@@ -182,6 +182,75 @@ Ce module gère le typage sémantique des flux comptables bruts.
 
 ---
 
+### Epic 8 : Intelligence Métier (Catégorisation, Dettes, Alertes)
+
+> Ajouté suite à l'interview utilisateur (Accountant Omnicane/OL, 2026-06-11). Sert le
+> Financial Manager au quotidien, au-delà du reporting brut. Différé après le MVP
+> (Epic 1 + Epic 3), priorité P2 — voir TODOS.md.
+
+* **FEAT-8.1 : Moteur de Catégorisation automatique (Nature / Sous-nature)**
+    * **User Story :** En tant que comptable, je veux que chaque transaction soit
+      classée automatiquement par nature et sous-nature, avec un **score de confiance**,
+      afin de ne réviser manuellement que les cas incertains.
+    * Priorité de classification : `USER_RULE > SYSTEM_RULE > ML_FALLBACK`
+      (cf. documentation API). Le score de confiance pilote l'UI : haute confiance →
+      appliqué silencieusement ; basse confiance → file de revue manuelle. La surcharge
+      manuelle crée un enregistrement d'audit immuable et devient une `USER_RULE`.
+
+* **FEAT-8.2 : Module Dettes & Échéanciers (saisie manuelle)**
+    * **User Story :** En tant que DAF, je veux saisir manuellement mes emprunts et
+      leurs conditions (montant, taux, durée, échéancier de remboursement) afin de
+      projeter les décaissements futurs dans la trésorerie.
+    * Saisie manuelle au MVP (les endpoints `/debt/*` de l'API Omni-FI restent une
+      source automatique ultérieure). Génère des échéances projetées alimentant la
+      courbe prévisionnelle (zone grisée, UI_GUIDELINES §3.5).
+
+* **FEAT-8.3 : Alertes Proactives**
+    * **User Story :** En tant que trésorier, je veux être alerté automatiquement des
+      anomalies financières afin d'agir avant qu'elles ne coûtent.
+    * Deux détections au MVP de l'epic : (a) **liquidités dormantes** — solde
+      excédentaire stagnant non placé au-delà d'un seuil/durée configurable ;
+      (b) **frais bancaires anormaux** — détection d'un débit de frais s'écartant de
+      la moyenne historique de la catégorie (cf. `CategoryAnomalies` côté API).
+      Alertes affichées dans le dashboard + notification (email) ; jamais d'action
+      automatique sur les comptes.
+
+---
+
+## 3.bis Localisation, temps et devises (Île Maurice)
+
+* **Fuseau** : le système opère à l'Île Maurice (**MUT, UTC+4**, sans heure d'été).
+  Tous les timestamps en base sont `TIMESTAMPTZ` stockés en **UTC** ; la conversion
+  `Asia/Port_Louis` est **explicite dans le code** pour tout calcul de clôture
+  (date comptable, bornes de période, soldes EOD, courbe 90j). `transaction_date`
+  dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'` (E20) — une transaction
+  à 22h UTC tombe le lendemain à Maurice.
+* **Multi-devise first (MUR, USD, EUR)** : le modèle ne suppose jamais le mono-MUR.
+  Toute table de montant porte sa devise ; la conversion vers la `base_currency` du
+  workspace est annotée (taux + date du taux). Montants en DECIMAL/centimes, jamais
+  en float, y compris après conversion FX.
+
+## 3.ter Stratégie de synchronisation (anti-sur-ingénierie)
+
+> **Décision validée par interviews utilisateurs (Accountant Omnicane/OL, 2026-06-11) :
+> le temps réel n'est PAS requis.** Les comptables travaillent sur des cycles de
+> clôture quotidiens/mensuels, pas à la seconde.
+
+La synchronisation des données bancaires Omni-FI se fait donc par **batchs/crons
+quotidiens** (Inngest), pas en streaming permanent :
+* Cron de sync quotidien (ex. 06:00 MUT) déclenchant `POST /sync/{ConnectionId}` par
+  connexion active, dans le respect du rate-limit (1 sync / 15 min / connexion) et de
+  `NextSyncAvailableAt`.
+* Le webhook `sync.completed` reste le déclencheur d'ingestion *quand il arrive*, mais
+  le produit ne dépend pas d'une fraîcheur infra-quotidienne — le SLO de fraîcheur est
+  recalibré sur la journée comptable, pas sur l'heure.
+* Conséquence ressources : pas de worker permanent ni de polling agressif ; le panneau
+  audit temps réel reste limité à la fenêtre du consent flow (démo Innov8), où le
+  « live » a une valeur narrative, pas opérationnelle.
+
+Ce choix préserve les ressources (free tiers Vercel/Neon/Inngest suffisants pour le
+pilote) sans sacrifier la valeur métier, conformément à la demande utilisateur.
+
 ## 4. Modèle de Données Multi-Tenant et Persistance (PostgreSQL, v2.1)
 
 > Remplace l'ancien modèle COMPANIES/COMPANY_USERS. Le tenant est le **Workspace**
