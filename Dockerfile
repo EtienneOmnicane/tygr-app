@@ -6,7 +6,10 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --ignore-scripts : le contexte Docker exclut .git (.dockerignore), donc le script
+# `prepare`/husky n'a rien à installer ; et ne pas exécuter de scripts d'install
+# arbitraires est une bonne pratique de sécurité en CI/conteneur.
+RUN npm ci --ignore-scripts
 
 # 2) builder — compile l'app et produit .next/standalone.
 FROM node:22-bookworm-slim AS builder
