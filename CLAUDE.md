@@ -16,6 +16,23 @@ les Financial Managers des BU du groupe (architecture SaaS-ready).
 Stack : Next.js App Router, Tailwind CSS, shadcn/ui, Tremor, Neon PostgreSQL (RLS
 forcée par workspace_id), Drizzle, Inngest, Auth.js (JWT). Interface en français.
 
+## Localisation & temps (Île Maurice)
+
+Règle stricte, non négociable :
+- **Le système opère à l'Île Maurice (MUT, UTC+4).** Aucun changement d'heure d'été.
+- **Tous les timestamps en base sont `TIMESTAMPTZ` stockés en UTC.** Jamais de
+  `timestamp` sans fuseau, jamais d'heure locale persistée.
+- **La conversion `Asia/Port_Louis` est EXPLICITE dans le code** pour tout calcul de
+  clôture (date comptable d'une transaction, bornes de période, agrégats EOD, courbe
+  90j). Une transaction à 22h UTC tombe le lendemain à Maurice : `transaction_date`
+  dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'` (E20). Interdit de
+  comparer des dates « nues » sans avoir posé le fuseau.
+- **Multi-devise first (MUR, USD, EUR).** Le modèle ne suppose jamais le mono-MUR :
+  toute table portant un montant porte sa devise ; les corporates mauriciens tiennent
+  couramment des comptes USD/EUR. Conversion vers la `base_currency` du workspace
+  **annotée** (taux + date du taux). Combiné à la règle 8 : montants en DECIMAL/
+  centimes, jamais en float, y compris après conversion FX.
+
 ## Tribal Knowledge & Quality Gates
 
 Règles non négociables pour tout agent (humain ou IA). Une règle violée = la tâche
@@ -138,6 +155,28 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
   citant la décision et le fait nouveau qui la remet en cause, pas en la re-litigant.
 - Une fois l'arbitrage rendu, exécution totale : le pushback vit AVANT la décision,
   jamais pendant l'implémentation (pas de scope creep déguisé en prudence).
+
+## Human-in-the-Loop (workflow Git & déploiement)
+
+Discipline de livraison — l'agent ne franchit jamais ces frontières seul :
+
+- **Règle 1 — Pas de commit direct sur `main`.** Toute modification vit sur une
+  branche `feature/*` (ou `fix/*`, `chore/*`). `main` est protégée ; on y arrive
+  uniquement par merge de PR validée.
+- **Règle 2 — L'agent s'arrête à la PR.** L'agent committe sur la branche `feature/*`,
+  pousse si demandé, puis **STOP** : c'est l'humain qui ouvre la Pull Request, ce qui
+  déclenche la CI (`.github/workflows/ci.yml`). L'agent n'ouvre pas la PR à la place
+  de l'humain.
+- **Règle 3 — Validation humaine obligatoire avant merge.** Deux contrôles que la CI
+  ne couvre pas et que l'humain DOIT faire : (a) **Visual QA** des écrans modifiés
+  contre `docs/UI_GUIDELINES.md` (Quality Gate 4), (b) **vérification devises &
+  fuseaux** — un montant converti affiche le bon taux/date, une clôture tombe le bon
+  jour à Maurice (section Localisation). La CI valide le code ; l'humain valide le sens.
+- **Règle 4 — L'humain merge.** Le merge de la PR est l'acte humain qui déclenche le
+  déploiement. L'agent ne merge jamais, ne force jamais le push sur `main`.
+
+Ces quatre règles complètent le stop-loss (Quality Gate 5) : le stop-loss garde le
+commit, le Human-in-the-Loop garde la PR et le déploiement.
 
 ## Skill routing
 

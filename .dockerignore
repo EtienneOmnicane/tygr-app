@@ -1,0 +1,37 @@
+# Strict : seul le nécessaire au build entre dans le contexte Docker.
+# Dépendances et artefacts (réinstallés/régénérés dans l'image)
+node_modules
+.next
+out
+build
+dist
+
+# Git & CI
+.git
+.github
+.gitignore
+
+# Env & secrets (JAMAIS dans l'image — règle 8)
+.env
+.env.*
+!.env.example
+
+# Outils agent & hooks (hors runtime)
+.claude
+.husky
+
+# Docs, plans, benchmarks (non requis au runtime)
+docs
+*.md
+!README.md
+
+# Tests & config de test
+tests
+vitest.config.ts
+coverage
+
+# Divers OS / éditeur
+.DS_Store
+*.log
+.vscode
+.idea

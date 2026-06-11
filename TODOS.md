@@ -4,17 +4,37 @@ Différés par la revue /autoplan du 2026-06-10 (plan v2.1 multi-tenant Workspac
 
 ## P1 — au scaffold du repo (bloquant pour le premier commit de code)
 
-- [ ] **Installer les hooks stop-loss** (`.claude/settings.json`) — Effort S (CC: ~15min).
-  Lint + `tsc --noEmit` + tests forcés avant commit (CLAUDE.md règle 5). Dépend de :
-  `git init` + scaffold Next.js + package.json. Tant que non installés : vérification
-  manuelle déclarée dans chaque message de commit. Utiliser /update-config.
+- [x] **Installer les hooks stop-loss** — FAIT 2026-06-11 : `.husky/pre-commit`
+  (prouvé bloquant sur erreur de type) + `.claude/settings.json` PreToolUse
+  (`.claude/hooks/stop-loss-commit.sh`). Ajouter `npm test` au pre-commit dès que
+  la suite de tests existera.
+- [ ] **npm audit : 2 vulnérabilités modérées transitives** (postcss via next,
+  toutes versions stables affectées au 2026-06-11) — Effort S. Surveiller le patch
+  next et re-auditer à chaque bump (CLAUDE.md règle 9).
 - [ ] **Règle lint anti accès DB ad-hoc** — Effort S (CC: ~20min). Interdire l'import
   du client DB hors `src/lib/` et `src/repositories/` (CLAUDE.md règle 2).
-- [ ] **Pipeline CI canonique** — Effort M (CC: ~1h). lint → typecheck → tests →
-  suite IDOR bloquante → build → migrations expand-contract → preview
-  (CLAUDE.md règle 9).
+- [x] **Pipeline CI canonique** — FAIT 2026-06-11 : `.github/workflows/ci.yml`
+  (lint → typecheck → tests/IDOR bloquant, sur PR vers main). Restent à brancher au
+  setup du déploiement : étape build, migrations expand-contract, deploy preview
+  (règle 9) — dépend du choix d'hébergeur (Vercel + Neon).
 
 ## P2 — après le MVP
+
+### Epic 8 — Intelligence Métier (interview Accountant Omnicane/OL, 2026-06-11)
+- [ ] **FEAT-8.1 Moteur de catégorisation auto (Nature/Sous-nature + score de
+  confiance)** — Effort M. Priorité `USER_RULE > SYSTEM_RULE > ML_FALLBACK` ; le
+  score pilote l'application silencieuse vs la file de revue manuelle ; surcharge
+  manuelle = audit immuable + nouvelle USER_RULE. Dépend de : transactions_cache
+  alimenté (semaines 3-5).
+- [ ] **FEAT-8.2 Dettes & Échéanciers (saisie manuelle)** — Effort M. Emprunts +
+  conditions (montant/taux/durée/échéancier), projections de décaissement dans la
+  courbe prévisionnelle. Source manuelle au MVP ; `/debt/*` API en automatisation
+  ultérieure.
+- [ ] **FEAT-8.3 Alertes proactives** — Effort M. (a) liquidités dormantes (solde
+  excédentaire stagnant, seuil/durée configurables) ; (b) frais bancaires anormaux
+  (écart vs moyenne historique de catégorie, cf. `CategoryAnomalies`). Dashboard +
+  email, jamais d'action automatique.
+
 
 - [ ] **FEAT-3.2 Matrice de flux pivot (Accordion Pivot Table)** — Effort M (CC: ~2j).
   Différé au gate CEO : hors chemin critique des 3 missions. Dépend de : Epic 3.1 livré,

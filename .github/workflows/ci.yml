@@ -1,0 +1,41 @@
+name: CI
+
+# Human-in-the-Loop (CLAUDE.md) : la CI se déclenche quand l'HUMAIN ouvre une PR
+# vers main. L'agent ne déclenche jamais ce pipeline lui-même.
+on:
+  pull_request:
+    branches: [main]
+
+# Annule les runs obsolètes si la PR est repoussée pendant qu'un run tourne.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gates:
+    name: Lint · Typecheck · Anti-IDOR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Installation reproductible (lockfile committé — règle 9).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Suite d'isolation anti-IDOR (BLOQUANTE — règle 2). Tourne sur PGlite,
+      # aucune base externe requise. Échec ici = pas de merge possible.
+      - name: Tests (suite anti-IDOR incluse)
+        run: npm test
