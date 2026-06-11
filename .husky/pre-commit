@@ -1,2 +1,2 @@
-# Stop-loss TYGR (CLAUDE.md règle 5) : aucun commit si lint ou typecheck échoue
-npm run lint && npm run typecheck
+# Stop-loss TYGR (CLAUDE.md règle 5) : lint + types + tests (suite IDOR incluse)
+npm run lint && npm run typecheck && npm test
