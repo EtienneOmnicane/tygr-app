@@ -27,6 +27,15 @@ if (typeof WebSocket !== "undefined") {
   neonConfig.webSocketConstructor = WebSocket;
 }
 
+// DEV LOCAL UNIQUEMENT — même câblage wsproxy que src/db/index.ts.
+if (process.env.NEON_WSPROXY_LOCAL) {
+  const proxy = process.env.NEON_WSPROXY_LOCAL;
+  neonConfig.wsProxy = (host, port) => `${proxy}/v1?address=${host}:${port}`;
+  neonConfig.useSecureWebSocket = false;
+  neonConfig.pipelineTLS = false;
+  neonConfig.pipelineConnect = false;
+}
+
 function exigerEnv(nom, options = {}) {
   const valeur = process.env[nom];
   if (!valeur) {

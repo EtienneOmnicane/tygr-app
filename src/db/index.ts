@@ -37,6 +37,19 @@ if (typeof WebSocket !== "undefined") {
   neonConfig.webSocketConstructor = WebSocket;
 }
 
+// DEV LOCAL UNIQUEMENT — jamais posée en production (revue : la variable est
+// absente des envs déployés). Pointe le driver Neon vers un wsproxy local
+// (ghcr.io/neondatabase/wsproxy) devant un Postgres Docker : E16 est conservé
+// (WebSocket + vraies transactions), seul le transport TLS est relâché en
+// local. Ex. : NEON_WSPROXY_LOCAL="localhost:5433".
+if (process.env.NEON_WSPROXY_LOCAL) {
+  const proxy = process.env.NEON_WSPROXY_LOCAL;
+  neonConfig.wsProxy = (host, port) => `${proxy}/v1?address=${host}:${port}`;
+  neonConfig.useSecureWebSocket = false;
+  neonConfig.pipelineTLS = false;
+  neonConfig.pipelineConnect = false;
+}
+
 function requireDatabaseUrl(): string {
   const url = process.env.DATABASE_URL;
   if (!url) {

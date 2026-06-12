@@ -16,7 +16,10 @@ import Credentials from "next-auth/providers/credentials";
 
 import { identite } from "@/db";
 import { extraireIp } from "@/lib/auth/rate-limit-ip";
-import { verifierIdentifiants } from "@/lib/auth/verifier-identifiants";
+import {
+  extraireIdentifiants,
+  verifierIdentifiants,
+} from "@/lib/auth/verifier-identifiants";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
@@ -38,7 +41,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               argon2.verify(hash, motDePasse).catch(() => false),
             maintenant: () => new Date(),
           },
-          credentials,
+          extraireIdentifiants(credentials),
           ip,
         );
 

@@ -50,6 +50,22 @@ export type ResultatVerification =
   | { ok: true; utilisateur: { id: string; email: string; fullName: string } }
   | { ok: false; code: CodeEchecConnexion };
 
+/**
+ * Adaptation Auth.js → contrat du cœur : Auth.js passe à authorize() le corps
+ * COMPLET du POST (csrfToken, callbackUrl…) ; le schéma .strict() rejetterait
+ * ces champs en trop. On extrait les deux champs du contrat, rien d'autre.
+ * Régression attrapée en validation E2E le 2026-06-12 (toute connexion
+ * légitime tombait en ENTREE_INVALIDE).
+ */
+export function extraireIdentifiants(
+  credentials: Record<string, unknown> | undefined,
+): { email: unknown; motDePasse: unknown } {
+  return {
+    email: credentials?.email,
+    motDePasse: credentials?.motDePasse,
+  };
+}
+
 export interface DepsVerification {
   identite: Pick<
     RepositoryIdentite,

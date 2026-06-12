@@ -178,6 +178,32 @@ Discipline de livraison — l'agent ne franchit jamais ces frontières seul :
 Ces quatre règles complètent le stop-loss (Quality Gate 5) : le stop-loss garde le
 commit, le Human-in-the-Loop garde la PR et le déploiement.
 
+## Dev local — stack de validation (2026-06-12)
+
+Le driver applicatif est Neon Serverless (WebSocket, E16) : un Postgres local nu ne
+suffit pas. Stack de validation reproductible (conteneurs dédiés, réseau isolé
+`tygr_validation`, AUCUN lien avec d'autres stacks Docker de la machine) :
+
+```bash
+docker network create tygr_validation
+docker run -d --name tygr_postgres --network tygr_validation \
+  -e POSTGRES_USER=tygr_owner -e POSTGRES_PASSWORD=… -e POSTGRES_DB=tygr postgres:16-alpine
+docker run -d --name tygr_wsproxy --network tygr_validation -p 127.0.0.1:5433:80 \
+  -e ALLOW_ADDR_REGEX='^tygr_postgres:5432$' ghcr.io/neondatabase/wsproxy:latest
+# migrations : psql dans le conteneur (sed 's/--> statement-breakpoint//g' …)
+# rôle applicatif : CREATE ROLE tygr_app LOGIN + GRANT (hors migrations à ce jour — voir TODOS)
+```
+
+`.env` local : `NEON_WSPROXY_LOCAL="localhost:5433"` (active le câblage wsproxy
+dev-only de `src/db/index.ts` et `scripts/seed-admin.mjs` — variable INTERDITE en
+production), `DATABASE_URL` avec l'hôte `tygr_postgres` (vu par le wsproxy).
+Le wsproxy reste restreint (`ALLOW_ADDR_REGEX` exact, bind 127.0.0.1) — jamais de
+proxy ouvert. Démontage : `docker rm -f tygr_postgres tygr_wsproxy && docker
+network rm tygr_validation`.
+
+Toute dette relevée en validation est consignée dans `TODOS.md` (règle 9 — le
+registre canonique de la dette est TODOS.md, ce fichier n'en garde que le renvoi).
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.

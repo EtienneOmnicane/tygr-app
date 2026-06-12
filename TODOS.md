@@ -30,6 +30,23 @@ jour)** : voir le decision log du plan
   Effort S. Le login utilise les tokens couleurs §0 mais la famille Geist
   existante ; bascule complète avec le build UI (spec VALIDATED_SHELVED).
 
+### Dette relevée en validation locale (2026-06-12, EM run)
+
+- [ ] **Provisioning du rôle `tygr_app` non migré** — Effort S. CREATE ROLE +
+  GRANT + ALTER DEFAULT PRIVILEGES vivent hors migrations (faits à la main en
+  local ET sur Neon). À codifier (migration dédiée ou script `db:provision`)
+  sinon chaque nouvel environnement diverge silencieusement.
+- [ ] **Delta de timing résiduel ~10-15 ms sur le login** — Effort S. La
+  vérification argon2 est égalisée (hash factice) mais l'écriture d'échec
+  (transaction FOR UPDATE) n'existe que sur le chemin « compte connu » —
+  oracle statistique théorique. Exploitation bornée par la limite 20/IP/15 min.
+  Option : écriture factice symétrique côté email inconnu.
+- [ ] **`/login` vide les champs après un échec** — Effort S (UX). L'email doit
+  survivre au re-rendu de useActionState. À reprendre avec le build UI.
+- [ ] **`turbopack.root` à épingler dans next.config.ts** — Effort S. Un
+  package-lock.json parasite dans le HOME fait inférer une mauvaise racine
+  workspace (warning au boot dev).
+
 ## P1 — au scaffold du repo (bloquant pour le premier commit de code)
 
 - [x] **Installer les hooks stop-loss** — FAIT 2026-06-11 : `.husky/pre-commit`
