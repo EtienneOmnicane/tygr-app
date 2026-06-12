@@ -138,6 +138,18 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Nouvelle dépendance : justification une ligne (Layer 1 éprouvé / Layer 2 à
   scruter / Layer 3 premiers principes), lockfile committé, audit de vulnérabilités
   au moment de l'ajout.
+- **Gestion de la dette (audit EM 2026-06-12)** — règles de classement et de vie :
+  - Classification **P0/P1/P2 avec SLA** : P0 = réglé avant la prochaine feature ;
+    P1 = avant le premier déploiement de production ; P2 = raccroché obligatoirement
+    à un chantier nommé (jamais « un jour »).
+  - Toute entrée TODOS.md porte **date, effort estimé et déclencheur de résolution**
+    (l'événement qui la rend due), pas seulement une priorité.
+  - Dette touchant **l'isolation tenant, les tables append-only ou les montants :
+    INTERDITE** — ça se corrige immédiatement, ça ne se consigne pas.
+  - **Revue de dette à chaque fin d'epic** ; un P2 vieux de 2 epics est re-priorisé
+    ou tué explicitement (décision tracée), jamais laissé pourrir.
+  - Dépendance beta/RC : **pin exact dans package.json** (pas de caret) +
+    re-validation du parcours critique concerné à chaque bump.
 
 ### 10. Pushback systématique (Devil's Advocate)
 - L'agent n'est pas un exécutant : c'est un Staff Engineer. Avant d'exécuter toute

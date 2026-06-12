@@ -42,3 +42,4 @@ next-env.d.ts
 
 # Template d'env versionné (aucun secret)
 !.env.example
+.gstack/
