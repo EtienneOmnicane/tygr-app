@@ -14,6 +14,7 @@ import { neonConfig, Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 
 import { createWithWorkspace } from "@/lib/tenancy";
+import { creerRepositoryIdentite } from "@/repositories/identite";
 
 import * as schema from "./schema";
 
@@ -39,5 +40,8 @@ export const db = drizzle(pool, { schema });
 
 /** Point d'entrée unique de l'accès aux données (CLAUDE.md règle 2). */
 export const withWorkspace = createWithWorkspace(db);
+
+/** Accès identité pré-contexte (login, re-validation E6) — voir le repository. */
+export const identite = creerRepositoryIdentite(db);
 
 export { schema };
