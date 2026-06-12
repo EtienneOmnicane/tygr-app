@@ -30,6 +30,16 @@ jour)** : voir le decision log du plan
   Effort S. Le login utilise les tokens couleurs §0 mais la famille Geist
   existante ; bascule complète avec le build UI (spec VALIDATED_SHELVED).
 
+### Dette relevée pendant le refacto d'arborescence (2026-06-12)
+
+- [ ] **`@/db` ré-exporte `schema` → porte dérobée à la frontière P0-a** —
+  Effort S (P1). La règle lint confine `@/db/schema`, mais `src/db/index.ts`
+  ré-exporte `schema`, donc `app/page.tsx:14` importe `{ schema, withWorkspace }`
+  et tisse du Drizzle brut (`schema.workspaces`) dans un Server Component. À
+  corriger en 2 temps : (a) retirer le ré-export `schema` de l'index DB pour
+  fermer la porte ; (b) déplacer la requête de page.tsx dans un repository scopé.
+  Code applicatif → hors du refacto mécanique, lot dédié.
+
 ### Dette relevée en validation locale (2026-06-12, EM run)
 
 - [ ] **Provisioning du rôle `tygr_app` non migré** — Effort S. CREATE ROLE +

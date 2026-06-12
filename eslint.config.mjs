@@ -13,6 +13,65 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+
+  // Frontière d'accès aux données (CLAUDE.md règle 2, dette P0-a).
+  //
+  // Principe : on restreint le CLIENT DB BRUT et le SCHÉMA Drizzle
+  // (`@/db/schema`, `@/db/index` côté pool, tenancy, repositories) — jamais
+  // importables hors de la couche serveur. En revanche le POINT D'ENTRÉE scopé
+  // `withWorkspace` (et `identite`) reste appelable partout : c'est l'API voulue
+  // pour qu'une page/Server Action serveur lise des données du tenant. La
+  // distinction est donc par CONTENU (quel symbole), pas seulement par chemin.
+  //
+  // Allowlist temporaire (`ignores`) : src/server/** est la cible ; les 3
+  // modules serveur encore hors server/ avant le refacto (auth.ts,
+  // lib/auth/session.ts, lib/auth/verifier-identifiants.ts) y sont listés et
+  // SERONT RETIRÉS quand ils migreront en server/ (étapes 3-4 du spec). Ces
+  // chemins legacy disparaissent à l'étape 4.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: [
+      "src/server/**",
+      "src/db/**",
+      "src/lib/tenancy.ts",
+      "src/repositories/**",
+      // legacy — retirés à mesure que ces fichiers rejoignent server/ :
+      "src/auth.ts",
+      "src/lib/auth/session.ts",
+      "src/lib/auth/verifier-identifiants.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              // Schéma brut + client DB + tenancy/repositories : confinés.
+              // `@/db` (l'index, qui exporte withWorkspace ET le pool) n'est PAS
+              // listé : importer withWorkspace depuis une page serveur est
+              // légitime. Ce qui fuit (le pool `db`) est couvert par la cloison
+              // server/ une fois le refacto terminé ; le schéma, lui, est
+              // bloqué partout hors serveur dès maintenant.
+              // `@/lib/tenancy` (et sa cible `@/server/db/tenancy`) n'est PAS
+              // listé : il exporte withWorkspace ET les types d'erreur publics
+              // (WorkspaceAccessDeniedError) qu'une page serveur doit attraper
+              // pour mapper 404. Le pool `db` qu'il pourrait fuir sera confiné
+              // par la cloison server/ après le refacto. Le schéma brut, lui,
+              // reste bloqué partout hors serveur dès maintenant.
+              group: [
+                "@/db/schema",
+                "@/server/db/schema",
+                "@/repositories/*",
+                "@/server/repositories/*",
+              ],
+              message:
+                "Schéma/repositories interdits hors src/server/** (CLAUDE.md règle 2). Lis les données via withWorkspace(session, fn) depuis une fonction serveur.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;
