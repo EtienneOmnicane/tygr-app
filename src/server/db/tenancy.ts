@@ -51,6 +51,27 @@ export class WorkspaceAccessDeniedError extends Error {
   }
 }
 
+/**
+ * Garde-fou runtime (dette P0-b / C6, risque R1 de la revue Eng) : la connexion
+ * applicative DOIT tourner sous un rôle non-propriétaire des tables. Un rôle
+ * propriétaire (ou superuser/BYPASSRLS) contourne la RLS — toute l'isolation
+ * inter-tenant tomberait en silence. On échoue FERMÉ (aucune requête servie)
+ * plutôt que d'exposer des données cross-tenant. C'est une erreur de
+ * configuration serveur, jamais déclenchable par un client : code distinct,
+ * volontairement bruyant, mappé en 500 par la couche route (pas un 404).
+ */
+export class UnsafeDatabaseRoleError extends Error {
+  readonly code = "UNSAFE_DB_ROLE";
+  constructor(role: string) {
+    super(
+      `Connexion DB sous un rôle propriétaire (${role}) : la RLS serait ` +
+        `contournée. L'app doit se connecter sous tygr_app (voir ` +
+        `drizzle/provisioning/tygr_app.sql). Requête refusée (fail-closed).`,
+    );
+    this.name = "UnsafeDatabaseRoleError";
+  }
+}
+
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
 /** Le type de transaction Drizzle, dérivé du type de base injecté. */
@@ -76,6 +97,25 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
     const { userId, activeWorkspaceId } = parsed.data;
 
     return db.transaction(async (tx) => {
+      // Garde-fou R1/C6 : refuser de servir si la connexion tourne sous le
+      // propriétaire des tables (RLS contournable). Comparé au propriétaire
+      // réel de workspace_members — pas à une liste de noms en dur, pour rester
+      // correct quel que soit le nom d'owner (tygr_owner en local, autre sur
+      // Neon). `tableowner = current_user` ⇒ rôle propriétaire ⇒ fail-closed.
+      const roleCheck = await tx.execute(
+        sql`select current_user as who,
+                   current_user = tableowner as is_owner
+            from pg_tables where tablename = 'workspace_members'`,
+      );
+      const ligneRole = (
+        roleCheck as unknown as {
+          rows: { who: string; is_owner: boolean }[];
+        }
+      ).rows[0];
+      if (ligneRole?.is_owner === true) {
+        throw new UnsafeDatabaseRoleError(ligneRole.who ?? "owner");
+      }
+
       await tx.execute(
         sql`select set_config('app.current_workspace_id', ${activeWorkspaceId}, true)`,
       );

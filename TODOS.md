@@ -42,10 +42,12 @@ jour)** : voir le decision log du plan
 
 ### Dette relevée en validation locale (2026-06-12, EM run)
 
-- [ ] **Provisioning du rôle `tygr_app` non migré** — Effort S. CREATE ROLE +
-  GRANT + ALTER DEFAULT PRIVILEGES vivent hors migrations (faits à la main en
-  local ET sur Neon). À codifier (migration dédiée ou script `db:provision`)
-  sinon chaque nouvel environnement diverge silencieusement.
+- [x] **Provisioning du rôle `tygr_app` non migré (P0-b)** — FAIT 2026-06-12 :
+  `drizzle/provisioning/tygr_app.sql` (idempotent, sans mdp) + `npm run
+  db:provision` + garde-fou runtime C6 (`UnsafeDatabaseRoleError`) + contre-
+  preuve R1 (test C5) + suite isolation consomme le script (source unique).
+  Spec : `docs/specs/provisioning-tygr-app.md`. Reste à brancher dans la CI
+  (étape provision avant migrate) au setup déploiement — dépend de l'hébergeur.
 - [ ] **Delta de timing résiduel ~10-15 ms sur le login** — Effort S. La
   vérification argon2 est égalisée (hash factice) mais l'écriture d'échec
   (transaction FOR UPDATE) n'existe que sur le chemin « compte connu » —
