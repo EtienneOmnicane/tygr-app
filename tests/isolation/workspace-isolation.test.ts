@@ -25,6 +25,7 @@ import { workspaceMembers } from "@/server/db/schema";
 import {
   createWithWorkspace,
   InvalidSessionError,
+  UnsafeDatabaseRoleError,
   WorkspaceAccessDeniedError,
 } from "@/server/db/tenancy";
 import { creerRepositoryIdentite } from "@/server/repositories/identite";
@@ -102,12 +103,15 @@ beforeAll(async () => {
   `);
 
   // 4. Rôle applicatif non-propriétaire : c'est LUI que la RLS contraint.
-  await client.exec(`
-    create role tygr_app nologin;
-    grant usage on schema public to tygr_app;
-    grant select, insert, update, delete on all tables in schema public to tygr_app;
-    set role tygr_app;
-  `);
+  //    SOURCE UNIQUE DE VÉRITÉ (dette P0-b) : on applique le MÊME script que la
+  //    production (drizzle/provisioning/tygr_app.sql) au lieu d'une définition
+  //    inline divergente. Si le provisioning prod régresse, ce test casse.
+  const provisioning = readFileSync(
+    path.join(process.cwd(), "drizzle", "provisioning", "tygr_app.sql"),
+    "utf8",
+  );
+  await client.exec(provisioning);
+  await client.exec(`set role tygr_app;`);
 });
 
 afterAll(async () => {
@@ -238,5 +242,48 @@ describe("isolation inter-workspace (anti-IDOR)", () => {
     ]);
     expect(await identite.membershipsDe(ALICE)).toEqual([]);
     expect(await identite.membershipsDe(CARL)).toEqual([]);
+  });
+});
+
+// Test négatif INVERSÉ (dette P0-b / C5) : prouve POURQUOI le rôle non-owner est
+// vital, et arme la CI contre le scénario R1 (l'app pointe sur l'owner Neon →
+// RLS contournée silencieusement). Si quelqu'un déprovisionne tygr_app ou
+// configure l'app sous l'owner, CE test casse — l'angle mort devient bloquant.
+describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire (P0-b/C5)", () => {
+  afterAll(async () => {
+    // Restaure l'invariant des autres suites éventuelles : rôle applicatif.
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("C5a. sous l'owner, un SELECT sans contexte voit TOUS les tenants (RLS ignorée)", async () => {
+    await client.exec(`reset role;`); // redevient propriétaire des tables
+    const res = await client.query<{ workspace_id: string }>(
+      "select workspace_id from workspace_members",
+    );
+    // BOB/WS_B subsiste (la membership d'Alice/A a été supprimée au test 8).
+    // Le point prouvé : l'owner voit des lignes SANS poser de contexte — donc
+    // connecter l'app sous l'owner exposerait du cross-tenant. C'est le risque.
+    expect(res.rows.length).toBeGreaterThan(0);
+    expect(res.rows.some((r) => r.workspace_id === WS_B)).toBe(true);
+  });
+
+  it("C5b. withWorkspace REFUSE de servir sous l'owner (garde-fou C6, fail-closed)", async () => {
+    await client.exec(`reset role;`); // auto-suffisant : ne dépend pas de C5a
+    // Le garde-fou runtime doit lever AVANT toute lecture de données — aucune
+    // fuite cross-tenant possible sous l'owner.
+    await expect(
+      withWorkspace({ userId: BOB, activeWorkspaceId: WS_B }, async () => {
+        throw new Error("fn ne doit JAMAIS être appelée sous l'owner");
+      }),
+    ).rejects.toBeInstanceOf(UnsafeDatabaseRoleError);
+  });
+
+  it("C5c. sous tygr_app, le même withWorkspace fonctionne (le rôle est la frontière)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const role = await withWorkspace(
+      { userId: BOB, activeWorkspaceId: WS_B },
+      async (_tx, ctx) => ctx.role,
+    );
+    expect(role).toBe("MANAGER");
   });
 });

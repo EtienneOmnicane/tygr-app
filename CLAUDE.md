@@ -33,6 +33,27 @@ Règle stricte, non négociable :
   **annotée** (taux + date du taux). Combiné à la règle 8 : montants en DECIMAL/
   centimes, jamais en float, y compris après conversion FX.
 
+## Provisioning & rôles DB (dette P0-b résolue, 2026-06-12)
+
+L'isolation RLS ne mord QUE sous un rôle non-propriétaire des tables. Garanties :
+
+- **Source unique du rôle** : `drizzle/provisioning/tygr_app.sql` (idempotent,
+  sans mot de passe en dur). Appliqué par `npm run db:provision`
+  (`DATABASE_URL_ADMIN`, rôle owner). La suite d'isolation consomme CE script
+  dans son `beforeAll` — aucune définition divergente du rôle.
+- **Ordre de pipeline NON négociable** : `db:provision` → `migrate` → `deploy`.
+  Le `GRANT … ON ALL TABLES` explicite du script rattrape les tables déjà
+  migrées (les `ALTER DEFAULT PRIVILEGES` ne couvrent que les tables futures).
+- **Secret (C4)** : le script crée `tygr_app` NOLOGIN sans mot de passe ; le
+  LOGIN + mot de passe est posé hors script (`ALTER ROLE … PASSWORD` depuis un
+  secret d'env, jamais commité) — rotation en runbook au déploiement.
+- **Garde-fou runtime (C6, fail-closed)** : `withWorkspace` refuse de servir
+  (`UnsafeDatabaseRoleError`, mappé 500) si la connexion tourne sous le
+  propriétaire des tables — la RLS serait contournée. Couvert par la contre-
+  preuve R1 (test C5) : sous l'owner, la RLS ne filtre pas ET le garde-fou
+  bloque ; un déprovisionnement ou un `DATABASE_URL` pointant l'owner fait
+  échouer la CI.
+
 ## Tribal Knowledge & Quality Gates
 
 Règles non négociables pour tout agent (humain ou IA). Une règle violée = la tâche
