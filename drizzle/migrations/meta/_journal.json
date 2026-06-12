@@ -15,6 +15,13 @@
       "when": 1781166731743,
       "tag": "0001_rls-force",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781236520253,
+      "tag": "0002_login-attempts",
+      "breakpoints": true
     }
   ]
 }
