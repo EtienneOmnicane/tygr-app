@@ -11,7 +11,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/db/schema";
-import { VERROU_BASE_MS } from "@/lib/auth/lockout";
+import { VERROU_BASE_MS } from "@/server/auth/lockout";
 import { creerRepositoryIdentite } from "@/repositories/identite";
 
 const client = new PGlite();

@@ -19,8 +19,8 @@ import { z } from "zod";
 
 import type { RepositoryIdentite } from "@/repositories/identite";
 
-import { estVerrouille } from "./lockout";
-import { depasseLimiteIp } from "./rate-limit-ip";
+import { estVerrouille } from "@/server/auth/lockout";
+import { depasseLimiteIp } from "@/server/auth/rate-limit-ip";
 
 /** Validation stricte : types, bornes, longueurs max (CLAUDE.md règle 3). */
 export const identifiantsSchema = z

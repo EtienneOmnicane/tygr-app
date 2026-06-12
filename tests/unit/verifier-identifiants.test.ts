@@ -5,8 +5,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { VERROU_BASE_MS } from "@/lib/auth/lockout";
-import { MAX_TENTATIVES_IP } from "@/lib/auth/rate-limit-ip";
+import { VERROU_BASE_MS } from "@/server/auth/lockout";
+import { MAX_TENTATIVES_IP } from "@/server/auth/rate-limit-ip";
 import {
   HASH_FACTICE,
   verifierIdentifiants,

@@ -19,8 +19,8 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { loginAttempts, users, workspaceMembers } from "@/db/schema";
 import type { WorkspaceRole } from "@/db/schema";
-import { evaluerEchec, evaluerSucces } from "@/lib/auth/lockout";
-import { debutFenetre } from "@/lib/auth/rate-limit-ip";
+import { evaluerEchec, evaluerSucces } from "@/server/auth/lockout";
+import { debutFenetre } from "@/server/auth/rate-limit-ip";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 

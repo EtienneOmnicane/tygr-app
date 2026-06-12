@@ -15,7 +15,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
 import { identite } from "@/db";
-import { extraireIp } from "@/lib/auth/rate-limit-ip";
+import { extraireIp } from "@/server/auth/rate-limit-ip";
 import {
   extraireIdentifiants,
   verifierIdentifiants,
