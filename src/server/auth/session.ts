@@ -11,7 +11,7 @@
  *   désactivé est indistinguable d'un non-connecté).
  * - AucunWorkspaceActifError → écran « aucun workspace » (PR 2 : sélecteur).
  */
-import { auth } from "@/auth";
+import { auth } from "@/server/auth/config";
 import { identite } from "@/server/db";
 import { workspaceSessionSchema, type WorkspaceSession } from "@/server/db/tenancy";
 

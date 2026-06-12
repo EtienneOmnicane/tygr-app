@@ -10,13 +10,13 @@
 import { eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 
-import { signOut } from "@/auth";
+import { signOut } from "@/server/auth/config";
 import { schema, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
   NonAuthentifieError,
-} from "@/lib/auth/session";
+} from "@/server/auth/session";
 import { WorkspaceAccessDeniedError } from "@/server/db/tenancy";
 
 async function deconnecter() {

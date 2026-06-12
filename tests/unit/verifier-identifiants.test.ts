@@ -11,7 +11,7 @@ import {
   HASH_FACTICE,
   verifierIdentifiants,
   type DepsVerification,
-} from "@/lib/auth/verifier-identifiants";
+} from "@/server/auth/verifier-identifiants";
 import type { UtilisateurIdentite } from "@/server/repositories/identite";
 
 const T0 = new Date("2026-06-12T10:00:00.000Z");

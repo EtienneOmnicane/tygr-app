@@ -19,7 +19,7 @@ import { extraireIp } from "@/server/auth/rate-limit-ip";
 import {
   extraireIdentifiants,
   verifierIdentifiants,
-} from "@/lib/auth/verifier-identifiants";
+} from "@/server/auth/verifier-identifiants";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },

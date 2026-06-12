@@ -23,23 +23,11 @@ const eslintConfig = defineConfig([
   // pour qu'une page/Server Action serveur lise des données du tenant. La
   // distinction est donc par CONTENU (quel symbole), pas seulement par chemin.
   //
-  // Allowlist temporaire (`ignores`) : src/server/** est la cible ; les 3
-  // modules serveur encore hors server/ avant le refacto (auth.ts,
-  // lib/auth/session.ts, lib/auth/verifier-identifiants.ts) y sont listés et
-  // SERONT RETIRÉS quand ils migreront en server/ (étapes 3-4 du spec). Ces
-  // chemins legacy disparaissent à l'étape 4.
+  // Toute la couche serveur vit sous src/server/** depuis le refacto
+  // d'arborescence (2026-06-12) — l'allowlist legacy a été retirée à l'étape 4.
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: [
-      "src/server/**",
-      "src/db/**",
-      "src/lib/tenancy.ts",
-      "src/repositories/**",
-      // legacy — retirés à mesure que ces fichiers rejoignent server/ :
-      "src/auth.ts",
-      "src/lib/auth/session.ts",
-      "src/lib/auth/verifier-identifiants.ts",
-    ],
+    ignores: ["src/server/**"],
     rules: {
       "no-restricted-imports": [
         "error",

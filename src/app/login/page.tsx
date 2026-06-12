@@ -4,7 +4,7 @@
  */
 import { redirect } from "next/navigation";
 
-import { auth } from "@/auth";
+import { auth } from "@/server/auth/config";
 
 import { FormulaireConnexion } from "./formulaire-connexion";
 

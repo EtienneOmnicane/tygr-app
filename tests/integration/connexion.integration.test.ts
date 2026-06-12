@@ -21,7 +21,7 @@ import {
   extraireIdentifiants,
   verifierIdentifiants,
   type DepsVerification,
-} from "@/lib/auth/verifier-identifiants";
+} from "@/server/auth/verifier-identifiants";
 import { creerRepositoryIdentite } from "@/server/repositories/identite";
 
 const client = new PGlite();
