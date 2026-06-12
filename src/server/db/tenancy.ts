@@ -19,7 +19,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
-import { workspaceMembers, type WorkspaceRole } from "@/db/schema";
+import { workspaceMembers, type WorkspaceRole } from "@/server/db/schema";
 
 export const workspaceSessionSchema = z
   .object({

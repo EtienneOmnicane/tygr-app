@@ -3,6 +3,6 @@
  * CSRF intégrée au framework. La logique métier vit dans src/auth.ts et
  * src/lib/auth/ ; rien d'autre ne doit apparaître ici.
  */
-import { handlers } from "@/auth";
+import { handlers } from "@/server/auth/config";
 
 export const { GET, POST } = handlers;

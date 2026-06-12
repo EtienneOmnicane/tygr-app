@@ -23,11 +23,11 @@ import {
   type WorkspaceContext,
   type WorkspaceSession,
   type WorkspaceTx,
-} from "@/lib/tenancy";
+} from "@/server/db/tenancy";
 import {
   creerRepositoryIdentite,
   type RepositoryIdentite,
-} from "@/repositories/identite";
+} from "@/server/repositories/identite";
 
 import * as schema from "./schema";
 

@@ -7,7 +7,7 @@ import {
   extraireIp,
   FENETRE_IP_MS,
   MAX_TENTATIVES_IP,
-} from "@/lib/auth/rate-limit-ip";
+} from "@/server/auth/rate-limit-ip";
 
 const T0 = new Date("2026-06-12T10:00:00.000Z");
 

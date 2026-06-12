@@ -13,7 +13,7 @@ import {
   SEUIL_VERROUILLAGE,
   VERROU_BASE_MS,
   VERROU_MAX_MS,
-} from "@/lib/auth/lockout";
+} from "@/server/auth/lockout";
 
 const T0 = new Date("2026-06-12T10:00:00.000Z");
 

@@ -5,14 +5,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { VERROU_BASE_MS } from "@/lib/auth/lockout";
-import { MAX_TENTATIVES_IP } from "@/lib/auth/rate-limit-ip";
+import { VERROU_BASE_MS } from "@/server/auth/lockout";
+import { MAX_TENTATIVES_IP } from "@/server/auth/rate-limit-ip";
 import {
   HASH_FACTICE,
   verifierIdentifiants,
   type DepsVerification,
-} from "@/lib/auth/verifier-identifiants";
-import type { UtilisateurIdentite } from "@/repositories/identite";
+} from "@/server/auth/verifier-identifiants";
+import type { UtilisateurIdentite } from "@/server/repositories/identite";
 
 const T0 = new Date("2026-06-12T10:00:00.000Z");
 const IP = "203.0.113.7";

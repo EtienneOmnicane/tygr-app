@@ -17,10 +17,10 @@
 import { and, count, eq, gte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
-import { loginAttempts, users, workspaceMembers } from "@/db/schema";
-import type { WorkspaceRole } from "@/db/schema";
-import { evaluerEchec, evaluerSucces } from "@/lib/auth/lockout";
-import { debutFenetre } from "@/lib/auth/rate-limit-ip";
+import { loginAttempts, users, workspaceMembers } from "@/server/db/schema";
+import type { WorkspaceRole } from "@/server/db/schema";
+import { evaluerEchec, evaluerSucces } from "@/server/auth/lockout";
+import { debutFenetre } from "@/server/auth/rate-limit-ip";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 

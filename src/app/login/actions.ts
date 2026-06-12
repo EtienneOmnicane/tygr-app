@@ -10,7 +10,7 @@
  */
 import { AuthError } from "next-auth";
 
-import { signIn } from "@/auth";
+import { signIn } from "@/server/auth/config";
 
 export interface EtatConnexion {
   erreur: string | null;
