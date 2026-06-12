@@ -15,14 +15,14 @@ import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import * as schema from "@/db/schema";
+import * as schema from "@/server/db/schema";
 import { SEUIL_VERROUILLAGE, VERROU_BASE_MS } from "@/server/auth/lockout";
 import {
   extraireIdentifiants,
   verifierIdentifiants,
   type DepsVerification,
 } from "@/lib/auth/verifier-identifiants";
-import { creerRepositoryIdentite } from "@/repositories/identite";
+import { creerRepositoryIdentite } from "@/server/repositories/identite";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });

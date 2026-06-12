@@ -12,8 +12,8 @@
  * - AucunWorkspaceActifError → écran « aucun workspace » (PR 2 : sélecteur).
  */
 import { auth } from "@/auth";
-import { identite } from "@/db";
-import { workspaceSessionSchema, type WorkspaceSession } from "@/lib/tenancy";
+import { identite } from "@/server/db";
+import { workspaceSessionSchema, type WorkspaceSession } from "@/server/db/tenancy";
 
 export class NonAuthentifieError extends Error {
   readonly code = "NOT_AUTHENTICATED";

@@ -17,7 +17,7 @@
  */
 import { z } from "zod";
 
-import type { RepositoryIdentite } from "@/repositories/identite";
+import type { RepositoryIdentite } from "@/server/repositories/identite";
 
 import { estVerrouille } from "@/server/auth/lockout";
 import { depasseLimiteIp } from "@/server/auth/rate-limit-ip";

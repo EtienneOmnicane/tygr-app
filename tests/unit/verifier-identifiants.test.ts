@@ -12,7 +12,7 @@ import {
   verifierIdentifiants,
   type DepsVerification,
 } from "@/lib/auth/verifier-identifiants";
-import type { UtilisateurIdentite } from "@/repositories/identite";
+import type { UtilisateurIdentite } from "@/server/repositories/identite";
 
 const T0 = new Date("2026-06-12T10:00:00.000Z");
 const IP = "203.0.113.7";

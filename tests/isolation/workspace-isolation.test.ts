@@ -20,14 +20,14 @@ import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import * as schema from "@/db/schema";
-import { workspaceMembers } from "@/db/schema";
+import * as schema from "@/server/db/schema";
+import { workspaceMembers } from "@/server/db/schema";
 import {
   createWithWorkspace,
   InvalidSessionError,
   WorkspaceAccessDeniedError,
-} from "@/lib/tenancy";
-import { creerRepositoryIdentite } from "@/repositories/identite";
+} from "@/server/db/tenancy";
+import { creerRepositoryIdentite } from "@/server/repositories/identite";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
