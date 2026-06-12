@@ -27,6 +27,7 @@ import {
   InvalidSessionError,
   WorkspaceAccessDeniedError,
 } from "@/lib/tenancy";
+import { creerRepositoryIdentite } from "@/repositories/identite";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -224,5 +225,18 @@ describe("isolation inter-workspace (anti-IDOR)", () => {
         throw new Error("fn ne doit jamais être appelée");
       }),
     ).rejects.toBeInstanceOf(WorkspaceAccessDeniedError);
+  });
+
+  it("9. surface auth (PR auth-foundation) : la lecture pré-contexte des memberships ne rend QUE ses propres lignes", async () => {
+    // Vecteur du login : avant tout contexte workspace, le JWT est construit
+    // depuis membershipsDe() (policy own_memberships_select). Une fuite ici
+    // permettrait de forger un activeWorkspaceId d'autrui dès la connexion.
+    // NB : la membership d'Alice sur A a été révoquée au test 8.
+    const identite = creerRepositoryIdentite(db);
+    expect(await identite.membershipsDe(BOB)).toEqual([
+      { workspaceId: WS_B, role: "MANAGER" },
+    ]);
+    expect(await identite.membershipsDe(ALICE)).toEqual([]);
+    expect(await identite.membershipsDe(CARL)).toEqual([]);
   });
 });

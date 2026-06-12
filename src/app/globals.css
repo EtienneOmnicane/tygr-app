@@ -1,26 +1,63 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Tokens TYGR — transposition Tailwind 4 (@theme, CSS-first) du §0 de
+ * docs/UI_GUIDELINES.md (source de vérité UI). Valeurs recopiées telles
+ * quelles ; toute divergence se corrige LÀ-BAS d'abord.
+ * Typographies : Geist (déjà chargée) pour les montants/tabular ; Instrument
+ * Sans arrive avec le build UI (spec validé en réserve) — entrée TODOS.md.
+ */
+@theme {
+  --color-ink: #0f1e3d;
+  --color-ink-700: #1b2d55;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-primary: #2447d6;
+  --color-primary-600: #1d3ab8;
+  --color-primary-50: #eef2ff;
+
+  --color-accent: #f59e0b;
+
+  --color-inflow: #16a34a;
+  --color-inflow-700: #15803d;
+  --color-inflow-bg: #e7f6ec;
+
+  --color-outflow: #dc2626;
+  --color-outflow-700: #b91c1c;
+  --color-outflow-bg: #fdeaea;
+
+  --color-danger: #b42318;
+  --color-danger-bg: #fef3f2;
+  --color-success: #079455;
+  --color-success-bg: #ecfdf3;
+  --color-warning: #b54708;
+  --color-warning-bg: #fffaeb;
+
+  --color-surface-page: #f3f5fa;
+  --color-surface-card: #ffffff;
+  --color-surface-inset: #f2f4f8;
+  --color-surface-forecast: #f6f8fb;
+
+  --color-line: #e6eaf2;
+  --color-line-strong: #cbd2e0;
+
+  --color-text: #101828;
+  --color-text-muted: #667085;
+  --color-text-faint: #98a2b3;
+  --color-text-onink: #ffffff;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-modal: 16px;
+
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-popover: 0 12px 24px -6px rgba(16, 24, 40, 0.16);
+  --shadow-modal: 0 24px 48px -12px rgba(16, 24, 40, 0.24);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-surface-page);
+  color: var(--color-text);
 }
