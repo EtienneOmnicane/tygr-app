@@ -25,6 +25,7 @@ import {
   boolean,
   char,
   check,
+  index,
   integer,
   pgPolicy,
   pgTable,
@@ -82,6 +83,32 @@ export const users = pgTable(
       .defaultNow(),
   },
   (t) => [uniqueIndex("users_email_lower_unique").on(sql`lower(${t.email})`)],
+);
+
+/**
+ * Tentatives de connexion par IP (plan E7, décision #49) — rate-limit en
+ * fenêtre glissante SANS Redis, surface non authentifiée (CLAUDE.md règle 3).
+ * Table d'infrastructure pré-auth : aucune donnée tenant ni PII au-delà de
+ * l'IP → hors RLS (même statut que users/workspaces), accès exclusivement
+ * via le repository identité. On ne stocke volontairement PAS l'email tenté
+ * (anti-énumération E18 + minimisation PII, règle 8). Purge des lignes hors
+ * fenêtre : cron à brancher avec la pipeline (entrée TODOS.md).
+ */
+export const loginAttempts = pgTable(
+  "login_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** IPv4 ou IPv6 textuelle (45 = longueur max IPv6 mappée IPv4). */
+    ip: varchar("ip", { length: 45 }).notNull(),
+    succeeded: boolean("succeeded").notNull(),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Couvre la requête unique du repository : COUNT par ip dans la fenêtre.
+    index("login_attempts_ip_attempted_at_idx").on(t.ip, t.attemptedAt),
+  ],
 );
 
 export const WORKSPACE_ROLES = ["ADMIN", "MANAGER", "VIEWER"] as const;
