@@ -101,6 +101,8 @@ export const identite: RepositoryIdentite = {
   enregistrerTentativeIp: (ip, succeeded) =>
     obtenirIdentite().enregistrerTentativeIp(ip, succeeded),
   membershipsDe: (userId) => obtenirIdentite().membershipsDe(userId),
+  membershipsAvecNom: (userId) =>
+    obtenirIdentite().membershipsAvecNom(userId),
 };
 
 export { schema };
