@@ -9,6 +9,10 @@ COPY package.json package-lock.json ./
 # --ignore-scripts : le contexte Docker exclut .git (.dockerignore), donc le script
 # `prepare`/husky n'a rien à installer ; et ne pas exécuter de scripts d'install
 # arbitraires est une bonne pratique de sécurité en CI/conteneur.
+# NB argon2 (module natif) : compatible — ses prébuilds napi (linux x64/arm64,
+# glibc+musl) sont DANS le paquet npm et résolus au require par node-gyp-build ;
+# aucun toolchain de compilation requis. `serverExternalPackages` (next.config.ts)
+# garantit que le tracing standalone embarque les .node tels quels.
 RUN npm ci --ignore-scripts
 
 # 2) builder — compile l'app et produit .next/standalone.

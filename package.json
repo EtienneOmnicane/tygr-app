@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "seed:admin": "node scripts/seed-admin.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
