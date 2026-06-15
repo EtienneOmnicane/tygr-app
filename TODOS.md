@@ -5,6 +5,34 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Cross-review croisée Agent UI — précision financière ingestion (2026-06-15)
+
+Alerte « bloquante » de l'Agent UI sur `ingestion/index.ts` + `dashboard.ts`.
+**Les DEUX constats rejetés sur preuve — code maintenu, aucun correctif.**
+Désaccord tranché par l'humain en faveur de l'analyse documentaire (règle 6).
+
+- **P1 (prétendu bloquant) — fuseau de `balanceDate` : FAUX POSITIF.** L'Agent UI
+  réclamait `AT TIME ZONE 'Asia/Port_Louis'` sur `b.Date` par symétrie avec
+  `transaction_date`. PREUVE (doc Fern `get-historical-balances`) : le champ `Date`
+  est `format: date` (YYYY-MM-DD **nu**, sans heure ni fuseau) et l'endpoint renvoie
+  des « end-of-day balances » = DÉJÀ la date comptable du compte. `AT TIME ZONE` ne
+  s'applique qu'à un INSTANT (cas de `transaction_date`, dérivée d'un
+  `BookingDateTime` horodaté) ; l'appliquer à une date nue serait un no-op ou un
+  DÉCALAGE d'un jour. `balanceDate: b.Date` est correct — le « corriger » créerait
+  le bug.
+- **P2 — source du KPI solde : DÉJÀ CONFORME.** `soldeConsolideCourant`
+  (`dashboard.ts`) somme déjà le dernier EOD de `balance_history`
+  (`max(balance_date)` par compte) et NE lit PAS `bank_accounts.current_balance` →
+  KPI et courbe partagent la même source. Rien à changer.
+- Leçon (méthode) : un constat de cross-review se VÉRIFIE contre la source de vérité
+  avant correctif ; une fausse symétrie (date nue vs instant) ne suffit pas. 2e
+  faux positif d'affilée tranché par preuve (cf. C1 PR-W1).
+
+> ⚠️ État réel à corriger : `feature/epic3-dashboard-integration` (qui porte
+> `dashboard.ts` / `soldeConsolideCourant`) **n'est PAS encore mergée dans `main`**
+> au 2026-06-15 (dernier merge = PR-W3 #15). Le socle de lecture du dashboard
+> n'est donc pas en prod ; PR-W4 + Visual QA en dépendent. À merger.
+
 ### PR-W3 — logique widget MFA côté client (2026-06-15)
 
 - A1 (PR-W1) **respecté** : `widget-runtime.ts` ne logge jamais l'OTP/token ;
