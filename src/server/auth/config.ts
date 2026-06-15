@@ -21,7 +21,7 @@ import {
   verifierIdentifiants,
 } from "@/server/auth/verifier-identifiants";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
   providers: [
@@ -74,15 +74,34 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       // `user` n'est défini qu'à la connexion : on fige userId et on résout le
       // workspace actif par défaut = premier membership (tri déterministe par
-      // workspace_id, lu sous RLS via own_memberships_select). Le sélecteur de
-      // workspace (PR 2) mettra à jour activeWorkspaceId via session update.
+      // workspace_id, lu sous RLS via own_memberships_select).
       if (user?.id) {
         token.userId = user.id;
         const memberships = await identite.membershipsDe(user.id);
         token.activeWorkspaceId = memberships[0]?.workspaceId ?? null;
+      }
+
+      // Bascule de workspace (Epic 2 / unstable_update) — DÉFENSE EN PROFONDEUR
+      // anti-IDOR (S1) : on ne fige JAMAIS un activeWorkspaceId dans le token
+      // sans RE-VALIDER que l'utilisateur est membre du workspace visé. La
+      // Server Action basculerWorkspace l'a déjà vérifié, mais le callback est
+      // la dernière barrière côté écriture du JWT : un appel forgé à
+      // update({ activeWorkspaceId }) ne peut pas injecter un tenant étranger.
+      if (
+        trigger === "update" &&
+        typeof token.userId === "string" &&
+        session?.activeWorkspaceId
+      ) {
+        const cible = session.activeWorkspaceId as string;
+        const memberships = await identite.membershipsDe(token.userId);
+        if (memberships.some((m) => m.workspaceId === cible)) {
+          token.activeWorkspaceId = cible;
+        }
+        // Sinon : silencieusement ignoré — le token garde l'ancien workspace,
+        // aucune exposition cross-tenant possible.
       }
       return token;
     },

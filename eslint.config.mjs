@@ -52,8 +52,14 @@ const eslintConfig = defineConfig([
                 "@/repositories/*",
                 "@/server/repositories/*",
               ],
+              // allowTypeImports : un `import type` est effacé à la compilation
+              // (zéro accès DB au runtime) — autorisé. Les imports de VALEUR
+              // (le client db, une fonction de repository) restent bloqués. La
+              // frontière vise l'accès runtime à la donnée, pas la connaissance
+              // des types partagés (WorkspaceRole, MembershipAvecNom).
+              allowTypeImports: true,
               message:
-                "Schéma/repositories interdits hors src/server/** (CLAUDE.md règle 2). Lis les données via withWorkspace(session, fn) depuis une fonction serveur.",
+                "Accès runtime au schéma/repositories interdit hors src/server/** (CLAUDE.md règle 2). Lis les données via withWorkspace(session, fn). (Les `import type` sont autorisés.)",
             },
           ],
         },

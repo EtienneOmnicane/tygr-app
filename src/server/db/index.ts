@@ -101,6 +101,18 @@ export const identite: RepositoryIdentite = {
   enregistrerTentativeIp: (ip, succeeded) =>
     obtenirIdentite().enregistrerTentativeIp(ip, succeeded),
   membershipsDe: (userId) => obtenirIdentite().membershipsDe(userId),
+  membershipsAvecNom: (userId) =>
+    obtenirIdentite().membershipsAvecNom(userId),
 };
 
 export { schema };
+
+// Provisioning (Epic 2 L3) : ré-exporté via le point d'entrée serveur pour que
+// les Server Actions de app/ l'appellent sans importer @/server/repositories/*
+// directement (frontière P0-a). La fonction s'exécute DANS withWorkspace (tx,
+// ctx) — ce n'est pas un accès DB hors contexte.
+export {
+  creerUtilisateurEtRattacher,
+  ProvisioningNonAutoriseError,
+  RoleInvalideError,
+} from "@/server/repositories/provisioning";

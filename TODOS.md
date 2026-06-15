@@ -40,6 +40,40 @@ jour)** : voir le decision log du plan
   fermer la porte ; (b) déplacer la requête de page.tsx dans un repository scopé.
   Code applicatif → hors du refacto mécanique, lot dédié.
 
+### Dette acceptée au schéma financier Epic 3 (2026-06-12)
+
+- [ ] **Roulement automatique des partitions `transactions_cache`** — Effort S
+  (P1, déclencheur : premier déploiement de production). La migration 0003 crée
+  les partitions annuelles 2024-2027 + DEFAULT ; le plan exige une alerte si la
+  partition à J-30 manque + création automatique du roulement. À brancher avec
+  les crons de la pipeline de sync (Étape 2). Sans elle : à partir de 2028 les
+  lignes tombent dans la partition DEFAULT (fonctionnel mais non perforant) —
+  jamais de perte de données.
+
+### Dette relevée pendant Epic 2 + audit EM (2026-06-12)
+
+- [x] **next-auth épinglé en CARET, viole notre propre règle 9** — FAIT
+  2026-06-15 (PR 0 `feature/epic3-omnifi-live`). Pin exact posé dans
+  `package.json` ET `package-lock.json` (`"5.0.0-beta.31"`, sans `^`) ; version
+  résolue inchangée (`5.0.0-beta.31` déjà installée), `npm ci --dry-run` OK.
+  Rappel : re-valider le parcours login à chaque bump manuel futur.
+- [ ] **QA visuelle des états Suspense non capturable in situ** — Effort S (P2).
+  Le skeleton `loading.tsx` n'a pas pu être capturé via navigation réelle
+  (browse attend `load` ; le Suspense streamé échappe au timing ; CDP network
+  throttling hors allowlist). Contourné par un **rendu HTML offline** (CSS
+  compilé extrait du dev server) — le markup est validé, mais PAS dans le vrai
+  flux Suspense. Déclencheur : pour une QA fiable des états de chargement,
+  ajouter un harness Playwright qui intercepte le streaming, OU une route de
+  test dédiée derrière un flag dev. Le code `loading.tsx` est correct.
+- [ ] **CSO findings 1+2 — courses lockout & rate-limit (TOUJOURS OUVERTS)** —
+  Effort S-M (P1). Re-validation read-decide-write non atomique : N requêtes
+  concurrentes lisent l'état « non verrouillé » avant qu'aucune n'écrive →
+  bypass du lockout E18 et du plafond IP E7 sous concurrence. Plus grave que le
+  delta de timing ci-dessous. Correction structurelle commune : UPDATE
+  conditionnel atomique (lockout) + compteur atomique (IP, Redis en phase 2).
+  À traiter en un lot AVANT le premier déploiement production. Rapport CSO du
+  2026-06-12 (script d'attaque de preuve disponible).
+
 ### Dette relevée en validation locale (2026-06-12, EM run)
 
 - [x] **Provisioning du rôle `tygr_app` non migré (P0-b)** — FAIT 2026-06-12 :
@@ -68,8 +102,10 @@ jour)** : voir le decision log du plan
 - [ ] **npm audit : 2 vulnérabilités modérées transitives** (postcss via next,
   toutes versions stables affectées au 2026-06-11) — Effort S. Surveiller le patch
   next et re-auditer à chaque bump (CLAUDE.md règle 9).
-- [ ] **Règle lint anti accès DB ad-hoc** — Effort S (CC: ~20min). Interdire l'import
-  du client DB hors `src/lib/` et `src/repositories/` (CLAUDE.md règle 2).
+- [x] **Règle lint anti accès DB ad-hoc (P0-a)** — FAIT 2026-06-12 (refacto
+  d'arborescence, étape 1) : `no-restricted-imports` confine schéma/repositories
+  hors `src/server/**`, `allowTypeImports` pour les types partagés ; barrière
+  prouvée chirurgicale (import de valeur du schéma depuis `app/` rejeté).
 - [x] **Pipeline CI canonique** — FAIT 2026-06-11 : `.github/workflows/ci.yml`
   (lint → typecheck → tests/IDOR bloquant, sur PR vers main). Restent à brancher au
   setup du déploiement : étape build, migrations expand-contract, deploy preview

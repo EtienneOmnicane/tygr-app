@@ -17,7 +17,12 @@
 import { and, count, eq, gte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
-import { loginAttempts, users, workspaceMembers } from "@/server/db/schema";
+import {
+  loginAttempts,
+  users,
+  workspaceMembers,
+  workspaces,
+} from "@/server/db/schema";
 import type { WorkspaceRole } from "@/server/db/schema";
 import { evaluerEchec, evaluerSucces } from "@/server/auth/lockout";
 import { debutFenetre } from "@/server/auth/rate-limit-ip";
@@ -37,6 +42,11 @@ export interface UtilisateurIdentite {
 export interface MembershipResume {
   workspaceId: string;
   role: WorkspaceRole;
+}
+
+export interface MembershipAvecNom extends MembershipResume {
+  nom: string;
+  kind: string;
 }
 
 export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
@@ -151,6 +161,43 @@ export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
         return lignes.map((l) => ({
           workspaceId: l.workspaceId,
           role: l.role as WorkspaceRole,
+        }));
+      });
+    },
+
+    /**
+     * Memberships enrichis du nom + kind du workspace, pour le SÉLECTEUR (Epic 2
+     * L1). Même garde que membershipsDe : `own_memberships_select` filtre
+     * workspace_members par current_user_id ; le JOIN vers `workspaces` (hors
+     * RLS) n'expose donc QUE les workspaces de l'utilisateur — pas
+     * d'énumération d'autrui (arbitrage S2 du spec Epic 2).
+     */
+    async membershipsAvecNom(
+      userId: string,
+    ): Promise<MembershipAvecNom[]> {
+      return db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select set_config('app.current_user_id', ${userId}, true)`,
+        );
+        const lignes = await tx
+          .select({
+            workspaceId: workspaceMembers.workspaceId,
+            role: workspaceMembers.role,
+            nom: workspaces.name,
+            kind: workspaces.kind,
+          })
+          .from(workspaceMembers)
+          .innerJoin(
+            workspaces,
+            eq(workspaces.id, workspaceMembers.workspaceId),
+          )
+          .where(eq(workspaceMembers.userId, userId))
+          .orderBy(workspaces.name);
+        return lignes.map((l) => ({
+          workspaceId: l.workspaceId,
+          role: l.role as WorkspaceRole,
+          nom: l.nom,
+          kind: l.kind,
         }));
       });
     },
