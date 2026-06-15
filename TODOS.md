@@ -5,6 +5,29 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Cross-review sécurité PR-W2 — orchestration serveur widget (2026-06-15)
+
+Audit OWASP/IDOR contexte frais sur les Server Actions démarrer/finaliser.
+**1 bloquant corrigé, 1 non-bloquant corrigé, 2 différés.**
+- **1.1 (BLOQUANT) CORRIGÉ** : `finaliserConnexion` recoupe désormais
+  l'`InstitutionId` des comptes du job avec celui de la connexion échangée →
+  `ConnexionDesalignmentError` fail-closed si désalignement (sessionToken/jobId
+  d'un autre flux). Test d'isolation du cas ajouté.
+- **5.1 CORRIGÉ** : log structuré corrélé (`workspace_id` + code machine, sans
+  PII/token) dans les Server Actions (exit-criteria règle 3) ; `instanceof
+  OmniFiApiError` mort retiré.
+- [ ] **1.2 — Contraintes UNIQUE globales non composites** — Effort M (P1).
+  `omnifi_connection_id` / `omnifi_account_id` sont UNIQUE globaux (non
+  `(workspace_id, …)`) ; une collision d'id cross-tenant + `onConflictDoUpdate`
+  fait échouer la finalisation (DoS, PAS IDOR silencieux — la RLS masque la ligne
+  étrangère). Durcir en contraintes composites. Touche le schéma → migration
+  dédiée + cross-review schéma. Lié à la dette #5 (FK composites).
+- [ ] **3.1 — `redirectOrigin` non allowlisté** — Effort S (P1). Le schéma zod
+  exige https sans path mais accepte tout host. Un MANAGER pourrait émettre un
+  LinkToken pointant un domaine tiers (exfiltration du PublicToken via
+  postMessage). Durcir : allowlist des origines TYGR (env `WIDGET_ALLOWED_ORIGIN`).
+  Déclencheur : avant exposition du widget en prod.
+
 ### Cross-review sécurité PR-W1 — client widget multi-auth (2026-06-15)
 
 Audit OWASP contexte frais sur la gestion LinkToken/SessionToken/identifiants
