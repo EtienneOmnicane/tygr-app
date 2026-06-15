@@ -189,6 +189,77 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Une fois l'arbitrage rendu, exécution totale : le pushback vit AVANT la décision,
   jamais pendant l'implémentation (pas de scope creep déguisé en prudence).
 
+## Convention des états d'affichage (Loading / Empty / Error / Partiel)
+
+Deux mécanismes coexistent, à choisir selon l'origine de l'attente (checklist
+UI_GUIDELINES §6.5 — tout écran de données spécifie ses 4 états) :
+
+- **`loading.tsx` natif (App Router)** — quand l'attente est le RSC lui-même
+  (Suspense automatique de Next pendant qu'un Server Component résout ses
+  données). Skeleton inline, monté par le routeur. Ex. `(workspace)/selection/
+  loading.tsx`. C'est le défaut pour un segment de route qui fetch côté serveur.
+
+- **Composants `<…State/>` présentationnels** (`src/components/<domaine>/states/`)
+  — quand l'état est piloté par le CLIENT (données déjà chargées mais vides,
+  échec de synchro à re-tenter, polling). Composants « stupides » : aucun fetch,
+  aucun état interne, handlers (`onRetry`/`onConnect`) en props optionnelles et
+  inertes par défaut. Le conteneur (page/feature) décide quel état monter. Ex.
+  `components/dashboard/states/` : `DashboardLoadingState`, `DashboardEmptyState`,
+  `DashboardErrorState`, exportés par un `index.ts` barrel.
+
+Règles communes (non négociables) :
+- **Tokens UI_GUIDELINES uniquement**, jamais de couleur en dur. Briques
+  partagées dans `states/primitives.tsx` (`SkeletonBlock`, `StateCard`,
+  `StateIllustration`) — pas de duplication du markup de carte.
+- **Erreur ≠ sortie (§3.4)** : un état d'erreur porte TOUJOURS fond `danger-bg`
+  + icône + message, jamais un simple rouge (qui est réservé aux montants
+  `outflow`). `role="alert"`.
+- **Loading neutre** : le skeleton n'emploie aucune couleur sémantique
+  (`inflow`/`outflow`) — le chargement n'est pas de la donnée. Il épouse la
+  FORME réelle de l'écran (mêmes cartes, mêmes colonnes) pour éviter le saut de
+  layout ; montants placeholders en `tabular-nums`.
+- **Empty (§4.4)** : illustration outline légère + message `text-muted` + UN seul
+  CTA. Jamais un « No data » sec.
+- **Zéro dépendance externe** (règle 9) : `cn` local + SVG inline tant que
+  clsx/cva/lucide ne sont pas au projet.
+- **Visual QA (Gate 4)** : une route de démo `src/app/demo/<domaine>-states/`
+  expose les états hors auth/DB pour capture headless. Hors production.
+
+## Consommation des services de lecture du dashboard (Epic 3)
+
+Les 5 services de lecture vivent dans `src/server/repositories/dashboard.ts` et
+s'exécutent TOUS dans `withWorkspace(session, fn)` (isolation RLS — règle 2). L'UI
+ne les appelle JAMAIS en direct depuis un composant : un Server Component (page/
+segment) ouvre `withWorkspace` et passe les résultats en props. Aucun `workspace_id`
+n'est jamais un paramètre.
+
+| Service | Signature | Sortie (montants = chaînes décimales) | Cible UI |
+|---|---|---|---|
+| `listerComptes(tx)` | `() => CompteConnecte[]` | comptes sélectionnés | side-panel « Comptes connectés » (§1.3) |
+| `soldeConsolideCourant(tx)` | `() => string` | somme des derniers EOD | carte SOLDE (§1.3) |
+| `courbeTresorerie(tx, {from,to})` | `(fenetre) => PointCourbe[]` | solde EOD consolidé / jour | courbe 90 j (§4.2) |
+| `syntheseMois(tx, "YYYY-MM")` | `(mois) => SyntheseMois` | entrées/sorties/variation | KPIs side-panel |
+| `transactionsRecentes(tx, n)` | `(limite?) => TransactionRecente[]` | N dernières | table « Transactions récentes » |
+
+Contrat impératif côté UI :
+- **Montants = CHAÎNES décimales** (règle 8) : formater en `tabular-nums`, NE JAMAIS
+  reconvertir en `number` pour recalculer (perte de centime). Les valeurs peuvent
+  être NÉGATIVES (variation, solde, point de courbe) — gérer le signe à l'affichage
+  (vert `inflow` / rouge `outflow` sur la donnée uniquement, §3).
+- **Tombstones déjà exclus** côté service (`is_removed=true`) — l'UI n'a aucun
+  filtrage à refaire.
+- **Pas de PII** : `bank_label_raw` n'est jamais renvoyé ; afficher `cleanLabel`
+  (peut être `null` → fallback neutre).
+- **États** : un service peut renvoyer `[]` / `"0"` (workspace sans donnée) → monter
+  l'empty state (§4.4), pas un dashboard vide silencieux. Voir la convention des
+  états ci-dessus.
+
+Pré-seed (avant que l'ingestion Omni-FI ne peuple la base), l'UI se câble sur les
+FIXTURES typées `src/server/repositories/dashboard.fixtures.ts` (données 100 %
+fictives, mêmes types que les services) : `FIXTURE_DASHBOARD` (état succès) et
+`FIXTURE_DASHBOARD_VIDE` (état vide). Ne JAMAIS importer ces fixtures dans un
+chemin servant des données réelles.
+
 ## Human-in-the-Loop (workflow Git & déploiement)
 
 Discipline de livraison — l'agent ne franchit jamais ces frontières seul :
