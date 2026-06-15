@@ -92,10 +92,43 @@ CREATE POLICY "tenant_isolation" ON "bank_connections" AS PERMISSIVE FOR ALL TO 
 CREATE POLICY "tenant_isolation" ON "transactions_cache" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
 -- FORCE ROW LEVEL SECURITY (même rationale que 0001_rls-force) : la RLS
 -- s'applique aussi au propriétaire — ceinture en plus du garde-fou C6.
--- La RLS s'hérite des partitions ; le FORCE sur la table mère suffit pour
--- toute requête passant par elle (le rôle applicatif n'attaque jamais une
--- partition en direct).
 ALTER TABLE "bank_connections" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "bank_accounts" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "transactions_cache" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "balance_history" FORCE ROW LEVEL SECURITY;
+ALTER TABLE "balance_history" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+-- ⚠️ ISOLATION TENANT SUR TABLE PARTITIONNÉE (constat cross-review BLOQUANT,
+-- 2026-06-15). PostgreSQL n'hérite PAS la RLS/les policies de la table mère aux
+-- partitions : une partition interrogée EN DIRECT (SELECT FROM
+-- transactions_cache_2026) n'applique que SON propre état RLS. Comme tygr_app
+-- reçoit GRANT … ON ALL TABLES (partitions incluses), sans RLS par partition la
+-- lecture directe d'une partition fuit TOUS les workspaces (montants +
+-- bank_label_raw, PII). On pose donc ENABLE+FORCE+policy tenant_isolation sur
+-- CHAQUE partition. ⚠️ Le roulement annuel des partitions (dette TODOS) DOIT
+-- répéter ces trois instructions à la création de toute partition future, sinon
+-- la prochaine partition rouvre le trou.
+ALTER TABLE "transactions_cache_2024" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "transactions_cache_2024" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenant_isolation" ON "transactions_cache_2024" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
+ALTER TABLE "transactions_cache_2025" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "transactions_cache_2025" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenant_isolation" ON "transactions_cache_2025" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
+ALTER TABLE "transactions_cache_2026" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "transactions_cache_2026" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenant_isolation" ON "transactions_cache_2026" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
+ALTER TABLE "transactions_cache_2027" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "transactions_cache_2027" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenant_isolation" ON "transactions_cache_2027" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
+ALTER TABLE "transactions_cache_default" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "transactions_cache_default" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "tenant_isolation" ON "transactions_cache_default" AS PERMISSIVE FOR ALL TO public USING (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid) WITH CHECK (workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid);--> statement-breakpoint
+-- #3 — Tombstone strict : transactions_cache et balance_history ne se
+-- suppriment jamais physiquement (is_removed porte l'effacement logique). On
+-- retire le privilège DELETE à tygr_app sur ces deux tables (le GRANT global de
+-- provisioning l'accorde sinon). Défense en base, pas seulement par convention.
+REVOKE DELETE ON "transactions_cache" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "transactions_cache_2024" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "transactions_cache_2025" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "transactions_cache_2026" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "transactions_cache_2027" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "transactions_cache_default" FROM "tygr_app";--> statement-breakpoint
+REVOKE DELETE ON "balance_history" FROM "tygr_app";
