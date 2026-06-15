@@ -49,6 +49,42 @@ jour)** : voir le decision log du plan
   les crons de la pipeline de sync (Étape 2). Sans elle : à partir de 2028 les
   lignes tombent dans la partition DEFAULT (fonctionnel mais non perforant) —
   jamais de perte de données.
+  **⚠️ SÉCURITÉ NON NÉGOCIABLE** : toute partition créée par ce roulement DOIT
+  poser `ENABLE` + `FORCE ROW LEVEL SECURITY` + `CREATE POLICY tenant_isolation`
+  + `REVOKE DELETE FROM tygr_app` à sa création (PostgreSQL n'hérite pas la RLS
+  de la mère — cf. constat bloquant cross-review 2026-06-15, corrigé dans 0003
+  pour les partitions 2024-2027+DEFAULT). Une partition sans RLS = fuite
+  cross-tenant. Ceci relève de l'isolation tenant : à traiter comme tel.
+
+### Dette acceptée au schéma Epic 3 — cross-review (2026-06-15)
+
+Cross-review contradictoire (rôle Sécurité, contexte frais) sur la branche
+`feature/epic3-schema`. BLOQUANT corrigé dans 0003 (RLS+FORCE+policy sur les 5
+partitions de `transactions_cache`, commentaire faux retiré). #3 corrigé dans
+0003 (REVOKE DELETE sur `transactions_cache`/`balance_history` — tombstone
+strict). Différés ci-dessous :
+
+- [ ] **#2 — Idempotence d'ingestion non garantie par la clé DB** — Effort M
+  (P1, déclencheur : PR pipeline de sync). L'unicité `(omnifi_txn_id,
+  transaction_date)` est forcée d'inclure `transaction_date` (clé de partition).
+  Si Omni-FI fait dériver le `BookingDateTime` d'une transaction d'un jour
+  Maurice à l'autre entre deux syncs, l'`ON CONFLICT` ne reconnaît pas la ligne
+  existante → DOUBLON (montant compté deux fois, agrégats faussés). L'idempotence
+  doit être gérée applicativement sur `omnifi_txn_id` seul (SELECT existant avant
+  upsert, ou ré-affectation de la ligne). À résoudre DANS la PR 2 ingestion.
+- [ ] **#5 — FK non composites → rattachement cross-workspace possible** — Effort
+  M (P1). `bank_accounts.connection_id → bank_connections.id` (et FK analogues)
+  ne vérifient pas l'égalité de `workspace_id` : une ligne du workspace courant
+  peut référencer un parent d'un autre workspace. Atténué par le `WITH CHECK`
+  (on n'écrit pas DANS un autre tenant) + `workspace_id` dénormalisé et indexé
+  (la lecture reste filtrée). Durcissement : PK/UNIQUE composites `(workspace_id,
+  id)` sur les parents + FK composites. À trancher (coût vs bénéfice).
+- [ ] **#6 — `ON DELETE no action` sur `created_by`/`workspace_id`** — Effort S
+  (P1). Supprimer un user qui a créé une `bank_connection` est bloqué par la FK
+  (alors que `workspace_members.user_id` est en cascade) → offboarding RGPD
+  heurte une erreur FK. Choix à acter : `SET NULL` sur `created_by` (traçabilité
+  via audit_events) vs statu quo (protection de l'historique). Idem suppression
+  de workspace, bloquée tant qu'il reste des données financières.
 
 ### Dette relevée pendant Epic 2 + audit EM (2026-06-12)
 
