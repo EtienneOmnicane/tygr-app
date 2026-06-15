@@ -21,7 +21,7 @@
  */
 import { useActionState, useState } from "react";
 
-import { OmniFiWidget, type OmniFiSuccess } from "@omnifi/react";
+import { OmniFiWidget } from "@omnifi/react";
 
 import {
   demarrerConnexionAction,
@@ -53,12 +53,19 @@ export function BankConnectWidget({
   const [ferme, setFerme] = useState(false);
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
-  function onSuccess(result: OmniFiSuccess) {
-    // Échange serveur (publicToken + sessionToken + jobId). Jamais loggés ici.
+  function onSuccess(publicToken: string) {
+    // Contrat Fern (décision 2026-06-15) : le widget renvoie le publicToken SEUL.
+    // Le serveur l'échange contre un ConnectionId (link-exchange) — pas de
+    // sessionToken ni jobId via ce callback. Le token n'est jamais loggé ici.
+    //
+    // ⚠️ DÉSALIGNEMENT SERVEUR À RÉSOUDRE (Agent Backend) : finaliserConnexionAction
+    // exige ENCORE publicToken + sessionToken + jobId (schéma zod .strict()). Avec
+    // publicToken seul, sa validation rejettera l'appel → la connexion ne sera pas
+    // rattachée. Le backend doit réduire finalisationSchema à { publicToken }
+    // (link-exchange n'a besoin que de PublicToken + ClientUserId, ce dernier
+    // venant du workspace côté serveur). Voir entrée TODOS.
     const fd = new FormData();
-    fd.set("publicToken", result.publicToken);
-    fd.set("sessionToken", result.sessionToken);
-    fd.set("jobId", result.jobId);
+    fd.set("publicToken", publicToken);
     finaliser(fd);
     setFerme(true);
   }
