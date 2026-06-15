@@ -14,7 +14,7 @@
  * pré-connectés sont rattachés en amont.
  */
 import type { OmniFiClient, OmniFiConnection } from "@/server/omnifi";
-import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
+import type { ExecuterWorkspace } from "@/server/db/tenancy";
 
 import { normaliserMontant } from "./conversion";
 import { synchroniserCompte, type ResultatSync } from "./orchestrateur";
@@ -23,10 +23,6 @@ import {
   upsertSoldes,
   type SoldeAUpserter,
 } from "@/server/repositories/ingestion";
-
-type Executer = <T>(
-  fn: (tx: WorkspaceTx<never>, ctx: WorkspaceContext) => Promise<T>,
-) => Promise<T>;
 
 /** Collecte toutes les pages de /connections (Q2 du client : suit Links.Next). */
 export async function collecterConnexions(
@@ -48,7 +44,7 @@ export async function collecterConnexions(
 /** Persiste les connexions d'un EndUser dans le workspace courant. */
 export async function ingererConnexions(
   client: OmniFiClient,
-  executer: Executer,
+  executer: ExecuterWorkspace,
   clientUserId: string,
 ): Promise<{ connexions: number }> {
   const connexions = await collecterConnexions(client, clientUserId);
@@ -73,7 +69,7 @@ export async function ingererConnexions(
  */
 export async function synchroniserCompteComplet(
   client: OmniFiClient,
-  executer: Executer,
+  executer: ExecuterWorkspace,
   params: {
     omnifiAccountId: string;
     bankAccountId: string;
