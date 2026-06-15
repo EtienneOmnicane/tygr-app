@@ -14,6 +14,10 @@
  * Règle 8 : montants en chaînes décimales, jamais de float. Dates comptables en
  * jours calendaires Maurice (les soldes EOD sont des dates nues, cf. doc Fern).
  * Données fictives uniquement (sociétés mauriciennes plausibles) — pas de PII réelle.
+ *
+ * RESET : chaque run purge d'abord les données de démo du workspace (rôle owner,
+ * DELETE physique) pour un état déterministe — légitime ici car données 100 %
+ * fictives. Ne JAMAIS pointer ce script sur un workspace contenant de la vraie donnée.
  */
 import { neonConfig, Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
@@ -67,16 +71,22 @@ const RECURRENCES: Array<[jour: number, label: string, cat: string, sous: string
   [28, "MCB Frais de tenue", "Banking & Finance", "Bank Charges", 2_450],
 ];
 
-/** Encaissements clients (date → montant crédit). */
+/**
+ * Encaissements clients (date → montant crédit). Calibrés pour une trésorerie
+ * SAINE : ~1 600 k/mois d'entrées contre ~1 218 k/mois de charges → courbe qui
+ * monte régulièrement sur la fenêtre 90 j. Sociétés mauriciennes plausibles.
+ */
 const ENCAISSEMENTS: Array<[date: string, client: string, montant: number]> = [
-  ["2026-03-20", "Beachcomber Resorts", 112_000],
-  ["2026-03-31", "ENL Property", 159_000],
-  ["2026-04-15", "IBL Ltd", 230_000],
-  ["2026-04-29", "Rogers Capital", 284_000],
-  ["2026-05-14", "Ciel Textile", 147_500],
-  ["2026-05-28", "Currimjee Jeewanjee", 194_000],
-  ["2026-06-04", "IBL Ltd", 238_000],
-  ["2026-06-11", "Beachcomber Resorts", 153_000],
+  ["2026-03-18", "IBL Ltd", 420_000],
+  ["2026-03-26", "Beachcomber Resorts", 385_000],
+  ["2026-04-02", "Rogers Capital", 540_000],
+  ["2026-04-11", "ENL Property", 410_000],
+  ["2026-04-22", "Currimjee Jeewanjee", 475_000],
+  ["2026-05-05", "IBL Ltd", 520_000],
+  ["2026-05-16", "Ciel Textile", 398_000],
+  ["2026-05-27", "Rogers Capital", 610_000],
+  ["2026-06-03", "Beachcomber Resorts", 432_000],
+  ["2026-06-10", "ENL Property", 505_000],
 ];
 
 /** Montant entier (roupies) → chaîne numeric "x.00" (règle 8, pas de float). */
@@ -183,6 +193,29 @@ async function main() {
       process.exit(1);
     }
     userId = m.rows[0].user_id;
+
+    // RESET déterministe (rôle owner, hors RLS — script d'admin de démo) : purge
+    // les données de démo du workspace avant ré-insertion, pour éviter des
+    // transactions orphelines/tombstones accumulées entre deux runs (le nombre/
+    // l'ordre des tx peut changer quand on ajuste le jeu). DELETE physique
+    // assumé ICI car données 100 % fictives de démo (jamais de la vraie donnée).
+    await ac.query(
+      "delete from transactions_cache where workspace_id = $1",
+      [workspaceId],
+    );
+    await ac.query(
+      "delete from balance_history where workspace_id = $1",
+      [workspaceId],
+    );
+    await ac.query(
+      "delete from bank_accounts where workspace_id = $1",
+      [workspaceId],
+    );
+    await ac.query(
+      "delete from bank_connections where workspace_id = $1",
+      [workspaceId],
+    );
+    console.log("Reset des données de démo du workspace effectué.");
   } finally {
     ac.release();
     await adminPool.end();
