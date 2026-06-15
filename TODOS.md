@@ -94,6 +94,29 @@ traité (voir ci-dessous). Différés :
   via audit_events) vs statu quo (protection de l'historique). Idem suppression
   de workspace, bloquée tant qu'il reste des données financières.
 
+### Dette acceptée à la PR 1 client Omni-FI — cross-review (2026-06-15)
+
+PR 1 `feature/epic3-omnifi-live`. La cross-review contradictoire (rôles Sécurité
++ QA, contexte frais) a produit 7 constats. Corrigés DANS la PR 1 : S1 (SSRF/
+fuite de clé — `startsWith` https contournable → `new URL` + rejet userinfo +
+allow-list des 3 hôtes doc), Q1 (`{Data:null}` rejeté), S2 (cause réseau réduite
+à `{name,code}`), Q5 (`Retry-After` format date HTTP), Q2 (Links/Meta exposés sur
+les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) :
+
+- [ ] **Q3 — `count` du sync non borné vs max 500 (doc § Transactions)** — Effort S
+  (P1, déclencheur : PR 2 ingestion). `OmniFiClient.syncTransactions` passe `count`
+  tel quel ; un `count>500` → soit 400 dur (ingestion bloquée), soit clamp
+  silencieux (dérive de pagination). À borner [1,500] côté client ou appelant au
+  moment où la boucle d'ingestion est écrite. Sans : risque uniquement si un
+  appelant fournit un count hors borne — aucun appelant n'existe avant la PR 2.
+- [ ] **Q4 — invariant curseur `NextCursor` vide + `HasMore:true` non défendu** —
+  Effort S (P1, déclencheur : PR 2 ingestion). `NextCursor` est typé `string` non
+  optionnel ; une boucle naïve sur un `NextCursor:""` renvoyé avec `HasMore:true`
+  re-demanderait la 1re page (curseur vide = historique complet) → boucle infinie
+  ré-ingérant les mêmes lignes. La garde (refuser `HasMore` sans curseur non vide)
+  vit naturellement dans la boucle d'ingestion PR 2. Sans : aucun effet en PR 1
+  (le client expose une page, n'itère pas).
+
 ### Dette relevée pendant Epic 2 + audit EM (2026-06-12)
 
 - [x] **next-auth épinglé en CARET, viole notre propre règle 9** — FAIT
