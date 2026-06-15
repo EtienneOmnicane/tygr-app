@@ -5,24 +5,21 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
-### ⚠️ Conflit d'agents — câblage widget en DOUBLE (2026-06-15, à arbitrer)
+### Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU)
 
-Le merge de main dans PR-W4 a révélé DEUX composants qui câblent le widget,
-avec des contrats DIVERGENTS (conflit résolu sur le stub `omnifi-react.d.ts` par
-une union permissive → les deux compilent, 167 tests verts, MAIS incohérent au
-runtime) :
-- `src/app/(workspace)/banques/connecter-banque.tsx` (backend, PR-W4) :
-  `useOmniFi({ token })` + `finaliserConnexionDropinAction` (publicToken seul →
-  GET /accounts). Aligné sur la doc Fern (onSuccess = publicToken seul).
-- `src/components/widget/bank-connect-widget.tsx` (agent UI, dans main) :
-  `<OmniFiWidget linkToken/>` + `finaliserConnexionAction` (attend publicToken +
-  sessionToken + jobId). Suppose onSuccess = { publicToken, sessionToken, jobId }.
-- [ ] **DÉCISION REQUISE (P0 avant démo)** : un seul câblage doit survivre. Le
-  vrai contrat de `@omnifi/react.onSuccess` tranche (publicToken seul OU objet) —
-  non lisible ici (package privé absent). À confirmer sur le poste de démo
-  (`cat node_modules/@omnifi/react/**/*.d.ts`). Si publicToken seul → garder le
-  câblage backend (dropin) ; si objet → garder celui de l'UI. Tant que non tranché,
-  l'un des deux échouera au runtime (zod rejette les champs manquants).
+Le merge de main dans PR-W4 avait révélé DEUX câblages divergents du widget.
+**Tranché (doc Fern) : `onSuccess = publicToken SEUL`.** Unification appliquée :
+- `bank-connect-widget.tsx` (agent UI, monté par `banques/page.tsx`) réécrit sur
+  le contrat dropin → `onSuccess(publicToken)` + `finaliserConnexionDropinAction`.
+- Doublon `connecter-banque.tsx` (backend, non monté) SUPPRIMÉ.
+- `finaliserConnexionAction` + son schéma zod (sessionToken/jobId) SUPPRIMÉS de
+  `actions.ts`. Stub `omnifi-react.d.ts` nettoyé (plus de sessionToken/jobId).
+- `finaliserConnexion` (orchestration, chemin « widget custom » via
+  getSyncJobAccounts) CONSERVÉE + testée (réutilisable hors dropin), mais plus
+  appelée par aucune action. Un seul chemin runtime : le dropin.
+- [ ] **5.3 (P2)** — retirer le stub `omnifi-react.d.ts` dès que le vrai package
+  privé est installé (le stub fige le contrat ; un changement du tiers échappe au
+  typecheck).
 
 ### Cross-review sécurité PR-W4 — intégration widget drop-in (2026-06-15)
 

@@ -11,27 +11,30 @@
  *      retourne un LinkToken usage-unique.
  *   2. LinkToken présent → on monte `<OmniFiWidget linkToken=… />`. Le widget natif
  *      prend la main (UI bancaire native).
- *   3. onSuccess → `finaliserConnexionAction` échange les tokens côté serveur et
- *      rattache la connexion ; onExit/onError → on réarme le bouton.
+ *   3. onSuccess → `finaliserConnexionDropinAction(publicToken)` échange le
+ *      PublicToken côté serveur (puis GET /accounts) et rattache la connexion ;
+ *      onExit/onError → on réarme le bouton.
  *
- * Sécurité : le LinkToken et les tokens de session ne sont NI loggés NI persistés
- * côté client (règle 8) ; ils transitent vers les Server Actions qui les relaient.
- * Le gating MANAGER/ADMIN est porté par le serveur (les actions refusent un VIEWER) ;
+ * Contrat (doc Fern) : `onSuccess` reçoit le `publicToken` SEUL — le widget gère
+ * la MFA en interne (ni sessionToken ni jobId exposés).
+ *
+ * Sécurité : le LinkToken et le PublicToken ne sont NI loggés NI persistés côté
+ * client (règle 8) ; ils transitent vers les Server Actions qui les relaient. Le
+ * gating MANAGER/ADMIN est porté par le serveur (les actions refusent un VIEWER) ;
  * ici on n'affiche le bouton que si `peutConnecter` (UX), la barrière réelle est serveur.
  */
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 
-import { OmniFiWidget, type OmniFiSuccess } from "@omnifi/react";
+import { OmniFiWidget } from "@omnifi/react";
 
 import {
   demarrerConnexionAction,
-  finaliserConnexionAction,
+  finaliserConnexionDropinAction,
   type EtatDemarrage,
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
 
 const ETAT_DEMARRAGE: EtatDemarrage = { erreur: null, linkToken: null };
-const ETAT_FINALISATION: EtatFinalisation = { erreur: null, succes: null };
 
 export function BankConnectWidget({
   peutConnecter,
@@ -43,24 +46,24 @@ export function BankConnectWidget({
     demarrerConnexionAction,
     ETAT_DEMARRAGE,
   );
-  const [finalisation, finaliser] = useActionState(
-    finaliserConnexionAction,
-    ETAT_FINALISATION,
-  );
+  const [finalisation, setFinalisation] = useState<EtatFinalisation>({
+    erreur: null,
+    succes: null,
+  });
+  const [, startFinalisation] = useTransition();
   // Le widget est monté tant que l'action a produit un LinkToken ET que
   // l'utilisateur ne l'a pas fermé. `ferme` réarme après sortie/succès sans
   // copier le token dans un état (pas de setState-in-effect — état DÉRIVÉ).
   const [ferme, setFerme] = useState(false);
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
-  function onSuccess(result: OmniFiSuccess) {
-    // Échange serveur (publicToken + sessionToken + jobId). Jamais loggés ici.
-    const fd = new FormData();
-    fd.set("publicToken", result.publicToken);
-    fd.set("sessionToken", result.sessionToken);
-    fd.set("jobId", result.jobId);
-    finaliser(fd);
+  function onSuccess(publicToken: string) {
+    // Contrat dropin : publicToken seul. Jamais loggé ici.
     setFerme(true);
+    startFinalisation(async () => {
+      const r = await finaliserConnexionDropinAction(publicToken);
+      setFinalisation(r);
+    });
   }
 
   if (!peutConnecter) {

@@ -24,7 +24,6 @@ import {
   ConnexionNonAutoriseeError,
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
-  finaliserConnexion,
   finaliserConnexionDropin,
 } from "@/server/widget/orchestration";
 
@@ -88,14 +87,6 @@ const demarrageSchema = z
   })
   .strict();
 
-const finalisationSchema = z
-  .object({
-    publicToken: z.string().min(1).max(512),
-    sessionToken: z.string().min(1).max(512),
-    jobId: z.string().uuid(),
-  })
-  .strict();
-
 /**
  * Démarre une connexion : retourne un LinkToken pour initialiser le widget.
  * Le ClientUserId vient du workspace (frontière tenant), jamais du client.
@@ -128,47 +119,6 @@ export async function demarrerConnexionAction(
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "demarrer"),
       linkToken: null,
-    };
-  }
-}
-
-/**
- * Finalise une connexion : échange le PublicToken, découvre + persiste les
- * comptes. Idempotent.
- */
-export async function finaliserConnexionAction(
-  _etat: EtatFinalisation,
-  formData: FormData,
-): Promise<EtatFinalisation> {
-  const session = await exigerSessionWorkspace();
-
-  const parsed = finalisationSchema.safeParse({
-    publicToken: formData.get("publicToken"),
-    sessionToken: formData.get("sessionToken"),
-    jobId: formData.get("jobId"),
-  });
-  if (!parsed.success) {
-    return { erreur: "Paramètres invalides.", succes: null };
-  }
-
-  const client = creerClientOmniFi();
-  const executer = <T>(fn: Parameters<typeof withWorkspace<T>>[1]) =>
-    withWorkspace(session, fn);
-
-  try {
-    const r = await finaliserConnexion(client, executer, {
-      publicToken: parsed.data.publicToken,
-      sessionToken: parsed.data.sessionToken,
-      jobId: parsed.data.jobId,
-    });
-    return {
-      erreur: null,
-      succes: `Connexion établie — ${r.comptesRattaches} compte(s) rattaché(s).`,
-    };
-  } catch (erreur) {
-    return {
-      erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser"),
-      succes: null,
     };
   }
 }
