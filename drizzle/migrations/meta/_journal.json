@@ -22,6 +22,13 @@
       "when": 1781236520253,
       "tag": "0002_login-attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781270795475,
+      "tag": "0003_epic3-financial-core",
+      "breakpoints": true
     }
   ]
 }
