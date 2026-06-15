@@ -103,17 +103,24 @@ Toutes les erreurs suivent l'enveloppe OBIE :
 
 ```json
 {
+  "Id": "err-ref-audit",
   "Code": "400 BadRequest",
   "Message": "Description lisible",
   "Errors": [
     {
       "ErrorCode": "CODE_MACHINE_READABLE",
       "Message": "Détail de l'erreur",
-      "Path": "$.FieldName"
+      "Path": "$.FieldName",
+      "Url": "https://docs.../remediation"
     }
   ]
 }
 ```
+
+> **Champs `Id` et `Errors[].Url` (préc. Fern 2026-06-15)** : `Id` est une
+> référence d'erreur unique (audit) à logger côté TYGR ; `Url` (optionnel) pointe
+> une page de remédiation. Le client mappe `Code` + `Errors[].ErrorCode`/`Path`
+> vers ses erreurs nommées ; `Message` (PII potentielle) n'est jamais exposé brut.
 
 ---
 
@@ -381,12 +388,22 @@ Crée un LinkToken court-vécu pour initialiser le widget.
   "ClientUserId": "uuid-de-votre-utilisateur",
   "RedirectOrigin": "https://your-app.example.com",
   "InstitutionId": "mcb",
-  "RequestedScopes": ["accounts", "data"],
+  "RequestedScopes": ["accounts", "insights", "alerts", "data"],
   "AppName": "Mon App",
   "AppLogoUrl": "https://...",
-  "AccountSelectionEnabled": true
+  "AccountSelectionEnabled": true,
+  "WebhookUrl": "https://your-server.com/webhooks/omnifi"
 }
 ```
+
+> **Précisions Fern 2026-06-15** : `ClientUserId` (**requis**, UUID) = NOTRE id
+> interne d'EndUser (= `workspaces.omnifi_client_user_id`). `RedirectOrigin`
+> (**requis**) = origine HTTPS (scheme+host, sans path/query/fragment) autorisée à
+> recevoir le `PublicToken` par `postMessage`. `RequestedScopes` ∈
+> `accounts|insights|alerts|data` — **un tableau vide déclenche `400
+> VALIDATION_ERROR`** (omettre pour les défauts). `WebhookUrl` (optionnel) route le
+> webhook `connection.created` de cette session vers une URL alternative.
+> **Réponse 201** : `{ Data: { LinkToken, Expiration } }`.
 
 Champs optionnels pour le mode **Repair** (re-connexion d'un compte en erreur) :
 
@@ -656,8 +673,20 @@ Détail complet d'un job (utilisé pour le polling).
 | `DeliveryTargets` | array \| null | Destinations masquées (ex: `[{ "Kind": "phone", "Target": "+230 5*** 1234" }]`) |
 | `MfaResendCooldownSeconds` | integer \| null | Cooldown banque entre resends |
 | `MfaResendRequestedAt` | datetime \| null | Dernier resend accepté |
-| `MfaResendCount` | integer | Compteur resends (0–3) |
+| `MfaResendCount` | integer | Compteur resends (0–3) ; le 4e est refusé |
 | `UserInput` | string \| null | OTP soumis (visible si en attente) |
+| `PersistenceStats` | object \| null | Peuplé après `ENRICHING` : `{ TransactionsCreated, TransactionsUpdated, TransactionsDuplicated, AccountsUpdated }` (entiers) |
+| `Metadata` | object \| null | Contexte device/IP/localisation ; null si non capturé |
+
+> **Authentification du polling (préc. Fern 2026-06-15)** : `GET /sync/job/{JobId}`
+> accepte **ApiKeyAuth** (avec `clientUserId` en query, requis B2B) **OU**
+> **SessionTokenAuth** (Bearer, pas de `clientUserId`). Le widget utilise le Bearer.
+>
+> **Détail des états MFA** : `OTP_REQUESTED` = code envoyé, en attente de saisie ;
+> `OTP_WAITING` = saisie reçue, validation en cours. `MfaLength` ∈ 1–12 ;
+> `MfaResendCooldownSeconds` ∈ 0–600. `DeliveryTargets[]` = `{ Kind: email|phone,
+> Target: <masqué> }`. Tous les champs MFA sont `null` si le job se termine sans
+> challenge.
 
 ---
 
@@ -676,7 +705,19 @@ Soumet le code OTP/MFA quand le job est en état `OTP_REQUESTED`.
 
 > `MfaResendRequestedAt` est **obligatoire** si un resend a déjà eu lieu sur ce job (watermark strict-equality). Omettre uniquement au premier OTP sans resend.
 
-**Réponse 202** | **409** `JOB_NOT_RUNNING` ou `STALE_INPUT`
+> **Contrat watermark (strict equality, préc. Fern 2026-06-15)** : le serveur
+> compare la valeur soumise à `MfaResendRequestedAt` de la ligne **à l'identique** ;
+> une valeur **absente, malformée, plus ancienne, ou un futur fabriqué** → rejet
+> `409 STALE_INPUT`. Échoer VERBATIM la valeur lue dans `GET /sync/job/{JobId}`,
+> sans reformatage. Si aucun resend (`MfaResendRequestedAt IS NULL`), le champ est
+> optionnel. Le 3e mauvais code fait passer `Status → FAILED` avec erreur `LOGIN_FAILED`.
+
+**Réponse 202 :**
+```json
+{ "Data": { "Status": "OTP_ACCEPTED", "JobId": "uuid" } }
+```
+**409** `JOB_NOT_RUNNING` (job hors `OTP_REQUESTED`) ou `STALE_INPUT` (watermark) ·
+**400** entrée invalide · **404** job introuvable.
 
 **Codes sandbox OTP :**
 
@@ -718,10 +759,29 @@ Demande un renvoi de l'OTP (le scraper Playwright clique "Renvoyer" sur le porta
 
 #### `GET /sync/job/{JobId}/accounts`
 
-Comptes associés au job (avec balances inline). Utilisé par le widget pour l'écran Account Selection.
+Comptes associés au job (avec balances inline). Utilisé par le widget pour l'écran Account Selection. **Résout la découverte de comptes** (connexion → comptes) côté flux widget.
 
-**Auth:** SessionTokenAuth  
-**Réponse 200:** `{ "Data": { "Account": [ OmniFiAccount + Balances[] ] } }`
+**Auth:** SessionTokenAuth (Bearer)  
+**Réponse 200:** `{ "Data": { "Account": [ OmniFiAccount ] } }`
+
+**Objet `OmniFiAccount` (préc. Fern 2026-06-15) :**
+
+| Champ | Type | Description |
+|---|---|---|
+| `AccountId` | string | UUID Omni-FI du compte |
+| `Status` | `Enabled` \| `Disabled` \| `Deleted` \| `Pending` \| `ProForma` | |
+| `Currency` | string | ISO 4217 |
+| `AccountCategory` | `Personal` \| `Business` | |
+| `AccountTypeCode` | `CACC` \| `CARD` \| `LOAN` \| `SVGS` \| … | Type OBIE |
+| `Balances` | `OBBalance[]` | `{ Type, Amount, DateTime, CreditDebitIndicator }` — au plus 1 entrée par type, snapshot le plus frais |
+| `PartyId` | uuid \| null | Personne morale/physique |
+| `PartyName` | string \| null | |
+| `InstitutionId` | string \| null | |
+| `OwnershipType` | `PRIMARY` \| `SECONDARY` \| `JOINT_OWNER` \| `TRUST` \| `BUSINESS` \| `POWER_OF_ATTORNEY` | |
+| `IsAsset` | boolean \| null | |
+
+> `Balances[].Type` ∈ `ITAV` `CLAV` `ITBD` `CLBD` `OPAV` `OPBD` `FWAV` `INFO`
+> `PRCD` `XPCD`. **Erreurs** : 401, 404, 500.
 
 ---
 
