@@ -27,6 +27,7 @@ import {
   ConnexionNonAutoriseeError,
   demarrerConnexion,
   finaliserConnexion,
+  finaliserConnexionDropin,
 } from "@/server/widget/orchestration";
 
 const client = new PGlite();
@@ -60,6 +61,16 @@ function clientFactice(over: {
       Account: over.accounts ?? [
         { AccountId: "oa-1", Status: "Enabled", Currency: "MUR", PartyName: "Compte 1", Balances: [{ Type: "ITAV", Amount: { Amount: "5000.00", Currency: "MUR" } }] },
       ],
+    }),
+    // GET /accounts?connectionId= (flux drop-in) : enveloppe { Data, Links, Meta }.
+    listerComptesConnexion: vi.fn().mockResolvedValue({
+      Data: {
+        Account: over.accounts ?? [
+          { AccountId: "oa-1", Status: "Enabled", Currency: "MUR", PartyName: "Compte 1", Balances: [{ Type: "ITAV", Amount: { Amount: "5000.00", Currency: "MUR" } }] },
+        ],
+      },
+      Links: {},
+      Meta: { TotalPages: 1 },
     }),
   } as unknown as OmniFiClient;
 }
@@ -189,5 +200,50 @@ describe("gating de rôle", () => {
     expect(c.creerLinkToken).toHaveBeenCalledWith(
       expect.objectContaining({ ClientUserId: "enduser-a", RedirectOrigin: "https://app.mu" }),
     );
+  });
+});
+
+describe("finaliserConnexionDropin — flux widget natif (GET /accounts ApiKey)", () => {
+  it("persiste connexion + comptes du workspace courant, invisibles d'un autre", async () => {
+    const c = clientFactice({
+      exchange: { ConnectionId: "conn-dropin-A", InstitutionId: "mcb" },
+      accounts: [
+        { AccountId: "oa-dropin-A1", Status: "Enabled", Currency: "MUR", PartyName: "Cpt A", Balances: [{ Type: "ITAV", Amount: { Amount: "2000.00", Currency: "MUR" } }] },
+      ],
+    });
+    const r = await finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: "pt-dropin" });
+    expect(r.comptesRattaches).toBe(1);
+    expect(r.connectionId).toBe("conn-dropin-A");
+
+    const vuB = await withWorkspace({ userId: ADMIN_B, activeWorkspaceId: WS_B }, async (tx) =>
+      (await tx.select().from(bankConnections)).some((x) => x.omnifiConnectionId === "conn-dropin-A"),
+    );
+    expect(vuB).toBe(false); // RLS : invisible de B
+  });
+
+  it("ClientUserId du workspace courant transmis à echangerPublicToken (frontière tenant)", async () => {
+    const c = clientFactice();
+    await finaliserConnexionDropin(c, execWs(ADMIN_B, WS_B), { publicToken: "pt-b" });
+    expect(c.echangerPublicToken).toHaveBeenCalledWith("pt-b", "enduser-b");
+    // découverte de comptes filtrée PAR la connexion échangée, sous le bon clientUserId
+    expect(c.listerComptesConnexion).toHaveBeenCalledWith(expect.any(String), "enduser-b", expect.anything());
+  });
+
+  it("VIEWER ne peut pas finaliser (dropin) — aucun exchange", async () => {
+    const c = clientFactice();
+    await expect(
+      finaliserConnexionDropin(c, execWs(VIEWER_A, WS_A), { publicToken: "pt" }),
+    ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
+    expect(c.echangerPublicToken).not.toHaveBeenCalled();
+  });
+
+  it("désalignement institution → ConnexionDesalignmentError (rien persisté)", async () => {
+    const c = clientFactice({
+      exchange: { ConnectionId: "conn-x", InstitutionId: "mcb" },
+      accounts: [{ AccountId: "oa-sbm", Status: "Enabled", Currency: "MUR", InstitutionId: "sbm" } as never],
+    });
+    await expect(
+      finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: "pt" }),
+    ).rejects.toBeInstanceOf(ConnexionDesalignmentError);
   });
 });

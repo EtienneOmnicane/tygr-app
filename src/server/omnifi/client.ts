@@ -46,6 +46,7 @@ import type {
   OmniFiSessionTokenData,
   OmniFiSyncJob,
   OmniFiSyncJobAccountsData,
+  OmniFiAccountsData,
   OmniFiTransactionsSummaryData,
   OmniFiTransactionsSyncData,
   OmniFiMfaResendData,
@@ -488,6 +489,29 @@ export class OmniFiClient {
       body: { PublicToken: publicToken, ClientUserId: clientUserId },
     });
     return env.Data;
+  }
+
+  /**
+   * [SERVEUR/ApiKey] GET /accounts?connectionId= — liste les comptes d'une
+   * connexion SANS SessionToken widget. Chemin du flux drop-in (@omnifi/react) :
+   * le widget gère la MFA en interne et ne nous rend que le PublicToken ; après
+   * link-exchange on découvre les comptes côté serveur par ce listing.
+   * `clientUserId` = frontière tenant B2B.
+   */
+  async listerComptesConnexion(
+    connectionId: string,
+    clientUserId: string,
+    pagination: { page?: number; pageSize?: number } = {},
+  ): Promise<OmniFiEnveloppe<OmniFiAccountsData>> {
+    return this.requete<OmniFiAccountsData>("/accounts", {
+      auth: authApiKey(),
+      query: {
+        connectionId,
+        clientUserId,
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+      },
+    });
   }
 }
 

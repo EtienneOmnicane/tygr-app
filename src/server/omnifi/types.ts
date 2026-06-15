@@ -276,8 +276,17 @@ export interface OmniFiAccount {
   InstitutionId?: string | null;
   OwnershipType?: string;
   IsAsset?: boolean | null;
+  /** Présent sur GET /accounts (préférence d'affichage). */
+  Nickname?: string | null;
 }
 
 export interface OmniFiSyncJobAccountsData {
+  Account: OmniFiAccount[];
+}
+
+/* --- GET /accounts?connectionId= (ApiKey) — listing serveur des comptes --- */
+/* Utilisé par le flux drop-in : après link-exchange (ApiKey), on découvre les   */
+/* comptes d'une connexion SANS SessionToken widget (OBReadAccount6 envelope).   */
+export interface OmniFiAccountsData {
   Account: OmniFiAccount[];
 }
