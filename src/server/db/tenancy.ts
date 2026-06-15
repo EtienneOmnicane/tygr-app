@@ -85,6 +85,15 @@ export interface WorkspaceContext {
   userId: string;
 }
 
+/**
+ * `withWorkspace(session, fn)` déjà lié à une session — passé aux orchestrateurs
+ * (ingestion, widget) pour qu'ils restent purs de la DB concrète. Le `tx` est
+ * typé sur AnyPgDatabase (compatible avec les repositories génériques `<TDb>`).
+ */
+export type ExecuterWorkspace = <T>(
+  fn: (tx: WorkspaceTx<AnyPgDatabase>, ctx: WorkspaceContext) => Promise<T>,
+) => Promise<T>;
+
 export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
   return async function withWorkspace<T>(
     session: WorkspaceSession,
