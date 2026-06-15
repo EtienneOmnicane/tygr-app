@@ -72,14 +72,33 @@ traité (voir ci-dessous). Différés :
   au niveau du provisioning (GRANT ciblé au lieu de ON ALL TABLES + REVOKE).
   Touche la surface sécurité de tygr_app.sql → chantier dédié, hors PR schéma.
 
-- [ ] **#2 — Idempotence d'ingestion non garantie par la clé DB** — Effort M
-  (P1, déclencheur : PR pipeline de sync). L'unicité `(omnifi_txn_id,
-  transaction_date)` est forcée d'inclure `transaction_date` (clé de partition).
-  Si Omni-FI fait dériver le `BookingDateTime` d'une transaction d'un jour
-  Maurice à l'autre entre deux syncs, l'`ON CONFLICT` ne reconnaît pas la ligne
-  existante → DOUBLON (montant compté deux fois, agrégats faussés). L'idempotence
-  doit être gérée applicativement sur `omnifi_txn_id` seul (SELECT existant avant
-  upsert, ou ré-affectation de la ligne). À résoudre DANS la PR 2 ingestion.
+- [x] **#2 — Idempotence d'ingestion non garantie par la clé DB** — FAIT 2026-06-15
+  (PR 2 ingestion, `feature/epic3-ingestion`). `upsertTransactions`
+  (`src/server/repositories/ingestion.ts`) neutralise (is_removed=true) toute
+  version antérieure de même `omnifi_txn_id` posée sur un AUTRE
+  `transaction_date` AVANT l'upsert sur la clé naturelle → un re-affinement du
+  BookingDateTime par l'amont ne crée plus de doublon. RLS scope la mise à jour
+  au workspace courant.
+
+### Dette résolue / intégrée à la PR 2 ingestion (2026-06-15)
+
+Q3 et Q4 (différées depuis la cross-review PR 1) intégrées dans l'orchestrateur
+`src/server/ingestion/orchestrateur.ts` :
+- **Q3 (count borné)** : `bornerCount` clampe le `count` du sync dans [1, 500]
+  (COUNT_MAX, doc Omni-FI) avant tout appel réseau.
+- **Q4 (garde anti-boucle)** : la boucle lève `IngestionBoucleError` si l'amont
+  renvoie `HasMore=true` avec un `NextCursor` vide ou identique au précédent
+  (sinon re-ingestion infinie de la 1re page) ; plafond `MAX_PAGES` en filet.
+
+- [ ] **Découverte de comptes (connexion → bank_accounts) hors surface PR 1** —
+  Effort M (P1, déclencheur : flux widget / consent). L'ingestion PR 2 synchronise
+  des comptes DÉJÀ rattachés (`synchroniserCompteComplet`) mais ne crée pas les
+  `bank_accounts` à partir d'une connexion : la liste des comptes d'une connexion
+  passe par `GET /sync/job/{JobId}/accounts` (SessionTokenAuth) ou `GET
+  /parties/{PartyId}/accounts` (ApiKey + PartyId), hors de la surface lecture
+  livrée en PR 1. Pour la démo sandbox : rattacher les comptes pré-connectés en
+  amont (script/seed). À industrialiser avec le flux widget. `upsertCompte` est
+  déjà prêt dans le repository d'ingestion.
 - [ ] **#5 — FK non composites → rattachement cross-workspace possible** — Effort
   M (P1). `bank_accounts.connection_id → bank_connections.id` (et FK analogues)
   ne vérifient pas l'égalité de `workspace_id` : une ligne du workspace courant
