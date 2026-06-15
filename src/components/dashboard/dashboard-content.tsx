@@ -19,6 +19,7 @@ import type {
   TransactionRecente,
 } from "@/server/repositories/dashboard";
 
+import { choisirEtatDashboard } from "@/lib/etat-dashboard";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
@@ -46,7 +47,9 @@ export function DashboardContent({
     donnees;
 
   // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
-  if (comptes.length === 0) {
+  // (état "vide" ; "partiel"/"complet" montent le shell ci-dessous — chaque zone
+  // gère son propre vide. Logique testée : choisirEtatDashboard.)
+  if (choisirEtatDashboard(donnees) === "vide") {
     return (
       <DashboardShell>
         <DashboardEmptyState />

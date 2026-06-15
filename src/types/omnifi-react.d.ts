@@ -1,38 +1,66 @@
 /**
- * Stub de types pour le widget natif `@omnifi/react` (drop-in officiel Omni-FI).
+ * Stub de types PROVISOIRE pour le widget natif `@omnifi/react` (drop-in Omni-FI).
  *
- * ⚠️ MODULE FANTÔME (temporaire) : le vrai package vit sur un registre npm PRIVÉ
- * d'entreprise, configuré uniquement sur le poste de l'utilisateur (comme la
- * résolution DNS de l'API). Il N'est PAS sur le registre npm public → `npm view
- * @omnifi/react` répond 404 ici. Ce `.d.ts` permet à `tsc` de compiler notre
- * câblage sans le package installé (pre-commit/stop-loss au vert côté agent).
+ * ⚠️ MODULE FANTÔME : le vrai package vit sur un registre npm PRIVÉ d'entreprise,
+ * installé uniquement sur le poste de démo (comme le DNS de l'API). Absent du
+ * registre public ET de node_modules ici → ce `.d.ts` permet à `tsc` de compiler
+ * sans le package. `next build`/runtime exigent le VRAI package (un .d.ts ne
+ * fournit aucune implémentation JS). Retirer ce stub dès l'installation réelle.
  *
- * CONSÉQUENCE ASSUMÉE (option 3, décision utilisateur) : `tsc` passe, mais
- * `next build` / le runtime échoueront tant que le VRAI package n'est pas installé
- * (un .d.ts ne fournit aucune implémentation JS). Sur le poste de l'utilisateur,
- * avec le registre privé, le vrai `@omnifi/react` prend le relais et fournit
- * `useOmniFi`. Retirer ce stub dès que le package est installé en propre.
- *
- * Signatures tirées de la doc Fern (Quickstart) — surface minimale documentée :
- *   const { open } = useOmniFi({ token, onSuccess });
- *   onSuccess reçoit le `publicToken` (string) — le widget gère lui-même en
- *   interne session/exchange, connect et la machine MFA ; il n'expose que le
- *   résultat final. (jobId/connectionId NON exposés par onSuccess — cf. doc.)
+ * ⚠️ STUB FUSIONNÉ (résolution conflit agents, 2026-06-15) : le câblage backend
+ * (`useOmniFi({ token })`) et le composant UI (`<OmniFiWidget linkToken/>`)
+ * supposaient des contrats DIFFÉRENTS. Le vrai contrat n'a pas pu être lu (package
+ * non installé dans cet environnement). On expose donc un SUR-ENSEMBLE permissif
+ * couvrant les deux usages, pour ne casser ni l'un ni l'autre à la compilation.
+ * Quand le vrai package est installé, lire son .d.ts et resserrer ce stub (ou le
+ * supprimer). Point à confirmer : `onSuccess` renvoie-t-il `publicToken` seul (doc
+ * Fern) ou `{ publicToken, sessionToken, jobId }` (hypothèse UI) ? → dette TODOS.
  */
 declare module "@omnifi/react" {
+  import type { ReactNode } from "react";
+
+  /** Forme riche de succès (hypothèse UI) — le widget POURRAIT exposer ces 3 champs. */
+  export interface OmniFiSuccess {
+    publicToken: string;
+    sessionToken: string;
+    jobId: string;
+  }
+
+  /**
+   * onSuccess accepte les DEUX formes connues, le temps de confirmer le vrai
+   * contrat : soit le `publicToken` seul (doc Fern), soit l'objet complet (UI).
+   */
+  export type OmniFiSuccessHandler =
+    | ((publicToken: string) => void)
+    | ((result: OmniFiSuccess) => void);
+
+  /** Composant drop-in (usage UI). */
+  export interface OmniFiWidgetProps {
+    linkToken: string;
+    onSuccess?: OmniFiSuccessHandler;
+    onExit?: (error?: { code?: string; message?: string }) => void;
+    onError?: (error: { code?: string; message?: string }) => void;
+    children?: ReactNode;
+  }
+  export function OmniFiWidget(props: OmniFiWidgetProps): JSX.Element;
+
+  /**
+   * Hook impératif. Accepte `token` (câblage backend) OU `linkToken` (UI) — l'un
+   * des deux. Champs callbacks permissifs (sur-ensemble des deux usages).
+   */
   export interface UseOmniFiOptions {
-    /** LinkToken créé côté serveur (POST /connections/link-token). */
-    token: string;
-    /** Appelé quand l'utilisateur a terminé : reçoit le PublicToken à échanger. */
-    onSuccess: (publicToken: string) => void;
-    /** Optionnels — non garantis par la doc, typés permissifs pour ne pas casser. */
-    onExit?: (raison?: string) => void;
+    token?: string;
+    linkToken?: string;
+    onSuccess?: OmniFiSuccessHandler;
+    onExit?: (error?: { code?: string; message?: string } | string) => void;
     onEvent?: (evenement: unknown) => void;
   }
 
   export interface UseOmniFiResult {
     /** Ouvre le widget (à brancher sur un onClick). */
     open: () => void;
+    /** Présent côté UI ; optionnel pour ne pas casser le câblage backend. */
+    ready?: boolean;
   }
 
   export function useOmniFi(options: UseOmniFiOptions): UseOmniFiResult;
