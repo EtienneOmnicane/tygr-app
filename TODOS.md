@@ -151,6 +151,12 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   flux Suspense. Déclencheur : pour une QA fiable des états de chargement,
   ajouter un harness Playwright qui intercepte le streaming, OU une route de
   test dédiée derrière un flag dev. Le code `loading.tsx` est correct.
+  **MAJ 2026-06-15** : la route de démo `/demo/dashboard-states`
+  (feature/epic3-dashboard-ui-states-v2) matérialise l'option « route de test
+  dédiée » — les 3 états du dashboard y sont capturables in situ (Visual QA
+  réussie via segmented control, sans flux Suspense). Reste ouvert pour
+  `loading.tsx` du sélecteur (Suspense réel). Reclasser en « partiellement
+  adressé » au merge.
 - [ ] **CSO findings 1+2 — courses lockout & rate-limit (TOUJOURS OUVERTS)** —
   Effort S-M (P1). Re-validation read-decide-write non atomique : N requêtes
   concurrentes lisent l'état « non verrouillé » avant qu'aucune n'écrive →
