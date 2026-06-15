@@ -11,7 +11,7 @@
  *   page à l'infini en ré-ingérant les mêmes lignes).
  */
 import type { OmniFiClient, OmniFiTransaction } from "@/server/omnifi";
-import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
+import type { ExecuterWorkspace } from "@/server/db/tenancy";
 
 import {
   deriverDateComptableMaurice,
@@ -39,10 +39,6 @@ export class IngestionBoucleError extends Error {
   }
 }
 
-/** `executer` = withWorkspace(session, fn) déjà lié — l'orchestrateur reste pur. */
-type Executer = <T>(
-  fn: (tx: WorkspaceTx<never>, ctx: WorkspaceContext) => Promise<T>,
-) => Promise<T>;
 
 /** Borne le count dans [1, COUNT_MAX] (Q3). */
 export function bornerCount(count: number | undefined): number {
@@ -82,7 +78,7 @@ export interface ResultatSync {
  */
 export async function synchroniserCompte(
   client: OmniFiClient,
-  executer: Executer,
+  executer: ExecuterWorkspace,
   params: {
     omnifiAccountId: string;
     bankAccountId: string;
