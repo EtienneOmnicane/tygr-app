@@ -58,7 +58,10 @@ export function BankConnectWidget({
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
   function onSuccess(publicToken: string) {
-    // Contrat dropin : publicToken seul. Jamais loggé ici.
+    // Contrat Fern : le widget renvoie le publicToken SEUL. La finalisation
+    // serveur (finaliserConnexionDropinAction) l'échange (link-exchange) puis
+    // découvre les comptes via GET /accounts — pas de sessionToken/jobId.
+    // Le token n'est jamais loggé ici.
     setFerme(true);
     startFinalisation(async () => {
       const r = await finaliserConnexionDropinAction(publicToken);

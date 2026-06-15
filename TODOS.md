@@ -144,6 +144,22 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
     (re-découpage au démarrage). Inclut la modal re-login sans perte de
     contexte (D2 transverse).
 
+### Dette relevée au contrat widget natif (UI, 2026-06-15)
+
+- [ ] **🔴 `finaliserConnexionAction` désalignée du contrat Fern `publicToken` seul**
+  — Effort S (P0, déclencheur : avant la démo du widget natif). Décision 2026-06-15 :
+  le widget natif Omni-FI (`@omnifi/react`, `onSuccess`) renvoie le **publicToken
+  SEUL** (doc Fern `link-connect → PublicToken`). L'UID UI
+  (`bank-connect-widget.tsx`) a été aligné : `onSuccess(publicToken: string)`
+  n'envoie plus que `publicToken`. MAIS `finaliserConnexionAction`
+  (`banques/actions.ts`) garde un `finalisationSchema` zod **`.strict()`** exigeant
+  `publicToken + sessionToken + jobId` → avec publicToken seul, la validation
+  REJETTE l'appel et la connexion bancaire n'est jamais rattachée. **Action backend** :
+  réduire `finalisationSchema` à `{ publicToken }` (le `link-exchange` n'a besoin que
+  de `PublicToken` + `ClientUserId`, ce dernier résolu côté serveur depuis le
+  workspace). Tant que ce n'est pas fait, le flux de connexion casse à la
+  finalisation, même si le widget aboutit.
+
 ### Dette acceptée à la PR auth-foundation (2026-06-12)
 
 - [ ] **Purge périodique de `login_attempts`** — Effort S. Les lignes hors
