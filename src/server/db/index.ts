@@ -116,3 +116,22 @@ export {
   ProvisioningNonAutoriseError,
   RoleInvalideError,
 } from "@/server/repositories/provisioning";
+
+// Services de lecture du dashboard (Epic 3 — FEAT-3.1) : ré-exportés ici pour
+// que la page (workspace)/page.tsx les appelle DANS withWorkspace(tx) sans
+// importer @/server/repositories/* directement (même frontière que provisioning
+// ci-dessus). Chaque fonction prend `tx` et s'exécute sous RLS — pas d'accès DB
+// hors contexte.
+export {
+  listerComptes,
+  soldeConsolideCourant,
+  courbeTresorerie,
+  syntheseMois,
+  transactionsRecentes,
+} from "@/server/repositories/dashboard";
+export type {
+  CompteConnecte,
+  PointCourbe,
+  SyntheseMois,
+  TransactionRecente,
+} from "@/server/repositories/dashboard";
