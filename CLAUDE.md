@@ -189,6 +189,38 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Une fois l'arbitrage rendu, exécution totale : le pushback vit AVANT la décision,
   jamais pendant l'implémentation (pas de scope creep déguisé en prudence).
 
+## Omni-FI — authentification multi-schéma & flux Link Widget (2026-06-15)
+
+Source de vérité : `docs/documentation_api.md` (sections Authentification, Link
+Widget, Sync Engine), aligné sur la doc Fern en ligne. Tribal knowledge pour tout
+agent touchant le client Omni-FI :
+
+- **Quatre schémas d'auth, choisis PAR endpoint** (le client ne peut pas se figer
+  sur un seul — l'`ApiKey` codé en dur de la PR 1 est à généraliser) :
+  - `ApiKey <client_id>:<secret>` — appels SERVEUR : `link-token`, `link-exchange`,
+    et les endpoints B2B de lecture/sync (avec `clientUserId` en query).
+  - `LinkToken` (identité dérivée du token) — `widget/session/exchange` uniquement.
+  - `Bearer <SessionToken>` — tous les appels WIDGET après l'échange : `link-connect`,
+    `sync/job/{id}` (polling), `sync/{id}/input`, `sync/{id}/resend`,
+    `sync/job/{id}/accounts`, `link-token/context`, `widget/session/revoke`.
+- **`ClientUserId` = `workspaces.omnifi_client_user_id`** : c'est NOTRE id interne
+  d'EndUser, fourni à `link-token` et re-transmis à `link-exchange` — c'est la
+  frontière tenant (le mismatch lève `403 PUBLIC_TOKEN_CLIENT_MISMATCH`). Jamais
+  inventé par Omni-FI.
+- **Secrets en transit** : `SECRET` (ApiKey) et `SessionToken` (Bearer) ne sont
+  JAMAIS loggés ni mis dans un message d'erreur / une `cause` brute (règle 8 ;
+  réutiliser le `resumeCauseSure` de la PR 1). Les identifiants bancaires de l'EndUser
+  (email/password de la banque) transitent par `link-connect` et ne sont JAMAIS
+  stockés ni journalisés côté TYGR (PII bancaire).
+- **Machine à états MFA** (polling de `sync/job/{id}`) : `OTP_REQUESTED`↔`OTP_WAITING` ;
+  mauvais code → `UserInput` repasse `null`, `Status` reste `OTP_REQUESTED` (détecter
+  la transition non-null→null) ; **3 échecs → `FAILED`/`LOGIN_FAILED`**. Watermark
+  `MfaResendRequestedAt` ré-émis VERBATIM à chaque submit après un resend, sinon
+  `409 STALE_INPUT`. Resend : cooldown `MfaResendCooldownSeconds`, max 3.
+- **Rate-limits** : `widget/session/exchange` 10/IP/60s ; `sync` 1/15min/connexion.
+- **Découverte de comptes** : `GET /sync/job/{id}/accounts` (Bearer) — résout
+  l'ancienne dette « connexion → bank_accounts ».
+
 ## Human-in-the-Loop (workflow Git & déploiement)
 
 Discipline de livraison — l'agent ne franchit jamais ces frontières seul :
