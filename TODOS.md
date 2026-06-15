@@ -5,6 +5,29 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### PR-W3 — logique widget MFA côté client (2026-06-15)
+
+- A1 (PR-W1) **respecté** : `widget-runtime.ts` ne logge jamais l'OTP/token ;
+  erreurs réduites à un code machine (`OMNIFI_<status>` / `RUNTIME_ERROR`).
+- A2 (PR-W1) **respecté** : le watermark est `undefined` tant qu'aucun resend,
+  jamais `null` (machine + submitMfaAction omettent le champ).
+Cross-review OWASP (contexte frais) — aucun bloquant. #6 (polling infini sur job
+bloqué non terminal) **CORRIGÉ** : `clearInterval` dès état terminal + plafond
+`MAX_POLLS` (~10 min). Sain confirmé : OTP/token/watermark jamais exposés, gating
+avant effet, A2 respecté, codes non-énumérants. Différés :
+- [ ] **#3 — détection de rejet OTP best-effort** — Effort S (P2). La transition
+  `UserInput présent→absent` peut manquer un snapshot de polling (echecsOtp client
+  non incrémenté). Impact sécurité NUL (le serveur tranche au 3e échec → FAILED) ;
+  c'est une divergence de COMPTEUR UI. Documenté « vérité = serveur » dans
+  machine-mfa.ts. À couvrir par un test du cas snapshot-manqué si testing-library
+  est ajouté.
+- [ ] **Test du hook React `useOmniFiWidget` non couvert** — Effort S (P2). La
+  logique métier MFA est dans la machine PURE (couverte : 11 tests rejet/
+  watermark/cooldown/échecs). Le hook reste une coquille (timers/refs polling) —
+  non testé car pas de renderer React au projet (testing-library/jsdom = nouvelle
+  dépendance, règle 9). Couvert au Visual QA avec l'agent UI. Déclencheur : si on
+  ajoute testing-library pour d'autres hooks, brancher un test polling/submit/resend.
+
 ### Cross-review sécurité PR-W2 — orchestration serveur widget (2026-06-15)
 
 Audit OWASP/IDOR contexte frais sur les Server Actions démarrer/finaliser.

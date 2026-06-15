@@ -221,6 +221,33 @@ agent touchant le client Omni-FI :
 - **Découverte de comptes** : `GET /sync/job/{id}/accounts` (Bearer) — résout
   l'ancienne dette « connexion → bank_accounts ».
 
+### Logique widget MFA côté client (PR-W3) — consommation par l'UI
+
+La logique métier MFA est séparée du visuel (pour l'agent UI) :
+- **Machine PURE** `src/components/widget/machine-mfa.ts` : réducteur
+  `transition(etat, evenement)` + sélecteurs (`peutSoumettre`, `peutResend`,
+  `cooldownRestantSecondes`, `pollingActif`). Zéro React, zéro réseau — toute la
+  décision MFA est ici (détection de rejet, watermark, cooldown, plafonds).
+- **Hook** `useOmniFiWidget(sessionToken, jobId, deps)` : pilote la machine
+  (polling périodique, submit, resend) via des Server Actions **injectables**
+  (`DepsWidget`) ; expose `{ etat, erreur, enCours, soumettreOtp, demanderResend }`.
+- **Server Actions runtime** `src/app/(workspace)/banques/widget-runtime.ts` :
+  `pollJobAction` / `submitMfaAction` / `resendMfaAction` — pont navigateur →
+  client Omni-FI serveur (le client serveur n'est jamais expédié au navigateur).
+
+Contrat pour les composants UI (purs) :
+- Brancher sur `etat.phase` (`initialisation|mfa_requis|mfa_validation|
+  synchronisation|termine|echec`) pour choisir l'écran ; ne JAMAIS recoder la
+  logique de rejet/cooldown — utiliser les sélecteurs.
+- Désactiver le bouton submit si `!peutSoumettre(etat)`, le bouton resend si
+  `!peutResend(etat, Date.now())` ; afficher `cooldownRestantSecondes`.
+- `etat.mfa` porte canal/longueur/destinations masquées pour le libellé OTP.
+- Ne jamais logger l'OTP saisi ni le SessionToken (règle 8). Le hook ne les
+  expose pas dans `etat`.
+- Tests : la machine pure est couverte (rejet/watermark/cooldown/échecs) ; le
+  hook (coquille timers/refs) est validé au Visual QA (pas de renderer React de
+  test au projet — choix tracé TODOS, règle 9).
+
 ## Convention des états d'affichage (Loading / Empty / Error / Partiel)
 
 Deux mécanismes coexistent, à choisir selon l'origine de l'attente (checklist
