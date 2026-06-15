@@ -42,6 +42,7 @@ export type {
   OmniFiMfaInputData,
   OmniFiMfaResendData,
   OmniFiSyncJobAccountsData,
+  OmniFiAccountsData,
   OmniFiAccount,
   OmniFiBalance,
 } from "./types";

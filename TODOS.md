@@ -5,6 +5,43 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU)
+
+Le merge de main dans PR-W4 avait révélé DEUX câblages divergents du widget.
+**Tranché (doc Fern) : `onSuccess = publicToken SEUL`.** Unification appliquée :
+- `bank-connect-widget.tsx` (agent UI, monté par `banques/page.tsx`) réécrit sur
+  le contrat dropin → `onSuccess(publicToken)` + `finaliserConnexionDropinAction`.
+- Doublon `connecter-banque.tsx` (backend, non monté) SUPPRIMÉ.
+- `finaliserConnexionAction` + son schéma zod (sessionToken/jobId) SUPPRIMÉS de
+  `actions.ts`. Stub `omnifi-react.d.ts` nettoyé (plus de sessionToken/jobId).
+- `finaliserConnexion` (orchestration, chemin « widget custom » via
+  getSyncJobAccounts) CONSERVÉE + testée (réutilisable hors dropin), mais plus
+  appelée par aucune action. Un seul chemin runtime : le dropin.
+- [ ] **5.3 (P2)** — retirer le stub `omnifi-react.d.ts` dès que le vrai package
+  privé est installé (le stub fige le contrat ; un changement du tiers échappe au
+  typecheck).
+
+### Cross-review sécurité PR-W4 — intégration widget drop-in (2026-06-15)
+
+Audit OWASP contexte frais. **Aucun bloquant.** Corrigés dans PR-W4 : 3.1
+(allowlist serveur du redirectOrigin via `APP_ALLOWED_ORIGINS`, fail-closed) et
+5.2 (open() du widget déclenché dans un effect après pose du token, plus de token
+vide). Différés / décisions :
+
+- [ ] **1.1 (P1) — Contraintes UNIQUE globales `omnifi_connection_id` /
+  `omnifi_account_id` (non scopées workspace)** — Hypothèse : Omni-FI garantit
+  l'unicité par ClientUserId (workspace). Si cette hypothèse est fausse, une
+  migration composite UNIQUE(workspace_id, id) sera nécessaire. Documenté dans
+  `schema.ts` au-dessus des contraintes. Décision (2026-06-15) : PAS de migration
+  avant la démo (pas de risque opérationnel à la veille) ; à confirmer auprès
+  d'Omni-FI puis durcir si besoin. La RLS empêche toute fuite de lecture ; le
+  risque résiduel est un oracle/déni de rattachement en cas de collision.
+- [ ] **3.1 résolu / suivi** — `APP_ALLOWED_ORIGINS` doit être renseigné en env
+  (sinon fail-closed : aucune connexion widget possible). À documenter au déploiement.
+- [ ] **5.3 (P2) — Stub `@omnifi/react` fige le contrat `onSuccess(string)`** — un
+  changement de contrat du widget tiers échappe au typecheck. Retirer le stub dès
+  que le vrai package est installé en propre (registre privé).
+
 ### Cross-review croisée Agent UI — précision financière ingestion (2026-06-15)
 
 Alerte « bloquante » de l'Agent UI sur `ingestion/index.ts` + `dashboard.ts`.

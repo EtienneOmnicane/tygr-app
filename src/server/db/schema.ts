@@ -178,7 +178,14 @@ export const bankConnections = pgTable(
     workspaceId: uuid("workspace_id")
       .notNull()
       .references(() => workspaces.id),
-    /** `ConnectionId` Omni-FI permanent (obtenu via link-exchange). */
+    /**
+     * `ConnectionId` Omni-FI permanent (obtenu via link-exchange).
+     * HYPOTHÈSE (cross-review PR-W4, 2026-06-15) : Omni-FI garantit l'unicité
+     * d'un ConnectionId par ClientUserId (= workspace). Sous cette hypothèse, la
+     * contrainte UNIQUE globale est sûre. Si elle est FAUSSE (un même
+     * omnifi_connection_id partageable entre 2 workspaces), une migration
+     * composite UNIQUE(workspace_id, omnifi_connection_id) sera nécessaire.
+     */
     omnifiConnectionId: varchar("omnifi_connection_id", { length: 64 })
       .notNull()
       .unique(),
@@ -212,6 +219,11 @@ export const bankAccounts = pgTable(
     connectionId: uuid("connection_id")
       .notNull()
       .references(() => bankConnections.id, { onDelete: "cascade" }),
+    /**
+     * HYPOTHÈSE (cross-review PR-W4, 2026-06-15) : un omnifi_account_id est unique
+     * par ClientUserId (= workspace) côté Omni-FI → UNIQUE globale sûre. Si faux,
+     * migration composite UNIQUE(workspace_id, omnifi_account_id) requise.
+     */
     omnifiAccountId: varchar("omnifi_account_id", { length: 64 })
       .notNull()
       .unique(),

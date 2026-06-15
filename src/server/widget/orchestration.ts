@@ -153,6 +153,56 @@ function soldeCourant(balances: OmniFiBalance[] | undefined): string | null {
 }
 
 /**
+ * Persiste connexion + comptes (Enabled uniquement) dans le workspace courant,
+ * dans UNE transaction scopée. Partagé par les deux chemins de finalisation
+ * (widget custom PR-W2 via getSyncJobAccounts, et drop-in via GET /accounts).
+ * Idempotent (upserts sur omnifi_*_id).
+ */
+async function persisterConnexionEtComptes(
+  executer: ExecuterWorkspace,
+  echange: { ConnectionId: string; InstitutionId: string },
+  comptes: OmniFiAccount[],
+): Promise<number> {
+  return executer(async (tx, ctx) => {
+    const { connectionId } = await upsertConnexion(tx, ctx, {
+      omnifiConnectionId: echange.ConnectionId,
+      institutionId: echange.InstitutionId,
+      status: "active",
+      nextSyncAvailableAt: null,
+    });
+
+    let n = 0;
+    for (const c of comptes) {
+      if (c.Status !== "Enabled") continue; // comptes utilisables uniquement
+      await upsertCompte(tx, ctx, connectionId, {
+        omnifiAccountId: c.AccountId,
+        accountName: c.Nickname ?? c.PartyName ?? `Compte ${c.AccountId.slice(0, 8)}`,
+        currency: c.Currency,
+        currentBalance: soldeCourant(c.Balances),
+        isSelected: true,
+      });
+      n += 1;
+    }
+    return n;
+  });
+}
+
+/**
+ * Recoupe l'institution des comptes découverts avec celle de la connexion
+ * échangée (constat cross-review 1.1) : un compte d'une AUTRE institution signale
+ * une découverte non corrélée au consentement → fail-closed.
+ */
+function verifierAlignement(
+  comptes: OmniFiAccount[],
+  institutionEchange: string,
+): void {
+  const desaligne = comptes.some(
+    (c) => c.InstitutionId != null && c.InstitutionId !== institutionEchange,
+  );
+  if (desaligne) throw new ConnexionDesalignmentError();
+}
+
+/**
  * Échange le PublicToken (ApiKey, ClientUserId = frontière tenant), découvre les
  * comptes du job (Bearer /accounts), puis persiste connexion + comptes dans le
  * workspace courant. Idempotent (upserts sur omnifi_*_id).
@@ -181,41 +231,67 @@ export async function finaliserConnexion(
   );
   const comptes: OmniFiAccount[] = accountsData.Account ?? [];
 
-  // 3bis. RECOUPEMENT (constat cross-review 1.1) : les comptes du job (non liés
-  // au tenant) doivent appartenir à l'institution de la connexion ÉCHANGÉE (liée
-  // au tenant via ClientUserId). Un compte dont l'InstitutionId diffère signale
-  // un sessionToken/jobId d'un AUTRE flux → on refuse TOUT (fail-closed), on ne
-  // persiste rien. (Les comptes sans InstitutionId renseigné héritent du contexte
-  // de la connexion ; seul un InstitutionId présent ET divergent déclenche.)
-  const desaligne = comptes.some(
-    (c) => c.InstitutionId != null && c.InstitutionId !== echange.InstitutionId,
-  );
-  if (desaligne) throw new ConnexionDesalignmentError();
+  // 3bis + 4 : recoupement anti-désalignement (1.1) puis persistance scopée.
+  verifierAlignement(comptes, echange.InstitutionId);
+  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes);
 
-  // 4. Persistance scopée : connexion puis comptes, dans UNE transaction.
-  const rattaches = await executer(async (tx, ctx) => {
-    const { connectionId } = await upsertConnexion(tx, ctx, {
-      omnifiConnectionId: echange.ConnectionId,
-      institutionId: echange.InstitutionId,
-      status: "active",
-      nextSyncAvailableAt: null,
-    });
+  return {
+    connectionId: echange.ConnectionId,
+    institutionId: echange.InstitutionId,
+    comptesRattaches: rattaches,
+  };
+}
 
-    let n = 0;
-    for (const c of comptes) {
-      // On ne rattache que les comptes utilisables (Enabled).
-      if (c.Status !== "Enabled") continue;
-      await upsertCompte(tx, ctx, connectionId, {
-        omnifiAccountId: c.AccountId,
-        accountName: c.PartyName ?? `Compte ${c.AccountId.slice(0, 8)}`,
-        currency: c.Currency,
-        currentBalance: soldeCourant(c.Balances),
-        isSelected: true,
-      });
-      n += 1;
-    }
-    return n;
+/* ------------------------------------------------------------------ */
+/* Étape 2bis — finaliser pour le widget DROP-IN (@omnifi/react)       */
+/* ------------------------------------------------------------------ */
+
+export interface FinaliserDropinParams {
+  /** PublicToken renvoyé par onSuccess du widget natif (seule donnée exposée). */
+  publicToken: string;
+}
+
+/**
+ * Finalisation pour le flux DROP-IN : le widget natif gère la MFA en interne et
+ * ne nous rend que le PublicToken (ni sessionToken ni jobId). On échange (ApiKey)
+ * puis on découvre les comptes par GET /accounts?connectionId= (ApiKey, SANS
+ * SessionToken) — chemin serveur, frontière tenant via ClientUserId. Recoupement
+ * 1.1 conservé : ici les comptes proviennent du listing filtré PAR connexion,
+ * donc l'alignement est structurel, mais on revérifie l'InstitutionId par défense.
+ */
+export async function finaliserConnexionDropin(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+  params: FinaliserDropinParams,
+): Promise<ResultatFinalisation> {
+  // 1. Garde de rôle + ClientUserId (scopé).
+  const clientUserId = await executer(async (tx, ctx) => {
+    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+    return clientUserIdDuWorkspace(tx, ctx.workspaceId);
   });
+
+  // 2. Exchange (ApiKey) → ConnectionId permanent (frontière tenant).
+  const echange = await client.echangerPublicToken(params.publicToken, clientUserId);
+
+  // 3. Découverte des comptes de CETTE connexion (ApiKey, filtré connectionId).
+  //    On suit la pagination (Links.Next) pour ne rien tronquer.
+  const comptes: OmniFiAccount[] = [];
+  let page = 1;
+  for (;;) {
+    const env = await client.listerComptesConnexion(
+      echange.ConnectionId,
+      clientUserId,
+      { page },
+    );
+    comptes.push(...(env.Data.Account ?? []));
+    const totalPages = env.Meta?.TotalPages ?? 1;
+    if (!env.Links?.Next || page >= totalPages) break;
+    page += 1;
+  }
+
+  // 4. Défense : recoupement institution + persistance scopée.
+  verifierAlignement(comptes, echange.InstitutionId);
+  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes);
 
   return {
     connectionId: echange.ConnectionId,

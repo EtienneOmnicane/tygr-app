@@ -24,7 +24,7 @@ import {
   ConnexionNonAutoriseeError,
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
-  finaliserConnexion,
+  finaliserConnexionDropin,
 } from "@/server/widget/orchestration";
 
 export interface EtatDemarrage {
@@ -41,7 +41,25 @@ const MESSAGE_REFUS = "Action non autorisée.";
 const MESSAGE_GENERIQUE = "La connexion bancaire a échoué. Réessayez.";
 const MESSAGE_CONFIG = "Workspace non configuré pour Omni-FI.";
 
-/** RedirectOrigin : https, scheme+host SANS path (contrat link-token). */
+/**
+ * Allowlist serveur des origines autorisées (constat cross-review 3.1). Le
+ * redirectOrigin vient du client (window.location.origin) : sa FORME ne suffit
+ * pas (n'importe quel https valide passerait), donc on vérifie qu'il appartient à
+ * APP_ALLOWED_ORIGINS (env, liste séparée par virgules) → un domaine tiers ne peut
+ * pas être posé comme cible postMessage du PublicToken. Si l'env n'est pas
+ * configuré, on n'autorise RIEN (fail-closed) : pas de connexion sans allowlist.
+ */
+function originesAutorisees(): Set<string> {
+  const brut = process.env.APP_ALLOWED_ORIGINS ?? "";
+  return new Set(
+    brut
+      .split(",")
+      .map((o) => o.trim().replace(/\/+$/, ""))
+      .filter(Boolean),
+  );
+}
+
+/** RedirectOrigin : https, scheme+host SANS path (contrat link-token) ET allowlisté. */
 const demarrageSchema = z
   .object({
     redirectOrigin: z
@@ -51,25 +69,21 @@ const demarrageSchema = z
       .refine((u) => {
         try {
           const url = new URL(u);
-          return (
-            url.protocol === "https:" &&
-            url.pathname === "/" &&
-            url.search === "" &&
-            url.hash === ""
-          );
+          if (
+            url.protocol !== "https:" ||
+            url.pathname !== "/" ||
+            url.search !== "" ||
+            url.hash !== ""
+          ) {
+            return false;
+          }
+          // 3.1 : l'origine DOIT être dans l'allowlist serveur.
+          return originesAutorisees().has(url.origin);
         } catch {
           return false;
         }
-      }, "RedirectOrigin doit être une origine https sans path"),
+      }, "RedirectOrigin non autorisé"),
     institutionId: z.string().trim().max(64).optional(),
-  })
-  .strict();
-
-const finalisationSchema = z
-  .object({
-    publicToken: z.string().min(1).max(512),
-    sessionToken: z.string().min(1).max(512),
-    jobId: z.string().uuid(),
   })
   .strict();
 
@@ -109,21 +123,20 @@ export async function demarrerConnexionAction(
   }
 }
 
+/** Entrée du widget DROP-IN : seul le PublicToken (onSuccess de @omnifi/react). */
+const dropinSchema = z.object({ publicToken: z.string().min(1).max(512) }).strict();
+
 /**
- * Finalise une connexion : échange le PublicToken, découvre + persiste les
- * comptes. Idempotent.
+ * Finalisation pour le widget natif @omnifi/react : reçoit le PublicToken de
+ * `onSuccess`, échange (ApiKey) et découvre les comptes via GET /accounts (ApiKey,
+ * sans SessionToken). Appelée directement depuis le composant client.
  */
-export async function finaliserConnexionAction(
-  _etat: EtatFinalisation,
-  formData: FormData,
+export async function finaliserConnexionDropinAction(
+  publicToken: string,
 ): Promise<EtatFinalisation> {
   const session = await exigerSessionWorkspace();
 
-  const parsed = finalisationSchema.safeParse({
-    publicToken: formData.get("publicToken"),
-    sessionToken: formData.get("sessionToken"),
-    jobId: formData.get("jobId"),
-  });
+  const parsed = dropinSchema.safeParse({ publicToken });
   if (!parsed.success) {
     return { erreur: "Paramètres invalides.", succes: null };
   }
@@ -133,10 +146,8 @@ export async function finaliserConnexionAction(
     withWorkspace(session, fn);
 
   try {
-    const r = await finaliserConnexion(client, executer, {
+    const r = await finaliserConnexionDropin(client, executer, {
       publicToken: parsed.data.publicToken,
-      sessionToken: parsed.data.sessionToken,
-      jobId: parsed.data.jobId,
     });
     return {
       erreur: null,
@@ -144,7 +155,7 @@ export async function finaliserConnexionAction(
     };
   } catch (erreur) {
     return {
-      erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser"),
+      erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),
       succes: null,
     };
   }
