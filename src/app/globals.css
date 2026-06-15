@@ -4,8 +4,11 @@
  * Tokens TYGR — transposition Tailwind 4 (@theme, CSS-first) du §0 de
  * docs/UI_GUIDELINES.md (source de vérité UI). Valeurs recopiées telles
  * quelles ; toute divergence se corrige LÀ-BAS d'abord.
- * Typographies : Geist (déjà chargée) pour les montants/tabular ; Instrument
- * Sans arrive avec le build UI (spec validé en réserve) — entrée TODOS.md.
+ * Typographies (§0) : Instrument Sans = UI & display (--font-sans, défaut) ;
+ * Geist tabular = montants, axes, cellules numériques (--font-numeric,
+ * OBLIGATOIRE sur toute donnée chiffrée) ; JetBrains Mono = identifiants
+ * techniques, ex. HMAC du panneau audit (--font-mono). Chargées via next/font
+ * dans src/app/layout.tsx (display: swap).
  */
 @theme {
   --color-ink: #0f1e3d;
@@ -45,6 +48,12 @@
   --color-text-faint: #98a2b3;
   --color-text-onink: #ffffff;
 
+  --color-chart-position: #2447d6;
+  --color-chart-position-fill: #dce6fb;
+  --color-chart-forecast-fill: #edf2fb;
+  --color-chart-threshold: #dc2626;
+  --color-chart-donut: #5ba8d9;
+
   --radius-card: 12px;
   --radius-control: 8px;
   --radius-modal: 16px;
@@ -53,8 +62,9 @@
   --shadow-popover: 0 12px 24px -6px rgba(16, 24, 40, 0.16);
   --shadow-modal: 0 24px 48px -12px rgba(16, 24, 40, 0.24);
 
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-instrument-sans);
+  --font-numeric: var(--font-geist);
+  --font-mono: var(--font-jetbrains-mono);
 }
 
 body {
