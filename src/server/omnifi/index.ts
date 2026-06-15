@@ -4,6 +4,12 @@
  */
 export { creerClientOmniFi, OmniFiClient, TIMEOUT_DEFAUT_MS } from "./client";
 export type { DepsClient } from "./client";
+export {
+  authApiKey,
+  authBearer,
+  authLinkToken,
+  type StrategieAuth,
+} from "./auth";
 export { obtenirConfigOmniFi, type OmniFiConfig } from "./config";
 export {
   OmniFiApiError,
@@ -23,4 +29,19 @@ export type {
   OmniFiTransaction,
   OmniFiTransactionsSummaryData,
   OmniFiTransactionsSyncData,
+  // Flux Link Widget (PR-W1)
+  CreerLinkTokenParams,
+  BankCredentials,
+  OmniFiLinkTokenData,
+  OmniFiSessionTokenData,
+  OmniFiLinkTokenContext,
+  OmniFiConnectData,
+  OmniFiPublicTokenExchangeData,
+  OmniFiSyncJob,
+  OmniFiSyncStatus,
+  OmniFiMfaInputData,
+  OmniFiMfaResendData,
+  OmniFiSyncJobAccountsData,
+  OmniFiAccount,
+  OmniFiBalance,
 } from "./types";
