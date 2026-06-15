@@ -26,9 +26,10 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Tout est protégé SAUF : /login, les endpoints Auth.js, les assets Next
-  // et les fichiers publics (favicon, images).
+  // Tout est protégé SAUF : /login, /demo (pages présentationnelles inertes,
+  // sans donnée ni session — Visual QA Epic 3), les endpoints Auth.js, les
+  // assets Next et les fichiers publics (favicon, images).
   matcher: [
-    "/((?!login|api/auth|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
+    "/((?!login|demo|api/auth|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
   ],
 };
