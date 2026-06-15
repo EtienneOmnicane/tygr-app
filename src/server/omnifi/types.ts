@@ -122,3 +122,162 @@ export interface OmniFiTransactionsSummaryData {
     TransactionCount: number;
   };
 }
+
+/* ================================================================== */
+/* Flux Link Widget (PR-W1) — docs § Link Widget / Sync Engine        */
+/* ================================================================== */
+
+/* --- POST /connections/link-token (ApiKey) --- */
+
+export interface CreerLinkTokenParams {
+  /** Notre id interne d'EndUser (= workspaces.omnifi_client_user_id). Requis. */
+  ClientUserId: string;
+  /** Origine HTTPS (scheme+host, sans path) autorisée à recevoir le PublicToken. Requis. */
+  RedirectOrigin: string;
+  InstitutionId?: string;
+  /** accounts|insights|alerts|data — un tableau VIDE déclenche 400 (ne pas passer []). */
+  RequestedScopes?: Array<"accounts" | "insights" | "alerts" | "data">;
+  AppName?: string;
+  AppLogoUrl?: string;
+  AccountSelectionEnabled?: boolean;
+  WebhookUrl?: string;
+}
+
+export interface OmniFiLinkTokenData {
+  LinkToken: string;
+  Expiration: string;
+}
+
+/* --- POST /widget/session/exchange (LinkToken) --- */
+
+export interface OmniFiSessionTokenData {
+  SessionToken: string;
+  ExpiresAt: string;
+  ExpiresIn: number;
+  AccountSelectionEnabled: boolean;
+}
+
+/* --- GET /connections/link-token/context (SessionToken) --- */
+
+export interface OmniFiLinkTokenContext {
+  ClientName?: string;
+  Environment?: string;
+  Mode?: string;
+  AccountSelectionEnabled?: boolean;
+  LockedInstitutionId?: string | null;
+  AppLogoUrl?: string | null;
+  RequestedScopes?: string[];
+  ResumeStep?: string | null;
+  ConnectionId?: string | null;
+}
+
+/* --- POST /connections/link-connect (SessionToken) --- */
+
+/** oneOf : email / username / corporateId — le mot de passe bancaire est PII. */
+export type BankCredentials =
+  | { Email: string; Password: string }
+  | { Username: string; Password: string }
+  | { CorporateId: string; Password: string };
+
+export interface OmniFiConnectData {
+  PublicToken: string;
+  JobId: string;
+  ConnectionId: string | null;
+  CustomerType: "personal" | "business";
+}
+
+/* --- POST /connections/link-exchange (ApiKey) --- */
+
+export interface OmniFiPublicTokenExchangeData {
+  ConnectionId: string;
+  InstitutionId: string;
+  CustomerType: "personal" | "business";
+}
+
+/* --- GET /sync/job/{JobId} (ApiKey | SessionToken) — machine d'états MFA --- */
+
+export type OmniFiSyncStatus =
+  | "PENDING"
+  | "STARTED"
+  | "LOGGING_IN"
+  | "OTP_REQUESTED"
+  | "OTP_WAITING"
+  | "RETRIEVING"
+  | "PARSING"
+  | "ENRICHING"
+  | "COMPLETED"
+  | "FAILED";
+
+export interface OmniFiMfaDeliveryTarget {
+  Kind: "email" | "phone";
+  Target: string; // masqué
+}
+
+export interface OmniFiSyncJob {
+  JobId: string;
+  InstitutionId: string;
+  Status: OmniFiSyncStatus;
+  Source?: "SCRAPE" | "DOCUMENT_UPLOAD";
+  IsManual?: boolean;
+  Attempts?: number;
+  StartedAt?: string;
+  FinishedAt?: string | null;
+  NextSyncAvailableAt?: string | null;
+  Error?: { Type: string; Message: string; Payload?: unknown } | null;
+  MfaType?: "sms" | "email" | "totp" | null;
+  MfaLength?: number | null;
+  MfaCharset?: "numeric" | "alphanumeric" | null;
+  DeliveryTargets?: OmniFiMfaDeliveryTarget[] | null;
+  MfaResendCooldownSeconds?: number | null;
+  MfaResendRequestedAt?: string | null;
+  MfaResendCount?: number;
+  UserInput?: string | null;
+  PersistenceStats?: {
+    TransactionsCreated: number;
+    TransactionsUpdated: number;
+    TransactionsDuplicated: number;
+    AccountsUpdated: number;
+  } | null;
+}
+
+/* --- POST /sync/{JobId}/input (ApiKey | SessionToken) --- */
+
+export interface OmniFiMfaInputData {
+  Status: string; // "OTP_ACCEPTED"
+  JobId: string;
+}
+
+/* --- POST /sync/{JobId}/resend (ApiKey | SessionToken) --- */
+
+export interface OmniFiMfaResendData {
+  JobId: string;
+  MfaResendRequestedAt: string;
+  MfaResendCount: number;
+}
+
+/* --- GET /sync/job/{JobId}/accounts (SessionToken) — découverte de comptes --- */
+
+export interface OmniFiBalance {
+  Type: string;
+  Amount: OmniFiAmount;
+  DateTime?: string;
+  CreditDebitIndicator?: OmniFiCreditDebit;
+}
+
+export interface OmniFiAccount {
+  AccountId: string;
+  Status: "Enabled" | "Disabled" | "Deleted" | "Pending" | "ProForma";
+  Currency: string;
+  AccountCategory?: "Personal" | "Business";
+  AccountTypeCode?: string;
+  Balances?: OmniFiBalance[];
+  PartyId?: string | null;
+  PartyName?: string | null;
+  InstitutionId?: string | null;
+  OwnershipType?: string;
+  IsAsset?: boolean | null;
+}
+
+export interface OmniFiSyncJobAccountsData {
+  Account: OmniFiAccount[];
+}

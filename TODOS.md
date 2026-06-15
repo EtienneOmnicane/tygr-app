@@ -5,6 +5,22 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Cross-review sécurité PR-W1 — client widget multi-auth (2026-06-15)
+
+Audit OWASP contexte frais sur la gestion LinkToken/SessionToken/identifiants
+bancaires. **Aucun constat bloquant ni non-bloquant valide.**
+- Constat « C1 » du réviseur (`historiqueSoldes` sans `clientUserId`) **INFIRMÉ** :
+  citation doc erronée (ligne de `latest-job`, pas `balances/history`). La doc
+  réelle (`balances/history` : query = from/to/page/pageSize, SANS clientUserId)
+  confirme que le client PR 1 est correct. Désaccord tranché par le fait, pas lissé.
+- Observations propagées aux PR appelantes (non corrigeables dans le client) :
+  - [ ] **A1 — log autour de `connecter()`** : l'appelant (PR-W2/W3) ne doit JAMAIS
+    logger l'objet d'erreur + ses arguments ensemble (le body porte le mot de passe
+    bancaire). Le client lui-même ne fuite rien. Effort S (P1, déclencheur PR-W2).
+  - [ ] **A2 — watermark MFA `undefined` vs `null`** : l'appelant passe `undefined`
+    (champ omis) tant qu'aucun resend n'a eu lieu ; ré-émet la valeur lue verbatim
+    ensuite. Passer `null` explicite → 409 STALE_INPUT. À documenter côté UI widget.
+
 ## P0 — en cours (Semaines 2-3, séquencement C1 restauré par D3)
 
 - [ ] **Epic 1 — Auth.js + consent flow + audit + révocation** — priorité absolue.

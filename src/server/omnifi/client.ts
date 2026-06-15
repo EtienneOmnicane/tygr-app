@@ -1,22 +1,29 @@
 /**
- * Client serveur Omni-FI Core API (OBIE v4.0.1) — PR 1 : couche d'accès réseau
- * pure, SANS état d'UI ni accès DB. Surface couverte : lecture (connexions,
- * historique de soldes, sync de transactions par curseur, résumé). Le flux
- * widget, l'ingestion (écriture DB) et l'UI arrivent dans des PRs dédiées.
+ * Client serveur Omni-FI Core API (OBIE v4.0.1) — couche d'accès réseau pure,
+ * SANS état d'UI ni accès DB. Surface : lecture B2B (connexions, soldes, sync,
+ * résumé) + flux Link Widget (PR-W1 : link-token, session, connect, polling,
+ * MFA input/resend, accounts, exchange).
  *
- * Conformité docs/documentation_api.md :
- * - Auth ApiKeyAuth serveur-à-serveur : « Authorization: ApiKey <client_id>:<secret> ».
- * - Enveloppe { Data, Links, Meta } décodée ; erreurs { Code, Message, Errors[] }
- *   mappées vers des erreurs nommées (erreurs.ts, règle 3).
- * - 429 → Retry-After remonté ; tous les appels B2B portent clientUserId.
- * - x-fapi-interaction-id de corrélation sur chaque requête (traçage).
+ * Conformité docs/documentation_api.md & CLAUDE.md « Omni-FI auth multi-schéma » :
+ * - QUATRE schémas d'auth choisis PAR endpoint via une StrategieAuth (auth.ts) :
+ *   ApiKey (serveur), LinkToken (session/exchange), Bearer/SessionToken (widget).
+ * - Enveloppe { Data, Links, Meta } décodée ; erreurs { Id, Code, Message,
+ *   Errors[] } mappées vers des erreurs nommées (erreurs.ts, règle 3).
+ * - 429 → Retry-After remonté ; appels B2B porteurs de clientUserId.
+ * - x-fapi-interaction-id de corrélation sur chaque requête.
  *
- * Règle 8 : le secret n'est jamais loggé ; aucun montant n'est converti ici
- * (chaînes OBIE conservées telles quelles, parsing en centimes côté ingestion).
+ * Règle 8 : NI le secret ApiKey NI les tokens (LinkToken/SessionToken) NI les
+ * identifiants bancaires de l'EndUser ne sont jamais loggés ni mis en message
+ * d'erreur / cause brute. Aucun montant converti ici (chaînes OBIE telles quelles).
  *
- * `fetch` est injectable (DepsClient) pour des tests sans réseau réel, sur le
- * modèle de src/server/auth/verifier-identifiants.ts.
+ * `fetch` est injectable (DepsClient) pour des tests sans réseau réel.
  */
+import {
+  authApiKey,
+  authBearer,
+  authLinkToken,
+  type StrategieAuth,
+} from "./auth";
 import { obtenirConfigOmniFi, type OmniFiConfig } from "./config";
 import {
   OmniFiApiError,
@@ -27,12 +34,23 @@ import {
   type OmniFiErreurDetail,
 } from "./erreurs";
 import type {
+  CreerLinkTokenParams,
   OmniFiBalanceHistoryData,
   OmniFiConnectionsData,
+  OmniFiConnectData,
   OmniFiEnveloppe,
   OmniFiEnveloppeErreur,
+  OmniFiLinkTokenContext,
+  OmniFiLinkTokenData,
+  OmniFiPublicTokenExchangeData,
+  OmniFiSessionTokenData,
+  OmniFiSyncJob,
+  OmniFiSyncJobAccountsData,
   OmniFiTransactionsSummaryData,
   OmniFiTransactionsSyncData,
+  OmniFiMfaResendData,
+  OmniFiMfaInputData,
+  BankCredentials,
 } from "./types";
 
 /** Timeout par défaut d'une requête (le scraping amont peut être lent, mais une
@@ -51,6 +69,12 @@ export interface DepsClient {
 interface OptionsRequete {
   /** Query params ; les valeurs nullish sont omises. */
   query?: Record<string, string | number | undefined>;
+  /** Méthode HTTP (défaut GET). */
+  method?: "GET" | "POST";
+  /** Stratégie d'auth de CET appel (défaut : ApiKey serveur). */
+  auth?: StrategieAuth;
+  /** Corps JSON pour les POST. */
+  body?: unknown;
 }
 
 function construireUrl(
@@ -122,35 +146,45 @@ export class OmniFiClient {
     this.timeoutMs = deps.timeoutMs ?? TIMEOUT_DEFAUT_MS;
   }
 
-  /** En-tête Authorization ApiKey (docs § Authentification.1). */
-  private enteteAuth(): string {
-    return `ApiKey ${this.config.clientId}:${this.config.secret}`;
+  /**
+   * Construit les en-têtes d'une requête selon la stratégie d'auth choisie.
+   * La valeur Authorization n'est produite qu'ici, au moment de l'envoi, et
+   * n'est jamais conservée ni loggée (règle 8).
+   */
+  private enTetes(auth: StrategieAuth, avecBody: boolean): HeadersInit {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "x-fapi-interaction-id": this.genererInteractionId(),
+    };
+    const valeur = auth(this.config);
+    if (valeur !== null) headers.Authorization = valeur;
+    if (avecBody) headers["Content-Type"] = "application/json";
+    return headers;
   }
 
   /**
-   * Exécute une requête GET et retourne l'enveloppe OBIE complète ({ Data, Links,
-   * Meta }). Q2 : on conserve Links/Meta pour que l'appelant puisse paginer (la
-   * troncature silencieuse au-delà d'une page est interdite sur des données
-   * financières). Lève une erreur nommée (erreurs.ts) sur tout échec — jamais de
-   * retour null silencieux (règle 3).
+   * Moteur HTTP générique : méthode + stratégie d'auth + body, retourne
+   * l'enveloppe OBIE complète ({ Data, Links, Meta }). Q2 : Links/Meta conservés
+   * pour la pagination. Lève une erreur nommée sur tout échec — jamais de retour
+   * null silencieux (règle 3).
    */
-  private async getEnveloppe<TData>(
+  private async requete<TData>(
     chemin: string,
     options: OptionsRequete = {},
   ): Promise<OmniFiEnveloppe<TData>> {
     const url = construireUrl(this.config.baseUrl, chemin, options.query);
+    const method = options.method ?? "GET";
+    const auth = options.auth ?? authApiKey();
+    const aBody = options.body !== undefined;
     const controleur = new AbortController();
     const minuteur = setTimeout(() => controleur.abort(), this.timeoutMs);
 
     let reponse: Response;
     try {
       reponse = await this.fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: this.enteteAuth(),
-          Accept: "application/json",
-          "x-fapi-interaction-id": this.genererInteractionId(),
-        },
+        method,
+        headers: this.enTetes(auth, aBody),
+        body: aBody ? JSON.stringify(options.body) : undefined,
         signal: controleur.signal,
       });
     } catch (cause) {
@@ -224,7 +258,7 @@ export class OmniFiClient {
     clientUserId: string,
     pagination: { page?: number; pageSize?: number } = {},
   ): Promise<OmniFiEnveloppe<OmniFiConnectionsData>> {
-    return this.getEnveloppe<OmniFiConnectionsData>("/connections", {
+    return this.requete<OmniFiConnectionsData>("/connections", {
       query: { clientUserId, page: pagination.page, pageSize: pagination.pageSize },
     });
   }
@@ -243,7 +277,7 @@ export class OmniFiClient {
       pageSize?: number;
     } = {},
   ): Promise<OmniFiEnveloppe<OmniFiBalanceHistoryData>> {
-    return this.getEnveloppe<OmniFiBalanceHistoryData>(
+    return this.requete<OmniFiBalanceHistoryData>(
       `/accounts/${encodeURIComponent(accountId)}/balances/history`,
       { query: { ...bornes } },
     );
@@ -261,7 +295,7 @@ export class OmniFiClient {
     clientUserId: string,
     options: { cursor?: string; count?: number } = {},
   ): Promise<OmniFiTransactionsSyncData> {
-    const enveloppe = await this.getEnveloppe<OmniFiTransactionsSyncData>(
+    const enveloppe = await this.requete<OmniFiTransactionsSyncData>(
       `/accounts/${encodeURIComponent(accountId)}/transactions/sync`,
       { query: { clientUserId, cursor: options.cursor, count: options.count } },
     );
@@ -276,11 +310,184 @@ export class OmniFiClient {
     clientUserId: string,
     bornes: { fromDate?: string; toDate?: string } = {},
   ): Promise<OmniFiTransactionsSummaryData> {
-    const enveloppe = await this.getEnveloppe<OmniFiTransactionsSummaryData>(
+    const enveloppe = await this.requete<OmniFiTransactionsSummaryData>(
       `/accounts/${encodeURIComponent(accountId)}/transactions/summary`,
       { query: { clientUserId, ...bornes } },
     );
     return enveloppe.Data;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Flux Link Widget (PR-W1) — docs § Link Widget / Sync Engine      */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * [SERVEUR/ApiKey] POST /connections/link-token — crée le LinkToken qui
+   * initialise le widget. `ClientUserId` = frontière tenant ; `RedirectOrigin`
+   * HTTPS obligatoire. NE PAS passer un RequestedScopes vide (400).
+   */
+  async creerLinkToken(
+    params: CreerLinkTokenParams,
+  ): Promise<OmniFiLinkTokenData> {
+    const env = await this.requete<OmniFiLinkTokenData>("/connections/link-token", {
+      method: "POST",
+      auth: authApiKey(),
+      body: params,
+    });
+    return env.Data;
+  }
+
+  /**
+   * [LinkToken] POST /widget/session/exchange — consomme le LinkToken (usage
+   * unique) et retourne le SessionToken (Bearer) des appels widget. Body vide :
+   * l'identité vient du LinkToken. Rate-limit 10/IP/60s (429).
+   */
+  async echangerSessionToken(
+    linkToken: string,
+  ): Promise<OmniFiSessionTokenData> {
+    const env = await this.requete<OmniFiSessionTokenData>("/widget/session/exchange", {
+      method: "POST",
+      auth: authLinkToken(linkToken),
+      body: {},
+    });
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] GET /connections/link-token/context — métadonnées du
+   * LinkToken (nom client, banque verrouillée, mode, scopes) pour le rendu widget.
+   */
+  async contexteLinkToken(
+    sessionToken: string,
+  ): Promise<OmniFiLinkTokenContext> {
+    const env = await this.requete<OmniFiLinkTokenContext>("/connections/link-token/context", {
+      auth: authBearer(sessionToken),
+    });
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] POST /connections/link-connect — soumet les identifiants
+   * bancaires de l'EndUser. ⚠️ `credentials` contient un mot de passe bancaire
+   * (PII) : transmis à Omni-FI, JAMAIS stocké ni loggé côté TYGR (règle 8).
+   * Retourne PublicToken + JobId pour le polling.
+   */
+  async connecter(
+    sessionToken: string,
+    credentials: BankCredentials,
+    institutionId?: string,
+  ): Promise<OmniFiConnectData> {
+    const env = await this.requete<OmniFiConnectData>("/connections/link-connect", {
+      method: "POST",
+      auth: authBearer(sessionToken),
+      body: { Credentials: credentials, InstitutionId: institutionId },
+    });
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] GET /sync/job/{JobId} — état du job (polling de la machine
+   * MFA). Variante Bearer (widget). Pour le polling serveur (ApiKey), passer
+   * clientUserId via getSyncJobServeur.
+   */
+  async getSyncJob(
+    sessionToken: string,
+    jobId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/job/${encodeURIComponent(jobId)}`,
+      { auth: authBearer(sessionToken) },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [ApiKey] GET /sync/job/{JobId} — variante serveur du polling (clientUserId
+   * requis pour la frontière B2B).
+   */
+  async getSyncJobServeur(
+    jobId: string,
+    clientUserId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/job/${encodeURIComponent(jobId)}`,
+      { auth: authApiKey(), query: { clientUserId } },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] POST /sync/{JobId}/input — soumet l'OTP. `mfaResendRequestedAt`
+   * DOIT être ré-émis verbatim après un resend (watermark strict, sinon 409
+   * STALE_INPUT). 3 mauvais codes → job FAILED.
+   */
+  async soumettreMfa(
+    sessionToken: string,
+    jobId: string,
+    userInput: string,
+    mfaResendRequestedAt?: string | null,
+  ): Promise<OmniFiMfaInputData> {
+    const env = await this.requete<OmniFiMfaInputData>(
+      `/sync/${encodeURIComponent(jobId)}/input`,
+      {
+        method: "POST",
+        auth: authBearer(sessionToken),
+        body: {
+          UserInput: userInput,
+          ...(mfaResendRequestedAt !== undefined
+            ? { MfaResendRequestedAt: mfaResendRequestedAt }
+            : {}),
+        },
+      },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] POST /sync/{JobId}/resend — demande un renvoi d'OTP. Cooldown
+   * (429/409 MFA_RESEND_COOLDOWN_ACTIVE + RetryAfterSeconds), max 3.
+   */
+  async resendMfa(
+    sessionToken: string,
+    jobId: string,
+  ): Promise<OmniFiMfaResendData> {
+    const env = await this.requete<OmniFiMfaResendData>(
+      `/sync/${encodeURIComponent(jobId)}/resend`,
+      { method: "POST", auth: authBearer(sessionToken), body: {} },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SessionToken] GET /sync/job/{JobId}/accounts — comptes découverts (résout
+   * connexion → comptes). Utilisé pour l'écran Account Selection.
+   */
+  async getSyncJobAccounts(
+    sessionToken: string,
+    jobId: string,
+  ): Promise<OmniFiSyncJobAccountsData> {
+    const env = await this.requete<OmniFiSyncJobAccountsData>(
+      `/sync/job/${encodeURIComponent(jobId)}/accounts`,
+      { auth: authBearer(sessionToken) },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SERVEUR/ApiKey] POST /connections/link-exchange — échange le PublicToken
+   * contre un ConnectionId permanent. `clientUserId` re-transmis pour la
+   * frontière tenant (mismatch → 403 PUBLIC_TOKEN_CLIENT_MISMATCH).
+   */
+  async echangerPublicToken(
+    publicToken: string,
+    clientUserId: string,
+  ): Promise<OmniFiPublicTokenExchangeData> {
+    const env = await this.requete<OmniFiPublicTokenExchangeData>("/connections/link-exchange", {
+      method: "POST",
+      auth: authApiKey(),
+      body: { PublicToken: publicToken, ClientUserId: clientUserId },
+    });
+    return env.Data;
   }
 }
 
