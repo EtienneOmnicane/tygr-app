@@ -1,8 +1,10 @@
 /**
- * Schéma Drizzle — fondation Workspace (Semaine 1).
- * Traduction stricte de docs/cahier_des_charges.md §4 (v2.1), périmètre :
- * workspaces, users, workspace_members. Les tables métier (bank_connections,
- * transactions_cache…) arrivent avec la pipeline de sync (semaines 3-5).
+ * Schéma Drizzle — fondation Workspace (Semaine 1) + cœur financier (Epic 3).
+ * Traduction stricte de docs/cahier_des_charges.md §4 (v2.1) : workspaces,
+ * users, workspace_members, puis bank_connections / bank_accounts /
+ * transactions_cache / balance_history (modèle SQL du plan approuvé).
+ * Restent à venir avec leurs chantiers : consent_records, audit_events,
+ * sync_runs (pipeline de sync & consent flow).
  *
  * Conventions de sécurité (CLAUDE.md règles 2 et 8) :
  * - workspace_members est sous RLS : politique tenant_isolation keyée sur
@@ -25,13 +27,16 @@ import {
   boolean,
   char,
   check,
+  date,
   index,
   integer,
+  numeric,
   pgPolicy,
   pgTable,
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
   varchar,
@@ -148,5 +153,171 @@ export const workspaceMembers = pgTable(
       for: "select",
       using: sql`user_id = nullif(current_setting('app.current_user_id', true), '')::uuid`,
     }),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Cœur financier (Epic 3, étape 1) — traduction du modèle SQL du plan  */
+/* v2.1 approuvé. Tables tenant : workspace_id + RLS tenant_isolation   */
+/* (pattern nullif fail-closed identique à workspace_members) ; FORCE   */
+/* RLS posé par migration custom, GRANTs par drizzle/provisioning.      */
+/* Montants : DECIMAL(15,2) — chaînes décimales côté TS (règle 8).      */
+/* ------------------------------------------------------------------ */
+
+const POLITIQUE_TENANT = {
+  for: "all",
+  using: sql`workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid`,
+  withCheck: sql`workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid`,
+} as const;
+
+/** Connexions bancaires Omni-FI (une connexion = une banque, cf. doc API). */
+export const bankConnections = pgTable(
+  "bank_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /** `ConnectionId` Omni-FI permanent (obtenu via link-exchange). */
+    omnifiConnectionId: varchar("omnifi_connection_id", { length: 64 })
+      .notNull()
+      .unique(),
+    institutionId: varchar("institution_id", { length: 64 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    /** Rate-limit amont : aucun POST /sync avant cet horodatage. */
+    nextSyncAvailableAt: timestamp("next_sync_available_at", {
+      withTimezone: true,
+    }),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("bank_connections_workspace_id_idx").on(t.workspaceId),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/** Comptes bancaires (OBIE `OBReadAccount6`, sous-ensemble du plan). */
+export const bankAccounts = pgTable(
+  "bank_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => bankConnections.id, { onDelete: "cascade" }),
+    omnifiAccountId: varchar("omnifi_account_id", { length: 64 })
+      .notNull()
+      .unique(),
+    accountName: varchar("account_name", { length: 255 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    currentBalance: numeric("current_balance", { precision: 15, scale: 2 }),
+    /** Account Selection (consentement) : compte autorisé par l'utilisateur. */
+    isSelected: boolean("is_selected").notNull().default(true),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    /**
+     * `NextCursor` Omni-FI du sync incrémental, par compte. Avancé UNIQUEMENT
+     * dans la même transaction SQL que les upserts (plan : pas de trou).
+     */
+    syncCursor: text("sync_cursor"),
+  },
+  (t) => [
+    index("bank_accounts_workspace_id_idx").on(t.workspaceId),
+    index("bank_accounts_connection_id_idx").on(t.connectionId),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/**
+ * Cache des transactions Omni-FI (OBIE v4.0.1), partitionné par RANGE sur
+ * transaction_date (clause posée à la main dans la migration — drizzle-kit ne
+ * sait pas l'émettre ; le snapshot reste correct, colonnes identiques).
+ *
+ * Divergences DOCUMENTÉES vs plan v2.1 (à valider, cf. revue) :
+ * - `currency` AJOUTÉE : « toute table portant un montant porte sa devise »
+ *   (CLAUDE.md, multi-devise first) — le plan l'omettait, la règle gagne.
+ * - `booking_date_time` AJOUTÉE : horodatage brut UTC dont dérive
+ *   `transaction_date` (AT TIME ZONE 'Asia/Port_Louis', E20) — sans lui, la
+ *   date comptable est invérifiable et l'export perd le tri amont.
+ *
+ * PII (règle 8) : `bank_label_raw` est un libellé bancaire brut — jamais dans
+ * les logs ni les messages d'erreur.
+ */
+export const transactionsCache = pgTable(
+  "transactions_cache",
+  {
+    id: uuid("id").notNull().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    bankAccountId: uuid("bank_account_id")
+      .notNull()
+      .references(() => bankAccounts.id, { onDelete: "cascade" }),
+    omnifiTxnId: varchar("omnifi_txn_id", { length: 255 }).notNull(),
+    /** Date comptable Maurice, dérivée de booking_date_time (E20). */
+    transactionDate: date("transaction_date").notNull(),
+    /** `BookingDateTime` OBIE brut, UTC. */
+    bookingDateTime: timestamp("booking_date_time", {
+      withTimezone: true,
+    }).notNull(),
+    amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+    creditDebit: varchar("credit_debit", { length: 6 }).notNull(),
+    bankLabelRaw: text("bank_label_raw").notNull(),
+    cleanLabel: varchar("clean_label", { length: 255 }),
+    primaryCategory: varchar("primary_category", { length: 120 }),
+    subCategory: varchar("sub_category", { length: 120 }),
+    /** Tombstone pour Removed[] du sync — jamais de DELETE physique. */
+    isRemoved: boolean("is_removed").notNull().default(false),
+  },
+  (t) => [
+    // La clé de partition doit appartenir à la PK et aux contraintes uniques.
+    primaryKey({ columns: [t.id, t.transactionDate] }),
+    unique("transactions_cache_omnifi_txn_unique").on(
+      t.omnifiTxnId,
+      t.transactionDate,
+    ),
+    check(
+      "transactions_cache_credit_debit_check",
+      sql`${t.creditDebit} IN ('Credit','Debit')`,
+    ),
+    // Couvre la liste du dashboard (plan, décision #603).
+    index("transactions_cache_workspace_date_idx").on(
+      t.workspaceId,
+      t.transactionDate.desc(),
+    ),
+    index("transactions_cache_bank_account_id_idx").on(t.bankAccountId),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/** Soldes end-of-day par compte — source de la courbe de trésorerie 90 j. */
+export const balanceHistory = pgTable(
+  "balance_history",
+  {
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    bankAccountId: uuid("bank_account_id")
+      .notNull()
+      .references(() => bankAccounts.id, { onDelete: "cascade" }),
+    balanceDate: date("balance_date").notNull(),
+    balance: numeric("balance", { precision: 15, scale: 2 }).notNull(),
+    currency: char("currency", { length: 3 }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.bankAccountId, t.balanceDate] }),
+    // Couvre l'agrégat multi-comptes du dashboard (FEAT-3.1, fenêtre 90 j).
+    index("balance_history_workspace_date_idx").on(
+      t.workspaceId,
+      t.balanceDate,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
