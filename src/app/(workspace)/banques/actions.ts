@@ -24,7 +24,7 @@ import {
   ConnexionNonAutoriseeError,
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
-  finaliserConnexionDropin,
+  finaliserConnexionsDropin,
 } from "@/server/widget/orchestration";
 
 export interface EtatDemarrage {
@@ -123,20 +123,30 @@ export async function demarrerConnexionAction(
   }
 }
 
-/** Entrée du widget DROP-IN : seul le PublicToken (onSuccess de @omnifi/react). */
-const dropinSchema = z.object({ publicToken: z.string().min(1).max(512) }).strict();
+/**
+ * Entrée du widget DROP-IN (hook `useOmniFILink`) : `onSuccess` rend
+ * `{ connections: [...] }` → le composant nous transmet la LISTE des PublicTokens
+ * (un par connexion). On borne la liste (1..20 connexions, tokens bornés) pour ne
+ * pas accepter de payload non contrôlé.
+ */
+const dropinSchema = z
+  .object({
+    publicTokens: z.array(z.string().min(1).max(512)).min(1).max(20),
+  })
+  .strict();
 
 /**
- * Finalisation pour le widget natif @omnifi/react : reçoit le PublicToken de
- * `onSuccess`, échange (ApiKey) et découvre les comptes via GET /accounts (ApiKey,
- * sans SessionToken). Appelée directement depuis le composant client.
+ * Finalisation pour le widget natif @omnifi/react (hook). Reçoit les PublicTokens
+ * de `onSuccess` (le payload peut porter plusieurs connexions), échange chacun
+ * (ApiKey) et découvre les comptes via GET /accounts (ApiKey, sans SessionToken).
+ * Appelée directement depuis le composant client.
  */
 export async function finaliserConnexionDropinAction(
-  publicToken: string,
+  publicTokens: string[],
 ): Promise<EtatFinalisation> {
   const session = await exigerSessionWorkspace();
 
-  const parsed = dropinSchema.safeParse({ publicToken });
+  const parsed = dropinSchema.safeParse({ publicTokens });
   if (!parsed.success) {
     return { erreur: "Paramètres invalides.", succes: null };
   }
@@ -146,13 +156,17 @@ export async function finaliserConnexionDropinAction(
     withWorkspace(session, fn);
 
   try {
-    const r = await finaliserConnexionDropin(client, executer, {
-      publicToken: parsed.data.publicToken,
-    });
-    return {
-      erreur: null,
-      succes: `Connexion établie — ${r.comptesRattaches} compte(s) rattaché(s).`,
-    };
+    const r = await finaliserConnexionsDropin(
+      client,
+      executer,
+      parsed.data.publicTokens,
+    );
+    // Succès partiel possible : on rattache ce qui a réussi et on signale le reste
+    // sans énumérer (registre S2) — le détail des échecs est tracé côté serveur.
+    const base = `Connexion établie — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.reussies.length} banque(s).`;
+    const succes =
+      r.echecs > 0 ? `${base} ${r.echecs} connexion(s) n'ont pas pu être finalisées.` : base;
+    return { erreur: null, succes };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),

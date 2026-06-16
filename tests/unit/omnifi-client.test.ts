@@ -323,10 +323,12 @@ describe("configuration (lecture d'env, règle 8)", () => {
   });
 
   it("S1 — les 3 hôtes documentés sont acceptés", () => {
+    // NOTE (2026-06-16) : "sandbox.omni-fi.co" (coquille doc, NXDOMAIN) retiré de
+    // l'allow-list au profit du vrai hôte de pré-prod "stage.omni-fi.co".
     for (const hote of [
       "api.omni-fi.co",
       "api-stage.omni-fi.co",
-      "sandbox.omni-fi.co",
+      "stage.omni-fi.co",
     ]) {
       vi.stubEnv("OMNIFI_ENV", "sandbox");
       vi.stubEnv("OMNIFI_BASE_URL", `https://${hote}/v1`);
@@ -339,7 +341,7 @@ describe("configuration (lecture d'env, règle 8)", () => {
 
   it("base URL avec slash final → normalisée (pas de // dans l'URL finale)", async () => {
     vi.stubEnv("OMNIFI_ENV", "sandbox");
-    vi.stubEnv("OMNIFI_BASE_URL", "https://sandbox.omni-fi.co/v1/");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://stage.omni-fi.co/v1/");
     vi.stubEnv("OMNIFI_CLIENT_ID", "c");
     vi.stubEnv("OMNIFI_SECRET", "s");
     _reinitialiserConfigOmniFi();
@@ -354,7 +356,7 @@ describe("configuration (lecture d'env, règle 8)", () => {
     await client.listerConnexions(CLIENT_USER_ID);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      "https://sandbox.omni-fi.co/v1/connections?clientUserId=user-123",
+      "https://stage.omni-fi.co/v1/connections?clientUserId=user-123",
     );
   });
 });

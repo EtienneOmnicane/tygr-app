@@ -1,31 +1,34 @@
 "use client";
 
 /**
- * Conteneur du WIDGET NATIF Omni-FI (PR-W4). Remplace le flux MFA custom : on ne
- * pilote plus la machine à états maison — on monte le drop-in `<OmniFiWidget/>`
- * (package privé `@omnifi/react`) qui gère lui-même credentials / OTP / sélection
- * de comptes.
+ * Conteneur du WIDGET NATIF Omni-FI (PR-W4, RÉ-ALIGNÉ 2026-06-16). On ne pilote
+ * plus la machine MFA maison : on consomme le drop-in officiel `@omnifi/react`,
+ * qui gère lui-même credentials / OTP / sélection de comptes.
+ *
+ * ⚠️ Contrat ré-aligné sur le CODE SOURCE (github.com/omni-fi-app/omni-fi-react-link),
+ * la doc Fern étant fausse. Différences clés :
+ *   - L'API est un HOOK `useOmniFILink({ token, onSuccess, ... })`, PAS un composant.
+ *   - Entrée = `token` (le LinkToken serveur).
+ *   - `onSuccess` reçoit `{ connections: [...] }` — potentiellement PLUSIEURS
+ *     connexions ; chacune porte `publicToken` (+ connectionId, institutionId…).
+ *   - Le widget charge un script CDN → on attend `isReady` avant `open()`.
  *
  * Cycle :
  *   1. clic « Connecter une banque » → `demarrerConnexionAction` (serveur, ApiKey)
  *      retourne un LinkToken usage-unique.
- *   2. LinkToken présent → on monte `<OmniFiWidget linkToken=… />`. Le widget natif
- *      prend la main (UI bancaire native).
- *   3. onSuccess → `finaliserConnexionDropinAction(publicToken)` échange le
- *      PublicToken côté serveur (puis GET /accounts) et rattache la connexion ;
+ *   2. LinkToken présent → on l'injecte dans `useOmniFILink` ; dès que `isReady`,
+ *      on `open()` le widget (UI bancaire native).
+ *   3. onSuccess → on extrait les `publicToken` de chaque connexion et on appelle
+ *      `finaliserConnexionDropinAction(publicTokens)` (échange + GET /accounts).
  *      onExit/onError → on réarme le bouton.
  *
- * Contrat (doc Fern) : `onSuccess` reçoit le `publicToken` SEUL — le widget gère
- * la MFA en interne (ni sessionToken ni jobId exposés).
- *
- * Sécurité : le LinkToken et le PublicToken ne sont NI loggés NI persistés côté
- * client (règle 8) ; ils transitent vers les Server Actions qui les relaient. Le
- * gating MANAGER/ADMIN est porté par le serveur (les actions refusent un VIEWER) ;
- * ici on n'affiche le bouton que si `peutConnecter` (UX), la barrière réelle est serveur.
+ * Sécurité : ni LinkToken ni PublicToken ne sont loggés/persistés côté client
+ * (règle 8) ; ils transitent vers les Server Actions. Le gating MANAGER/ADMIN est
+ * porté par le serveur ; ici on n'affiche le bouton que si `peutConnecter` (UX).
  */
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 
-import { OmniFiWidget } from "@omnifi/react";
+import { useOmniFILink, type OmniFiSuccessPayload } from "@omnifi/react";
 
 import {
   demarrerConnexionAction,
@@ -51,23 +54,37 @@ export function BankConnectWidget({
     succes: null,
   });
   const [, startFinalisation] = useTransition();
-  // Le widget est monté tant que l'action a produit un LinkToken ET que
-  // l'utilisateur ne l'a pas fermé. `ferme` réarme après sortie/succès sans
-  // copier le token dans un état (pas de setState-in-effect — état DÉRIVÉ).
+  // Le LinkToken courant pilote le hook. `ferme` réarme après sortie/succès sans
+  // copier le token dans un état dérivé inutile.
   const [ferme, setFerme] = useState(false);
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
-  function onSuccess(publicToken: string) {
-    // Contrat Fern : le widget renvoie le publicToken SEUL. La finalisation
-    // serveur (finaliserConnexionDropinAction) l'échange (link-exchange) puis
-    // découvre les comptes via GET /accounts — pas de sessionToken/jobId.
-    // Le token n'est jamais loggé ici.
+  function onSuccess(payload: OmniFiSuccessPayload) {
+    // Le payload peut porter PLUSIEURS connexions. On n'expédie au serveur que
+    // les publicToken (jamais loggés ici) ; la finalisation échange chacun puis
+    // découvre les comptes via GET /accounts.
+    const publicTokens = payload.connections.map((c) => c.publicToken);
     setFerme(true);
     startFinalisation(async () => {
-      const r = await finaliserConnexionDropinAction(publicToken);
+      const r = await finaliserConnexionDropinAction(publicTokens);
       setFinalisation(r);
     });
   }
+
+  // Le hook DOIT être appelé inconditionnellement (règle des hooks). Quand il n'y
+  // a pas de token actif, on lui passe une chaîne vide : on n'appellera `open()`
+  // que lorsqu'un vrai token est présent ET que le script CDN est prêt.
+  const { open, isReady } = useOmniFILink({
+    token: tokenActif ?? "",
+    onSuccess,
+    onExit: () => setFerme(true),
+    onError: () => setFerme(true),
+  });
+
+  // Ouverture programmatique : dès qu'un LinkToken est actif et le script chargé.
+  useEffect(() => {
+    if (tokenActif && isReady) open();
+  }, [tokenActif, isReady, open]);
 
   if (!peutConnecter) {
     return (
@@ -77,34 +94,22 @@ export function BankConnectWidget({
     );
   }
 
-  // Widget natif monté : il occupe la surface, gère credentials/OTP/comptes.
-  if (tokenActif) {
-    return (
-      <div className="rounded-card bg-surface-card p-6 shadow-card">
-        <OmniFiWidget
-          linkToken={tokenActif}
-          onSuccess={onSuccess}
-          onExit={() => setFerme(true)}
-          onError={() => setFerme(true)}
-        />
-      </div>
-    );
-  }
-
-  // État repos : bouton de démarrage + retours d'erreur/succès des actions.
   // RedirectOrigin = origine https sans path (contrat link-token), lue côté
   // navigateur. En dev (http://localhost) l'action la rejettera : le widget natif
   // exige https — c'est attendu, la démo tourne sur un domaine https.
   const redirectOrigin =
     typeof window !== "undefined" ? window.location.origin : "";
 
+  const widgetEnCours = Boolean(tokenActif) && !isReady;
+
   return (
     <div className="flex flex-col gap-3">
       <form
         action={(fd) => {
-          // Réarme : un nouveau démarrage doit remonter le widget même après une
+          // Réarme : un nouveau démarrage doit ré-ouvrir le widget même après une
           // fermeture précédente (le LinkToken renvoyé sera de nouveau « actif »).
           setFerme(false);
+          setFinalisation({ erreur: null, succes: null });
           demarrer(fd);
         }}
       >
@@ -116,14 +121,14 @@ export function BankConnectWidget({
         />
         <button
           type="submit"
-          disabled={demarrageEnCours}
+          disabled={demarrageEnCours || widgetEnCours}
           className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
             px-4 text-sm font-semibold text-text-onink transition-colors
             hover:bg-primary-600 focus:outline-none focus-visible:ring-2
             focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-48"
         >
           <span aria-hidden>+</span>
-          {demarrageEnCours ? "Ouverture…" : "Connecter une banque"}
+          {demarrageEnCours || widgetEnCours ? "Ouverture…" : "Connecter une banque"}
         </button>
       </form>
 
