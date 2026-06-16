@@ -16,7 +16,9 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 2 | Package SDK non publié → vendoring manuel obligatoire | Bloquant | Contourné (clone + build + vendoring) |
 | 3 | Nom du package erroné dans la doc (`@omnifi/react`) | Élevé | Contourné (corrigé en `@omni-fi/react-link`) |
 | 4 | Exigence HTTPS du widget non documentée | Élevé | Contourné (HTTPS local + allowlist) |
-| 5 | Widget CDN plante en fin de parcours — `onSuccess` jamais émis | **Critique** | Contourné (workaround `connection-linked`) — **fix attendu côté API** |
+| 5 | Widget CDN : `postMessage` bloqué (« parentOrigin not established ») → `onSuccess` jamais émis | **Critique** | Contourné (re-sync serveur `GET /connections`) — **fix attendu côté API** |
+| 6 | Auth : confusion `client_id` (« Issuing for ») vs « APICLIENT ID » UUID ; message `401` peu explicite | Moyen | Contourné (deviné le bon identifiant) |
+| 7 | EndUser non auto-créé : `ClientUserId` arbitraire → `404`, non documenté dans le parcours | Moyen | Contourné (`POST /clients/end-users`) |
 
 ---
 
@@ -93,20 +95,33 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 ```
 exchange → context → envelope → institutions → link-connect → accounts → accounts → [requête échouée] → revoke (échec)
 ```
-- `link-connect` et `accounts` : **succès** (la banque est connectée, les comptes découverts).
-- Une requête en fin de séquence : **« An error occurred trying to load the resource »**.
-- `revoke` : **échec**.
-- Aucun `onSuccess` reçu côté hôte (notre Server Action de finalisation n'est jamais appelée — confirmé par l'absence de toute trace de finalisation dans nos logs serveur).
+- `link-connect` et `accounts` : **succès** (la banque est connectée, les comptes découverts ; réponses inspectées : `PublicToken`, `ConnectionId`, comptes + soldes bien présents).
+- Le widget affiche l'écran final « Your account has been successfully connected » (clic « Finish » / « Continue »).
+- `revoke` (fin de session widget) : **échec**.
 
-**Analyse.** Le SDK React transmet correctement notre `onSuccess` au script CDN via `window.OmniFI.connect({...})`. Le problème est donc **côté widget hébergé (script CDN)** : il échoue à émettre `onSuccess` (et à se fermer proprement) à cause d'une requête réseau en échec en toute fin de parcours.
+**CAUSE RACINE (confirmée par la console navigateur).** Le widget hébergé **n'établit pas le canal `postMessage`** avec la page parente. Messages observés dans la console, de façon reproductible :
+```
+Blocked a frame with origin "https://staging-connect.omni-fi.co"
+  from accessing a frame with origin "https://localhost:3000".
+  Protocols, domains, and ports must match.
 
-**Contournement mis en place côté TYGR (temporaire).** Nous écoutons l'événement **`omni-fi:connection-linked`** (émis **par banque**, **avant** le plantage), nous accumulons les `publicToken`, puis — après un court silence — nous **forçons la fermeture** du widget (`destroy()`) et déclenchons **nous-mêmes** la finalisation. Notre chemin `onSuccess` reste branché comme voie nominale ; une double-finalisation éventuelle est neutralisée côté serveur (dédoublonnage des `publicToken` + échange idempotent). Ce contournement est **temporaire** et ne remplace pas un correctif côté widget.
+[omni-fi-link] Cannot send success message: parentOrigin is not established.
+```
+Conséquence : le widget **ne peut jamais envoyer le message de succès** à la page → `onSuccess` (et tout autre callback de retour, y compris `omni-fi:connection-linked`) **n'arrive jamais** côté hôte, **quel que soit** le bouton cliqué. La connexion est pourtant bien persistée côté Omni-FI.
+
+**Analyse.** Le SDK React transmet correctement notre `onSuccess` au script CDN via `window.OmniFI.connect({...})`. Le blocage est **entièrement côté widget hébergé** : son iframe (`staging-connect.omni-fi.co`) échoue à « établir » l'origine parente (`https://localhost:3000`) et à lui parler via `postMessage`. Notre `RedirectOrigin` envoyé au `link-token` est pourtant bien `https://localhost:3000` (= l'origine réelle de la page) ; le canal de retour reste néanmoins bloqué.
+
+**Pistes côté Omni-FI (à investiguer).**
+- L'origine parente `https://localhost:3000` n'est peut-être pas autorisée par le widget (allowlist d'origines côté serveur/iframe, distincte du `RedirectOrigin`).
+- Le handshake d'« établissement du parentOrigin » échoue (timing, vérification d'origine trop stricte, ou incompatibilité avec un certificat local de développement).
+
+**Contournement retenu côté TYGR (temporaire, indépendant du postMessage).** Plutôt que d'attendre `onSuccess`, nous **relisons l'état réel côté serveur** via `GET /connections?clientUserId=…` (auth ApiKey), puis `GET /accounts?connectionId=…`, et nous rattachons les comptes — **sans dépendre du canal `postMessage`**. Ce chemin est exposé comme une action de **re-synchronisation manuelle** (bouton « Synchroniser mes connexions »). Le flux nominal `onSuccess` reste en place : dès que le widget sera corrigé, il fonctionnera sans changement de notre côté.
 
 **Recommandation (prioritaire).**
-1. **Corriger le plantage de fin de parcours** du widget CDN sandbox (identifier la requête en échec et la rendre non bloquante).
-2. **Garantir l'émission de `onSuccess`** même si un appel non essentiel (ex. `revoke`) échoue — le succès fonctionnel (banque liée + comptes) ne devrait pas dépendre d'un appel de nettoyage.
-3. **Fermer le widget proprement** en cas d'erreur terminale, plutôt que de le laisser bloqué ouvert.
-4. Documenter le **contrat d'événements** (`omni-fi:connection-linked` vs `omni-fi:success`) et leur ordre, ainsi que la **compatibilité de version** entre le SDK npm et le widget CDN (le `README` du SDK mentionne un couplage de versions, sans procédure claire).
+1. **Permettre au widget d'établir le `parentOrigin`** pour les origines légitimes (au minimum `https://localhost:3000` en développement, et les domaines de production des intégrateurs). Documenter **comment** une origine parente est autorisée (allowlist, paramètre, etc.).
+2. **Garantir l'émission de `onSuccess`** une fois la connexion réussie, indépendamment des appels de nettoyage (ex. `revoke`).
+3. **Ne pas laisser le widget bloqué ouvert** en cas d'échec du canal de retour.
+4. Documenter le **contrat d'événements** (`omni-fi:connection-linked` vs `omni-fi:success`, ordre, payloads) et la **compatibilité de version** SDK npm ↔ widget CDN (le `README` du SDK mentionne un couplage de versions, sans procédure claire).
 
 ---
 

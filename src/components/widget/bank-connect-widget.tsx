@@ -35,6 +35,7 @@ import dynamic from "next/dynamic";
 import {
   demarrerConnexionAction,
   finaliserConnexionDropinAction,
+  synchroniserConnexionsAction,
   type EtatDemarrage,
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
@@ -75,11 +76,22 @@ export function BankConnectWidget({
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
   function finaliser(publicTokens: string[]) {
-    // publicToken jamais loggés ici ; la finalisation serveur les échange puis
-    // découvre les comptes via GET /accounts.
+    // Flux NOMINAL : à la fin du parcours (onSuccess), la finalisation serveur
+    // échange les publicToken (jamais loggés ici) puis découvre les comptes.
     setFerme(true);
     startFinalisation(async () => {
       const r = await finaliserConnexionDropinAction(publicTokens);
+      setFinalisation(r);
+    });
+  }
+
+  function synchroniser() {
+    // Re-synchronisation MANUELLE : relit l'état réel côté Omni-FI (GET /connections)
+    // et rattache les comptes. Utile pour rafraîchir des connexions existantes, et
+    // comme repli si le widget n'a pas finalisé (cf. OMNIFI_API_FEEDBACK.md §5).
+    // Idempotent côté serveur (pas de doublon).
+    startFinalisation(async () => {
+      const r = await synchroniserConnexionsAction();
       setFinalisation(r);
     });
   }
@@ -109,33 +121,50 @@ export function BankConnectWidget({
         />
       )}
 
-      <form
-        action={(fd) => {
-          // Réarme : un nouveau démarrage doit ré-ouvrir le widget même après une
-          // fermeture précédente (le LinkToken renvoyé sera de nouveau « actif »).
-          setFerme(false);
-          setFinalisation({ erreur: null, succes: null });
-          demarrer(fd);
-        }}
-      >
-        <input
-          type="hidden"
-          name="redirectOrigin"
-          value={redirectOrigin}
-          readOnly
-        />
-        <button
-          type="submit"
-          disabled={demarrageEnCours || Boolean(tokenActif)}
-          className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
-            px-4 text-sm font-semibold text-text-onink transition-colors
-            hover:bg-primary-600 focus:outline-none focus-visible:ring-2
-            focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-48"
+      <div className="flex flex-wrap items-center gap-2">
+        <form
+          action={(fd) => {
+            // Réarme : un nouveau démarrage doit ré-ouvrir le widget même après une
+            // fermeture précédente (le LinkToken renvoyé sera de nouveau « actif »).
+            setFerme(false);
+            setFinalisation({ erreur: null, succes: null });
+            demarrer(fd);
+          }}
         >
-          <span aria-hidden>+</span>
-          {demarrageEnCours || tokenActif ? "Ouverture…" : "Connecter une banque"}
+          <input
+            type="hidden"
+            name="redirectOrigin"
+            value={redirectOrigin}
+            readOnly
+          />
+          <button
+            type="submit"
+            disabled={demarrageEnCours || Boolean(tokenActif)}
+            className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
+              px-4 text-sm font-semibold text-text-onink transition-colors
+              hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+              focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-48"
+          >
+            <span aria-hidden>+</span>
+            {demarrageEnCours || tokenActif ? "Ouverture…" : "Connecter une banque"}
+          </button>
+        </form>
+
+        {/* Re-synchronisation manuelle (GET /connections) — rafraîchit les
+            connexions existantes ; sert aussi de repli si le widget n'a pas finalisé. */}
+        <button
+          type="button"
+          onClick={synchroniser}
+          disabled={Boolean(tokenActif)}
+          className="inline-flex h-10 items-center gap-2 rounded-control border
+            border-border bg-surface-card px-4 text-sm font-semibold text-text
+            transition-colors hover:bg-surface-muted focus:outline-none
+            focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
+            disabled:opacity-48"
+        >
+          Synchroniser mes connexions
         </button>
-      </form>
+      </div>
 
       {demarrage.erreur && (
         <p role="alert" className="text-sm text-danger">

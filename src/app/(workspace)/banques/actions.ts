@@ -25,6 +25,7 @@ import {
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
   finaliserConnexionsDropin,
+  synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
 import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
 
@@ -162,6 +163,38 @@ export async function finaliserConnexionDropinAction(
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),
+      succes: null,
+    };
+  }
+}
+
+/**
+ * Synchronise les connexions du workspace en lisant l'état réel côté Omni-FI
+ * (`GET /connections`), SANS dépendre du PublicToken/postMessage du widget — qui est
+ * cassé en sandbox (cf. OMNIFI_API_FEEDBACK.md §5/§6). Appelée à la fermeture du
+ * widget (le widget a déjà persisté la connexion côté Omni-FI). Idempotente.
+ */
+export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> {
+  const session = await exigerSessionWorkspace();
+
+  const client = creerClientOmniFi();
+  const executer = <T>(fn: Parameters<typeof withWorkspace<T>>[1]) =>
+    withWorkspace(session, fn);
+
+  try {
+    const r = await synchroniserConnexionsDepuisOmnifi(client, executer);
+    if (r.connexions === 0) {
+      // Aucune connexion trouvée : ni erreur ni faux succès (l'utilisateur a pu
+      // fermer sans connecter). Message neutre.
+      return { erreur: null, succes: null };
+    }
+    return {
+      erreur: null,
+      succes: `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`,
+    };
+  } catch (erreur) {
+    return {
+      erreur: messageDepuis(erreur, session.activeWorkspaceId, "synchroniser"),
       succes: null,
     };
   }
