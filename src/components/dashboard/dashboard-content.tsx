@@ -24,6 +24,7 @@ import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
+import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
@@ -66,12 +67,16 @@ export function DashboardContent({
   return (
     <DashboardShell
       aside={
-        <SidePanelKpi
-          soldeConsolide={soldeConsolide}
-          syntheseMois={syntheseMois}
-          devise={devise}
-          dateSolde={dateSolde}
-        />
+        <>
+          <SidePanelKpi
+            soldeConsolide={soldeConsolide}
+            syntheseMois={syntheseMois}
+            devise={devise}
+            dateSolde={dateSolde}
+          />
+          {/* Pile aside : SOLDE → DÉTAILS (SidePanelKpi) → COMPTES CONNECTÉS. */}
+          <ConnectedAccountsCard comptes={comptes} />
+        </>
       }
     >
       <div className="flex flex-col gap-6">

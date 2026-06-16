@@ -41,7 +41,7 @@ export function SidePanelKpi({
           </span>
           <span className="text-xs text-text-muted">au {dateSolde}</span>
         </div>
-        <p className="mt-3 text-[28px] font-bold leading-none tabular-nums text-primary">
+        <p className="mt-4 text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary">
           {formatMontant(soldeConsolide, devise)}
         </p>
       </StateCard>
