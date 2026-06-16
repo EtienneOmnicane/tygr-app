@@ -29,9 +29,15 @@ const omnifiPackagePresent = (() => {
   }
 })();
 
-// Chemin absolu du stub (Turbopack résout `resolveAlias` depuis la racine projet ;
-// Webpack depuis le contexte. Un chemin absolu est non ambigu pour les deux.)
-const omnifiStubPath = path.resolve(
+// Les deux bundlers attendent des formes de chemin DIFFÉRENTES (validation
+// croisée Backend 2026-06-16) :
+//  - Turbopack (Next 16) résout `resolveAlias` RELATIVEMENT à la racine projet.
+//    Un chemin absolu y est interprété comme « server relative » (préfixé d'un
+//    `.` → `./Users/...`) et n'est PAS résolu. Il faut donc une forme relative
+//    `./src/stubs/...`.
+//  - Webpack `resolve.alias` exige au contraire un chemin ABSOLU.
+const omnifiStubRelative = "./src/stubs/omnifi-react.stub.ts";
+const omnifiStubAbsolute = path.resolve(
   import.meta.dirname,
   "src/stubs/omnifi-react.stub.ts",
 );
@@ -55,14 +61,14 @@ const nextConfig: NextConfig = {
     : {
         turbopack: {
           resolveAlias: {
-            "@omnifi/react": omnifiStubPath,
+            "@omnifi/react": omnifiStubRelative,
           },
         },
         webpack: (config) => {
           config.resolve = config.resolve ?? {};
           config.resolve.alias = {
             ...config.resolve.alias,
-            "@omnifi/react": omnifiStubPath,
+            "@omnifi/react": omnifiStubAbsolute,
           };
           return config;
         },
