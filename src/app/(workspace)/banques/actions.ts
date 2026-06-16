@@ -26,6 +26,7 @@ import {
   demarrerConnexion,
   finaliserConnexionsDropin,
 } from "@/server/widget/orchestration";
+import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
 
 export interface EtatDemarrage {
   erreur: string | null;
@@ -40,49 +41,21 @@ export interface EtatFinalisation {
 const MESSAGE_REFUS = "Action non autorisée.";
 const MESSAGE_GENERIQUE = "La connexion bancaire a échoué. Réessayez.";
 const MESSAGE_CONFIG = "Workspace non configuré pour Omni-FI.";
+// Message DISTINCT du « paramètres invalides » générique (Volet B) : le rejet le
+// plus courant n'est pas une malformation mais une origine non sécurisée/non
+// autorisée. Reste non-énumérant (registre S2) : il ne révèle pas l'allowlist.
+const MESSAGE_ORIGINE = "Origine sécurisée non autorisée pour la connexion bancaire.";
 
 /**
- * Allowlist serveur des origines autorisées (constat cross-review 3.1). Le
- * redirectOrigin vient du client (window.location.origin) : sa FORME ne suffit
- * pas (n'importe quel https valide passerait), donc on vérifie qu'il appartient à
- * APP_ALLOWED_ORIGINS (env, liste séparée par virgules) → un domaine tiers ne peut
- * pas être posé comme cible postMessage du PublicToken. Si l'env n'est pas
- * configuré, on n'autorise RIEN (fail-closed) : pas de connexion sans allowlist.
+ * Schéma de FORME seulement (string/url/longueur). L'AUTORISATION (https/dev/
+ * allowlist) est décidée séparément par `autoriserRedirectOrigin` (module pur
+ * `@/server/widget/redirect-origin`) dans l'action, pour pouvoir distinguer et
+ * logger le motif de rejet (Volet B) — un fichier `"use server"` ne peut exporter
+ * que des Server Actions, d'où l'extraction de la logique testable dans un module.
  */
-function originesAutorisees(): Set<string> {
-  const brut = process.env.APP_ALLOWED_ORIGINS ?? "";
-  return new Set(
-    brut
-      .split(",")
-      .map((o) => o.trim().replace(/\/+$/, ""))
-      .filter(Boolean),
-  );
-}
-
-/** RedirectOrigin : https, scheme+host SANS path (contrat link-token) ET allowlisté. */
 const demarrageSchema = z
   .object({
-    redirectOrigin: z
-      .string()
-      .url()
-      .max(255)
-      .refine((u) => {
-        try {
-          const url = new URL(u);
-          if (
-            url.protocol !== "https:" ||
-            url.pathname !== "/" ||
-            url.search !== "" ||
-            url.hash !== ""
-          ) {
-            return false;
-          }
-          // 3.1 : l'origine DOIT être dans l'allowlist serveur.
-          return originesAutorisees().has(url.origin);
-        } catch {
-          return false;
-        }
-      }, "RedirectOrigin non autorisé"),
+    redirectOrigin: z.string().url().max(255),
     institutionId: z.string().trim().max(64).optional(),
   })
   .strict();
@@ -102,7 +75,17 @@ export async function demarrerConnexionAction(
     institutionId: formData.get("institutionId") ?? undefined,
   });
   if (!parsed.success) {
+    // Malformation pure (champ absent, pas une URL, trop long) : reste générique.
+    logRejetDemarrage(session.activeWorkspaceId, "forme");
     return { erreur: "Paramètres invalides.", linkToken: null };
+  }
+
+  // Autorisation de l'origine (Volet B/C) : motif loggé côté serveur, message UI
+  // distinct et parlant mais non-énumérant.
+  const motif = autoriserRedirectOrigin(parsed.data.redirectOrigin);
+  if (motif !== "ok") {
+    logRejetDemarrage(session.activeWorkspaceId, motif);
+    return { erreur: MESSAGE_ORIGINE, linkToken: null };
   }
 
   const client = creerClientOmniFi();
@@ -148,6 +131,15 @@ export async function finaliserConnexionDropinAction(
 
   const parsed = dropinSchema.safeParse({ publicTokens });
   if (!parsed.success) {
+    // Rejet de forme de la finalisation (liste vide/hors bornes/token trop long) :
+    // tracé pour ne pas être invisible (Volet B), message UI inchangé.
+    console.warn(
+      JSON.stringify({
+        evt: "widget_finalisation_rejet",
+        action: "finaliser-dropin",
+        workspaceId: session.activeWorkspaceId,
+      }),
+    );
     return { erreur: "Paramètres invalides.", succes: null };
   }
 
@@ -209,4 +201,21 @@ function messageDepuis(erreur: unknown, workspaceId: string, action: string): st
   // UnsafeDatabaseRoleError…) → message générique côté UI (non-énumérant), mais
   // tracé ci-dessus par son code machine.
   return MESSAGE_GENERIQUE;
+}
+
+/**
+ * Log structuré d'un rejet de validation AVANT tout appel amont (Volet B). Sans
+ * lui, un rejet du schéma/de l'allowlist est invisible en exploitation (l'UI ne
+ * voit qu'un message). On ne logge QUE le workspace_id + le motif machine — JAMAIS
+ * l'URL d'origine (peut porter des identifiants) ni de token (règle 8).
+ */
+function logRejetDemarrage(workspaceId: string, motif: string): void {
+  console.warn(
+    JSON.stringify({
+      evt: "widget_demarrage_rejet",
+      action: "demarrer",
+      workspaceId,
+      motif,
+    }),
+  );
 }
