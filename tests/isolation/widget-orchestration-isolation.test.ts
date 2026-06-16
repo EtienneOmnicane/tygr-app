@@ -29,6 +29,7 @@ import {
   finaliserConnexion,
   finaliserConnexionDropin,
   finaliserConnexionsDropin,
+  synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
 
 const client = new PGlite();
@@ -46,10 +47,11 @@ const execWs =
   (fn) =>
     withWorkspace({ userId, activeWorkspaceId: workspaceId }, fn);
 
-/** Client factice : echange + accounts injectables. */
+/** Client factice : echange + accounts + connexions injectables. */
 function clientFactice(over: {
   exchange?: Partial<{ ConnectionId: string; InstitutionId: string; CustomerType: "business" }>;
   accounts?: Array<{ AccountId: string; Status: string; Currency: string; PartyName?: string; Balances?: unknown[] }>;
+  connections?: Array<{ ConnectionId: string; InstitutionId: string; Status: string }>;
 } = {}): OmniFiClient {
   return {
     creerLinkToken: vi.fn().mockResolvedValue({ LinkToken: "lt_x", Expiration: "2026-06-15T00:15:00Z" }),
@@ -62,6 +64,16 @@ function clientFactice(over: {
       Account: over.accounts ?? [
         { AccountId: "oa-1", Status: "Enabled", Currency: "MUR", PartyName: "Compte 1", Balances: [{ Type: "ITAV", Amount: { Amount: "5000.00", Currency: "MUR" } }] },
       ],
+    }),
+    // GET /connections?clientUserId= (chemin synchronisation) : enveloppe complète.
+    listerConnexions: vi.fn().mockResolvedValue({
+      Data: {
+        Connections: over.connections ?? [
+          { ConnectionId: over.exchange?.ConnectionId ?? "conn-omnifi-1", InstitutionId: over.exchange?.InstitutionId ?? "mcb", InstitutionName: "MCB", CustomerType: "CORPORATE", Status: "active", CreatedAt: "2026-06-16T00:00:00Z" },
+        ],
+      },
+      Links: {},
+      Meta: { TotalPages: 1 },
     }),
     // GET /accounts?connectionId= (flux drop-in) : enveloppe { Data, Links, Meta }.
     listerComptesConnexion: vi.fn().mockResolvedValue({
@@ -334,5 +346,61 @@ describe("finaliserConnexionsDropin — payload multi-connexions du hook", () =>
     expect(r.reussies).toHaveLength(1); // une seule banque, pas deux
     expect(r.comptesRattaches).toBe(1);
     expect(c.echangerPublicToken).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections (postMessage cassé)", () => {
+  it("liste les connexions par ClientUserId du workspace et persiste comptes (isolé de B)", async () => {
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-sync-A", InstitutionId: "mcb", Status: "active" }],
+      accounts: [
+        { AccountId: "oa-sync-A1", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "3000.00", Currency: "MUR" } }] },
+      ],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(1);
+    expect(r.comptesRattaches).toBe(1);
+    // Frontière tenant : on liste avec le ClientUserId du workspace A, jamais un param.
+    expect(c.listerConnexions).toHaveBeenCalledWith("enduser-a", expect.anything());
+    // Invisible de B (RLS).
+    const vuB = await withWorkspace({ userId: ADMIN_B, activeWorkspaceId: WS_B }, async (tx) =>
+      (await tx.select().from(bankConnections)).some((x) => x.omnifiConnectionId === "conn-sync-A"),
+    );
+    expect(vuB).toBe(false);
+  });
+
+  it("idempotent : deux synchros n'accumulent pas (upserts)", async () => {
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-idem", InstitutionId: "mcb", Status: "active" }],
+      accounts: [{ AccountId: "oa-idem", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "1000.00", Currency: "MUR" } }] }],
+    });
+    await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    const n = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(bankConnections)).filter((x) => x.omnifiConnectionId === "conn-idem").length,
+    );
+    expect(n).toBe(1); // une seule ligne malgré deux synchros
+  });
+
+  it("ignore les connexions non actives", async () => {
+    const c = clientFactice({
+      connections: [
+        { ConnectionId: "conn-active", InstitutionId: "mcb", Status: "active" },
+        { ConnectionId: "conn-revoked", InstitutionId: "mcb", Status: "revoked" },
+      ],
+      // AccountId unique à ce test : la contrainte UNIQUE globale omnifi_account_id
+      // + RLS interdit d'écraser un compte déjà inséré par un autre test (dette 1.1).
+      accounts: [{ AccountId: "oa-actif-only", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "1.00", Currency: "MUR" } }] }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(1); // seule l'active est rattachée
+  });
+
+  it("VIEWER ne peut pas synchroniser (rejet, aucune liste)", async () => {
+    const c = clientFactice();
+    await expect(
+      synchroniserConnexionsDepuisOmnifi(c, execWs(VIEWER_A, WS_A)),
+    ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
+    expect(c.listerConnexions).not.toHaveBeenCalled();
   });
 });

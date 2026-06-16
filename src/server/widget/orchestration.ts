@@ -301,6 +301,77 @@ export async function finaliserConnexionDropin(
 }
 
 /* ------------------------------------------------------------------ */
+/* Synchronisation depuis l'état Omni-FI (contournement postMessage)    */
+/* ------------------------------------------------------------------ */
+
+export interface ResultatSynchronisation {
+  connexions: number;
+  comptesRattaches: number;
+}
+
+/**
+ * Synchronise les connexions du workspace courant en LISANT l'état réel côté
+ * Omni-FI (`GET /connections` filtré par ClientUserId), sans dépendre du
+ * PublicToken ni du `postMessage` du widget.
+ *
+ * Pourquoi ce chemin (cf. OMNIFI_API_FEEDBACK.md §5/§6) : le widget CDN sandbox
+ * échoue à établir le canal `postMessage` avec la page (« parentOrigin is not
+ * established ») → `onSuccess`/`publicToken` ne reviennent JAMAIS côté client, alors
+ * que la connexion EST bien persistée côté Omni-FI. On la récupère donc côté serveur.
+ *
+ * Sécurité (frontière tenant) : le ClientUserId vient du workspace courant, jamais
+ * d'un paramètre client → on ne peut lister que SES connexions. Gating MANAGER/ADMIN.
+ * Idempotent (upserts sur omnifi_*_id) : ré-exécutable sans créer de doublon.
+ */
+export async function synchroniserConnexionsDepuisOmnifi(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+): Promise<ResultatSynchronisation> {
+  // 1. Garde de rôle + ClientUserId (scopé, frontière tenant).
+  const clientUserId = await executer(async (tx, ctx) => {
+    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+    return clientUserIdDuWorkspace(tx, ctx.workspaceId);
+  });
+
+  // 2. Lister les connexions actives de cet EndUser (ApiKey), pagination suivie.
+  const connexions: Array<{ ConnectionId: string; InstitutionId: string }> = [];
+  let pageC = 1;
+  for (;;) {
+    const env = await client.listerConnexions(clientUserId, { page: pageC });
+    for (const c of env.Data.Connections ?? []) {
+      // On ne rattache que les connexions exploitables (actives).
+      if (c.Status === "active" || c.Status === "Active") {
+        connexions.push({ ConnectionId: c.ConnectionId, InstitutionId: c.InstitutionId });
+      }
+    }
+    const totalPages = env.Meta?.TotalPages ?? 1;
+    if (!env.Links?.Next || pageC >= totalPages) break;
+    pageC += 1;
+  }
+
+  // 3. Pour chaque connexion : découvrir les comptes (filtré connectionId) et
+  //    persister. Même helper idempotent que le chemin dropin.
+  let comptesRattaches = 0;
+  for (const cx of connexions) {
+    const comptes: OmniFiAccount[] = [];
+    let pageA = 1;
+    for (;;) {
+      const env = await client.listerComptesConnexion(cx.ConnectionId, clientUserId, {
+        page: pageA,
+      });
+      comptes.push(...(env.Data.Account ?? []));
+      const totalPages = env.Meta?.TotalPages ?? 1;
+      if (!env.Links?.Next || pageA >= totalPages) break;
+      pageA += 1;
+    }
+    verifierAlignement(comptes, cx.InstitutionId);
+    comptesRattaches += await persisterConnexionEtComptes(executer, cx, comptes);
+  }
+
+  return { connexions: connexions.length, comptesRattaches };
+}
+
+/* ------------------------------------------------------------------ */
 /* Étape 2ter — finaliser PLUSIEURS connexions (payload du hook)       */
 /* ------------------------------------------------------------------ */
 
