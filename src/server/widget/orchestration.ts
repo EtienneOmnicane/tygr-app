@@ -299,3 +299,64 @@ export async function finaliserConnexionDropin(
     comptesRattaches: rattaches,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Étape 2ter — finaliser PLUSIEURS connexions (payload du hook)       */
+/* ------------------------------------------------------------------ */
+
+export interface ResultatConnexionMulti {
+  /** Connexions effectivement échangées + persistées. */
+  reussies: ResultatFinalisation[];
+  /** Nombre de publicTokens reçus qui ont échoué (sans payload sensible). */
+  echecs: number;
+  /** Total des comptes rattachés sur l'ensemble des connexions réussies. */
+  comptesRattaches: number;
+}
+
+/**
+ * Finalisation du flux DROP-IN réel (hook `useOmniFILink`) : `onSuccess` rend un
+ * payload `{ connections: [...] }` pouvant porter PLUSIEURS connexions. On
+ * échange chaque PublicToken via le chemin déjà testé (finaliserConnexionDropin) :
+ * chaque connexion est sa propre transaction scopée et idempotente.
+ *
+ * Fail-SOFT par connexion (décision : ne pas perdre les connexions déjà
+ * persistées si une autre échoue) — un échec est COMPTÉ (échecs++) mais sans
+ * détail sensible (règle 8/A1 : pas de publicToken ni de message OBIE remonté).
+ * Si AUCUNE ne réussit, on relève la 1re erreur pour que l'action mappe un
+ * message (sinon l'UI annoncerait un faux succès « 0 compte »).
+ */
+export async function finaliserConnexionsDropin(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+  publicTokens: string[],
+): Promise<ResultatConnexionMulti> {
+  const reussies: ResultatFinalisation[] = [];
+  let echecs = 0;
+  let premiereErreur: unknown = null;
+
+  // Dédoublonnage (constat QA) : si le widget renvoie deux fois la MÊME connexion,
+  // l'idempotence des upserts ne persiste qu'une banque — mais sans ce dédoublonnage
+  // on échangerait/compterait le token deux fois, gonflant `reussies` et le message
+  // UI (« 2 banque(s) » pour une seule). On échange chaque PublicToken AU PLUS une fois.
+  const tokensUniques = [...new Set(publicTokens)];
+
+  for (const publicToken of tokensUniques) {
+    try {
+      reussies.push(await finaliserConnexionDropin(client, executer, { publicToken }));
+    } catch (erreur) {
+      echecs += 1;
+      premiereErreur ??= erreur;
+    }
+  }
+
+  if (reussies.length === 0) {
+    // Aucune connexion persistée : remonter l'erreur (jamais un faux succès).
+    throw premiereErreur ?? new Error("Aucune connexion à finaliser");
+  }
+
+  return {
+    reussies,
+    echecs,
+    comptesRattaches: reussies.reduce((n, r) => n + r.comptesRattaches, 0),
+  };
+}

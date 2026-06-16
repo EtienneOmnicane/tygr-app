@@ -12,7 +12,7 @@
 import { OmniFiConfigError } from "./erreurs";
 
 export interface OmniFiConfig {
-  /** Base URL sans slash final, ex. https://sandbox.omni-fi.co/v1 */
+  /** Base URL sans slash final, ex. https://stage.omni-fi.co/v1 */
   readonly baseUrl: string;
   readonly environment: "sandbox" | "production";
   /** Identifiant public de l'ApiClient (peut figurer dans les logs). */
@@ -35,11 +35,16 @@ function exiger(nom: string): string {
  * Hôtes Omni-FI légitimes (docs/documentation_api.md § Environnements). La clé
  * ApiKey transite dans l'en-tête Authorization : on n'autorise QUE ces hôtes,
  * sinon une OMNIFI_BASE_URL mal saisie/compromise enverrait le secret ailleurs.
+ *
+ * NOTE (2026-06-16) : l'hôte sandbox de la doc officielle (`sandbox.omni-fi.co`)
+ * est une COQUILLE — il ne résout pas (NXDOMAIN, vérifié). Le vrai hôte de
+ * pré-prod est `stage.omni-fi.co` (HTTP 200 vérifié). On retire l'hôte mort de
+ * l'allow-list pour ne pas laisser croire qu'il est utilisable.
  */
 const HOTES_AUTORISES = new Set([
   "api.omni-fi.co",
   "api-stage.omni-fi.co",
-  "sandbox.omni-fi.co",
+  "stage.omni-fi.co",
 ]);
 
 /**

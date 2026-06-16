@@ -5,6 +5,37 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Ré-alignement contrat widget sur le code source + cross-review (2026-06-16)
+
+⚠️ La doc Fern « `onSuccess = publicToken seul` » (tranchée 2026-06-15) était FAUSSE.
+Code source réel (github.com/omni-fi-app/omni-fi-react-link) : hook `useOmniFILink`,
+`onSuccess({ connections: [...] })` (multi-connexions), entrée `token`, script CDN
+(`isReady`). URL API : `sandbox.omni-fi.co` = coquille NXDOMAIN → vrai hôte
+`stage.omni-fi.co` (vérifié HTTP 200). Câblage ré-aligné + boucle fail-soft multi.
+
+Cross-review Sécurité + QA passée (aucun BLOQUANT/MAJEUR). 3 constats corrigés au
+diff (dédoublonnage publicTokens + test, test IDOR dans la boucle, casse stub).
+Durcissements différés (déclencheur commun : intégration du VRAI package / mise en prod) :
+
+- [ ] **W4-D1 (P1) — `OMNIFI_ENV` découplé de l'hôte de `OMNIFI_BASE_URL`** — Effort S
+  (déclencheur : 1er déploiement prod). `config.ts` valide l'hôte contre l'allow-list
+  mais rien ne lie `OMNIFI_ENV` (`sandbox`/`production`) à l'hôte effectif : on peut
+  tourner `OMNIFI_ENV=production` pointé sur `stage`, ou l'inverse. `environment`
+  devient décoratif → risque opérationnel de viser la prod en croyant être en pré-prod.
+  Lier env→hôtes attendus (fail-closed) ou retirer le champ. Relevé par audit sécurité.
+- [ ] **W4-D2 (P2) — pas de rate-limit applicatif sur `finaliserConnexionsDropin`** —
+  Effort S (déclencheur : si la sélection multi-banques devient courante). Boucle
+  séquentielle ≤20 connexions × (exchange + pagination /accounts) ; surface
+  authentifiée + gating MANAGER/ADMIN + array borné, donc pas un vecteur anonyme,
+  mais un re-jeu peut dépasser le 10/IP/60s amont (throttle). Borner totalPages ou
+  la durée totale. Relevé par audit sécurité (5/10).
+- [ ] **W4-D3 (P2) — `open()` du widget sans garde anti-double-ouverture** — Effort S
+  (déclencheur : intégration du vrai `@omnifi/react`). `bank-connect-widget.tsx` :
+  `useEffect([tokenActif, isReady, open])` peut ré-appeler `open()` si l'identité de
+  `open` n'est pas stable dans le package réel (non observable contre le stub). Le
+  flux normal le masque (onSuccess→setFerme→token null). Ajouter un `useRef`
+  « déjà ouvert » à l'intégration. Relevé par audit QA (5/10).
+
 ### Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU)
 
 Le merge de main dans PR-W4 avait révélé DEUX câblages divergents du widget.

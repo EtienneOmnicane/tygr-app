@@ -28,6 +28,7 @@ import {
   demarrerConnexion,
   finaliserConnexion,
   finaliserConnexionDropin,
+  finaliserConnexionsDropin,
 } from "@/server/widget/orchestration";
 
 const client = new PGlite();
@@ -245,5 +246,93 @@ describe("finaliserConnexionDropin — flux widget natif (GET /accounts ApiKey)"
     await expect(
       finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: "pt" }),
     ).rejects.toBeInstanceOf(ConnexionDesalignmentError);
+  });
+});
+
+describe("finaliserConnexionsDropin — payload multi-connexions du hook", () => {
+  /**
+   * Client dont l'exchange dépend du PublicToken : un token "ko-*" lève (échec
+   * d'une connexion), les autres réussissent avec une connexion/compte distincts.
+   * Permet de prouver le fail-soft (succès partiel) et le rejet si tout échoue.
+   */
+  function clientParToken(): OmniFiClient {
+    return {
+      echangerPublicToken: vi.fn(async (publicToken: string, clientUserId: string) => {
+        if (publicToken.startsWith("ko")) throw new Error("exchange refusé");
+        // Simule la frontière tenant Omni-FI (403 PUBLIC_TOKEN_CLIENT_MISMATCH) :
+        // un publicToken préfixé "tenantB-" n'appartient qu'à enduser-b. Présenté
+        // sous un autre clientUserId → l'exchange refuse.
+        if (publicToken.startsWith("tenantB-") && clientUserId !== "enduser-b") {
+          throw new Error("PUBLIC_TOKEN_CLIENT_MISMATCH");
+        }
+        return { ConnectionId: `conn-${publicToken}`, InstitutionId: "mcb", CustomerType: "business" };
+      }),
+      listerComptesConnexion: vi.fn(async (connectionId: string) => ({
+        Data: {
+          Account: [
+            { AccountId: `oa-${connectionId}`, Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] },
+          ],
+        },
+        Links: {},
+        Meta: { TotalPages: 1 },
+      })),
+    } as unknown as OmniFiClient;
+  }
+
+  it("agrège plusieurs connexions du payload (toutes réussies)", async () => {
+    const c = clientParToken();
+    const r = await finaliserConnexionsDropin(c, execWs(ADMIN_A, WS_A), ["ok-1", "ok-2"]);
+    expect(r.reussies).toHaveLength(2);
+    expect(r.echecs).toBe(0);
+    expect(r.comptesRattaches).toBe(2);
+    expect(c.echangerPublicToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("succès partiel (fail-soft) : une connexion échoue, l'autre est persistée", async () => {
+    const c = clientParToken();
+    const r = await finaliserConnexionsDropin(c, execWs(ADMIN_A, WS_A), ["ok-3", "ko-x"]);
+    expect(r.reussies).toHaveLength(1);
+    expect(r.echecs).toBe(1);
+    expect(r.comptesRattaches).toBe(1);
+  });
+
+  it("toutes les connexions échouent → rejette (jamais de faux succès)", async () => {
+    const c = clientParToken();
+    await expect(
+      finaliserConnexionsDropin(c, execWs(ADMIN_A, WS_A), ["ko-1", "ko-2"]),
+    ).rejects.toBeTruthy();
+  });
+
+  it("VIEWER ne peut finaliser aucune connexion (rejet, aucun exchange)", async () => {
+    const c = clientParToken();
+    await expect(
+      finaliserConnexionsDropin(c, execWs(VIEWER_A, WS_A), ["ok-1"]),
+    ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
+    expect(c.echangerPublicToken).not.toHaveBeenCalled();
+  });
+
+  it("IDOR boucle : un publicToken d'un AUTRE tenant échoue (rien persisté pour lui)", async () => {
+    // ADMIN_A finalise un lot où se glisse un token appartenant au tenant B.
+    // La frontière (clientUserId = enduser-a, relu du workspace par itération)
+    // fait refuser l'exchange du token de B → compté en échec, jamais rattaché à A.
+    const c = clientParToken();
+    const r = await finaliserConnexionsDropin(c, execWs(ADMIN_A, WS_A), [
+      "ok-legit-A",
+      "tenantB-vole",
+    ]);
+    expect(r.reussies).toHaveLength(1); // seul le token légitime de A passe
+    expect(r.echecs).toBe(1); // le token de B est refusé (mismatch)
+    // Le token de B n'a JAMAIS été échangé sous le clientUserId de B.
+    expect(c.echangerPublicToken).toHaveBeenCalledWith("tenantB-vole", "enduser-a");
+    const connexionsA = r.reussies.map((x) => x.connectionId);
+    expect(connexionsA).not.toContain("conn-tenantB-vole");
+  });
+
+  it("doublon de publicToken : échangé UNE seule fois (pas de double-comptage)", async () => {
+    const c = clientParToken();
+    const r = await finaliserConnexionsDropin(c, execWs(ADMIN_A, WS_A), ["dup-1", "dup-1"]);
+    expect(r.reussies).toHaveLength(1); // une seule banque, pas deux
+    expect(r.comptesRattaches).toBe(1);
+    expect(c.echangerPublicToken).toHaveBeenCalledTimes(1);
   });
 });
