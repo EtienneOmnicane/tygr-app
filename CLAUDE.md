@@ -350,3 +350,9 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+## Health Stack
+
+- typecheck: tsc --noEmit
+- lint: eslint
+- test: vitest run
