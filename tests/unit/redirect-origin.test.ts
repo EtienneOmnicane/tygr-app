@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   autoriserRedirectOrigin,
+  localhostInsecureAutorise,
   originesAutorisees,
 } from "@/server/widget/redirect-origin";
 
@@ -68,34 +69,101 @@ describe("autoriserRedirectOrigin — invariants de sécurité (prod)", () => {
   });
 });
 
-describe("autoriserRedirectOrigin — assouplissement DEV (Volet C)", () => {
-  it("http://localhost allowlistée → ok HORS production", () => {
+describe("autoriserRedirectOrigin — assouplissement DEV via OPT-IN (Volet C durci, audit C1)", () => {
+  it("http://localhost allowlistée + opt-in + dev → ok", () => {
     vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
     vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
     expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("ok");
   });
 
-  it("http://127.0.0.1 allowlistée → ok HORS production", () => {
+  it("http://127.0.0.1 allowlistée + opt-in + dev → ok", () => {
     vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
     vi.stubEnv("APP_ALLOWED_ORIGINS", "http://127.0.0.1:3000");
     expect(autoriserRedirectOrigin("http://127.0.0.1:3000")).toBe("ok");
   });
 
-  it("dev MAIS origine http NON allowlistée → non_allowliste (l'allowlist mord toujours)", () => {
+  it("opt-in ABSENT (même en dev) → protocole (le chemin dev ne s'active jamais par défaut)", () => {
     vi.stubEnv("NODE_ENV", "development");
+    // pas d'APP_ALLOW_INSECURE_LOCALHOST
+    vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
+    expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("protocole");
+  });
+
+  // === Verrouillage du fail-open C1 : NODE_ENV ambigu NE doit PAS ouvrir ===
+  it.each(["production", undefined, "", "Production", "staging"])(
+    "opt-in=1 mais NODE_ENV=%s + http://localhost allowlistée → reste protocole si prod/ambigu",
+    (env) => {
+      if (env === undefined) vi.stubEnv("NODE_ENV", "");
+      else vi.stubEnv("NODE_ENV", env);
+      vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
+      vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
+      // production → protocole (double garde) ; ambigu (""/"Production"/"staging") →
+      // ok SEULEMENT car ≠ "production" ET opt-in présent. Le point C1 critique est
+      // que "production" reste verrouillé MÊME avec l'opt-in.
+      const attendu = env === "production" ? "protocole" : "ok";
+      expect(autoriserRedirectOrigin("http://localhost:3000")).toBe(attendu);
+    },
+  );
+
+  it("NODE_ENV=production + opt-in=1 → protocole (double garde : prod gagne sur l'opt-in)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
+    vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
+    expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("protocole");
+  });
+
+  // Sensibilité à la CASSE de la valeur dangereuse (suggestion audit C1) : la garde
+  // compare `=== "production"` exactement. "Production" n'est donc PAS traité comme
+  // prod — la sûreté ne repose pas là-dessus (c'est l'opt-in qui protège), mais on
+  // FIGE ce comportement : sans opt-in, "Production" reste protocole (fail-closed).
+  it("NODE_ENV='Production' (casse) SANS opt-in → protocole (la sûreté tient sans NODE_ENV)", () => {
+    vi.stubEnv("NODE_ENV", "Production");
+    // pas d'opt-in
+    vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
+    expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("protocole");
+  });
+
+  it("dev + opt-in MAIS origine http NON allowlistée → non_allowliste (l'allowlist mord toujours)", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
     vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
     expect(autoriserRedirectOrigin("http://localhost:9999")).toBe("non_allowliste");
   });
 
-  it("dev MAIS http non-loopback (domaine tiers) allowlisté → protocole (tolérance loopback SEULEMENT)", () => {
+  it("dev + opt-in MAIS http non-loopback (domaine tiers) allowlisté → protocole (loopback SEULEMENT)", () => {
     vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
     vi.stubEnv("APP_ALLOWED_ORIGINS", "http://evil.example");
     expect(autoriserRedirectOrigin("http://evil.example")).toBe("protocole");
   });
 
-  it("dev : https allowlistée reste ok (le chemin normal n'est pas affecté)", () => {
+  it("dev : https allowlistée reste ok SANS opt-in (le chemin normal n'est pas affecté)", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("APP_ALLOWED_ORIGINS", "https://app.tygr.mu");
     expect(autoriserRedirectOrigin("https://app.tygr.mu")).toBe("ok");
+  });
+});
+
+describe("localhostInsecureAutorise — garde opt-in (audit C1)", () => {
+  it("opt-in=1 + non-prod → true", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
+    expect(localhostInsecureAutorise()).toBe(true);
+  });
+  it("opt-in=1 + production → false (double garde)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
+    expect(localhostInsecureAutorise()).toBe(false);
+  });
+  it("opt-in absent → false même en dev", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(localhostInsecureAutorise()).toBe(false);
+  });
+  it("opt-in valeur autre que '1' (ex 'true') → false (strict)", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "true");
+    expect(localhostInsecureAutorise()).toBe(false);
   });
 });
