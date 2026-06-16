@@ -12,7 +12,8 @@
 import { OmniFiConfigError } from "./erreurs";
 
 export interface OmniFiConfig {
-  /** Base URL sans slash final, ex. https://stage.omni-fi.co/v1 */
+  /** Base URL sans slash final NI préfixe /v1, ex. https://api-stage.omni-fi.co
+   *  (routes à la racine : /connections/link-token — la doc OpenAPI ment sur /v1). */
   readonly baseUrl: string;
   readonly environment: "sandbox" | "production";
   /** Identifiant public de l'ApiClient (peut figurer dans les logs). */

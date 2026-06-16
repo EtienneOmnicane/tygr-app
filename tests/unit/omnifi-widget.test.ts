@@ -9,8 +9,10 @@ import { describe, expect, it, vi } from "vitest";
 import { OmniFiClient } from "@/server/omnifi/client";
 import { OmniFiApiError } from "@/server/omnifi/erreurs";
 
+// Vérité serveur Staging (dump tuteur 2026-06-16) : hôte api-stage.omni-fi.co,
+// routes À LA RACINE (PAS de préfixe /v1 — la doc OpenAPI ment).
 const CONFIG = {
-  baseUrl: "https://sandbox.omni-fi.co/v1",
+  baseUrl: "https://api-stage.omni-fi.co",
   environment: "sandbox" as const,
   clientId: "client_test",
   secret: "sand_sk_secret",
@@ -51,7 +53,7 @@ describe("link-token (ApiKey, serveur)", () => {
     });
     expect(r.LinkToken).toBe("lt_x");
     const { url, init, headers } = dernierAppel(f);
-    expect(url).toBe("https://sandbox.omni-fi.co/v1/connections/link-token");
+    expect(url).toBe("https://api-stage.omni-fi.co/connections/link-token");
     expect(init.method).toBe("POST");
     expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
     expect(headers["Content-Type"]).toBe("application/json");
@@ -106,7 +108,7 @@ describe("polling sync job", () => {
     expect(r.Status).toBe("OTP_REQUESTED");
     const { url, headers } = dernierAppel(f);
     expect(headers.Authorization).toBe("Bearer st_x");
-    expect(url).toBe("https://sandbox.omni-fi.co/v1/sync/job/j1");
+    expect(url).toBe("https://api-stage.omni-fi.co/sync/job/j1");
     expect(url).not.toContain("clientUserId");
   });
 
@@ -169,7 +171,7 @@ describe("resend MFA + accounts + link-exchange", () => {
     const c = client(f as unknown as typeof fetch);
     const r = await c.getSyncJobAccounts("st_x", "j1");
     expect(r.Account[0].AccountId).toBe("a1");
-    expect(dernierAppel(f).url).toBe("https://sandbox.omni-fi.co/v1/sync/job/j1/accounts");
+    expect(dernierAppel(f).url).toBe("https://api-stage.omni-fi.co/sync/job/j1/accounts");
   });
 
   it("echangerPublicToken (ApiKey) re-transmet ClientUserId (frontière tenant)", async () => {
