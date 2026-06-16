@@ -114,6 +114,17 @@ describe("autoriserRedirectOrigin — assouplissement DEV via OPT-IN (Volet C du
     expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("protocole");
   });
 
+  // Sensibilité à la CASSE de la valeur dangereuse (suggestion audit C1) : la garde
+  // compare `=== "production"` exactement. "Production" n'est donc PAS traité comme
+  // prod — la sûreté ne repose pas là-dessus (c'est l'opt-in qui protège), mais on
+  // FIGE ce comportement : sans opt-in, "Production" reste protocole (fail-closed).
+  it("NODE_ENV='Production' (casse) SANS opt-in → protocole (la sûreté tient sans NODE_ENV)", () => {
+    vi.stubEnv("NODE_ENV", "Production");
+    // pas d'opt-in
+    vi.stubEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000");
+    expect(autoriserRedirectOrigin("http://localhost:3000")).toBe("protocole");
+  });
+
   it("dev + opt-in MAIS origine http NON allowlistée → non_allowliste (l'allowlist mord toujours)", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("APP_ALLOW_INSECURE_LOCALHOST", "1");
