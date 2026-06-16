@@ -5,6 +5,19 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Vendoring de @omni-fi/react-link (2026-06-16)
+
+- [ ] **VENDOR-1 (P1) — remplacer le vendoring `file:` par le package publié** —
+  Effort S (déclencheur : Omni-FI publie `@omni-fi/react-link` sur npm public OU un
+  registre privé d'entreprise). `vendor/omni-fi-react-link/` contient un `dist/` tiers
+  BUILDÉ localement, NON audité et NON reproductible (cf. `SECURITY_VENDORING.md`),
+  intégré pour débloquer la démo (le package n'est sur aucun registre et son dépôt ne
+  committe pas le `dist/`). Risque supply-chain assumé pour la démo uniquement, sur app
+  qui manipule des secrets bancaires. Sortie : `npm install @omni-fi/react-link@<ver>`,
+  supprimer `vendor/` + `SECURITY_VENDORING.md`, re-valider build + flux de connexion.
+  Idéal : demander au repo amont un script `prepare` (build à l'install) ou la
+  publication du `dist/`. Décision PO 2026-06-16 (« OK démo, dette tracée »).
+
 ### Ré-alignement contrat widget sur le code source + cross-review (2026-06-16)
 
 ⚠️ La doc Fern « `onSuccess = publicToken seul` » (tranchée 2026-06-15) était FAUSSE.

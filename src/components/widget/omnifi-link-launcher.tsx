@@ -1,22 +1,43 @@
 "use client";
 
 /**
- * Launcher du widget natif Omni-FI — ISOLE l'usage du hook `useOmniFILink` et
- * l'import de `@omnifi/react` (correctif QA 2026-06-16, module fantôme).
+ * Launcher du widget natif Omni-FI — isole l'usage du hook `useOmniFILink` du
+ * package officiel `@omni-fi/react-link` (vendoré dans `vendor/`, cf.
+ * SECURITY_VENDORING.md). Chargé via `next/dynamic` (`ssr:false`) par
+ * `bank-connect-widget.tsx` car le hook touche `window.OmniFI` / charge un script
+ * CDN : il ne peut pas s'exécuter côté serveur.
  *
- * Ce composant n'est JAMAIS importé statiquement : `bank-connect-widget.tsx` le
- * charge via `next/dynamic` (ssr:false) et seulement quand un LinkToken est actif.
- * Ainsi le package privé `@omnifi/react` (absent de node_modules en local) n'est
- * résolu qu'au RUNTIME, à l'ouverture du widget — l'appli et la démo démarrent sans
- * lui. Si le module manque au runtime, l'erreur remonte au WidgetErrorBoundary du
- * parent (UI propre, pas de crash de page).
+ * Contrat (types réels du package) :
+ *   - `useOmniFILink(config)` : hook ; `config.token` = LinkToken serveur.
+ *   - `onSuccess(payload)` avec `payload.connections[]`, chaque connexion portant
+ *     `publicToken` (+ connectionId, institutionId…). Le payload peut contenir
+ *     PLUSIEURS connexions.
+ *   - `config.env` pilote le CDN (staging → staging-cdn.omni-fi.co) ; on le dérive
+ *     de NEXT_PUBLIC_OMNIFI_ENV pour viser le sandbox en démo.
+ *   - Attendre `isReady` avant `open()` (le hook throw sinon).
  *
- * Pas de rendu visible propre : le hook charge un script CDN et `open()` ouvre la
- * surface native. On rend uniquement un statut discret tant que le script charge.
+ * Sécurité : le publicToken n'est jamais loggé ici ; il part vers la Server Action
+ * de finalisation (règle 8).
  */
 import { useEffect } from "react";
 
-import { useOmniFILink, type OmniFiSuccessPayload } from "@omnifi/react";
+import {
+  useOmniFILink,
+  type OmniFIEnv,
+  type OmniFISuccessPayload,
+} from "@omni-fi/react-link";
+
+/**
+ * Environnement CDN du widget (NEXT_PUBLIC_OMNIFI_ENV : "staging" pour le sandbox
+ * de démo, "production" par défaut). Validé ici pour ne passer au hook qu'une des
+ * valeurs attendues (sinon on omet → défaut "production" du package).
+ */
+function envWidget(): OmniFIEnv | undefined {
+  const v = process.env.NEXT_PUBLIC_OMNIFI_ENV;
+  return v === "staging" || v === "development" || v === "production"
+    ? v
+    : undefined;
+}
 
 export function OmniFiLinkLauncher({
   token,
@@ -32,7 +53,8 @@ export function OmniFiLinkLauncher({
 }) {
   const { open, isReady } = useOmniFILink({
     token,
-    onSuccess: (payload: OmniFiSuccessPayload) => {
+    env: envWidget(),
+    onSuccess: (payload: OmniFISuccessPayload) => {
       // Le payload peut porter PLUSIEURS connexions ; on n'expédie que les
       // publicToken (jamais loggés ici).
       onConnexions(payload.connections.map((c) => c.publicToken));

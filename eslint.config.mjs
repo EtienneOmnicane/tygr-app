@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Dépendance tierce vendorée (dist/ buildé en amont) : on ne lint pas le code
+    // d'un package, cf. SECURITY_VENDORING.md. (Non auditable ligne à ligne ici.)
+    "vendor/**",
   ]),
 
   // Frontière d'accès aux données (CLAUDE.md règle 2, dette P0-a).

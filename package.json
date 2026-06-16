@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
+    "@omni-fi/react-link": "file:vendor/omni-fi-react-link",
     "argon2": "^0.44.0",
     "drizzle-orm": "^0.45.2",
     "next": "16.2.9",

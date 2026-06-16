@@ -119,7 +119,7 @@ const dropinSchema = z
   .strict();
 
 /**
- * Finalisation pour le widget natif @omnifi/react (hook). Reçoit les PublicTokens
+ * Finalisation pour le widget natif @omni-fi/react-link (hook). Reçoit les PublicTokens
  * de `onSuccess` (le payload peut porter plusieurs connexions), échange chacun
  * (ApiKey) et découvre les comptes via GET /accounts (ApiKey, sans SessionToken).
  * Appelée directement depuis le composant client.

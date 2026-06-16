@@ -493,7 +493,7 @@ export class OmniFiClient {
 
   /**
    * [SERVEUR/ApiKey] GET /accounts?connectionId= — liste les comptes d'une
-   * connexion SANS SessionToken widget. Chemin du flux drop-in (@omnifi/react) :
+   * connexion SANS SessionToken widget. Chemin du flux drop-in (@omni-fi/react-link) :
    * le widget gère la MFA en interne et ne nous rend que le PublicToken ; après
    * link-exchange on découvre les comptes côté serveur par ce listing.
    * `clientUserId` = frontière tenant B2B.
