@@ -16,8 +16,10 @@ import {
   OmniFiTimeoutError,
 } from "@/server/omnifi/erreurs";
 
+// Vérité serveur Staging (dump tuteur 2026-06-16) : hôte api-stage.omni-fi.co,
+// routes À LA RACINE (PAS de préfixe /v1 — la doc OpenAPI ment).
 const CONFIG = {
-  baseUrl: "https://sandbox.omni-fi.co/v1",
+  baseUrl: "https://api-stage.omni-fi.co",
   environment: "sandbox" as const,
   clientId: "client_test",
   secret: "sand_sk_secret",
@@ -277,8 +279,10 @@ describe("S2 — la cause réseau ne porte qu'un résumé sûr (pas de requête/
 
 describe("configuration (lecture d'env, règle 8)", () => {
   it("OMNIFI_SECRET manquant → OmniFiConfigError", () => {
+    // Hôte VALIDE (allow-list) pour que l'erreur vienne bien du secret vide, pas
+    // de la baseUrl (validée en premier). sandbox n'est plus dans l'allow-list.
     vi.stubEnv("OMNIFI_ENV", "sandbox");
-    vi.stubEnv("OMNIFI_BASE_URL", "https://sandbox.omni-fi.co/v1");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api-stage.omni-fi.co");
     vi.stubEnv("OMNIFI_CLIENT_ID", "client_test");
     vi.stubEnv("OMNIFI_SECRET", "");
     _reinitialiserConfigOmniFi();
@@ -324,24 +328,26 @@ describe("configuration (lecture d'env, règle 8)", () => {
 
   it("S1 — les 3 hôtes documentés sont acceptés", () => {
     // NOTE (2026-06-16) : "sandbox.omni-fi.co" (coquille doc, NXDOMAIN) retiré de
-    // l'allow-list au profit du vrai hôte de pré-prod "stage.omni-fi.co".
+    // l'allow-list. Hôtes valides : api (prod), api-stage (API pré-prod, dump
+    // tuteur), stage (CDN widget). Base SANS /v1 : routes à la racine.
     for (const hote of [
       "api.omni-fi.co",
       "api-stage.omni-fi.co",
       "stage.omni-fi.co",
     ]) {
       vi.stubEnv("OMNIFI_ENV", "sandbox");
-      vi.stubEnv("OMNIFI_BASE_URL", `https://${hote}/v1`);
+      vi.stubEnv("OMNIFI_BASE_URL", `https://${hote}`);
       vi.stubEnv("OMNIFI_CLIENT_ID", "c");
       vi.stubEnv("OMNIFI_SECRET", "s");
       _reinitialiserConfigOmniFi();
-      expect(obtenirConfigOmniFi().baseUrl).toBe(`https://${hote}/v1`);
+      expect(obtenirConfigOmniFi().baseUrl).toBe(`https://${hote}`);
     }
   });
 
   it("base URL avec slash final → normalisée (pas de // dans l'URL finale)", async () => {
     vi.stubEnv("OMNIFI_ENV", "sandbox");
-    vi.stubEnv("OMNIFI_BASE_URL", "https://stage.omni-fi.co/v1/");
+    // Slash final → normalisé ; routes à la racine (PAS de /v1, dump tuteur 2026-06-16).
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api-stage.omni-fi.co/");
     vi.stubEnv("OMNIFI_CLIENT_ID", "c");
     vi.stubEnv("OMNIFI_SECRET", "s");
     _reinitialiserConfigOmniFi();
@@ -356,7 +362,7 @@ describe("configuration (lecture d'env, règle 8)", () => {
     await client.listerConnexions(CLIENT_USER_ID);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      "https://stage.omni-fi.co/v1/connections?clientUserId=user-123",
+      "https://api-stage.omni-fi.co/connections?clientUserId=user-123",
     );
   });
 });
