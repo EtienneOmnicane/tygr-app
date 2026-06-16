@@ -5,6 +5,19 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Vendoring de @omni-fi/react-link (2026-06-16)
+
+- [ ] **VENDOR-1 (P1) — remplacer le vendoring `file:` par le package publié** —
+  Effort S (déclencheur : Omni-FI publie `@omni-fi/react-link` sur npm public OU un
+  registre privé d'entreprise). `vendor/omni-fi-react-link/` contient un `dist/` tiers
+  BUILDÉ localement, NON audité et NON reproductible (cf. `SECURITY_VENDORING.md`),
+  intégré pour débloquer la démo (le package n'est sur aucun registre et son dépôt ne
+  committe pas le `dist/`). Risque supply-chain assumé pour la démo uniquement, sur app
+  qui manipule des secrets bancaires. Sortie : `npm install @omni-fi/react-link@<ver>`,
+  supprimer `vendor/` + `SECURITY_VENDORING.md`, re-valider build + flux de connexion.
+  Idéal : demander au repo amont un script `prepare` (build à l'install) ou la
+  publication du `dist/`. Décision PO 2026-06-16 (« OK démo, dette tracée »).
+
 ### Ré-alignement contrat widget sur le code source + cross-review (2026-06-16)
 
 ⚠️ La doc Fern « `onSuccess = publicToken seul` » (tranchée 2026-06-15) était FAUSSE.
@@ -30,11 +43,11 @@ Durcissements différés (déclencheur commun : intégration du VRAI package / m
   mais un re-jeu peut dépasser le 10/IP/60s amont (throttle). Borner totalPages ou
   la durée totale. Relevé par audit sécurité (5/10).
 - [ ] **W4-D3 (P2) — `open()` du widget sans garde anti-double-ouverture** — Effort S
-  (déclencheur : intégration du vrai `@omnifi/react`). `bank-connect-widget.tsx` :
-  `useEffect([tokenActif, isReady, open])` peut ré-appeler `open()` si l'identité de
-  `open` n'est pas stable dans le package réel (non observable contre le stub). Le
-  flux normal le masque (onSuccess→setFerme→token null). Ajouter un `useRef`
-  « déjà ouvert » à l'intégration. Relevé par audit QA (5/10).
+  (déclencheur : test du flux réel avec `@omni-fi/react-link` désormais installé).
+  `omnifi-link-launcher.tsx` : `useEffect([isReady, open])` peut ré-appeler `open()`
+  si l'identité de `open` n'est pas stable dans le package. Le flux normal le masque
+  (onSuccess→setFerme→launcher démonté). Ajouter un `useRef` « déjà ouvert » si le
+  test révèle une double-ouverture. Relevé par audit QA (5/10).
 
 ### Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU)
 
@@ -48,9 +61,9 @@ Le merge de main dans PR-W4 avait révélé DEUX câblages divergents du widget.
 - `finaliserConnexion` (orchestration, chemin « widget custom » via
   getSyncJobAccounts) CONSERVÉE + testée (réutilisable hors dropin), mais plus
   appelée par aucune action. Un seul chemin runtime : le dropin.
-- [ ] **5.3 (P2)** — retirer le stub `omnifi-react.d.ts` dès que le vrai package
-  privé est installé (le stub fige le contrat ; un changement du tiers échappe au
-  typecheck).
+- [x] **5.3 (P2) — RÉSOLU 2026-06-16** — stub `omnifi-react.d.ts` + stub JS + alias
+  de build SUPPRIMÉS : le vrai package `@omni-fi/react-link` est vendoré et fournit
+  ses propres types (branche `fix/omni-fi-integration`). Voir dette VENDOR-1.
 
 ### Cross-review sécurité PR-W4 — intégration widget drop-in (2026-06-15)
 
@@ -69,9 +82,9 @@ vide). Différés / décisions :
   risque résiduel est un oracle/déni de rattachement en cas de collision.
 - [ ] **3.1 résolu / suivi** — `APP_ALLOWED_ORIGINS` doit être renseigné en env
   (sinon fail-closed : aucune connexion widget possible). À documenter au déploiement.
-- [ ] **5.3 (P2) — Stub `@omnifi/react` fige le contrat `onSuccess(string)`** — un
-  changement de contrat du widget tiers échappe au typecheck. Retirer le stub dès
-  que le vrai package est installé en propre (registre privé).
+- [x] **5.3 (P2) — RÉSOLU 2026-06-16** — stub supprimé, vrai package `@omni-fi/react-link`
+  vendoré (ses types réels font foi : `onSuccess(payload)`, pas `onSuccess(string)` —
+  l'ancienne hypothèse Fern était fausse). Suivi : dette VENDOR-1 (package publié).
 
 ### Cross-review croisée Agent UI — précision financière ingestion (2026-06-15)
 

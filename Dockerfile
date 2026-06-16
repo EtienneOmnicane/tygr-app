@@ -6,6 +6,12 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+# vendor/ AVANT npm ci : la dépendance "@omni-fi/react-link":"file:vendor/..." doit
+# pointer vers une cible RÉELLE au moment de l'install. Sans ce COPY, `npm ci` sort 0
+# mais crée un symlink BALLANT (cible absente) → résolution cassée plus tard, en
+# silence. Cf. SECURITY_VENDORING.md (le node_modules interne du vendor est gitignoré
+# et inutile : seul dist/ + package.json sont requis).
+COPY vendor ./vendor
 # --ignore-scripts : le contexte Docker exclut .git (.dockerignore), donc le script
 # `prepare`/husky n'a rien à installer ; et ne pas exécuter de scripts d'install
 # arbitraires est une bonne pratique de sécurité en CI/conteneur.

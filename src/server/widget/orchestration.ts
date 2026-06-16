@@ -243,7 +243,7 @@ export async function finaliserConnexion(
 }
 
 /* ------------------------------------------------------------------ */
-/* Étape 2bis — finaliser pour le widget DROP-IN (@omnifi/react)       */
+/* Étape 2bis — finaliser pour le widget DROP-IN (@omni-fi/react-link)  */
 /* ------------------------------------------------------------------ */
 
 export interface FinaliserDropinParams {
