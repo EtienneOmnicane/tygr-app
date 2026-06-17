@@ -29,6 +29,13 @@
       "when": 1781270795475,
       "tag": "0003_epic3-financial-core",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781712000000,
+      "tag": "0004_append-only-no-delete",
+      "breakpoints": true
     }
   ]
 }

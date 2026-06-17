@@ -237,11 +237,15 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   lignes tombent dans la partition DEFAULT (fonctionnel mais non perforant) —
   jamais de perte de données.
   **⚠️ SÉCURITÉ NON NÉGOCIABLE** : toute partition créée par ce roulement DOIT
-  poser `ENABLE` + `FORCE ROW LEVEL SECURITY` + `CREATE POLICY tenant_isolation`
-  + `REVOKE DELETE FROM tygr_app` à sa création (PostgreSQL n'hérite pas la RLS
-  de la mère — cf. constat bloquant cross-review 2026-06-15, corrigé dans 0003
-  pour les partitions 2024-2027+DEFAULT). Une partition sans RLS = fuite
-  cross-tenant. Ceci relève de l'isolation tenant : à traiter comme tel.
+  poser, à sa création, `ENABLE` + `FORCE ROW LEVEL SECURITY` + `CREATE POLICY
+  tenant_isolation`. La RLS N'est PAS héritée de la mère (cf. constat bloquant
+  cross-review 2026-06-15, corrigé dans 0003 pour 2024-2027+DEFAULT) → c'est
+  l'invariant que le roulement doit RÉPÉTER. Une partition sans RLS = fuite
+  cross-tenant. À traiter comme de l'isolation tenant (non différable).
+  NB : le **trigger `BEFORE DELETE` append-only** (migration 0004), lui, EST
+  hérité automatiquement par toute partition (présente/future, PostgreSQL ≥ 11,
+  vérifié empiriquement) — le roulement n'a PAS à le répéter. Ne pas confondre
+  les deux invariants : RLS = à répéter ; trigger = hérité.
 
 ### Dette acceptée au schéma Epic 3 — cross-review (2026-06-15)
 
@@ -250,14 +254,45 @@ Cross-review contradictoire (rôle Sécurité, contexte frais) sur la branche
 partitions de `transactions_cache`, commentaire faux retiré). #3 PARTIELLEMENT
 traité (voir ci-dessous). Différés :
 
-- [ ] **#3bis — Tombstone non garanti par le seul REVOKE de 0003** — Effort S
-  (P1, déclencheur : avant 1er déploiement prod). 0003 pose un `REVOKE DELETE`
-  conditionnel (IF role exists) sur `transactions_cache`(+partitions) et
-  `balance_history`, mais `tygr_app.sql` accorde `DELETE ON ALL TABLES` : selon
-  l'ordre provision/migrate le GRANT global peut ré-écraser le REVOKE (cas des
-  tests migrate→provision). Garantie définitive = retirer DELETE sur ces 2 tables
-  au niveau du provisioning (GRANT ciblé au lieu de ON ALL TABLES + REVOKE).
-  Touche la surface sécurité de tygr_app.sql → chantier dédié, hors PR schéma.
+- [x] **#3bis — Tombstone non garanti par le seul REVOKE de 0003 — FAIT
+  2026-06-17** (branche `fix/tombstone-delete-provisioning`). `tygr_app.sql`
+  passe en **liste blanche DELETE (deny-by-default)** : plus aucun `GRANT DELETE
+  ON ALL TABLES` ; le GRANT global se limite à `SELECT, INSERT, UPDATE` (idem
+  `ALTER DEFAULT PRIVILEGES`), et DELETE est octroyé table par table (bloc
+  `DO`/`to_regclass` conditionnel) UNIQUEMENT aux 6 tables normales
+  (`workspaces`, `users`, `login_attempts`, `workspace_members`,
+  `bank_connections`, `bank_accounts`). `transactions_cache` (+ partitions, y
+  compris FUTURES via roulement) et `balance_history` ne reçoivent JAMAIS DELETE
+  — garantie indépendante de l'ordre provision/migrate et du nombre de
+  re-provisions (prouvé PGlite : invariant `DELETE=false` dans les deux ordres).
+  Le `REVOKE` de 0003 demeure (ceinture + intention documentée). Preuve verrouillée :
+  `tests/isolation/tombstone-delete-isolation.test.ts` (DELETE refusé sur les 2
+  tables + partition directe + DEFAULT ; UPDATE `is_removed` toujours autorisé ;
+  contre-preuve DELETE autorisé sur `workspace_members`). Le piège « REVOKE non
+  propagé aux partitions » est ainsi clos par construction.
+  **2e volet — faille CASCADE colmatée (cross-review Sécurité, 2026-06-17).** La
+  liste blanche seule NE suffisait PAS : le grant DELETE légitime sur
+  `bank_accounts`/`bank_connections` (déconnexion d'une banque) laissait la
+  cascade FK `ON DELETE cascade` effacer PHYSIQUEMENT l'append-only SANS
+  re-vérifier son privilège (reproduit : 1 ligne → 0). Migration **0004**
+  (`0004_append-only-no-delete.sql`) ajoute une fonction + un **trigger
+  BEFORE DELETE** sur la mère `transactions_cache` (HÉRITÉ par ses 5 partitions,
+  présentes et futures — PostgreSQL ≥ 11) et sur `balance_history`, qui lève
+  `append_only_no_delete` (ERRCODE check_violation) : défense réelle indépendante
+  du privilège ET du chemin (direct / partition directe / cascade / code futur).
+  L'invariant append-only est désormais vrai par construction (vérifié même SOUS
+  l'owner, et sur une partition 2028 créée après la migration). Cas cascade
+  verrouillés (tests 8-10 : DELETE `bank_accounts`/`bank_connections` rejeté,
+  lignes append-only intactes). Le roulement de partitions n'a PAS à répéter le
+  trigger (hérité) — seule la RLS est à répéter (cf. dette roulement ci-dessus).
+  - [ ] **Suivi opérationnel (P2, déclencheur : 1er déploiement prod sur base
+    NEUVE)** — Effort S. En ordre `provision → migrate` sur base vierge, les
+    GRANT DELETE des tables normales sont sautés au 1er provision (tables encore
+    absentes) ; ils ne mordent qu'au **re-provision post-migrate**. L'append-only
+    reste protégé à tout instant (jamais d'octroi) ; le seul effet est que
+    l'offboarding RGPD (DELETE sur tables normales) exige ce re-provision. À
+    intégrer dans le runbook de déploiement (étape « db:provision » à rejouer
+    après migrate). Aucun impact sur base déjà migrée (cas Neon/local actuel).
 
 - [x] **#2 — Idempotence d'ingestion non garantie par la clé DB** — FAIT 2026-06-15
   (PR 2 ingestion, `feature/epic3-ingestion`). `upsertTransactions`
