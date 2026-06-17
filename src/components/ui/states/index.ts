@@ -11,3 +11,4 @@ export {
   type StateIllustrationVariant,
 } from "./primitives";
 export { EmptyState } from "./empty-state";
+export { AppErrorState } from "./app-error-state";
