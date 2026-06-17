@@ -41,8 +41,8 @@ inter-tenant disparaît, **et aucun test ne le détecte** — les tests tournent
 | # | Sujet | Proposition |
 |---|---|---|
 | C1 | Où vit le provisioning | **Script SQL idempotent versionné** `drizzle/provisioning/tygr_app.sql`, appliqué avec `DATABASE_URL_ADMIN` AVANT `migrate`, via une commande `npm run db:provision`. PAS une migration Drizzle numérotée (les rôles sont des objets cluster/instance, pas du schéma applicatif — les mélanger casse le rejeu expand-contract). |
-| C2 | Idempotence | `DO $$ … IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='tygr_app') …` pour le rôle ; `GRANT` ré-émis (idempotent par nature) ; `ALTER DEFAULT PRIVILEGES` posé AVANT toute table (cf. R2 ci-dessous). |
-| C3 | Le piège `ALTER DEFAULT PRIVILEGES` (R2 de la revue) | Le script DOIT (a) poser les default privileges ET (b) ré-émettre un `GRANT … ON ALL TABLES IN SCHEMA public` explicite — sinon les 3 tables déjà créées par les migrations 0000/0002 n'héritent pas du GRANT et `tygr_app` perd l'accès en lecture. Les deux, ceinture-bretelles. |
+| C2 | Idempotence | `DO $$ … IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='tygr_app') …` pour le rôle ; `GRANT` ré-émis (idempotent par nature) ; `ALTER DEFAULT PRIVILEGES` posé AVANT toute table (cf. R2 ci-dessous). Le GRANT DELETE en liste blanche est enveloppé dans un `DO`/`to_regclass` conditionnel : il se saute sans erreur quand une table n'existe pas encore (re-jouable), idempotent. |
+| C3 | Le piège `ALTER DEFAULT PRIVILEGES` (R2 de la revue) | Le script DOIT (a) poser les default privileges ET (b) ré-émettre un `GRANT … ON ALL TABLES IN SCHEMA public` explicite — sinon les tables déjà créées par les migrations n'héritent pas du GRANT et `tygr_app` perd l'accès en lecture. Les deux, ceinture-bretelles. **Précision DELETE (dette #3bis, 2026-06-17)** : ce GRANT global porte désormais `SELECT, INSERT, UPDATE` SANS DELETE (deny-by-default sur l'append-only) ; idem `ALTER DEFAULT PRIVILEGES`. DELETE est accordé séparément, table par table, aux seules tables normales — JAMAIS `transactions_cache`/partitions ni `balance_history`. Un `GRANT … DELETE ON ALL TABLES` est interdit ici (il engloberait l'append-only ; un REVOKE de rattrapage ne se propage pas aux partitions). |
 | C4 | Secret du mot de passe `tygr_app` | Le script ne fixe PAS de mot de passe en dur. Il fait `CREATE ROLE tygr_app LOGIN` ; le mot de passe est posé hors script (Neon UI / `ALTER ROLE … PASSWORD` depuis un secret d'env `TYGR_APP_PASSWORD`), jamais commité. Local : mot de passe trivial documenté dans CLAUDE.md (déjà le cas). |
 | C5 | Le test négatif inversé (le cœur de la preuve) | Nouveau test : prouver qu'**en se connectant SOUS l'owner**, la RLS ne protège PAS (lignes cross-tenant visibles). Rend explicite POURQUOI le rôle est vital et fait **échouer la CI** si quelqu'un déprovisionne ou pointe sur l'owner. C'est la conversion de R1 d'angle mort invisible en invariant testé. |
 | C6 | Garde-fou runtime (défense en profondeur, R3) | Optionnel, à trancher : une assertion au premier appel de `withWorkspace` refusant de servir si `current_user` = owner (fail-closed). Coût : 1 requête au démarrage. Recommandé mais séparable en lot ultérieur si on veut garder ce PR minimal. |
@@ -58,6 +58,14 @@ db:provision (DATABASE_URL_ADMIN, idempotent)  →  migrate  →  deploy
 Jamais `migrate` avant `provision` sur une base neuve, sinon les tables existent
 avant le GRANT (R2). Sur une base déjà migrée (cas actuel Neon/local), `provision`
 rattrape via le `GRANT … ON ALL TABLES` explicite (C3).
+
+> **Base NEUVE et liste blanche DELETE (#3bis)** : en `provision → migrate` sur
+> base vierge, les GRANT DELETE des tables normales (bloc `to_regclass`
+> conditionnel) sont sautés au 1er provision (tables absentes). Ils ne prennent
+> effet qu'au **re-provision post-migrate** — `db:provision` étant idempotent,
+> le runbook de déploiement le rejoue après `migrate`. L'append-only n'est
+> JAMAIS concerné (il ne reçoit DELETE à aucun moment) ; le seul effet est que
+> l'offboarding RGPD (DELETE sur tables normales) attend ce re-provision.
 
 ## Critères d'acceptation
 
