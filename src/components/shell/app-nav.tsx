@@ -6,9 +6,10 @@
  * §1.2 — l'accent ambre signale la nav active, JAMAIS la donnée, §3.1).
  *
  * Présentationnel : aucune donnée, aucune logique métier. Les liens pointent
- * vers les segments du groupe (workspace) ; les sections non encore livrées
- * (Graphiques, Échéances, Transactions) sont des placeholders inertes — elles
- * arriveront avec leurs epics, le shell est neutre vis-à-vis de leur contenu.
+ * vers les segments du groupe (workspace). Graphiques / Échéances / Transactions
+ * sont actifs et mènent à une page en Empty State (la fonctionnalité arrive avec
+ * son epic) — le mécanisme `placeholder` reste disponible pour de futures
+ * sections non encore routées.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -22,9 +23,9 @@ type Item = {
 
 const ITEMS: Item[] = [
   { label: "Dashboard", href: "/" },
-  { label: "Graphiques", href: "/graphiques", placeholder: true },
-  { label: "Échéances", href: "/echeances", placeholder: true },
-  { label: "Transactions", href: "/transactions", placeholder: true },
+  { label: "Graphiques", href: "/graphiques" },
+  { label: "Échéances", href: "/echeances" },
+  { label: "Transactions", href: "/transactions" },
 ];
 
 export function AppNav() {
