@@ -26,11 +26,14 @@ import {
 } from "@/server/auth/session";
 import {
   CategorieIntrouvableError,
+  CurseurInvalideError,
+  type PageTransactions,
   TransactionIntrouvableError,
   VentilationDepasseError,
   archiverCategorie,
   creerCategorie,
   listerCategories,
+  listerTransactions,
   remplacerSplits,
   renommerCategorie,
   withWorkspace,
@@ -41,6 +44,10 @@ import {
   remplacerSplitsSchema,
   renommerCategorieSchema,
 } from "@/lib/categorisation-schema";
+import {
+  type ListerTransactionsInput,
+  listerTransactionsSchema,
+} from "@/lib/transactions-schema";
 
 /** Résultat normalisé (miroir de `ResultatAction` du contrat UI). */
 export type ResultatAction<T = void> =
@@ -76,6 +83,9 @@ function echec(
   } else if (erreur instanceof CategorieIntrouvableError) {
     code = erreur.code; // CATEGORY_NOT_FOUND
     message = "Catégorie introuvable.";
+  } else if (erreur instanceof CurseurInvalideError) {
+    code = erreur.code; // INVALID_CURSOR
+    message = "Page demandée invalide.";
   } else if (erreur instanceof ServiceIndisponibleError) {
     code = "SERVICE_UNAVAILABLE";
     message = "Service momentanément indisponible.";
@@ -90,6 +100,33 @@ function echec(
 export async function listerCategoriesAction(): Promise<CategorieDTO[]> {
   const session = await exigerSessionWorkspace();
   return withWorkspace(session, (tx, ctx) => listerCategories(tx, ctx));
+}
+
+/**
+ * Lecture paginée (par CURSEUR) des transactions du workspace, avec résumé de
+ * ventilation par ligne (anti-N+1, cf. repository). Surface d'appel de la page
+ * /transactions. Retour normalisé `ResultatAction` : un curseur falsifié devient
+ * une entrée invalide (jamais d'exception propagée au client).
+ *
+ * `filtres` est l'objet brut côté UI (recherche, compte, statut, dates, curseur,
+ * limite) — validé/normalisé par Zod ici. Le workspace n'est JAMAIS un paramètre.
+ */
+export async function listerTransactionsAction(
+  filtres: Partial<ListerTransactionsInput> = {},
+): Promise<ResultatAction<PageTransactions>> {
+  const session = await exigerSessionWorkspace();
+  const parsed = listerTransactionsSchema.safeParse(filtres);
+  if (!parsed.success) {
+    return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
+  }
+  try {
+    const page = await withWorkspace(session, (tx, ctx) =>
+      listerTransactions(tx, ctx, parsed.data),
+    );
+    return { ok: true, data: page };
+  } catch (erreur) {
+    return echec(erreur, session.activeWorkspaceId, "lister-transactions");
+  }
 }
 
 /**
