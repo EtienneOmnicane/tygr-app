@@ -42,8 +42,11 @@ L'isolation RLS ne mord QUE sous un rôle non-propriétaire des tables. Garantie
   (`DATABASE_URL_ADMIN`, rôle owner). La suite d'isolation consomme CE script
   dans son `beforeAll` — aucune définition divergente du rôle.
 - **Ordre de pipeline NON négociable** : `db:provision` → `migrate` → `deploy`.
-  Le `GRANT … ON ALL TABLES` explicite du script rattrape les tables déjà
-  migrées (les `ALTER DEFAULT PRIVILEGES` ne couvrent que les tables futures).
+  Le `GRANT … ON ALL TABLES` (SELECT/INSERT/UPDATE — **PAS DELETE**, cf. section
+  suivante) rattrape les tables déjà migrées (les `ALTER DEFAULT PRIVILEGES` ne
+  couvrent que les tables futures). Sur base **neuve**, les GRANT DELETE sélectifs
+  (liste blanche, conditionnels à l'existence des tables) ne mordent qu'au
+  **re-provision post-migrate** : le runbook rejoue `db:provision` après `migrate`.
 - **Secret (C4)** : le script crée `tygr_app` NOLOGIN sans mot de passe ; le
   LOGIN + mot de passe est posé hors script (`ALTER ROLE … PASSWORD` depuis un
   secret d'env, jamais commité) — rotation en runbook au déploiement.
@@ -53,6 +56,50 @@ L'isolation RLS ne mord QUE sous un rôle non-propriétaire des tables. Garantie
   preuve R1 (test C5) : sous l'owner, la RLS ne filtre pas ET le garde-fou
   bloque ; un déprovisionnement ou un `DATABASE_URL` pointant l'owner fait
   échouer la CI.
+
+## Intégrité append-only des tables financières (#3bis, 2026-06-17)
+
+`transactions_cache` (+ partitions) et `balance_history` sont **append-only** :
+l'effacement est **logique** (`is_removed=true` via UPDATE) ou l'historique EOD
+est immuable. JAMAIS de DELETE physique. Deux gardes **complémentaires**, parce
+qu'aucune ne suffit seule (leçon de cross-review — la 1re a été contournée par
+la 2nde voie) :
+
+- **(1) Privilège : liste blanche DELETE « deny-by-default »** (`tygr_app.sql`).
+  Le GRANT global ne donne que SELECT/INSERT/UPDATE (idem `ALTER DEFAULT
+  PRIVILEGES`, donc toute table FUTURE — partition de roulement comprise — naît
+  sans DELETE). DELETE est ensuite octroyé **table par table** (bloc
+  `DO`/`to_regclass` conditionnel) aux SEULES tables normales (`workspaces`,
+  `users`, `login_attempts`, `workspace_members`, `bank_connections`,
+  `bank_accounts`). **Ne JAMAIS** ajouter une table append-only à cette liste, ni
+  un `GRANT … DELETE ON ALL TABLES` (il engloberait l'append-only + ses
+  partitions ; un REVOKE de rattrapage ne se propage PAS aux partitions).
+
+- **(2) Intégrité : trigger `BEFORE DELETE`** (migration `0004`, fonction
+  `tygr_refuser_delete_append_only`, lève `append_only_no_delete` / ERRCODE
+  `check_violation`, message sans PII). Indispensable EN PLUS du privilège : une
+  **cascade FK `ON DELETE cascade`** (depuis `bank_accounts`/`bank_connections`,
+  qui ONT légitimement DELETE) supprime les lignes enfant **sans re-vérifier
+  leur privilège** → sans ce trigger, déconnecter une banque effacerait
+  physiquement l'historique. Le trigger est la seule défense **indépendante du
+  privilège ET du chemin** (DELETE direct, partition en direct, cascade, code
+  futur, même sous l'owner).
+
+- **Partitions — héritage (à ne PAS confondre avec la RLS)** : un trigger
+  row-level posé sur la table MÈRE partitionnée est **hérité** par toutes les
+  partitions, présentes ET futures (PostgreSQL ≥ 11). La **RLS, elle, n'est PAS
+  héritée** (`ENABLE`/`FORCE`/`CREATE POLICY` posés par partition dans `0003`).
+  Donc au **roulement annuel** des partitions : RÉPÉTER la RLS (sinon fuite
+  cross-tenant), mais PAS le trigger (déjà hérité). Inverser cette règle = bug.
+
+- **Preuve (bloquante en CI)** : `tests/isolation/tombstone-delete-isolation.test.ts`
+  — DELETE direct/partition/cascade refusé sous `tygr_app` ET sous l'owner,
+  partition future héritant le trigger, UPDATE `is_removed` toujours autorisé,
+  contre-preuve DELETE autorisé sur une table normale, idempotence du script.
+
+Corollaire de gouvernance : ces deux invariants relèvent de l'isolation tenant /
+append-only → **dette INTERDITE** (règle 9). Toute nouvelle table financière
+append-only DOIT poser son trigger `BEFORE DELETE` et rester hors liste blanche.
 
 ## Tribal Knowledge & Quality Gates
 
@@ -137,8 +184,12 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Montants : **jamais de float**. DECIMAL en base ; côté TS, chaînes décimales ou
   centimes entiers ; règles d'arrondi documentées ; tests aux bornes. Affichage :
   Geist `tabular-nums` (UI_GUIDELINES §0).
-- `audit_events` et `consent_records` sont **append-only** : aucun UPDATE/DELETE,
-  même en migration de réparation — on écrit un événement correctif.
+- `audit_events` et `consent_records` sont **append-only stricts** : aucun
+  UPDATE/DELETE, même en migration de réparation — on écrit un événement
+  correctif. `transactions_cache` (+ partitions) et `balance_history` sont
+  **append-only au DELETE** : pas de suppression physique (garde-fou trigger +
+  liste blanche, cf. « Intégrité append-only des tables financières »), mais
+  l'UPDATE est permis (tombstone `is_removed`, affinage de catégorie).
 - Aucune donnée bancaire réelle hors production : fixtures = sandbox Omni-FI
   uniquement ; pas de dump de prod en local ; logs sans PII (jamais de libellés
   bancaires bruts dans les messages d'erreur ou la télémétrie).
