@@ -5,6 +5,18 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Empty States transverses (UI, 2026-06-17)
+
+- [ ] **UI-ES1 (P2) — faire dériver `DashboardEmptyState` du `EmptyState` générique**
+  — Effort S (déclencheur : merge de `feat/activate-nav-empty-states`). Le composant
+  générique `src/components/ui/states/empty-state.tsx` (livré avec les pages
+  graphiques/échéances/transactions) recouvre le markup de `DashboardEmptyState`
+  (illustration + titre + message + CTA lien `primary`). `DashboardEmptyState` reste
+  couplé au domaine (CTA « Connecter une banque » → /banques) — le réécrire comme une
+  fine spécialisation du générique supprime la duplication. Différé pour ne pas toucher
+  du code dashboard mergé/QA dans la PR d'activation nav (décision design D3,
+  plan-design-review 2026-06-17).
+
 ### Vendoring de @omni-fi/react-link (2026-06-16)
 
 - [ ] **VENDOR-1 (P1) — remplacer le vendoring `file:` par le package publié** —
