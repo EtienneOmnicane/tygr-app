@@ -28,6 +28,7 @@ import {
   char,
   check,
   date,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -329,6 +330,180 @@ export const balanceHistory = pgTable(
     index("balance_history_workspace_date_idx").on(
       t.workspaceId,
       t.balanceDate,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Pilier 1 — catégorisation manuelle + ventilation (spec             */
+/* docs/specs/pilier1-categorisation-manuelle.md). transactions_cache */
+/* reste READ-ONLY : toute la catégorisation vit dans ces 3 tables.   */
+/* ------------------------------------------------------------------ */
+
+export const CATEGORIZATION_SOURCES = ["MANUAL", "RULE"] as const;
+export type CategorizationSource = (typeof CATEGORIZATION_SOURCES)[number];
+
+/**
+ * Référentiel de catégories par workspace (Nature / Sous-nature). Hiérarchie à
+ * deux niveaux via `parent_id` (NULL = racine = Nature ; sinon = Sous-nature).
+ * Éditable (DELETE autorisé à tygr_app, cf. liste blanche provisioning) ;
+ * `is_active` permet la désactivation sans perte de l'historique de splits.
+ */
+export const categories = pgTable(
+  "categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    name: varchar("name", { length: 120 }).notNull(),
+    /** NULL = catégorie racine (Nature) ; sinon parent dans le MÊME workspace. */
+    parentId: uuid("parent_id"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées workspace
+    // (correctif cross-review MAJEUR). Permet d'exiger qu'une catégorie
+    // référencée appartienne au MÊME workspace que la ligne référençante.
+    unique("categories_id_workspace_unique").on(t.id, t.workspaceId),
+    // Auto-référence hiérarchie COMPOSITE (parent dans le MÊME workspace) :
+    // un parent_id d'un autre tenant est désormais IMPOSSIBLE.
+    foreignKey({
+      columns: [t.parentId, t.workspaceId],
+      foreignColumns: [t.id, t.workspaceId],
+      name: "categories_parent_id_workspace_fk",
+    }),
+    // Pas de doublon de nom au même niveau d'un workspace.
+    unique("categories_workspace_name_parent_unique").on(
+      t.workspaceId,
+      t.name,
+      t.parentId,
+    ),
+    index("categories_workspace_id_idx").on(t.workspaceId),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/**
+ * Catégorisation d'une transaction, AVEC ventilation : une transaction peut être
+ * répartie sur N lignes (1 ligne = cas 1:1 ; plusieurs = 1:N). La somme des
+ * `amount` des lignes d'une transaction doit rester ≤ |montant de la transaction|
+ * (invariant appliqué côté repository en transaction — un CHECK SQL ne peut pas
+ * agréger d'autres lignes ; cf. spec §4).
+ *
+ * FK COMPOSITE vers transactions_cache : cette table étant partitionnée, sa PK
+ * est `(id, transaction_date)` — une FK doit cibler la PK ENTIÈRE. On dénormalise
+ * donc `transaction_date` ici uniquement pour porter la FK (spec §3).
+ * transactions_cache reste READ-ONLY : aucune écriture n'y est faite.
+ */
+export const transactionCategorizations = pgTable(
+  "transaction_categorizations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    transactionId: uuid("transaction_id").notNull(),
+    /** Dénormalisée pour la FK composite vers la table partitionnée (spec §3). */
+    transactionDate: date("transaction_date").notNull(),
+    categoryId: uuid("category_id").notNull(),
+    /** Montant de CETTE part (> 0 ; le signe vit sur la transaction). */
+    amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+    source: varchar("source", { length: 10 }).notNull(),
+    /** NULL si MANUAL ; renseigné si source='RULE' (table rules à venir). */
+    ruleId: uuid("rule_id"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // FK composite vers la PK partitionnée de transactions_cache.
+    foreignKey({
+      columns: [t.transactionId, t.transactionDate],
+      foreignColumns: [transactionsCache.id, transactionsCache.transactionDate],
+      name: "txn_categorizations_transaction_fk",
+    }),
+    // FK category COMPOSITE (correctif cross-review MAJEUR) : la catégorie DOIT
+    // appartenir au MÊME workspace que le split → une category_id d'un autre
+    // tenant est impossible (garantie en base, pas par convention).
+    foreignKey({
+      columns: [t.categoryId, t.workspaceId],
+      foreignColumns: [categories.id, categories.workspaceId],
+      name: "txn_categorizations_category_workspace_fk",
+    }),
+    check("txn_categorizations_amount_positive", sql`${t.amount} > 0`),
+    check(
+      "txn_categorizations_source_check",
+      sql`${t.source} IN ('MANUAL','RULE')`,
+    ),
+    // Double verrou source/rule_id : MANUAL ⟺ pas de rule ; RULE ⟺ rule présent.
+    check(
+      "txn_categorizations_source_rule_coherence",
+      sql`(${t.source} = 'MANUAL' AND ${t.ruleId} IS NULL) OR (${t.source} = 'RULE' AND ${t.ruleId} IS NOT NULL)`,
+    ),
+    // Récupère les splits d'une transaction (scopé workspace).
+    index("txn_categorizations_workspace_txn_idx").on(
+      t.workspaceId,
+      t.transactionId,
+      t.transactionDate,
+    ),
+    // Agrégats par catégorie (dashboards futurs).
+    index("txn_categorizations_workspace_category_idx").on(
+      t.workspaceId,
+      t.categoryId,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/**
+ * Journal APPEND-ONLY immuable des changements de catégorisation (FEAT-8.1 :
+ * « surcharge manuelle = audit immuable »). Comme audit_events / consent_records :
+ * aucun UPDATE ni DELETE (la migration 0005 pose un trigger BEFORE UPDATE OR
+ * DELETE qui lève ; tygr_app n'a que INSERT/SELECT — liste blanche provisioning).
+ * Pas de FK dure vers la transaction (on garde la trace quoi qu'il arrive).
+ */
+export const categorizationAudit = pgTable(
+  "categorization_audit",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    transactionId: uuid("transaction_id").notNull(),
+    transactionDate: date("transaction_date").notNull(),
+    /** Opération sur un split : CREATE / UPDATE / DELETE. */
+    action: varchar("action", { length: 16 }).notNull(),
+    /** Snapshots lisibles au moment de l'action (pas de jointure requise). */
+    categoryName: varchar("category_name", { length: 120 }),
+    amount: numeric("amount", { precision: 15, scale: 2 }),
+    source: varchar("source", { length: 10 }),
+    actorId: uuid("actor_id")
+      .notNull()
+      .references(() => users.id),
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check(
+      "categorization_audit_action_check",
+      sql`${t.action} IN ('CREATE','UPDATE','DELETE')`,
+    ),
+    index("categorization_audit_workspace_txn_idx").on(
+      t.workspaceId,
+      t.transactionId,
+      t.transactionDate,
     ),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],

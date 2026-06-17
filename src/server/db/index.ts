@@ -135,3 +135,19 @@ export type {
   SyntheseMois,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
+
+// Catégorisation manuelle + ventilation (Pilier 1). Ré-exporté pour que les
+// Server Actions (à venir) l'appellent DANS withWorkspace(tx) sans importer
+// @/server/repositories/* directement.
+export {
+  listerSplits,
+  ajouterSplit,
+  supprimerSplit,
+  VentilationDepasseError,
+  TransactionIntrouvableError,
+} from "@/server/repositories/categorisation";
+export type {
+  RefTransaction,
+  SplitAAjouter,
+  SplitLu,
+} from "@/server/repositories/categorisation";

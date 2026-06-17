@@ -71,9 +71,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --      - login_attempts             : purge périodique de la fenêtre (cron, dette TODOS)
 --      - bank_connections           : déconnexion d'une banque (cascade vers bank_accounts)
 --      - bank_accounts              : cascade depuis bank_connections / dé-rattachement
+--      - categories                 : référentiel éditable (Pilier 1)
+--      - transaction_categorizations: splits éditables (correction de catégorie, Pilier 1)
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
+--      - categorization_audit       (append-only : ni UPDATE ni DELETE — étape 6)
 --    Le code applicatif n'émet à ce jour AUCUN DELETE (vérifié) ; ces GRANTs
 --    couvrent les cascades FK et l'offboarding RGPD à venir sans rouvrir
 --    l'append-only.
@@ -100,13 +103,29 @@ BEGIN
     'login_attempts',
     'workspace_members',
     'bank_connections',
-    'bank_accounts'
+    'bank_accounts',
+    'categories',
+    'transaction_categorizations'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
       EXECUTE format('GRANT DELETE ON public.%I TO tygr_app', t);
     END IF;
   END LOOP;
+END
+$$;
+
+-- 6. APPEND-ONLY au niveau PRIVILÈGE (deny-by-default, comme #3bis pour DELETE) :
+--    `categorization_audit` est immuable → tygr_app ne doit avoir NI UPDATE NI
+--    DELETE dessus, seulement INSERT/SELECT. L'étape 3 a accordé UPDATE en bloc
+--    (`ON ALL TABLES`) ; on le RETIRE ici. Le trigger 0005 est la défense de
+--    fond ; ce REVOKE est la ceinture de privilège (double garde). Conditionnel
+--    à l'existence (mêmes deux ordres de pipeline que l'étape 5).
+DO $$
+BEGIN
+  IF to_regclass('public.categorization_audit') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE ON public.categorization_audit FROM tygr_app;
+  END IF;
 END
 $$;
 
