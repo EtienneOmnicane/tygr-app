@@ -159,3 +159,15 @@ export type {
   SplitCible,
   CategorieLue,
 } from "@/server/repositories/categorisation";
+
+// Lecture paginée des transactions + résumé de ventilation (B1-B3, page
+// /transactions). Même frontière : la Server Action appelle ceci DANS
+// withWorkspace(tx) sans importer @/server/repositories/* directement.
+export {
+  listerTransactions,
+  CurseurInvalideError,
+} from "@/server/repositories/transactions";
+export type {
+  TransactionLigne,
+  PageTransactions,
+} from "@/server/repositories/transactions";
