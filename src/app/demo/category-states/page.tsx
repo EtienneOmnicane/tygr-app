@@ -14,6 +14,7 @@ import {
   CategoryBadge,
   CategoryPicker,
   CategoryManagerModal,
+  SplitAllocationModal,
   type ActionsReferentielCategories,
   type CategorieUI,
 } from "@/components/ui/category";
@@ -42,6 +43,7 @@ const ACTIONS_STUB: ActionsReferentielCategories = {
 export default function CategoryStatesDemoPage() {
   const [selectionnee, setSelectionnee] = useState<string | null>("cat-charges-elec");
   const [managerOuvert, setManagerOuvert] = useState(false);
+  const [splitOuvert, setSplitOuvert] = useState(false);
 
   return (
     <div className="min-h-screen bg-surface-page">
@@ -122,6 +124,53 @@ export default function CategoryStatesDemoPage() {
             onClose={() => setManagerOuvert(false)}
             categories={CATEGORIES_DEMO}
             actions={ACTIONS_STUB}
+          />
+        </section>
+
+        {/* 4. SplitAllocationModal — ventilation + réconciliation temps réel */}
+        <section className="rounded-card bg-surface-card p-6 shadow-card">
+          <h2 className="mb-4 text-base font-semibold text-text">
+            SplitAllocationModal — ventilation (10 000 MUR)
+          </h2>
+          <button
+            type="button"
+            onClick={() => setSplitOuvert(true)}
+            className="inline-flex h-10 items-center rounded-control bg-primary px-4
+              text-sm font-semibold text-text-onink transition-colors
+              hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+              focus-visible:ring-primary focus-visible:ring-offset-2"
+          >
+            Ventiler la transaction
+          </button>
+          <SplitAllocationModal
+            open={splitOuvert}
+            onClose={() => setSplitOuvert(false)}
+            transaction={{
+              transactionId: "11111111-1111-4111-8111-111111111111",
+              transactionDate: "2026-06-11",
+              label: "Beachcomber Resorts",
+              montantAbs: "10000.00",
+              devise: "MUR",
+              sens: "Credit",
+            }}
+            categories={CATEGORIES_DEMO}
+            initialSplits={[
+              {
+                id: "split-1",
+                categoryId: "cat-charges-elec",
+                amount: "6000.00",
+                source: "MANUAL",
+                ruleId: null,
+              },
+              {
+                id: "split-2",
+                categoryId: "cat-charges-mat",
+                amount: "2000.00",
+                source: "MANUAL",
+                ruleId: null,
+              },
+            ]}
+            onReplace={async () => ({ ok: true, data: undefined })}
           />
         </section>
       </main>
