@@ -26,9 +26,18 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Tout est protégé SAUF : /login, les endpoints Auth.js, les assets Next
-  // et les fichiers publics (favicon, images).
+  // Tout est protégé SAUF : /login, les endpoints Auth.js, les assets Next,
+  // les fichiers publics (favicon, images) ET le segment /demo.
+  //
+  // /demo PUBLIC (décision PO + QA B-1, 2026-06-17) : c'est un bac à sable de
+  // composants PURS pour le Visual QA (Gate 4) — `"use client"`, données en dur,
+  // ZÉRO accès DB/auth/secret (vérifié : aucun `withWorkspace`/`@/server/*`).
+  // L'ouvrir ne fuit rien ; sans cette exclusion, le proxy redirige /demo/* vers
+  // /login et casse la capture headless. La vraie barrière de sécurité reste
+  // `exigerSessionWorkspace` sur les routes `(workspace)/` (cf. en-tête).
+  // ⚠️ INVARIANT : ne JAMAIS ajouter d'accès aux données réelles dans une page
+  // /demo tant qu'elle est hors auth (sinon cette exclusion devient une fuite).
   matcher: [
-    "/((?!login|api/auth|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
+    "/((?!login|api/auth|demo|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
   ],
 };
