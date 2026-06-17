@@ -143,11 +143,19 @@ export {
   listerSplits,
   ajouterSplit,
   supprimerSplit,
+  remplacerSplits,
+  listerCategories,
+  creerCategorie,
+  renommerCategorie,
+  archiverCategorie,
   VentilationDepasseError,
   TransactionIntrouvableError,
+  CategorieIntrouvableError,
 } from "@/server/repositories/categorisation";
 export type {
   RefTransaction,
   SplitAAjouter,
   SplitLu,
+  SplitCible,
+  CategorieLue,
 } from "@/server/repositories/categorisation";
