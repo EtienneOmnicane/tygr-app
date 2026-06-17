@@ -219,3 +219,33 @@ Cross-review contradictoire (contexte frais). 1 BLOQUANT + 1 MAJEUR **corrigés*
    limite concurrence) + **cas isolation IDOR ajouté à la suite bloquante**.
 5. Quality Gates : lint/typecheck/tests/IDOR ; cross-review Sécurité + QA
    (contexte frais) ; STOP à la PR poussée.
+
+## 12. Server Actions (surface d'appel UI, 2026-06-17)
+
+Branche `feat/pilier1-categorisation-actions`. 5 Server Actions
+(`src/app/(workspace)/transactions/actions.ts`, `"use server"`) honorant le
+contrat UI `src/components/ui/category/types.ts` :
+- `remplacerSplitsAction(ref, splits)` — remplace ATOMIQUEMENT l'état complet
+  (DELETE+INSERT dans la transaction `withWorkspace` = tout-ou-rien), somme ≤
+  |montant| revérifiée serveur sous `FOR UPDATE`. Liste vide = tout
+  dé-catégoriser. Splits toujours MANUAL.
+- `listerCategoriesAction()` / `creerCategorieAction` / `renommerCategorieAction`
+  / `archiverCategorieAction` (is_active=false, jamais de DELETE).
+
+Toutes : `exigerSessionWorkspace` + `withWorkspace`, Zod strict (`src/lib/
+categorisation-schema.ts` — déplacé hors `repositories/` pour être importable par
+`app/`), retour `ResultatAction` non-énumérant (erreurs nommées mappées en
+code+message, jamais de détail technique/PII au client).
+
+**Gating** : catégorisation ET CRUD référentiel ouverts à TOUS les membres
+(VIEWER inclus) — décision PO, cohérente splits/référentiel. La RLS `WITH CHECK`
++ FK composites bornent toute écriture au tenant courant, indépendamment du rôle.
+
+Cross-review Sécurité+QA (contexte frais) : **feu vert, aucun BLOQUANT/MAJEUR**.
+Atomicité prouvée empiriquement y compris l'échec POST-DELETE (FK invalide sur un
+INSERT du milieu → rollback complet, état d'avant intact) — cas ajouté à la suite.
+2 MINEURS non bloquants : (1) la sérialisation `FOR UPDATE` n'est pas couvrable
+en CI (PGlite mono-backend) — dette de test concurrentiel à éprouver en
+intégration multi-backend ; (2) `listerCategoriesAction` ne normalise pas en
+`ResultatAction` (lecture RSC : l'exception remonte à l'error boundary) — à garder
+en tête au câblage du picker. Tests : 265 au total. lint/typecheck/build OK.

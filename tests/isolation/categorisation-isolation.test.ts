@@ -23,7 +23,13 @@ import { categorizationAudit } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   ajouterSplit,
+  archiverCategorie,
+  CategorieIntrouvableError,
+  creerCategorie,
+  listerCategories,
   listerSplits,
+  remplacerSplits,
+  renommerCategorie,
   supprimerSplit,
   VentilationDepasseError,
   TransactionIntrouvableError,
@@ -231,5 +237,148 @@ describe("la table transactions_cache reste read-only (jamais écrite par la cat
         ),
     );
     expect(rows[0].amount).toBe("-1000.00"); // inchangé
+  });
+});
+
+describe("remplacerSplits — atomique tout-ou-rien", () => {
+  it("remplace l'état complet des splits (700 + 300 ≤ 1000)", async () => {
+    const r = await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "700.00" },
+        { categoryId: CAT_A, amount: "300.00" },
+      ]),
+    );
+    expect(r.remplaces).toBe(2);
+    const splits = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(splits).toHaveLength(2);
+    const total = splits.reduce((s, x) => s + Number(x.amount), 0);
+    expect(total).toBe(1000);
+  });
+
+  it("ROLLBACK si l'état cible dépasse |montant| : aucun changement persisté (atomicité)", async () => {
+    const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "900.00" },
+          { categoryId: CAT_A, amount: "200.00" }, // 1100 > 1000
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(VentilationDepasseError);
+    // L'état d'AVANT est intact (le DELETE des anciens a été rollback avec l'INSERT).
+    const apres = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(apres).toHaveLength(avant.length);
+    expect(apres.reduce((s, x) => s + Number(x.amount), 0)).toBe(
+      avant.reduce((s, x) => s + Number(x.amount), 0),
+    );
+  });
+
+  it("liste vide = tout dé-catégoriser (autorisé)", async () => {
+    const r = await withWorkspace(sessionA, (tx, ctx) => remplacerSplits(tx, ctx, refA, []));
+    expect(r.remplaces).toBe(0);
+    const splits = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(splits).toHaveLength(0);
+  });
+
+  it("ROLLBACK si l'échec survient APRÈS le DELETE (FK invalide sur le 2e INSERT)", async () => {
+    // Cas le plus dangereux (relevé en cross-review) : la somme passe la
+    // validation (le DELETE s'exécute), le 1er INSERT réussit, puis le 2e viole
+    // la FK composite (CAT_B hors workspace). Tout doit être rollback : l'état
+    // d'avant intact, AUCUN split à 500 persisté.
+    await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "600.00" },
+        { categoryId: CAT_A, amount: "400.00" },
+      ]),
+    );
+    const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(avant).toHaveLength(2);
+
+    let thrown: unknown = null;
+    try {
+      await withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "500.00" }, // 1er INSERT OK
+          { categoryId: CAT_B, amount: "500.00" }, // 2e viole la FK composite
+        ]),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown, "le 2e INSERT (FK invalide) doit échouer").not.toBeNull();
+
+    // État d'AVANT intact : ni le DELETE des anciens ni le 1er INSERT ne sont restés.
+    const apres = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(apres).toHaveLength(2);
+    expect(apres.every((s) => s.amount === "600.00" || s.amount === "400.00")).toBe(true);
+    expect(apres.some((s) => s.amount === "500.00")).toBe(false);
+  });
+
+  it("rejette une category_id d'un autre workspace (FK composite, même dans remplacerSplits)", async () => {
+    let thrown: unknown = null;
+    try {
+      await withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [{ categoryId: CAT_B, amount: "10.00" }]),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).not.toBeNull();
+  });
+});
+
+describe("CRUD référentiel de catégories", () => {
+  it("creerCategorie crée une Nature, listerCategories la renvoie", async () => {
+    const r = await withWorkspace(sessionA, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Salaires", parentId: null }),
+    );
+    expect(r.categoryId).toBeTruthy();
+    const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
+    expect(cats.some((c) => c.name === "Salaires")).toBe(true);
+  });
+
+  it("creerCategorie avec parentId d'un AUTRE workspace → rejeté (FK composite)", async () => {
+    let thrown: unknown = null;
+    try {
+      await withWorkspace(sessionA, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Sous-cat", parentId: CAT_B }),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown, "parentId cross-workspace doit être rejeté").not.toBeNull();
+  });
+
+  it("renommerCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        renommerCategorie(tx, ctx, { categoryId: CAT_B, name: "Hack" }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieIntrouvableError);
+  });
+
+  it("archiverCategorie masque la catégorie mais PRÉSERVE les splits existants", async () => {
+    // CAT_A est utilisée par des splits (recréés ci-dessous). On l'archive.
+    await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [{ categoryId: CAT_A, amount: "500.00" }]),
+    );
+    const splitsAvant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(splitsAvant).toHaveLength(1);
+
+    await withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A));
+
+    // La catégorie a disparu des pickers…
+    const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
+    expect(cats.some((c) => c.id === CAT_A)).toBe(false);
+    // …mais le split qui la référence existe TOUJOURS (historique préservé).
+    const splitsApres = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(splitsApres).toHaveLength(1);
+    expect(splitsApres[0].categoryId).toBe(CAT_A);
+  });
+
+  it("archiverCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
+    ).rejects.toBeInstanceOf(CategorieIntrouvableError);
   });
 });

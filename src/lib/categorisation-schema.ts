@@ -56,3 +56,49 @@ export const refTransactionSchema = z
     transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date invalide"),
   })
   .strict();
+
+/**
+ * remplacerSplits : état cible COMPLET de la ventilation. Array borné (1..50
+ * parts — au-delà n'a pas de sens métier pour une transaction). Vide AUTORISÉ
+ * (tout dé-catégoriser). Chaque part = catégorie + montant positif. L'invariant
+ * somme ≤ |montant txn| est vérifié côté serveur (le schéma ne voit pas la txn).
+ */
+export const remplacerSplitsSchema = z
+  .object({
+    transactionId: z.string().uuid(),
+    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date invalide"),
+    splits: z
+      .array(
+        z
+          .object({
+            categoryId: z.string().uuid(),
+            amount: montantDecimalPositif,
+          })
+          .strict(),
+      )
+      .max(50),
+  })
+  .strict();
+
+export type RemplacerSplitsInput = z.infer<typeof remplacerSplitsSchema>;
+
+/** Nom de catégorie : non vide après trim, ≤ 120 (aligné varchar(120) en base). */
+const nomCategorie = z.string().trim().min(1, "Nom requis").max(120);
+
+export const creerCategorieSchema = z
+  .object({
+    name: nomCategorie,
+    parentId: z.string().uuid().nullable().default(null),
+  })
+  .strict();
+
+export const renommerCategorieSchema = z
+  .object({
+    categoryId: z.string().uuid(),
+    name: nomCategorie,
+  })
+  .strict();
+
+export const archiverCategorieSchema = z
+  .object({ categoryId: z.string().uuid() })
+  .strict();
