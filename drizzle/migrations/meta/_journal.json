@@ -36,6 +36,13 @@
       "when": 1781712000000,
       "tag": "0004_append-only-no-delete",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781712001000,
+      "tag": "0005_pilier1-gen",
+      "breakpoints": true
     }
   ]
 }
