@@ -150,19 +150,22 @@ export function BankConnectWidget({
           </button>
         </form>
 
-        {/* Re-synchronisation manuelle (GET /connections) — rafraîchit les
-            connexions existantes ; sert aussi de repli si le widget n'a pas finalisé. */}
+        {/* Re-synchronisation manuelle (GET /connections) — relit l'état réel chez
+            Omni-FI et rattache les comptes. Sert surtout de RATTRAPAGE quand une
+            banque connectée n'apparaît pas (widget non finalisé). Présenté comme un
+            LIEN D'ACTION (§2.3), pas un bouton de même rang que l'action principale :
+            son libellé dit QUAND s'en servir. */}
         <button
           type="button"
           onClick={synchroniser}
           disabled={Boolean(tokenActif)}
-          className="inline-flex h-10 items-center gap-2 rounded-control border
-            border-border bg-surface-card px-4 text-sm font-semibold text-text
-            transition-colors hover:bg-surface-muted focus:outline-none
-            focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
-            disabled:opacity-48"
+          title="Relit vos connexions chez votre banque et rattache les comptes manquants."
+          className="inline-flex h-10 items-center gap-1 rounded-control px-2 text-sm
+            font-semibold text-primary transition-colors hover:text-primary-600
+            hover:underline focus:outline-none focus-visible:ring-2
+            focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-48"
         >
-          Synchroniser mes connexions
+          Une banque n’apparaît pas ?
         </button>
       </div>
 
