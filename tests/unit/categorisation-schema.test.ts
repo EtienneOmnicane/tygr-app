@@ -9,6 +9,7 @@ import {
   ajouterSplitSchema,
   archiverCategorieSchema,
   creerCategorieSchema,
+  refTransactionSchema,
   remplacerSplitsSchema,
   renommerCategorieSchema,
   supprimerSplitSchema,
@@ -72,6 +73,39 @@ describe("supprimerSplitSchema", () => {
   });
   it("REFUSE un non-uuid", () => {
     expect(supprimerSplitSchema.safeParse({ splitId: "x" }).success).toBe(false);
+  });
+});
+
+// Contrat de la ref pour listerSplitsAction (TX-B3bis) : une ref malformée DOIT
+// être rejetée — l'action lève alors plutôt que de renvoyer [] (anti-perte de
+// données : un [] silencieux ferait dé-catégoriser au Valider).
+describe("refTransactionSchema", () => {
+  it("accepte une ref valide (uuid + date)", () => {
+    expect(
+      refTransactionSchema.safeParse({ transactionId: UUID, transactionDate: "2026-03-15" })
+        .success,
+    ).toBe(true);
+  });
+  it("REFUSE un transactionId non-uuid", () => {
+    expect(
+      refTransactionSchema.safeParse({ transactionId: "x", transactionDate: "2026-03-15" })
+        .success,
+    ).toBe(false);
+  });
+  it("REFUSE une date malformée", () => {
+    expect(
+      refTransactionSchema.safeParse({ transactionId: UUID, transactionDate: "15/03/2026" })
+        .success,
+    ).toBe(false);
+  });
+  it("REFUSE une clé inattendue (strict — pas de workspace_id injecté)", () => {
+    expect(
+      refTransactionSchema.safeParse({
+        transactionId: UUID,
+        transactionDate: "2026-03-15",
+        workspaceId: UUID,
+      } as Record<string, unknown>).success,
+    ).toBe(false);
   });
 });
 

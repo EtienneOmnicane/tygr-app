@@ -28,11 +28,14 @@ import {
   CategorieIntrouvableError,
   CurseurInvalideError,
   type PageTransactions,
+  type RefTransaction,
+  type SplitLu,
   TransactionIntrouvableError,
   VentilationDepasseError,
   archiverCategorie,
   creerCategorie,
   listerCategories,
+  listerSplits,
   listerTransactions,
   remplacerSplits,
   renommerCategorie,
@@ -41,6 +44,7 @@ import {
 import {
   archiverCategorieSchema,
   creerCategorieSchema,
+  refTransactionSchema,
   remplacerSplitsSchema,
   renommerCategorieSchema,
 } from "@/lib/categorisation-schema";
@@ -100,6 +104,53 @@ function echec(
 export async function listerCategoriesAction(): Promise<CategorieDTO[]> {
   const session = await exigerSessionWorkspace();
   return withWorkspace(session, (tx, ctx) => listerCategories(tx, ctx));
+}
+
+/** Split renvoyé au client (miroir de `SplitUI` du contrat UI). */
+export interface SplitDTO {
+  id: string;
+  categoryId: string;
+  amount: string;
+  source: SplitLu["source"];
+  ruleId: string | null;
+}
+
+/**
+ * Lecture des splits existants d'UNE transaction (TX-B3bis), pour PRÉ-REMPLIR la
+ * modale de ventilation à son ouverture. Contrat UI : `listerSplits(ref) →
+ * Promise<SplitUI[]>` (tableau DIRECT, pas d'enveloppe ResultatAction — cohérent
+ * avec listerCategoriesAction).
+ *
+ * SÉCURITÉ DONNÉES (raison d'être de ce ticket) : si la lecture échoue (ref
+ * invalide ou panne), on LÈVE une exception au lieu de renvoyer `[]`. Un `[]`
+ * silencieux ferait croire à la modale « 0 split » sur une transaction pourtant
+ * ventilée → un clic « Valider » la dé-catégoriserait (remplacerSplits([])). Le
+ * Front DOIT distinguer « pas de split » de « chargement impossible » : la 1re est
+ * un tableau vide légitime, la 2de une exception (modale non ouverte en mode vide).
+ *
+ * Authz : exigerSessionWorkspace + withWorkspace ; la RLS scope `listerSplits` au
+ * workspace courant → une ref d'un autre tenant renvoie simplement 0 ligne (jamais
+ * de fuite). `workspace_id` n'est JAMAIS un paramètre client.
+ */
+export async function listerSplitsAction(
+  ref: RefTransaction,
+): Promise<SplitDTO[]> {
+  const session = await exigerSessionWorkspace();
+  const parsed = refTransactionSchema.safeParse(ref);
+  if (!parsed.success) {
+    // Ref malformée = bug d'intégration (la ref vient de notre propre liste), pas
+    // un cas utilisateur. On échoue BRUYAMMENT plutôt que de masquer en `[]`.
+    console.warn(
+      JSON.stringify({
+        evt: "categorisation_echec",
+        action: "lister-splits",
+        workspaceId: session.activeWorkspaceId,
+        code: "INVALID_PARAMS",
+      }),
+    );
+    throw new Error("Référence de transaction invalide.");
+  }
+  return withWorkspace(session, (tx, ctx) => listerSplits(tx, ctx, parsed.data));
 }
 
 /**
