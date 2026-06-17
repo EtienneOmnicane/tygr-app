@@ -79,6 +79,8 @@ export function TransactionsFeature({
 
   const [modale, setModale] = useState<ModaleEnCours | null>(null);
   const [ouvertureEnCours, setOuvertureEnCours] = useState<string | null>(null);
+  /** Échec de chargement des splits à l'ouverture → on N'OUVRE PAS la modale. */
+  const [erreurOuverture, setErreurOuverture] = useState(false);
 
   /** (Re)charge la PREMIÈRE page pour un jeu de filtres donné (reset curseur). */
   const rechargerPremierePage = useCallback(
@@ -119,16 +121,29 @@ export function TransactionsFeature({
     setChargement(false);
   }
 
-  /** Clic sur une ligne : charge ses splits puis ouvre la modale. */
+  /**
+   * Clic sur une ligne : charge ses splits PUIS ouvre la modale. `chargerSplits`
+   * (→ listerSplitsAction) LÈVE en cas d'échec plutôt que de renvoyer [] : on NE
+   * DOIT PAS ouvrir la modale sur un état faussement vide, sinon un « Valider »
+   * écraserait des splits existants (perte de données). En cas d'exception : alerte
+   * et abandon de l'ouverture.
+   */
   async function ouvrirVentilation(transaction: TransactionListItem) {
     const cle = `${transaction.transactionId}:${transaction.transactionDate}`;
     setOuvertureEnCours(cle);
-    const splits = await actions.chargerSplits({
-      transactionId: transaction.transactionId,
-      transactionDate: transaction.transactionDate,
-    });
-    setOuvertureEnCours(null);
-    setModale({ transaction, initialSplits: splits });
+    setErreurOuverture(false);
+    try {
+      const splits = await actions.chargerSplits({
+        transactionId: transaction.transactionId,
+        transactionDate: transaction.transactionDate,
+      });
+      setModale({ transaction, initialSplits: splits });
+    } catch {
+      // Échec de chargement → on bloque l'ouverture (anti-écrasement).
+      setErreurOuverture(true);
+    } finally {
+      setOuvertureEnCours(null);
+    }
   }
 
   /** Après un remplacement réussi : recharger la page courante de façon ciblée. */
@@ -207,6 +222,42 @@ export function TransactionsFeature({
         <p className="sr-only" role="status">
           Ouverture de la ventilation…
         </p>
+      )}
+
+      {/* Échec de chargement des splits → la modale ne s'est PAS ouverte. Erreur
+          système (§3.4) : fond danger-bg + icône + message, jamais un simple rouge. */}
+      {erreurOuverture && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-card bg-danger-bg px-4 py-3 text-sm text-danger"
+        >
+          <svg
+            aria-hidden
+            viewBox="0 0 24 24"
+            className="mt-0.5 h-5 w-5 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <line x1="12" y1="8" x2="12" y2="13" />
+            <line x1="12" y1="16" x2="12" y2="16" />
+          </svg>
+          <span className="flex-1">
+            Erreur de chargement de la ventilation. La transaction n’a pas été
+            ouverte — réessayez dans un instant.
+          </span>
+          <button
+            type="button"
+            onClick={() => setErreurOuverture(false)}
+            className="shrink-0 font-medium underline underline-offset-2
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+          >
+            Fermer
+          </button>
+        </div>
       )}
 
       {/* Modale de ventilation — montée quand une transaction est sélectionnée. */}
