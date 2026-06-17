@@ -83,6 +83,18 @@ export interface ActionsCategorisation {
   ajouterSplit(input: AjoutSplitManuelUI): Promise<ResultatAction<{ splitId: string }>>;
   /** Retire un split (correction). Pas de `modifier` côté serveur : retirer + ré-ajouter. */
   supprimerSplit(splitId: string): Promise<ResultatAction>;
+  /**
+   * Remplace ATOMIQUEMENT l'ensemble des splits d'une transaction par l'état cible
+   * (tout-ou-rien : supprime+insère le diff EN UNE transaction, valide la somme ≤
+   * |montant| une seule fois). Évite l'état partiel d'une boucle ajouter/supprimer
+   * non atomique. Utilisé par SplitAllocationModal (édition optimiste locale → sync
+   * au Valider, décision design D4 du plan-design-review 2026-06-17).
+   * ⚠️ À LIVRER côté serveur (le repository actuel n'a que ajouter/supprimer/lister).
+   */
+  remplacerSplits(
+    ref: RefTransactionUI,
+    splits: Array<{ categoryId: string; amount: string }>,
+  ): Promise<ResultatAction>;
 }
 
 /**
