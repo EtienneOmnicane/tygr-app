@@ -5,18 +5,18 @@
  * (Suspense natif → `loading.tsx`), puis le conteneur CLIENT `TransactionsFeature`
  * gère filtres / pagination / ouverture de la SplitAllocationModal.
  *
- * ⚠️ CONTRAT-FIRST (frontière UI/Backend, 2026-06-17) : l'UI est complète et câblée
- * contre le contrat `ActionsTransactions`. Il MANQUE deux Server Actions côté
- * Backend (liste de courses B1/B3 — cf. PLAN-transactions-page.md, entrée TODOS) :
- *   - `listerTransactionsAction` (lecture paginée + résumé de ventilation),
- *   - `listerSplitsAction` (détail des splits à l'ouverture de la modale).
- * Tant qu'elles ne sont pas livrées, `actionsTransactions` renvoie une page VIDE
- * (l'écran montre l'Empty State, sans planter). Le branchement final = remplacer le
- * corps de ces deux closures par l'appel aux Server Actions (une ligne chacune).
- * La preuve visuelle du tableau peuplé se fait via `/demo/transactions`.
+ * CÂBLAGE FINAL (2026-06-17) : les Server Actions Backend sont livrées et branchées —
+ *   - `listerTransactionsAction` (lecture paginée par curseur + résumé ventilation),
+ *   - `listerSplitsAction` (détail des splits à l'ouverture de la modale ; LÈVE une
+ *     exception en cas d'échec plutôt que de renvoyer [] → la modale ne s'ouvre pas
+ *     sur un état faussement vide qui écraserait les splits au Valider),
+ *   - `remplacerSplitsAction` (écriture atomique).
+ * La réconciliation des contrats Backend↔UI vit dans `./adapter` (statut, compteNom,
+ * curseur opaque, libellé non-PII). La 1re page est chargée ICI (RSC) ; le conteneur
+ * recharge/paginera côté client via les mêmes actions.
  *
- * Authz (règle 3) : exigerSessionWorkspace + withWorkspace. Catégories & comptes
- * lus côté serveur. Mapping erreurs : non auth → /login ; aucun workspace → /selection.
+ * Authz (règle 3) : exigerSessionWorkspace + withWorkspace. Mapping erreurs :
+ * non auth → /login ; aucun workspace → /selection.
  */
 import { redirect } from "next/navigation";
 
@@ -28,13 +28,19 @@ import {
 } from "@/server/auth/session";
 
 import { TransactionsFeature } from "@/components/transactions";
-import type { ActionsTransactions } from "@/components/transactions/types-transactions";
+import type {
+  ActionsTransactions,
+  PageTransactions,
+} from "@/components/transactions/types-transactions";
 import type { CategorieUI, SplitUI } from "@/components/ui/category";
 
 import {
   listerCategoriesAction,
+  listerSplitsAction,
+  listerTransactionsAction,
   remplacerSplitsAction,
 } from "./actions";
+import { versInputBackend, versPageUI } from "./adapter";
 
 export const metadata = { title: "Transactions — TYGR" };
 
@@ -52,7 +58,7 @@ export default async function PageTransactions() {
     throw erreur;
   }
 
-  // Données déjà disponibles côté serveur (existant).
+  // Données serveur : catégories (modale), comptes (filtre + résolution compteNom).
   const [categoriesDTO, comptes] = await Promise.all([
     listerCategoriesAction(),
     withWorkspace(session, (tx) => listerComptes(tx)),
@@ -69,21 +75,36 @@ export default async function PageTransactions() {
     bankAccountId: c.bankAccountId,
     nom: c.accountName,
   }));
+  const nomParCompte = new Map(
+    comptes.map((c) => [c.bankAccountId, c.accountName]),
+  );
   const aucuneBanque = comptes.length === 0;
 
-  // ⚠️ STUB CONTRAT-FIRST — à remplacer par les Server Actions Backend (B1/B3).
-  // Ce ne sont PAS de nouvelles Server Actions : juste des closures de page qui
-  // renverront l'appel réel dès qu'il existe. Page vide en attendant (≠ plantage).
+  // Surface d'actions RÉELLE injectée au conteneur. Les closures pontent l'UI vers
+  // les Server Actions Backend en passant par l'adaptateur de contrat. La résolution
+  // de compteNom réutilise la map des comptes côté serveur (pas de requête en plus).
   const actionsTransactions: ActionsTransactions = {
-    async listerTransactions() {
-      // TODO(Backend B1) : return (await listerTransactionsAction(args));
-      return { ok: true, data: { lignes: [], curseurSuivant: null } };
+    async listerTransactions({ curseur, filtres }) {
+      "use server";
+      const res = await listerTransactionsAction(
+        versInputBackend(filtres, curseur),
+      );
+      if (!res.ok) return res;
+      return { ok: true, data: versPageUI(res.data, nomParCompte) };
     },
-    async chargerSplits(): Promise<SplitUI[]> {
-      // TODO(Backend B3bis) : return (await listerSplitsAction(ref));
-      return [];
+    async chargerSplits(ref): Promise<SplitUI[]> {
+      "use server";
+      // listerSplitsAction LÈVE en cas d'échec (jamais [] faussement vide) — le
+      // conteneur catche et bloque l'ouverture de la modale (anti-écrasement).
+      return listerSplitsAction(ref);
     },
   };
+
+  // Première page (RSC) — rendue immédiatement, puis paginée/filtrée côté client.
+  const premiere = await listerTransactionsAction(versInputBackend(undefined, null));
+  const initial: PageTransactions = premiere.ok
+    ? versPageUI(premiere.data, nomParCompte)
+    : { lignes: [], curseurSuivant: null };
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
@@ -96,7 +117,7 @@ export default async function PageTransactions() {
       </div>
 
       <TransactionsFeature
-        initial={{ lignes: [], curseurSuivant: null }}
+        initial={initial}
         categories={categories}
         comptes={comptesFiltre}
         actions={actionsTransactions}

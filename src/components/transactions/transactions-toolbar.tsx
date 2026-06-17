@@ -15,22 +15,11 @@ import type {
   StatutCategorisation,
 } from "./types-transactions";
 
-/** Concatène des classes en ignorant les valeurs falsy. Pas de clsx (règle 9). */
-function cn(...classes: Array<string | false | null | undefined>): string {
-  return classes.filter(Boolean).join(" ");
-}
-
 /** Un compte connecté, pour le filtre par compte. */
 export interface CompteFiltre {
   bankAccountId: string;
   nom: string;
 }
-
-const SEGMENTS_SENS: Array<{ valeur: "Credit" | "Debit" | undefined; label: string }> = [
-  { valeur: undefined, label: "Tout" },
-  { valeur: "Credit", label: "Entrées" },
-  { valeur: "Debit", label: "Sorties" },
-];
 
 const OPTIONS_STATUT: Array<{ valeur: StatutCategorisation | ""; label: string }> = [
   { valeur: "", label: "Tous statuts" },
@@ -59,33 +48,10 @@ export function TransactionsToolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* Sens — segmented control */}
-      <div
-        role="group"
-        aria-label="Filtrer par sens"
-        className="inline-flex gap-1 rounded-control bg-surface-inset p-1"
-      >
-        {SEGMENTS_SENS.map((s) => {
-          const actif = filtres.sens === s.valeur;
-          return (
-            <button
-              key={s.label}
-              type="button"
-              aria-pressed={actif}
-              disabled={disabled}
-              onClick={() => onChange({ ...filtres, sens: s.valeur })}
-              className={cn(
-                "rounded-[6px] px-4 py-1.5 text-sm transition-colors disabled:opacity-[0.48]",
-                actif
-                  ? "bg-ink font-semibold text-text-onink"
-                  : "font-medium text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-              )}
-            >
-              {s.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* NB : le filtre Sens (Entrées/Sorties) n'est PAS exposé en v1 — le schéma de
+          lecture Backend ne supporte pas encore ce filtre (pas de champ `sens`,
+          .strict). Le filtrer côté client casserait la pagination (pages tronquées).
+          À ré-activer dès que Backend l'ajoute (tracé TODOS TX-FILTRE1). */}
 
       {/* Compte — seulement si plusieurs comptes */}
       {comptes.length > 1 && (

@@ -144,7 +144,6 @@ export default function TransactionsDemoPage() {
       }) {
         const f = args.filtres ?? {};
         const lignes = LIGNES.filter((l) => {
-          if (f.sens && l.sens !== f.sens) return false;
           if (f.bankAccountId && l.bankAccountId !== f.bankAccountId) return false;
           if (f.statutCategorisation && l.statutCategorisation !== f.statutCategorisation)
             return false;
@@ -153,6 +152,12 @@ export default function TransactionsDemoPage() {
         return { ok: true as const, data: { lignes, curseurSuivant: null } };
       },
       async chargerSplits(ref) {
+        // Démonstration du garde-fou : la ligne « t5 » simule un échec serveur —
+        // chargerSplits LÈVE (comme listerSplitsAction), le conteneur bloque alors
+        // l'ouverture de la modale et affiche l'alerte (anti-écrasement).
+        if (ref.transactionId === "t5") {
+          throw new Error("Échec simulé de chargement des splits (démo).");
+        }
         return SPLITS[ref.transactionId] ?? [];
       },
     }),

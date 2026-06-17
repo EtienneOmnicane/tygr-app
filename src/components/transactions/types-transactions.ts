@@ -62,20 +62,19 @@ export interface TransactionListItem {
 }
 
 /**
- * Curseur de pagination (B1) — pagination par CURSEUR, pas OFFSET (la table grossit,
- * l'ordre `(transaction_date desc, booking_date_time desc, id)` est stable et indexé).
- * Opaque côté UI : on le renvoie tel quel pour la page suivante.
+ * Curseur de pagination (B1) — pagination par CURSEUR, pas OFFSET. OPAQUE côté UI :
+ * le Backend l'encode en chaîne base64url (détail interne : `transaction_date|id`) ;
+ * l'UI ne le décode jamais, elle le renvoie tel quel pour la page suivante. Aligné
+ * sur le contrat serveur livré (`PageTransactions.curseurSuivant: string | null`).
  */
-export interface CurseurTransactions {
-  transactionDate: string;
-  bookingDateTime: string;
-  id: string;
-}
+export type CurseurTransactions = string;
 
-/** Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ». */
+/**
+ * Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ».
+ * NB : pas de filtre `sens` (Entrées/Sorties) — non supporté par le schéma de
+ * lecture Backend v1 ; le filtrer côté client casserait la pagination (TX-FILTRE1).
+ */
 export interface FiltresTransactions {
-  /** Restreindre au sens (entrées OU sorties). */
-  sens?: "Credit" | "Debit";
   /** Restreindre à un compte connecté. */
   bankAccountId?: string;
   /** Restreindre par statut de ventilation. */
@@ -106,9 +105,13 @@ export interface ActionsTransactions {
   }): Promise<ResultatAction<PageTransactions>>;
   /**
    * Détail des splits d'une transaction, chargé À L'OUVERTURE de la modale de
-   * ventilation (la liste ne porte qu'un RÉSUMÉ — B2 option éco). Le repository a
-   * déjà `listerSplits` ; il MANQUE la Server Action `listerSplitsAction` qui
-   * l'expose au client (B3bis — à LIVRER côté serveur, voir plan §1).
+   * ventilation (la liste ne porte qu'un RÉSUMÉ — B2 option éco). Pont vers
+   * `listerSplitsAction` (B3bis, livrée).
+   *
+   * ⚠️ PEUT LEVER : en cas d'échec, l'action serveur LÈVE une exception plutôt que
+   * de renvoyer `[]` — sinon la modale s'ouvrirait sur un état faussement vide et un
+   * « Valider » écraserait les splits existants. L'appelant DOIT try/catch et NE PAS
+   * ouvrir la modale en cas d'erreur (cf. `ouvrirVentilation` du conteneur).
    */
   chargerSplits(ref: {
     transactionId: string;

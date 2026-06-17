@@ -5,36 +5,45 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
-### Page /transactions — contrat-first, dépendances Backend (UI, 2026-06-17)
+### Page /transactions — câblée et opérationnelle (UI, 2026-06-17)
 
-L'UI complète de `/transactions` (table dense, filtres, pagination, injection
-SplitAllocationModal) est livrée et câblée contre le contrat
-`src/components/transactions/types-transactions.ts` (pattern éprouvé Pilier 1).
-Trois Server Actions / lectures MANQUENT côté Backend ; tant qu'elles n'existent
-pas, `page.tsx` branche des closures-stub qui renvoient une page VIDE (l'écran
-montre l'Empty State, sans planter). Branchement final = remplacer le corps de
-deux closures (une ligne chacune).
+L'UI complète de `/transactions` (table dense, pagination, injection
+SplitAllocationModal) est livrée ET câblée sur les vraies Server Actions Backend.
+La réconciliation des contrats Backend↔UI vit dans
+`src/app/(workspace)/transactions/adapter.ts` (statut MAJ→min, compteNom via map
+comptes, curseur opaque string + hasMore, libellé non-PII).
 
-- [ ] **TX-B1 (P1) — `listerTransactionsAction` (lecture paginée + filtres)** —
-      Effort M. Déclencheur : démarrage de l'exploitation de `/transactions` en
-      conditions réelles. Repository paginé par CURSEUR (ordre
-      `(transaction_date desc, booking_date_time desc, id)`, déjà indexé),
-      `is_removed = false`, scopé `withWorkspace`. Filtres : `sens`,
-      `bankAccountId`, `statutCategorisation`. Le repo n'a aujourd'hui que
-      `transactionsRecentes` (plafonné à 8, sans pagination ni filtre).
-- [ ] **TX-B2 (P1) — résumé de ventilation par ligne** — Effort M (couplé à B1).
-      La lecture doit rapporter, par transaction, `statutCategorisation`
-      (`non_categorise|partiel|complet`), `nbCategories`, et (si nbCategories===1)
-      `categorie {id,name}` — pour afficher le badge SANS requête N+1. Option éco
-      retenue (UI reco) : le DÉTAIL des splits reste chargé à l'ouverture de la
-      modale via B3bis.
-- [ ] **TX-B3bis (P1) — `listerSplitsAction`** — Effort S. Le repository a déjà
-      `listerSplits` ; il MANQUE la Server Action qui l'expose au client (la modale
-      charge `initialSplits` au clic). Sans elle, la ventilation s'ouvre vide.
+- [x] **TX-B1 — `listerTransactionsAction` (lecture paginée + filtres)** — LIVRÉ
+      (Backend, PR #45) + CÂBLÉ (PR à suivre). Pagination keyset, filtres
+      `bankAccountId` + `statut`.
+- [x] **TX-B2 — résumé de ventilation par ligne** — LIVRÉ + CÂBLÉ. Backend renvoie
+      `statut` + `nbSplits` (PAS la catégorie unique nommée → l'UI affiche un badge
+      de comptage générique « 1 catégorie » / « N catégories »).
+- [x] **TX-B3bis — `listerSplitsAction`** — LIVRÉ (Backend) + CÂBLÉ. LÈVE une
+      exception en cas d'échec (≠ `[]` faussement vide) ; le conteneur try/catch et
+      BLOQUE l'ouverture de la modale (alerte « Erreur de chargement ») —
+      anti-écrasement des splits. Vérifié au Visual QA (ligne t5 de la démo).
 
-Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants
-(elles sont en LECTURE seule, scopées RLS) → consignables (≠ interdites). Plan de
-référence : `PLAN-transactions-page.md`.
+Dettes ouvertes héritées du câblage :
+
+- [ ] **TX-FILTRE1 (P2) — filtre Sens (Entrées/Sorties) absent** — Effort S
+      (gardien Backend). Le schéma de lecture (`listerTransactionsSchema`, `.strict`)
+      n'a pas de champ `sens`/`creditDebit` ; le segmented control Sens a donc été
+      RETIRÉ de la toolbar v1 (le filtrer côté client casserait la pagination —
+      pages tronquées). **Déclencheur** : première demande utilisateur de filtrer
+      entrées/sorties. Backend ajoute `sens` au schéma + au WHERE (colonne
+      `credit_debit` indexable) ; l'UI ré-active le segmented (commenté dans
+      `transactions-toolbar.tsx`) + le champ `FiltresTransactions.sens` + le mapping
+      dans `adapter.ts:versInputBackend`.
+- [ ] **TX-BADGE1 (P2) — nom de la catégorie unique sur la ligne** — Effort S
+      (gardien Backend). Quand `nbSplits===1`, la liste affiche « 1 catégorie »
+      générique faute du nom (B2 ne renvoie pas `categorie {id,name}`). **Déclencheur** :
+      retour UX « je veux voir la catégorie sans cliquer ». Backend enrichit la ligne
+      du `categoryId`/`categoryName` quand il n'y a qu'un split ; l'UI peuple alors
+      `TransactionListItem.categorie` (déjà prévu au type) → `CategoryBadge` nommé.
+
+Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants.
+Plan de référence : `PLAN-transactions-page.md`.
 
 ### Findings QA nav + Empty States (UI, 2026-06-17)
 
