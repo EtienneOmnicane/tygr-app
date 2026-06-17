@@ -5,6 +5,55 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Page /transactions — contrat-first, dépendances Backend (UI, 2026-06-17)
+
+L'UI complète de `/transactions` (table dense, filtres, pagination, injection
+SplitAllocationModal) est livrée et câblée contre le contrat
+`src/components/transactions/types-transactions.ts` (pattern éprouvé Pilier 1).
+Trois Server Actions / lectures MANQUENT côté Backend ; tant qu'elles n'existent
+pas, `page.tsx` branche des closures-stub qui renvoient une page VIDE (l'écran
+montre l'Empty State, sans planter). Branchement final = remplacer le corps de
+deux closures (une ligne chacune).
+
+- [ ] **TX-B1 (P1) — `listerTransactionsAction` (lecture paginée + filtres)** —
+      Effort M. Déclencheur : démarrage de l'exploitation de `/transactions` en
+      conditions réelles. Repository paginé par CURSEUR (ordre
+      `(transaction_date desc, booking_date_time desc, id)`, déjà indexé),
+      `is_removed = false`, scopé `withWorkspace`. Filtres : `sens`,
+      `bankAccountId`, `statutCategorisation`. Le repo n'a aujourd'hui que
+      `transactionsRecentes` (plafonné à 8, sans pagination ni filtre).
+- [ ] **TX-B2 (P1) — résumé de ventilation par ligne** — Effort M (couplé à B1).
+      La lecture doit rapporter, par transaction, `statutCategorisation`
+      (`non_categorise|partiel|complet`), `nbCategories`, et (si nbCategories===1)
+      `categorie {id,name}` — pour afficher le badge SANS requête N+1. Option éco
+      retenue (UI reco) : le DÉTAIL des splits reste chargé à l'ouverture de la
+      modale via B3bis.
+- [ ] **TX-B3bis (P1) — `listerSplitsAction`** — Effort S. Le repository a déjà
+      `listerSplits` ; il MANQUE la Server Action qui l'expose au client (la modale
+      charge `initialSplits` au clic). Sans elle, la ventilation s'ouvre vide.
+
+Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants
+(elles sont en LECTURE seule, scopées RLS) → consignables (≠ interdites). Plan de
+référence : `PLAN-transactions-page.md`.
+
+### Findings QA nav + Empty States (UI, 2026-06-17)
+
+- [ ] **Routes `/demo/*` redirigées vers `/login` (P1, sécurité/routing)** —
+  relevé par /qa 2026-06-17. Effort S (~2 lignes, gardien Backend). Le matcher
+  de `src/proxy.ts:31-33` n'exclut pas `demo` de l'allowlist, donc les routes de
+  démo (conçues hors auth/DB pour le Visual QA Gate 4, cf. commentaire de
+  `src/app/demo/dashboard-states/page.tsx`) renvoient `307 → /login`. Casse le
+  workflow Visual QA documenté en CLAUDE.md. **Déclencheur de résolution** :
+  prochaine session Visual QA des états, ou au plus tard avant le premier
+  déploiement (P1). À trancher : rendre `/demo` public (ajouter `demo` au
+  matcher) OU corriger le commentaire « hors auth » si la protection est voulue.
+  Surface auth → ne pas corriger en tant qu'Agent UI.
+- [ ] **Empty State de section : débordement header mobile 375px (P2, UI démo)** —
+  relevé par /qa 2026-06-17. Effort S. Le chrome reconstitué EN DUR de
+  `/demo/dashboard-states` (pas le vrai shell) casse à 375px : badge « Démo · Visual
+  QA » sur 3 lignes, nav qui déborde (« Transactions » coupé). **Déclencheur** :
+  chantier responsive / TODO P2 UI-ES1. Hors production, n'affecte que la capture.
+
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 
 Symptôme : base injoignable (Neon/wsproxy down) → 500 brut + crash de
