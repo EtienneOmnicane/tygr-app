@@ -5,6 +5,53 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
+
+Symptôme : base injoignable (Neon/wsproxy down) → 500 brut + crash de
+sérialisation Next (« Only plain objects can be passed to Client Components »),
+car l'erreur du driver Neon porte une `cause: ErrorEvent` (classe DOM non
+sérialisable). Corrigé (branche `fix/workspace-db-error-ux`) :
+- `ServiceIndisponibleError` (`session.ts`) : `exigerSessionWorkspace` convertit
+  l'erreur d'infra du chemin E6 (`estActif`) en une Error PROPRE sérialisable —
+  **FAIL-CLOSED conservé** (DB injoignable ⇒ accès refusé, jamais « supposé
+  actif »). Vérifié : compte désactivé → /login (métier), DB down → écran infra.
+- `(workspace)/layout.tsx` : helper `gererErreurInfra` qui **rend `AppErrorState`
+  directement** (« Service momentanément indisponible », `role=alert`, sans fuite
+  technique) pour TOUTE erreur d'infra — `ServiceIndisponibleError` du chemin E6
+  ET une panne brute survenant pendant `withWorkspace`/`membershipsAvecNom`
+  (axe 5 de la cross-review). Garde-fous dans l'ordre : `unstable_rethrow`
+  (re-lance redirect/notFound — jamais avalés), `UnsafeDatabaseRoleError`
+  re-`throw` (refus de sécurité C6, pas un « réessayez »), reste → écran. Prouvé
+  en prod (standalone) : panne (début ET pendant) → HTTP 200 + écran propre ;
+  nominal, redirect sans cookie, et fail-closed (compte désactivé → /login)
+  intacts.
+- `components/ui/states/app-error-state.tsx` : état d'erreur transverse (§3.4).
+- `app/global-error.tsx` : filet ultime pour une panne du ROOT layout.
+
+Cross-review Sécurité (contexte frais) : **feu vert**, fail-closed solide sur les
+3 axes critiques (estActif lève ⇒ jamais de session retournée ; layout court-
+circuite le shell ; désactivé ≠ panne). 1 constat MINEUR non-sécurité (axe 5)
+**corrigé** ci-dessus par `gererErreurInfra`.
+
+⚠️ **SAVOIR TRIBAL Next 16.2 (vérifié empiriquement, contre-intuitif)** : un
+`error.tsx` / `global-error.tsx` NE capture PAS une exception levée par le
+**data-fetching d'un layout pendant le SSR initial**. Testé : `(workspace)/
+error.tsx`, `app/error.tsx` (absent du build), `global-error.tsx` — AUCUN ne
+monte (leurs `console.error` ne s'exécutent jamais), Next sert sa 500 par
+défaut. La seule voie fiable = **le layout gère l'erreur lui-même** (try/catch +
+rendu direct), PAS un boundary. Conséquence : ne pas « ajouter un error.tsx »
+pour fiabiliser un layout qui fetch — gérer dans le layout, ou sortir le fetch
+(approche Next recommandée). `app/error.tsx`/`(workspace)/error.tsx` ont été
+RETIRÉS (redondants : le layout court-circuite avant les pages).
+
+- [ ] **UX-ERR1 (P2) — bouton « Réessayer » fonctionnel sur l'écran d'erreur du
+  layout** — Effort S (déclencheur : si l'incident DB devient visible en démo).
+  L'`AppErrorState` rendu par le layout RSC n'a PAS de `onRetry` (un handler
+  client est impossible dans un Server Component). L'utilisateur doit recharger
+  la page à la main. Option : un petit Client Component « bouton recharger »
+  (`location.reload()`) ou un `<a href>` vers la même URL. Cosmétique ; le
+  rechargement manuel marche déjà.
+
 ### Empty States transverses (UI, 2026-06-17)
 
 - [ ] **UI-ES1 (P2) — faire dériver `DashboardEmptyState` du `EmptyState` générique**
