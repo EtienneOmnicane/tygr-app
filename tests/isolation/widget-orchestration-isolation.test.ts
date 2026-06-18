@@ -298,6 +298,9 @@ describe("finaliserConnexionsDropin — payload multi-connexions du hook", () =>
     expect(r.echecs).toBe(0);
     expect(r.comptesRattaches).toBe(2);
     expect(c.echangerPublicToken).toHaveBeenCalledTimes(2);
+    // WIDGET-RD1 : `echecs === 0` est la SOURCE du drapeau `complet` exposé par
+    // finaliserConnexionDropinAction (succès TOTAL → le Front redirige).
+    expect(r.echecs === 0).toBe(true);
   });
 
   it("succès partiel (fail-soft) : une connexion échoue, l'autre est persistée", async () => {
@@ -306,6 +309,9 @@ describe("finaliserConnexionsDropin — payload multi-connexions du hook", () =>
     expect(r.reussies).toHaveLength(1);
     expect(r.echecs).toBe(1);
     expect(r.comptesRattaches).toBe(1);
+    // WIDGET-RD1 : ≥ 1 échec → `complet` vaut false (succès PARTIEL → pas de
+    // redirection auto, on ne masque pas l'échec).
+    expect(r.echecs === 0).toBe(false);
   });
 
   it("toutes les connexions échouent → rejette (jamais de faux succès)", async () => {
