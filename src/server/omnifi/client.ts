@@ -260,7 +260,7 @@ export class OmniFiClient {
     pagination: { page?: number; pageSize?: number } = {},
   ): Promise<OmniFiEnveloppe<OmniFiConnectionsData>> {
     return this.requete<OmniFiConnectionsData>("/connections", {
-      query: { clientUserId, page: pagination.page, pageSize: pagination.pageSize },
+      query: { client_user_id: clientUserId, page: pagination.page, pageSize: pagination.pageSize },
     });
   }
 
@@ -298,7 +298,7 @@ export class OmniFiClient {
   ): Promise<OmniFiTransactionsSyncData> {
     const enveloppe = await this.requete<OmniFiTransactionsSyncData>(
       `/accounts/${encodeURIComponent(accountId)}/transactions/sync`,
-      { query: { clientUserId, cursor: options.cursor, count: options.count } },
+      { query: { client_user_id: clientUserId, cursor: options.cursor, count: options.count } },
     );
     return enveloppe.Data;
   }
@@ -313,7 +313,7 @@ export class OmniFiClient {
   ): Promise<OmniFiTransactionsSummaryData> {
     const enveloppe = await this.requete<OmniFiTransactionsSummaryData>(
       `/accounts/${encodeURIComponent(accountId)}/transactions/summary`,
-      { query: { clientUserId, ...bornes } },
+      { query: { client_user_id: clientUserId, ...bornes } },
     );
     return enveloppe.Data;
   }
@@ -412,7 +412,7 @@ export class OmniFiClient {
   ): Promise<OmniFiSyncJob> {
     const env = await this.requete<OmniFiSyncJob>(
       `/sync/job/${encodeURIComponent(jobId)}`,
-      { auth: authApiKey(), query: { clientUserId } },
+      { auth: authApiKey(), query: { client_user_id: clientUserId } },
     );
     return env.Data;
   }
@@ -507,7 +507,7 @@ export class OmniFiClient {
       auth: authApiKey(),
       query: {
         connectionId,
-        clientUserId,
+        client_user_id: clientUserId,
         page: pagination.page,
         pageSize: pagination.pageSize,
       },
