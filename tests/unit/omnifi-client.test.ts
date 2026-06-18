@@ -63,7 +63,9 @@ describe("chemin heureux — décodage d'enveloppe", () => {
     expect(r.Data).toEqual(data); // Q2 : enveloppe complète (Data + Links/Meta)
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("/connections");
-    expect(url).toContain("clientUserId=user-123");
+    // Omni-FI lit le param en snake_case (ResolveEndUser → query_params.get("client_user_id")).
+    // En camelCase il renvoie 403 (param ignoré). Vérifié runtime 2026-06-18.
+    expect(url).toContain("client_user_id=user-123");
     expect(url).toContain("pageSize=50");
     expect(url).not.toContain("page="); // valeur undefined omise
     const headers = (init as RequestInit).headers as Record<string, string>;
@@ -362,7 +364,7 @@ describe("configuration (lecture d'env, règle 8)", () => {
     await client.listerConnexions(CLIENT_USER_ID);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      "https://api-stage.omni-fi.co/connections?clientUserId=user-123",
+      "https://api-stage.omni-fi.co/connections?client_user_id=user-123",
     );
   });
 });

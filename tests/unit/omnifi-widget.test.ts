@@ -109,16 +109,17 @@ describe("polling sync job", () => {
     const { url, headers } = dernierAppel(f);
     expect(headers.Authorization).toBe("Bearer st_x");
     expect(url).toBe("https://api-stage.omni-fi.co/sync/job/j1");
-    expect(url).not.toContain("clientUserId");
+    expect(url).not.toContain("client_user_id");
   });
 
-  it("getSyncJobServeur (ApiKey) AVEC clientUserId en query", async () => {
+  it("getSyncJobServeur (ApiKey) AVEC client_user_id en query", async () => {
     const f = vi.fn().mockResolvedValue(rep({ Data: { JobId: "j1", InstitutionId: "mcb", Status: "COMPLETED" } }));
     const c = client(f as unknown as typeof fetch);
     await c.getSyncJobServeur("j1", "ws-user-1");
     const { url, headers } = dernierAppel(f);
     expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
-    expect(url).toContain("clientUserId=ws-user-1");
+    // snake_case requis côté Omni-FI (ResolveEndUser) — camelCase → 403.
+    expect(url).toContain("client_user_id=ws-user-1");
   });
 });
 
