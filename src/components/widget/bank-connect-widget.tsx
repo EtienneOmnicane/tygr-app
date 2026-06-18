@@ -23,6 +23,10 @@
  *      `useOmniFILink` et `open()` dès `isReady`.
  *   3. onSuccess → on extrait les `publicToken` de chaque connexion et on appelle
  *      `finaliserConnexionDropinAction(publicTokens)`. onExit/onError → réarme.
+ *   4. Finalisation COMPLÈTE (toutes les banques rattachées) → on emmène
+ *      l'utilisateur sur le Dashboard (`/`), où ses comptes fraîchement connectés
+ *      apparaissent. Finalisation PARTIELLE → on RESTE ici pour montrer ce qui a
+ *      échoué (ne pas masquer un échec derrière une navigation).
  *
  * Sécurité : ni LinkToken ni PublicToken ne sont loggés/persistés côté client
  * (règle 8) ; ils transitent vers les Server Actions. Le gating MANAGER/ADMIN est
@@ -31,6 +35,7 @@
 import { useActionState, useState, useTransition } from "react";
 
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 
 import {
   demarrerConnexionAction,
@@ -39,8 +44,23 @@ import {
   type EtatDemarrage,
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
+import { ROUTE_DASHBOARD, WidgetFeedback } from "./widget-feedback";
 
 const ETAT_DEMARRAGE: EtatDemarrage = { erreur: null, linkToken: null };
+
+/**
+ * Vue UI de l'état de finalisation. Étend le contrat Backend (`EtatFinalisation`)
+ * d'un signal OPTIONNEL `complet` : `true` ssi TOUTES les connexions ont été
+ * finalisées (aucun échec). Il pilote la redirection vers le Dashboard.
+ *
+ * Contract-first : tant que le Backend n'expose pas ce champ, il vaut `undefined`
+ * → la garde « rediriger SEULEMENT si `complet === true` » échoue côté sûr (on
+ * reste sur place et on affiche le succès, jamais de redirection au pif qui
+ * masquerait un succès partiel). Liste de courses Backend : TODOS « WIDGET-RD1 ».
+ */
+type EtatFinalisationUI = EtatFinalisation & { complet?: boolean };
+
+const ETAT_FINALISATION_VIDE: EtatFinalisationUI = { erreur: null, succes: null };
 
 /**
  * Launcher chargé via `next/dynamic` (`ssr:false`) : le hook `useOmniFILink` touche
@@ -62,17 +82,19 @@ export function BankConnectWidget({
   /** Rôle autorisé (MANAGER/ADMIN) — UX seulement ; la barrière réelle est serveur. */
   peutConnecter: boolean;
 }) {
+  const router = useRouter();
   const [demarrage, demarrer, demarrageEnCours] = useActionState(
     demarrerConnexionAction,
     ETAT_DEMARRAGE,
   );
-  const [finalisation, setFinalisation] = useState<EtatFinalisation>({
-    erreur: null,
-    succes: null,
-  });
+  const [finalisation, setFinalisation] =
+    useState<EtatFinalisationUI>(ETAT_FINALISATION_VIDE);
   const [, startFinalisation] = useTransition();
   // Le LinkToken courant monte le launcher. `ferme` réarme après sortie/succès.
   const [ferme, setFerme] = useState(false);
+  // Verrou anti-double-déclenchement : une fois la redirection lancée, on neutralise
+  // l'UI (le launcher peut, en théorie, ré-émettre). `router.push` est async.
+  const [redirection, setRedirection] = useState(false);
   const tokenActif = !ferme ? demarrage.linkToken : null;
 
   function finaliser(publicTokens: string[]) {
@@ -80,8 +102,17 @@ export function BankConnectWidget({
     // échange les publicToken (jamais loggés ici) puis découvre les comptes.
     setFerme(true);
     startFinalisation(async () => {
-      const r = await finaliserConnexionDropinAction(publicTokens);
+      const r: EtatFinalisationUI =
+        await finaliserConnexionDropinAction(publicTokens);
       setFinalisation(r);
+      // Succès COMPLET → on emmène l'utilisateur voir ses comptes sur le Dashboard.
+      // Garde stricte : SEULEMENT si le serveur confirme `complet === true`. En
+      // succès partiel (ou flag pas encore exposé) on reste ici pour afficher
+      // l'état — jamais de redirection qui masquerait un échec (cf. type UI).
+      if (r.erreur === null && r.complet === true) {
+        setRedirection(true);
+        router.push(ROUTE_DASHBOARD);
+      }
     });
   }
 
@@ -89,7 +120,8 @@ export function BankConnectWidget({
     // Re-synchronisation MANUELLE : relit l'état réel côté Omni-FI (GET /connections)
     // et rattache les comptes. Utile pour rafraîchir des connexions existantes, et
     // comme repli si le widget n'a pas finalisé (cf. OMNIFI_API_FEEDBACK.md §5).
-    // Idempotent côté serveur (pas de doublon).
+    // Idempotent côté serveur (pas de doublon). Pas de redirection auto ici : c'est
+    // une action de rattrapage déclenchée par l'utilisateur, il reste maître.
     startFinalisation(async () => {
       const r = await synchroniserConnexionsAction();
       setFinalisation(r);
@@ -127,7 +159,7 @@ export function BankConnectWidget({
             // Réarme : un nouveau démarrage doit ré-ouvrir le widget même après une
             // fermeture précédente (le LinkToken renvoyé sera de nouveau « actif »).
             setFerme(false);
-            setFinalisation({ erreur: null, succes: null });
+            setFinalisation(ETAT_FINALISATION_VIDE);
             demarrer(fd);
           }}
         >
@@ -139,7 +171,7 @@ export function BankConnectWidget({
           />
           <button
             type="submit"
-            disabled={demarrageEnCours || Boolean(tokenActif)}
+            disabled={demarrageEnCours || Boolean(tokenActif) || redirection}
             className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
               px-4 text-sm font-semibold text-text-onink transition-colors
               hover:bg-primary-600 focus:outline-none focus-visible:ring-2
@@ -158,7 +190,7 @@ export function BankConnectWidget({
         <button
           type="button"
           onClick={synchroniser}
-          disabled={Boolean(tokenActif)}
+          disabled={Boolean(tokenActif) || redirection}
           title="Relit vos connexions chez votre banque et rattache les comptes manquants."
           className="inline-flex h-10 items-center gap-1 rounded-control px-2 text-sm
             font-semibold text-primary transition-colors hover:text-primary-600
@@ -169,19 +201,12 @@ export function BankConnectWidget({
         </button>
       </div>
 
-      {demarrage.erreur && (
-        <p role="alert" className="text-sm text-danger">
-          {demarrage.erreur}
-        </p>
-      )}
-      {finalisation.erreur && (
-        <p role="alert" className="text-sm text-danger">
-          {finalisation.erreur}
-        </p>
-      )}
-      {finalisation.succes && (
-        <p className="text-sm text-success">{finalisation.succes}</p>
-      )}
+      <WidgetFeedback
+        erreurDemarrage={demarrage.erreur}
+        erreurFinalisation={finalisation.erreur}
+        succes={finalisation.succes}
+        redirection={redirection}
+      />
     </div>
   );
 }
