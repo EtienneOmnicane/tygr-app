@@ -19,7 +19,8 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 5 | Widget CDN : `postMessage` bloqué (« parentOrigin not established ») → `onSuccess` jamais émis | **Critique** | Contourné (re-sync serveur `GET /connections`) — **fix attendu côté API** |
 | 6 | Auth : confusion `client_id` (« Issuing for ») vs « APICLIENT ID » UUID ; message `401` peu explicite | Moyen | Contourné (deviné le bon identifiant) |
 | 7 | EndUser non auto-créé : `ClientUserId` arbitraire → `404`, non documenté dans le parcours | Moyen | Contourné (`POST /clients/end-users`) |
-| 8 | `GET /connections` → `403 FORBIDDEN` (permission/scope) malgré des credentials valides → **le contournement du #5 est lui-même bloqué** | **Critique** | **Non contournable côté TYGR — fix attendu côté API** |
+| 8 | `GET /connections` → `403 FORBIDDEN` au lieu d'un `404` : l'EndUser ciblé n'existe pas encore (jamais provisionné), mais le code renvoie un `403` trompeur | **Élevé** | **Résolu côté TYGR** (provisioning via `POST /clients/end-users`) — **code de statut à corriger côté API** |
+| 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis (cause-racine confirmée par lecture du code, cf. #5) | **Critique** | **Non contournable côté TYGR — fix attendu côté widget** |
 
 ---
 
@@ -118,7 +119,15 @@ Conséquence : le widget **ne peut jamais envoyer le message de succès** à la 
 
 **Contournement retenu côté TYGR (temporaire, indépendant du postMessage).** Plutôt que d'attendre `onSuccess`, nous **relisons l'état réel côté serveur** via `GET /connections?clientUserId=…` (auth ApiKey), puis `GET /accounts?connectionId=…`, et nous rattachons les comptes — **sans dépendre du canal `postMessage`**. Ce chemin est exposé comme une action de **re-synchronisation manuelle** (bouton « Synchroniser mes connexions »). Le flux nominal `onSuccess` reste en place : dès que le widget sera corrigé, il fonctionnera sans changement de notre côté.
 
-> ⚠️ **Mise à jour 2026-06-18 — ce contournement est désormais lui-même BLOQUÉ.** Lors d'un test de bout en bout, `GET /connections` renvoie **`403 FORBIDDEN`** pour notre client sandbox (voir **§8**), alors que nos credentials sont valides. Les **deux** voies de finalisation sont donc inopérantes : le flux nominal (`onSuccess`, bloqué par `parentOrigin`) **et** le repli serveur (`GET /connections`, bloqué par le 403). L'intégration ne peut plus rien rattraper de son côté tant que ces deux points ne sont pas corrigés côté Omni-FI.
+> **Mise à jour 2026-06-18 — précisions après investigation.**
+> - **Le repli `GET /connections` est désormais RÉSOLU côté intégrateur** : le `403` n'était pas un blocage de permission mais un EndUser non provisionné (cf. **§8**). Après `POST /clients/end-users`, le repli fonctionne.
+> - **Le flux nominal (`onSuccess`) reste bloqué** par le `parentOrigin` (cf. **§9** ci-dessous) — c'est le seul point réellement bloquant restant, et il est côté widget.
+
+**Diagnostic complémentaire `parentOrigin` (cf. §9).** Après lecture du backend `omni-fi-core` (branche `staging`), nous confirmons que **`RedirectOrigin` et `WIDGET_ALLOWED_ORIGIN` ne sont PAS la cause** :
+- `RedirectOrigin` (passé à `POST /connections/link-token`) est l'origine HTTPS du `postMessage` **de retour** (le `PublicToken`) — nous l'envoyons correctement (`https://localhost:3000`).
+- `WIDGET_ALLOWED_ORIGIN` (`omni_fi_backend/settings.py:501`, vérifié par `_check_origin` dans `apps/institutions/authentication.py:30`) valide l'en-tête `Origin` des appels **SessionToken venant de l'iframe** ; sa valeur attendue est l'origine de l'**iframe** (`staging-connect.omni-fi.co`), pas celle de la page hôte.
+
+Le `parentOrigin` (origine de la page hôte) est donc établi **ailleurs** : par le handshake `postMessage` interne au widget iframe (`link-app`), dépôt **non inclus** dans `omni-fi-core`. L'analyse du bundle CDN servi montre que l'iframe initialise `parentOrigin = null` puis ne le renseigne **qu'à la réception d'un message provenant du parent** ; or le SDK `@omni-fi/react-link` n'émet aucun message d'initialisation parent → iframe. `parentOrigin` reste donc `null`, et la garde interne du widget refuse d'émettre le message de succès. **Aucun paramètre côté intégrateur ne permet d'amorcer ce handshake** — le correctif est dans `link-app`.
 
 **Recommandation (prioritaire).**
 1. **Permettre au widget d'établir le `parentOrigin`** pour les origines légitimes (au minimum `https://localhost:3000` en développement, et les domaines de production des intégrateurs). Documenter **comment** une origine parente est autorisée (allowlist, paramètre, etc.).
@@ -128,61 +137,89 @@ Conséquence : le widget **ne peut jamais envoyer le message de succès** à la 
 
 ---
 
-## 8. `GET /connections` → `403 FORBIDDEN` malgré des credentials valides (le repli du #5 est bloqué)
+## 8. `GET /connections` → `403 FORBIDDEN` au lieu de `404` (EndUser non provisionné) — code de statut trompeur
 
-**Symptôme (CRITIQUE).** L'endpoint **`GET /connections`** — celui sur lequel repose notre contournement du #5 (re-synchronisation serveur) — renvoie systématiquement **`403 Forbidden` / `FORBIDDEN`** (« You do not have permission to perform this action »), **quel que soit le `clientUserId`**. Nos credentials `ApiKey` sont pourtant **valides** : d'autres routes authentifiées avec exactement le même en-tête répondent normalement (un `405 Method Not Allowed`, et non un `403/401`), ce qui prouve que l'authentification passe et que le rejet est bien une question de **permission/scope sur cette route**, pas d'identifiants.
+**Symptôme.** `GET /connections?client_user_id=<id>` renvoie systématiquement **`403 Forbidden`** (« You do not have permission to perform this action »), **quel que soit le `client_user_id`**, alors que nos credentials `ApiKey` sont valides.
 
-**Impact.** Les **deux** chemins de finalisation d'une connexion bancaire sont désormais inopérants :
-- le **flux nominal** (`onSuccess` du widget) est bloqué par `parentOrigin not established` (**§5**) ;
-- le **repli serveur** (relire l'état via `GET /connections`) est bloqué par ce **403**.
-
-Résultat concret pour l'intégrateur : une banque connectée et persistée côté Omni-FI (vérifié : écran « Connected » du widget, requêtes `exchange`/`accounts` en succès) **ne peut être rapatriée par aucun moyen** dans l'application hôte. L'utilisateur voit « La connexion bancaire a échoué » alors que la connexion existe bel et bien côté Omni-FI.
-
-**Preuve (reproduction hors navigateur, `curl`, credentials du `.env`).**
-
-Repli serveur — la route du contournement, avec le `clientUserId` provisionné comme avec un `clientUserId` de démo :
+**Preuve que l'authentification est valide.** Le même en-tête `ApiKey` sur une autre route renvoie `405`, pas `401/403` :
 ```
-GET https://api-stage.omni-fi.co/connections?clientUserId=<provisionné>&page=1&pageSize=50
+GET https://api-stage.omni-fi.co/clients/end-users   → HTTP 405 (Method Not Allowed)
+GET https://api-stage.omni-fi.co/connections?client_user_id=<id>   → HTTP 403 (Forbidden)
+```
+Un `405` (mauvaise méthode) et non un `401/403` ⇒ l'auth passe ; seule `GET /connections` refuse.
+
+**Cause-racine (confirmée par lecture du code source — accès en lecture seule au dépôt `omni-fi-core`, branche `staging`).** Le `403` n'est **ni un scope, ni une permission manquante** : c'est que **l'EndUser ciblé n'existe pas**, et la couche d'autorisation renvoie un `403` à la place d'un `404`.
+
+- Route : `apps/institutions/urls.py` → `GetConnectionsView` (`apps/institutions/views.py:240`), avec `permission_classes = [ResolveEndUser]` et `sandbox_supported = True`.
+- `ResolveEndUser._resolve_for_api_client` (`apps/clients/authentication.py:156`) tente :
+  ```python
+  request.end_user = EndUser.objects.get(
+      client_user_id=client_user_id,
+      api_client=request.user,        # doit appartenir à l'ApiClient appelant
+      is_sandbox=(env == "sandbox"),  # doit matcher l'environnement de la clé
+  )
+  except EndUser.DoesNotExist:
+      return False        # → DRF traduit `has_permission() == False` en HTTP 403
+  ```
+- Notre `client_user_id` n'avait **jamais été provisionné** comme `EndUser` (placeholder côté intégrateur, sans appel `POST /clients/end-users`). `DoesNotExist` → `403`.
+
+**Le vrai problème (côté API).** Un `EndUser` **inconnu** est traité comme un **refus de permission** (`403`) plutôt qu'une **ressource introuvable** (`404`). C'est incohérent avec d'autres vues du même module : `DeleteConnectionView` (`views.py:300`) renvoie correctement un `404 CONNECTION_NOT_FOUND` quand la ressource n'appartient pas à l'appelant. Le `403` de `GetConnectionsView` masque la vraie nature du problème et envoie l'intégrateur chercher un scope/permission inexistant.
+
+**Résolution côté intégrateur (TYGR).** Provisionner l'EndUser **avant** toute lecture, via la route officielle :
+```
+POST https://api-stage.omni-fi.co/clients/end-users
   Authorization: ApiKey <client_id>:<secret>
-→ HTTP 403
-  {"Code":"403 Forbidden","Message":"You do not have permission to perform this action.",
-   "Errors":[{"ErrorCode":"FORBIDDEN","Message":"You do not have permission to perform this action."}]}
+  {"ClientUserId": "<id>"}
+```
+`CreateEndUserView` (`views.py:60`) pose `is_sandbox=True` automatiquement selon l'environnement de la clé et rattache l'EndUser à l'ApiClient appelant — exactement les conditions qu'exige `ResolveEndUser`. Après provisioning, `GET /connections` renvoie `200`.
+
+**Recommandation (côté API).**
+1. **Renvoyer `404` (ressource introuvable) plutôt que `403`** lorsqu'un `client_user_id` ne correspond à aucun `EndUser` de l'ApiClient — comme le fait déjà `DeleteConnectionView`. Réserver le `403` aux vrais refus de permission.
+2. **Documenter explicitement le pré-requis de provisioning** (`POST /clients/end-users`) dans le parcours de démarrage : un `client_user_id` arbitraire n'est pas auto-créé (lié au #7).
+
+---
+
+## 9. Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis (cause-racine)
+
+**Symptôme (CRITIQUE).** En fin de parcours, le clic « Finish » n'émet jamais `onSuccess` vers la page hôte. Console, de façon reproductible :
+```
+Blocked a frame with origin "https://staging-connect.omni-fi.co"
+  from accessing a frame with origin "https://localhost:3000".
+  Protocols, domains, and ports must match.
+[omni-fi-link] Cannot send success message: parentOrigin is not established.
 ```
 
-Preuve que les credentials sont valides (même en-tête `ApiKey`, autre route) :
-```
-GET https://api-stage.omni-fi.co/clients/end-users?page=1&pageSize=10
-  Authorization: ApiKey <client_id>:<secret>
-→ HTTP 405
-  {"Code":"405 MethodNotAllowed","Message":"Method \"GET\" not allowed.", … }
-```
-Un `405` (mauvaise méthode HTTP) et non un `403/401` ⇒ l'**authentification est acceptée** ; seule la route `GET /connections` refuse l'accès.
+**Ce qui a été écarté (sources serveur lues dans `omni-fi-core`).**
+- **`RedirectOrigin`** (envoyé à `POST /connections/link-token`, stocké via `apps/institutions/views.py:452`) est l'origine du `postMessage` **de retour** du `PublicToken`. Nous l'envoyons correctement (`https://localhost:3000`, origine réelle de la page, HTTPS). Ce n'est pas le canal d'établissement du `parentOrigin`.
+- **`WIDGET_ALLOWED_ORIGIN`** (`omni_fi_backend/settings.py:501`, appliqué par `_check_origin`, `apps/institutions/authentication.py:30`) valide l'en-tête `Origin` des requêtes **SessionToken émises par l'iframe** ; sa valeur attendue est l'origine de l'**iframe** (`staging-connect.omni-fi.co`), pas celle de la page hôte. Sans rapport avec notre `parentOrigin`.
 
-**Analyse.** Le `403` est spécifique à `GET /connections`. Deux hypothèses, à trancher côté Omni-FI :
-1. le client sandbox ne dispose pas du **scope/permission de lecture des connexions** (à octroyer) ;
-2. l'EndUser ciblé n'a jamais été **réellement provisionné** côté sandbox, et la route répond `403` (plutôt qu'un `404` explicite) pour un `clientUserId` inconnu — auquel cas le **code de statut est trompeur**.
+**Cause-racine (analyse du bundle CDN du widget — le dépôt `link-app` n'étant pas accessible, l'analyse porte sur l'artefact servi).** Le widget iframe initialise son état avec `parentOrigin = null` et ne le renseigne **qu'à la réception d'un message provenant de la page parente** (logique observée : au premier message reçu, il fixe `parentOrigin` = origine de l'émetteur ; les messages suivants d'une autre origine sont ignorés). Or le SDK `@omni-fi/react-link` (côté hôte) charge le script et appelle `window.OmniFI.connect({...})` **sans émettre de message d'initialisation parent → iframe**. En conséquence, `parentOrigin` reste `null`, et la fonction d'émission du succès court-circuite explicitement (`if (!parentOrigin) { … return; }`) — d'où le message « Cannot send success message: parentOrigin is not established » et l'absence totale de `onSuccess`.
 
-**Recommandation (prioritaire).**
-1. **Accorder au client d'intégration le droit de `GET /connections`** sur le sandbox (c'est l'endpoint pivot de toute re-synchronisation serveur).
-2. Si le `403` masque en réalité un EndUser/`clientUserId` inconnu, renvoyer un **`404` explicite** (comme `POST /connections/link-exchange` le fait déjà, cf. #7) plutôt qu'un `403` générique — un code de statut juste fait gagner des heures de diagnostic.
-3. Documenter, par endpoint, le **scope/permission requis** et le **schéma d'auth** attendu.
+**Conséquence.** La connexion est pourtant **bien persistée** côté Omni-FI (écran « Connected », `exchange`/`accounts` en succès), mais la page hôte n'en est **jamais notifiée**. Aucun paramètre d'URL, origine ou configuration **côté intégrateur** ne permet d'amorcer ce handshake : le correctif est nécessairement **dans le widget `link-app`**.
+
+**Recommandation (prioritaire, côté widget).**
+1. **Établir le `parentOrigin` de façon fiable** dès l'initialisation — soit en faisant émettre par le SDK un message d'init `parent → iframe` (handshake explicite), soit en dérivant l'origine parente du `RedirectOrigin` déjà fourni au `link-token`, soit via `document.referrer` / `window.location.ancestorOrigins`.
+2. **Autoriser les origines légitimes** des intégrateurs (au minimum `https://localhost:3000` en développement, et leurs domaines de production) ; documenter **comment** une origine parente est déclarée.
+3. **Garantir l'émission de `onSuccess`** une fois la connexion persistée, indépendamment des appels de nettoyage (`revoke`), et émettre un **`onError`** explicite dans les cas où la finalisation est réellement impossible (plutôt qu'un échec silencieux).
 
 ---
 
 ## Conclusion — état de l'intégration côté TYGR
 
-**L'intégration TYGR du Link Widget est terminée et prête.** Le code (flux nominal `onSuccess` → finalisation serveur, repli de re-synchronisation `GET /connections`, allowlist d'origines HTTPS, gestion multi-connexions, isolation tenant) est en place, testé et mergé. Nous avons prouvé **empiriquement** que le blocage ne vient **pas** de notre côté :
+**L'intégration TYGR du Link Widget est terminée et prête.** Le code (flux nominal `onSuccess` → finalisation serveur, repli de re-synchronisation `GET /connections`, allowlist d'origines HTTPS, gestion multi-connexions, isolation tenant) est en place, testé et mergé. Après investigation (tests `curl` hors navigateur + lecture du code source `omni-fi-core`), l'état des blocages est désormais clarifié :
 
-- nos **credentials sont valides** (l'auth `ApiKey` est acceptée — un `405`, pas un `401/403`, sur une autre route) ;
-- notre `RedirectOrigin` est correct (`https://localhost:3000`, l'origine réelle de la page, en HTTPS) ;
-- les deux blocages restants sont **côté vendor** : le widget n'établit pas `parentOrigin` (#5) **et** `GET /connections` est refusé en `403` (#8).
+| # | Blocage | Cause-racine | Responsabilité | Statut |
+|---|---------|--------------|----------------|--------|
+| 8 | `GET /connections` → `403` | EndUser non provisionné (le code renvoie `403` au lieu de `404`) | Intégrateur (provisioning) + API (statut trompeur) | **Résolu côté TYGR** via `POST /clients/end-users` |
+| 9 | `onSuccess` jamais émis | `parentOrigin` jamais établi (handshake `postMessage` non amorcé dans le widget `link-app`) | **Omni-FI** (widget) | **Bloquant — fix attendu côté widget** |
 
-| Blocage | Détail | Code/Trace | Responsabilité |
-|---------|--------|-----------|----------------|
-| Finalisation widget | `onSuccess` jamais émis | `parentOrigin is not established` + `Blocked a frame … must match` | **Omni-FI** (widget iframe) |
-| Repli serveur | `GET /connections` refusé | `HTTP 403 FORBIDDEN` | **Omni-FI** (permission/scope) |
+Faits établis :
+- nos **credentials sont valides** (auth `ApiKey` acceptée — `405`, pas `401/403`, sur une autre route) ;
+- notre **`RedirectOrigin` est correct** (`https://localhost:3000`, l'origine réelle de la page, en HTTPS) ;
+- le **403 n'était pas une permission manquante** mais un EndUser absent — désormais provisionné de notre côté ;
+- **il ne reste qu'un seul vrai bloquant** : le widget n'établit pas `parentOrigin`, et **aucun paramètre côté intégrateur ne permet de l'amorcer** (le correctif est dans le dépôt `link-app`).
 
-**En attente d'un correctif vendor.** Le jour où Omni-FI (a) permet au widget d'établir le `parentOrigin` pour les origines légitimes **et/ou** (b) accorde l'accès à `GET /connections`, l'intégration TYGR fonctionnera **sans aucune modification de notre code**. Nous ne déployons aucun palliatif supplémentaire pour compenser ces lacunes côté API.
+**En attente d'un correctif côté widget.** Le jour où le widget établit le `parentOrigin` pour les origines légitimes (et émet `onSuccess`/`onError` en conséquence), l'intégration TYGR fonctionnera **sans aucune modification de notre code**.
 
 ---
 
@@ -190,7 +227,7 @@ Un `405` (mauvaise méthode HTTP) et non un `403/401` ⇒ l'**authentification e
 
 - **Environnement testé :** sandbox / staging (`api-stage.omni-fi.co` pour l'API REST, `staging-cdn.omni-fi.co` pour le widget).
 - **Auth utilisée :** `ApiKey <client_id>:<secret>` (schéma serveur). NB : le `client_id` attendu par l'en-tête est l'identifiant `client_…` de l'ApiClient (le « Issuing for »), **pas** l'« APICLIENT ID » UUID affiché à côté — distinction non triviale qui a aussi coûté du temps (un `401 Invalid client credentials` peu explicite).
-- **EndUser :** doit être **créé au préalable** via `POST /clients/end-users` ; un `ClientUserId` arbitraire renvoie `404 End user not found` (comportement correct mais à documenter dans le parcours de démarrage).
+- **EndUser :** doit être **créé au préalable** via `POST /clients/end-users` ; sur `POST /connections/link-exchange` un `ClientUserId` inconnu renvoie un `404` explicite, mais sur **`GET /connections` il renvoie un `403` trompeur** (cf. §8) — à uniformiser et à documenter dans le parcours de démarrage.
 - **Identifiants sandbox utilisés pour le widget :** `sandbox@example.com` / `sandbox_password` (happy path, sans MFA).
 
 *Document rédigé à l'usage de l'équipe API Omni-FI. Toutes les valeurs sensibles (secrets, jetons) sont volontairement omises.*
