@@ -117,10 +117,10 @@ Conséquence : le widget **ne peut jamais envoyer le message de succès** à la 
 - L'origine parente `https://localhost:3000` n'est peut-être pas autorisée par le widget (allowlist d'origines côté serveur/iframe, distincte du `RedirectOrigin`).
 - Le handshake d'« établissement du parentOrigin » échoue (timing, vérification d'origine trop stricte, ou incompatibilité avec un certificat local de développement).
 
-**Contournement retenu côté TYGR (temporaire, indépendant du postMessage).** Plutôt que d'attendre `onSuccess`, nous **relisons l'état réel côté serveur** via `GET /connections?clientUserId=…` (auth ApiKey), puis `GET /accounts?connectionId=…`, et nous rattachons les comptes — **sans dépendre du canal `postMessage`**. Ce chemin est exposé comme une action de **re-synchronisation manuelle** (bouton « Synchroniser mes connexions »). Le flux nominal `onSuccess` reste en place : dès que le widget sera corrigé, il fonctionnera sans changement de notre côté.
+**Contournement retenu côté TYGR (temporaire, indépendant du postMessage).** Plutôt que d'attendre `onSuccess`, nous **relisons l'état réel côté serveur** via `GET /connections?client_user_id=…` (auth ApiKey), puis `GET /accounts?connectionId=…`, et nous rattachons les comptes — **sans dépendre du canal `postMessage`**. Ce chemin est exposé comme une action de **re-synchronisation manuelle** (bouton « Synchroniser mes connexions »). Le flux nominal `onSuccess` reste en place : dès que le widget sera corrigé, il fonctionnera sans changement de notre côté.
 
 > **Mise à jour 2026-06-18 — précisions après investigation.**
-> - **Le repli `GET /connections` est désormais RÉSOLU côté intégrateur** : le `403` n'était pas un blocage de permission mais un EndUser non provisionné (cf. **§8**). Après `POST /clients/end-users`, le repli fonctionne.
+> - **Le repli `GET /connections` est désormais RÉSOLU côté intégrateur** : le `403` venait d'un **bug dans notre client** (param envoyé en `clientUserId` au lieu de `client_user_id` ; cf. **§8**), pas d'un défaut d'autorisation côté API. Une fois le nom corrigé, le repli fonctionne (`200`, connexions listées).
 > - **Le flux nominal (`onSuccess`) reste bloqué** par le `parentOrigin` (cf. **§9** ci-dessous) — c'est le seul point réellement bloquant restant, et il est côté widget.
 
 **Diagnostic complémentaire `parentOrigin` (cf. §9).** Après lecture du backend `omni-fi-core` (branche `staging`), nous confirmons que **`RedirectOrigin` et `WIDGET_ALLOWED_ORIGIN` ne sont PAS la cause** :
