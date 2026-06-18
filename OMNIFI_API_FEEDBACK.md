@@ -21,6 +21,7 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 7 | EndUser non auto-créé : `ClientUserId` arbitraire → `404`, non documenté dans le parcours | Moyen | Contourné (`POST /clients/end-users`) |
 | 8 | Nom du query param `client_user_id` (snake_case) — non documenté, et `GET /connections` répond `403` (param ignoré) au lieu d'un `400`/`404` explicite | Moyen | **Résolu côté TYGR** (notre bug : on envoyait `clientUserId`) — suggestion d'amélioration côté API |
 | 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis | **Critique** | **Non contournable côté TYGR — fix attendu côté widget** |
+| 10 | Routes documentées mais **non déployées** sur staging : `GET /accounts/{id}/transactions/sync` et `GET /accounts/{id}/balances/history` → `404`. De plus la pagination réelle (`page`) diverge de la doc (curseur `NextCursor`/`HasMore`) | **Élevé** | **Bloqué (data historique)** — code gelé sur le contrat Fern en attendant l'alignement serveur |
 
 ---
 
@@ -183,6 +184,35 @@ Blocked a frame with origin "https://staging-connect.omni-fi.co"
 
 ---
 
+## 10. Routes `/transactions/sync` et `/balances/history` documentées mais NON déployées + divergence de pagination
+
+**Symptôme (ÉLEVÉ).** Deux endpoints décrits dans la doc Fern / la spec OpenAPI **n'existent pas** sur `api-stage.omni-fi.co` : ils renvoient un **`404` HTML générique** (« Not Found » — page serveur, pas une enveloppe d'erreur OBIE). Les **routes réelles** existent sous un autre chemin, **avec un modèle de pagination différent** de celui documenté.
+
+**Preuve (runtime, `curl`, credentials sandbox, EndUser provisionné).**
+```
+# Documenté (Fern / OpenAPI) — ABSENT :
+GET /accounts/{id}/transactions/sync   → HTTP 404 (page "Not Found")
+GET /accounts/{id}/balances/history    → HTTP 404 (page "Not Found")
+
+# Réel (déployé) — OK :
+GET /accounts/{id}/transactions   → HTTP 200  { "Data": { "Transaction": [...] }, "Links": {...}, "Meta": { "TotalPages": 2, "TotalRecords": 38 } }
+GET /accounts/{id}/balances       → HTTP 200  (soldes COURANTS / latest par type, PAS de série temporelle)
+```
+
+**Divergences précises.**
+1. **Chemin.** Doc : `/transactions/sync` et `/balances/history`. Réel : `/transactions` et `/balances`.
+2. **Pagination.** La doc décrit `/transactions/sync` comme un **delta incrémental par curseur** (`Added[]`, `Modified[]`, `Removed[]`, `NextCursor`, `HasMore`, paramètres `cursor`/`count`). La route réelle `/transactions` est une **liste paginée par page** (`page` / `Meta.TotalPages` / `Links.Next`) — **aucune notion de curseur ni de delta**. Ce ne sont pas deux variantes d'un même contrat : ce sont deux modèles de synchronisation incompatibles.
+3. **Donnée historique manquante.** `GetHistoricalBalances` (série temporelle end-of-day, openapi.yml) **n'a aucune route déployée** — confirmé : `grep` sur le code Django de `omni-fi-core` (branche `staging`) ne trouve `balances/history` nulle part. Seul le **solde courant** est exposé. → Toute fonctionnalité de **courbe / tendance de trésorerie** est impossible à alimenter en l'état.
+
+**Impact / décision côté TYGR.** Notre client a été écrit **fidèlement sur le contrat Fern** (sync par curseur + historique EOD). Plutôt que de réécrire toute notre couche d'ingestion (orchestrateur, modèle curseur, tests) pour épouser un staging temporairement non conforme — au risque de devoir **tout défaire** le jour où `/sync` sera déployé — **nous gelons ce code sur le contrat documenté** et attendons l'alignement serveur. Le rattachement des comptes (`GET /connections` + `GET /accounts`) fonctionne déjà ; seules les **transactions** et l'**historique des soldes** sont en attente.
+
+**Recommandation (prioritaire).**
+1. **Aligner staging sur la doc** : déployer `GET /accounts/{id}/transactions/sync` (delta par curseur) et `GET /accounts/{id}/balances/history` (série EOD) tels que spécifiés — **ou** mettre la doc/OpenAPI à jour pour refléter les routes réelles (`/transactions` paginé par page, pas d'historique).
+2. **Choisir un modèle de pagination unique** pour les transactions et le documenter sans ambiguïté (curseur **ou** page, pas les deux selon la source).
+3. Pour `404` sur une route inexistante, renvoyer une **enveloppe d'erreur OBIE JSON** cohérente avec le reste de l'API plutôt qu'une page HTML — un intégrateur qui parse du JSON reçoit sinon une erreur de désérialisation opaque.
+
+---
+
 ## Conclusion — état de l'intégration côté TYGR
 
 **L'intégration TYGR du Link Widget est terminée et prête.** Le code (flux nominal `onSuccess` → finalisation serveur, repli de re-synchronisation `GET /connections`, allowlist d'origines HTTPS, gestion multi-connexions, isolation tenant) est en place, testé et mergé. Après investigation (tests `curl` hors navigateur + lecture du code source `omni-fi-core`), l'état des blocages est désormais clarifié :
@@ -191,14 +221,16 @@ Blocked a frame with origin "https://staging-connect.omni-fi.co"
 |---|---------|--------------|----------------|--------|
 | 8 | `GET /connections` → `403` | **Notre bug** : param envoyé en `clientUserId` au lieu de `client_user_id` (ignoré → `403`) | Intégrateur (corrigé) ; suggestion mineure API | **Résolu côté TYGR** |
 | 9 | `onSuccess` jamais émis | `parentOrigin` jamais établi (handshake `postMessage` non amorcé dans le widget `link-app`) | **Omni-FI** (widget) | **Bloquant — fix attendu côté widget** |
+| 10 | Transactions + historique des soldes non récupérables | Routes `/transactions/sync` et `/balances/history` documentées mais **non déployées** (`404`) ; pagination réelle (`page`) ≠ doc (curseur) | **Omni-FI** (API ≠ doc) | **Bloqué — code gelé sur le contrat Fern, en attente d'alignement** |
 
 Faits établis :
 - nos **credentials sont valides** (auth `ApiKey` acceptée — `405`, pas `401/403`, sur une autre route) ;
 - notre **`RedirectOrigin` est correct** (`https://localhost:3000`, l'origine réelle de la page, en HTTPS) ;
 - le **403 sur `GET /connections` était notre erreur** (mauvais nom de query param), désormais corrigée — l'API renvoie `200` avec les connexions ;
-- **il ne reste qu'un seul vrai bloquant côté Omni-FI** : le widget n'établit pas `parentOrigin`, et **aucun paramètre côté intégrateur ne permet de l'amorcer** (le correctif est dans le dépôt `link-app`).
+- **les comptes + soldes courants sont récupérés** (le repli serveur fonctionne, comptes visibles dans le Dashboard) ;
+- **deux blocages restent côté Omni-FI** : (a) le widget n'établit pas `parentOrigin` (#9, correctif dans `link-app`) ; (b) les endpoints `/transactions/sync` et `/balances/history` sont documentés mais non déployés (#10, l'API doit s'aligner sur sa doc — ou l'inverse).
 
-**En attente d'un correctif côté widget.** Le jour où le widget établit le `parentOrigin` pour les origines légitimes (et émet `onSuccess`/`onError` en conséquence), l'intégration TYGR fonctionnera **sans aucune modification de notre code**.
+**En attente d'un alignement côté Omni-FI** (widget `parentOrigin` **et** routes transactions/historique conformes à la doc). Le jour où c'est aligné, l'intégration TYGR fonctionnera **sans réécriture** : notre client suit déjà le contrat Fern documenté.
 
 ---
 
