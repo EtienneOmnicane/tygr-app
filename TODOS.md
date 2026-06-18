@@ -166,6 +166,30 @@ Durcissements différés (déclencheur commun : intégration du VRAI package / m
   (onSuccess→setFerme→launcher démonté). Ajouter un `useRef` « déjà ouvert » si le
   test révèle une double-ouverture. Relevé par audit QA (5/10).
 
+### Redirection Dashboard post-succès widget (UI, 2026-06-18)
+
+Branche `feat/omnifi-native-success` : au succès COMPLET de la finalisation native
+(`onSuccess` → `finaliserConnexionDropinAction`), l'utilisateur est redirigé vers le
+Dashboard (`router.push('/')`) ; en succès PARTIEL on reste sur `/banques` pour ne
+pas masquer l'échec (bandeau + lien d'action). Le repli manuel « Une banque
+n'apparaît pas ? » est conservé (retrait progressif). Liste de courses Backend :
+
+- [ ] **WIDGET-RD1 (P1) — exposer un flag `complet` sur `EtatFinalisation`** —
+  Effort S (déclencheur : ce câblage de redirection, dû MAINTENANT). Le contrat
+  `EtatFinalisation` (`src/app/(workspace)/banques/actions.ts`) ne renvoie que
+  `{ erreur, succes }` (strings) ; le serveur CONNAÎT `echecs`/`reussies`
+  (`finaliserConnexionsDropin`, `orchestration.ts`) mais les fond dans le LIBELLÉ.
+  Côté client je distingue donc « succès total » de « partiel » uniquement via un
+  champ booléen — que je consomme déjà en contract-first (`EtatFinalisationUI =
+  EtatFinalisation & { complet?: boolean }`, `bank-connect-widget.tsx`). **Tant que
+  Backend ne pose pas le flag, `complet` vaut `undefined` → fallback SÛR : aucune
+  redirection automatique**, on reste sur la page avec le lien explicite (jamais de
+  navigation qui masquerait un échec). Demande Backend : ajouter `complet: boolean`
+  (= `echecs === 0 && reussies.length > 0`) au retour de `finaliserConnexionDropinAction`.
+  Frontière respectée (gardien Backend du contrat) — je ne modifie pas la Server Action.
+  Anti-pattern à NE PAS faire côté UI : parser le texte de `succes` pour deviner le
+  partiel (couplé au libellé, casse au moindre changement de message).
+
 ### Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU)
 
 Le merge de main dans PR-W4 avait révélé DEUX câblages divergents du widget.
