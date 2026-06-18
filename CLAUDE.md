@@ -401,3 +401,11 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+## Politique de branches (actée 2026-06-18)
+
+- **`main`** = Production stable (protégée, source de vérité).
+- **`staging`** = Pré-production / recette : environnement d'intégration continue où l'on fusionne et teste les grosses fonctionnalités (ex. intégration Omni-FI) **avant** de promouvoir vers `main`.
+- **Les nouvelles fonctionnalités partent de `main`** : on crée chaque branche de feature/fix depuis `main` à jour (`git pull origin main`), puis on la propose en PR (vers `staging` pour recette, ou directement vers `main` selon le flux).
+- **Dossier de travail exclusif** : toutes les commandes (Git, Node, etc.) s'exécutent dans `tygr-app/`, jamais à la racine `Desktop/TYGR`.
+- Hygiène : ne supprimer une branche distante que si `git branch -r --merged origin/main` la confirme fusionnée. Créer les branches d'infra (ex. `staging`) depuis un **clone propre** du remote.
