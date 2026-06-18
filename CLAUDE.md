@@ -409,3 +409,9 @@ Key routing rules:
 - **Les nouvelles fonctionnalités partent de `main`** : on crée chaque branche de feature/fix depuis `main` à jour (`git pull origin main`), puis on la propose en PR (vers `staging` pour recette, ou directement vers `main` selon le flux).
 - **Dossier de travail exclusif** : toutes les commandes (Git, Node, etc.) s'exécutent dans `tygr-app/`, jamais à la racine `Desktop/TYGR`.
 - Hygiène : ne supprimer une branche distante que si `git branch -r --merged origin/main` la confirme fusionnée. Créer les branches d'infra (ex. `staging`) depuis un **clone propre** du remote.
+
+### Autorisation de merge (Human-in-the-Loop nuancé, actée 2026-06-18)
+
+- **Auto-merge autorisé** (l'agent peut merger lui-même via `gh`, en son nom, après Quality Gate vert) **UNIQUEMENT** pour les PR **non applicatives** : documentation, `chore/`, notes, configuration éditoriale — rien qui change le comportement du produit.
+- **Human-in-the-Loop reste ABSOLU** pour tout le reste : code métier, infrastructure, sécurité, base de données (typiquement `feat/`, `fix/`, `refactor/`, migrations, RLS, Server Actions). Pour ces PR, l'agent **s'arrête à la PR poussée** et attend la validation + le merge **manuel** de l'humain.
+- En cas de doute sur la catégorie d'une PR (mixte docs + code, ou portée ambiguë) : traiter comme **applicative** → ne pas auto-merger.
