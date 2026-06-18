@@ -37,6 +37,16 @@ export interface EtatDemarrage {
 export interface EtatFinalisation {
   erreur: string | null;
   succes: string | null;
+  /**
+   * Succès TOTAL de la finalisation : `true` ssi zéro échec lors de la
+   * découverte/synchronisation des comptes (toutes les connexions du payload ont
+   * été échangées et persistées), `false` en cas de succès PARTIEL (≥ 1 échec).
+   * Le Front l'utilise pour déclencher la redirection auto vers le Dashboard
+   * UNIQUEMENT sur un succès total (WIDGET-RD1) — ne jamais rediriger sur un
+   * partiel masquerait un échec. Optionnel/absent quand la notion n'a pas de sens
+   * (rejet de forme, erreur, ou synchro idempotente `GET /connections`).
+   */
+  complet?: boolean;
 }
 
 const MESSAGE_REFUS = "Action non autorisée.";
@@ -159,7 +169,10 @@ export async function finaliserConnexionDropinAction(
     const base = `Connexion établie — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.reussies.length} banque(s).`;
     const succes =
       r.echecs > 0 ? `${base} ${r.echecs} connexion(s) n'ont pas pu être finalisées.` : base;
-    return { erreur: null, succes };
+    // WIDGET-RD1 : drapeau de succès TOTAL. `echecs` est le nb de publicTokens
+    // reçus n'ayant pas pu être finalisés (cf. ResultatConnexionMulti). Zéro échec
+    // = succès complet → le Front peut rediriger ; sinon partiel → il reste sur place.
+    return { erreur: null, succes, complet: r.echecs === 0 };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),
