@@ -19,8 +19,8 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 5 | Widget CDN : `postMessage` bloqué (« parentOrigin not established ») → `onSuccess` jamais émis | **Critique** | Contourné (re-sync serveur `GET /connections`) — **fix attendu côté API** |
 | 6 | Auth : confusion `client_id` (« Issuing for ») vs « APICLIENT ID » UUID ; message `401` peu explicite | Moyen | Contourné (deviné le bon identifiant) |
 | 7 | EndUser non auto-créé : `ClientUserId` arbitraire → `404`, non documenté dans le parcours | Moyen | Contourné (`POST /clients/end-users`) |
-| 8 | `GET /connections` → `403 FORBIDDEN` au lieu d'un `404` : l'EndUser ciblé n'existe pas encore (jamais provisionné), mais le code renvoie un `403` trompeur | **Élevé** | **Résolu côté TYGR** (provisioning via `POST /clients/end-users`) — **code de statut à corriger côté API** |
-| 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis (cause-racine confirmée par lecture du code, cf. #5) | **Critique** | **Non contournable côté TYGR — fix attendu côté widget** |
+| 8 | Nom du query param `client_user_id` (snake_case) — non documenté, et `GET /connections` répond `403` (param ignoré) au lieu d'un `400`/`404` explicite | Moyen | **Résolu côté TYGR** (notre bug : on envoyait `clientUserId`) — suggestion d'amélioration côté API |
+| 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis | **Critique** | **Non contournable côté TYGR — fix attendu côté widget** |
 
 ---
 
@@ -137,45 +137,24 @@ Le `parentOrigin` (origine de la page hôte) est donc établi **ailleurs** : par
 
 ---
 
-## 8. `GET /connections` → `403 FORBIDDEN` au lieu de `404` (EndUser non provisionné) — code de statut trompeur
+## 8. Query param `client_user_id` (snake_case) — non documenté, et `403` peu explicite quand il est mal nommé
 
-**Symptôme.** `GET /connections?client_user_id=<id>` renvoie systématiquement **`403 Forbidden`** (« You do not have permission to perform this action »), **quel que soit le `client_user_id`**, alors que nos credentials `ApiKey` sont valides.
+> **Note d'honnêteté (mise à jour 2026-06-18).** Une version précédente de ce document attribuait le `403` sur `GET /connections` à un défaut d'autorisation côté API (EndUser non provisionné / statut trompeur). **C'était une erreur de notre part** : après vérification empirique, le `403` venait d'un **bug dans notre propre client** (mauvais nom de paramètre). Nous corrigeons ici le constat. Reste une **suggestion mineure** côté API (un code de statut plus parlant).
 
-**Preuve que l'authentification est valide.** Le même en-tête `ApiKey` sur une autre route renvoie `405`, pas `401/403` :
+**Cause-racine réelle (bug côté intégrateur, corrigé).** L'endpoint `GET /connections` lit le paramètre de l'EndUser en **snake_case** : `ResolveEndUser` fait `request.query_params.get("client_user_id")` (`apps/clients/authentication.py:158`). Notre client l'envoyait en **camelCase** (`clientUserId`). Le paramètre était donc **silencieusement ignoré** → aucun `client_user_id` fourni → `ResolveEndUser` retourne `False` → **`403`**.
+
+**Preuve empirique (runtime, même clé sandbox, même EndUser, même instant).**
 ```
-GET https://api-stage.omni-fi.co/clients/end-users   → HTTP 405 (Method Not Allowed)
-GET https://api-stage.omni-fi.co/connections?client_user_id=<id>   → HTTP 403 (Forbidden)
+GET https://api-stage.omni-fi.co/connections?clientUserId=tygr-demo-omnicane    → HTTP 403 Forbidden
+GET https://api-stage.omni-fi.co/connections?client_user_id=tygr-demo-omnicane  → HTTP 200 OK (21 connexions)
 ```
-Un `405` (mauvaise méthode) et non un `401/403` ⇒ l'auth passe ; seule `GET /connections` refuse.
+Seul le **nom du paramètre** change. L'EndUser existait, les credentials étaient valides, l'environnement (sandbox) était correct.
 
-**Cause-racine (confirmée par lecture du code source — accès en lecture seule au dépôt `omni-fi-core`, branche `staging`).** Le `403` n'est **ni un scope, ni une permission manquante** : c'est que **l'EndUser ciblé n'existe pas**, et la couche d'autorisation renvoie un `403` à la place d'un `404`.
+**Correction côté TYGR.** Les 5 appels B2B du client (tous protégés par `ResolveEndUser`) envoient désormais `client_user_id`. NB : l'API Omni-FI est **mixte** sur la casse des params — `client_user_id` en snake_case, mais `pageSize` / `institutionId` / `accountId` en camelCase (vérifié dans leurs tests). C'est une source de confusion réelle.
 
-- Route : `apps/institutions/urls.py` → `GetConnectionsView` (`apps/institutions/views.py:240`), avec `permission_classes = [ResolveEndUser]` et `sandbox_supported = True`.
-- `ResolveEndUser._resolve_for_api_client` (`apps/clients/authentication.py:156`) tente :
-  ```python
-  request.end_user = EndUser.objects.get(
-      client_user_id=client_user_id,
-      api_client=request.user,        # doit appartenir à l'ApiClient appelant
-      is_sandbox=(env == "sandbox"),  # doit matcher l'environnement de la clé
-  )
-  except EndUser.DoesNotExist:
-      return False        # → DRF traduit `has_permission() == False` en HTTP 403
-  ```
-- Notre `client_user_id` n'avait **jamais été provisionné** comme `EndUser` (placeholder côté intégrateur, sans appel `POST /clients/end-users`). `DoesNotExist` → `403`.
-
-**Le vrai problème (côté API).** Un `EndUser` **inconnu** est traité comme un **refus de permission** (`403`) plutôt qu'une **ressource introuvable** (`404`). C'est incohérent avec d'autres vues du même module : `DeleteConnectionView` (`views.py:300`) renvoie correctement un `404 CONNECTION_NOT_FOUND` quand la ressource n'appartient pas à l'appelant. Le `403` de `GetConnectionsView` masque la vraie nature du problème et envoie l'intégrateur chercher un scope/permission inexistant.
-
-**Résolution côté intégrateur (TYGR).** Provisionner l'EndUser **avant** toute lecture, via la route officielle :
-```
-POST https://api-stage.omni-fi.co/clients/end-users
-  Authorization: ApiKey <client_id>:<secret>
-  {"ClientUserId": "<id>"}
-```
-`CreateEndUserView` (`views.py:60`) pose `is_sandbox=True` automatiquement selon l'environnement de la clé et rattache l'EndUser à l'ApiClient appelant — exactement les conditions qu'exige `ResolveEndUser`. Après provisioning, `GET /connections` renvoie `200`.
-
-**Recommandation (côté API).**
-1. **Renvoyer `404` (ressource introuvable) plutôt que `403`** lorsqu'un `client_user_id` ne correspond à aucun `EndUser` de l'ApiClient — comme le fait déjà `DeleteConnectionView`. Réserver le `403` aux vrais refus de permission.
-2. **Documenter explicitement le pré-requis de provisioning** (`POST /clients/end-users`) dans le parcours de démarrage : un `client_user_id` arbitraire n'est pas auto-créé (lié au #7).
+**Suggestions (côté API, mineures mais utiles).**
+1. **Uniformiser la casse des query params** (tout snake_case ou tout camelCase), ou à défaut la **documenter explicitement** par endpoint — le mélange actuel est un piège.
+2. **Renvoyer un `400 Bad Request`** (« missing required parameter `client_user_id` ») plutôt qu'un `403 Forbidden` lorsque le paramètre requis est absent. Le `403` actuel laisse croire à un problème de permission/credentials et envoie l'intégrateur sur une fausse piste (ce qui nous est arrivé).
 
 ---
 
@@ -210,14 +189,14 @@ Blocked a frame with origin "https://staging-connect.omni-fi.co"
 
 | # | Blocage | Cause-racine | Responsabilité | Statut |
 |---|---------|--------------|----------------|--------|
-| 8 | `GET /connections` → `403` | EndUser non provisionné (le code renvoie `403` au lieu de `404`) | Intégrateur (provisioning) + API (statut trompeur) | **Résolu côté TYGR** via `POST /clients/end-users` |
+| 8 | `GET /connections` → `403` | **Notre bug** : param envoyé en `clientUserId` au lieu de `client_user_id` (ignoré → `403`) | Intégrateur (corrigé) ; suggestion mineure API | **Résolu côté TYGR** |
 | 9 | `onSuccess` jamais émis | `parentOrigin` jamais établi (handshake `postMessage` non amorcé dans le widget `link-app`) | **Omni-FI** (widget) | **Bloquant — fix attendu côté widget** |
 
 Faits établis :
 - nos **credentials sont valides** (auth `ApiKey` acceptée — `405`, pas `401/403`, sur une autre route) ;
 - notre **`RedirectOrigin` est correct** (`https://localhost:3000`, l'origine réelle de la page, en HTTPS) ;
-- le **403 n'était pas une permission manquante** mais un EndUser absent — désormais provisionné de notre côté ;
-- **il ne reste qu'un seul vrai bloquant** : le widget n'établit pas `parentOrigin`, et **aucun paramètre côté intégrateur ne permet de l'amorcer** (le correctif est dans le dépôt `link-app`).
+- le **403 sur `GET /connections` était notre erreur** (mauvais nom de query param), désormais corrigée — l'API renvoie `200` avec les connexions ;
+- **il ne reste qu'un seul vrai bloquant côté Omni-FI** : le widget n'établit pas `parentOrigin`, et **aucun paramètre côté intégrateur ne permet de l'amorcer** (le correctif est dans le dépôt `link-app`).
 
 **En attente d'un correctif côté widget.** Le jour où le widget établit le `parentOrigin` pour les origines légitimes (et émet `onSuccess`/`onError` en conséquence), l'intégration TYGR fonctionnera **sans aucune modification de notre code**.
 
@@ -227,7 +206,8 @@ Faits établis :
 
 - **Environnement testé :** sandbox / staging (`api-stage.omni-fi.co` pour l'API REST, `staging-cdn.omni-fi.co` pour le widget).
 - **Auth utilisée :** `ApiKey <client_id>:<secret>` (schéma serveur). NB : le `client_id` attendu par l'en-tête est l'identifiant `client_…` de l'ApiClient (le « Issuing for »), **pas** l'« APICLIENT ID » UUID affiché à côté — distinction non triviale qui a aussi coûté du temps (un `401 Invalid client credentials` peu explicite).
-- **EndUser :** doit être **créé au préalable** via `POST /clients/end-users` ; sur `POST /connections/link-exchange` un `ClientUserId` inconnu renvoie un `404` explicite, mais sur **`GET /connections` il renvoie un `403` trompeur** (cf. §8) — à uniformiser et à documenter dans le parcours de démarrage.
+- **EndUser :** doit être **créé au préalable** via `POST /clients/end-users` (un `ClientUserId` arbitraire n'est pas auto-créé).
+- **Casse des query params (piège) :** `client_user_id` en **snake_case**, mais `pageSize` / `institutionId` / `accountId` en **camelCase**. Un nom mal cassé est silencieusement ignoré ; sur `GET /connections` cela se traduit par un `403` peu explicite (cf. §8). À uniformiser/documenter côté API.
 - **Identifiants sandbox utilisés pour le widget :** `sandbox@example.com` / `sandbox_password` (happy path, sans MFA).
 
 *Document rédigé à l'usage de l'équipe API Omni-FI. Toutes les valeurs sensibles (secrets, jetons) sont volontairement omises.*
