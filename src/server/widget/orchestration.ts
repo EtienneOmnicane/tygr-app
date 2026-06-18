@@ -173,7 +173,14 @@ async function persisterConnexionEtComptes(
 
     let n = 0;
     for (const c of comptes) {
-      if (c.Status !== "Enabled") continue; // comptes utilisables uniquement
+      // On rattache les comptes utilisables. `GET /accounts` ne renvoie déjà QUE les
+      // comptes confirmés/actifs côté Omni-FI ; le champ Status précise l'état
+      // bancaire OBIE (Enabled/Disabled/Deleted…). On EXCLUT seulement les états
+      // explicitement non exploitables ; un Status ABSENT (null/undefined) est traité
+      // comme exploitable — le sandbox Omni-FI renvoie `Status: null` sur des comptes
+      // par ailleurs valides (vérifié runtime 2026-06-18), et les rejeter vidait la
+      // synchro (« 0 compte rattaché » malgré des comptes réels avec soldes).
+      if (c.Status != null && c.Status !== "Enabled") continue;
       await upsertCompte(tx, ctx, connectionId, {
         omnifiAccountId: c.AccountId,
         accountName: c.Nickname ?? c.PartyName ?? `Compte ${c.AccountId.slice(0, 8)}`,

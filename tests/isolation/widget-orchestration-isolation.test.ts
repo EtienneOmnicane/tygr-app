@@ -127,13 +127,13 @@ describe("finaliserConnexion — isolation tenant", () => {
       exchange: { ConnectionId: "conn-A", InstitutionId: "mcb" },
       accounts: [
         { AccountId: "oa-A1", Status: "Enabled", Currency: "MUR", PartyName: "Cpt A1", Balances: [{ Type: "ITAV", Amount: { Amount: "1000.00", Currency: "MUR" } }] },
-        { AccountId: "oa-A2", Status: "Disabled", Currency: "MUR" }, // ignoré (≠ Enabled)
+        { AccountId: "oa-A2", Status: "Disabled", Currency: "MUR" }, // exclu (état non exploitable explicite)
       ],
     });
     const r = await finaliserConnexion(c, execWs(ADMIN_A, WS_A), {
       publicToken: "pt", sessionToken: "st", jobId: "550e8400-e29b-41d4-a716-446655440000",
     });
-    expect(r.comptesRattaches).toBe(1); // seul le compte Enabled
+    expect(r.comptesRattaches).toBe(1); // seul le compte Enabled (le Disabled est exclu)
 
     // Sous A : la connexion + le compte existent.
     const vuA = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) => ({
@@ -150,6 +150,26 @@ describe("finaliserConnexion — isolation tenant", () => {
     }));
     expect(vuB.conns).toBe(0);
     expect(vuB.accs).toBe(0);
+  });
+
+  // Régression 2026-06-18 : le sandbox Omni-FI renvoie `Status: null` sur des comptes
+  // pourtant valides (vérifié runtime, 21 connexions / comptes avec soldes réels). Le
+  // filtre strict `Status === "Enabled"` les rejetait → « 0 compte rattaché sur N banques ».
+  // Un Status ABSENT doit être traité comme exploitable ; seul un état non-actif EXPLICITE
+  // (Disabled, etc.) est exclu.
+  it("rattache un compte au Status null/absent (cas sandbox), exclut un Disabled", async () => {
+    const c = clientFactice({
+      exchange: { ConnectionId: "conn-null", InstitutionId: "absa" },
+      accounts: [
+        { AccountId: "oa-null", Status: null, Currency: "MUR", Nickname: "Compte sans statut", Balances: [{ Type: "ITAV", Amount: { Amount: "1710400.00", Currency: "MUR" } }] } as never,
+        { AccountId: "oa-undef", Currency: "USD", Nickname: "Statut absent", Balances: [{ Type: "ITAV", Amount: { Amount: "44800.00", Currency: "USD" } }] } as never,
+        { AccountId: "oa-off", Status: "Disabled", Currency: "MUR" } as never,
+      ],
+    });
+    const r = await finaliserConnexion(c, execWs(ADMIN_A, WS_A), {
+      publicToken: "pt2", sessionToken: "st2", jobId: "550e8400-e29b-41d4-a716-4466554400a1",
+    });
+    expect(r.comptesRattaches).toBe(2); // les 2 sans statut, PAS le Disabled
   });
 
   it("1.1 — désalignement exchange↔accounts : comptes d'une AUTRE institution → rejet, RIEN persisté", async () => {
