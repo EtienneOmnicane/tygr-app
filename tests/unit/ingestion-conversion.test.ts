@@ -21,8 +21,22 @@ describe("normaliserMontant (règle 8 — sans float)", () => {
     expect(normaliserMontant("9999999999999.99")).toBe("9999999999999.99");
   });
 
+  it("accepte les décimales >2 SI elles sont nulles (format API 4 décimales)", () => {
+    // L'API Omni-FI renvoie « 750.0000 » : décimales 3-4 nulles → zéro perte.
+    expect(normaliserMontant("750.0000")).toBe("750.00");
+    expect(normaliserMontant("65000.0000")).toBe("65000.00");
+    expect(normaliserMontant("0.5000")).toBe("0.50");
+    expect(normaliserMontant("12.340")).toBe("12.34");
+  });
+
+  it("rejette >2 décimales SIGNIFICATIVES (pas d'arrondi caché, règle 8)", () => {
+    for (const perte of ["1.234", "12.3456", "0.001", "5.005"]) {
+      expect(() => normaliserMontant(perte)).toThrow(OmniFiInvalidResponseError);
+    }
+  });
+
   it("rejette les formes non conformes (pas de coercition silencieuse)", () => {
-    for (const mauvais of ["", "-5.00", "1.234", "abc", "1,50", "1e3", " "]) {
+    for (const mauvais of ["", "-5.00", "abc", "1,50", "1e3", " "]) {
       expect(() => normaliserMontant(mauvais)).toThrow(OmniFiInvalidResponseError);
     }
   });

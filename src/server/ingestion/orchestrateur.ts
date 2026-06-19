@@ -63,7 +63,9 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     amount: normaliserMontant(t.Amount.Amount),
     currency: t.Amount.Currency,
     creditDebit: validerCreditDebit(t.CreditDebitIndicator),
-    bankLabelRaw: t.Description,
+    // L'API ne fournit pas toujours Description (sandbox 2026-06-19) → null propre
+    // plutôt qu'undefined (la colonne est nullable, jamais lue côté UI car PII).
+    bankLabelRaw: t.Description ?? null,
     cleanLabel: t.CleanMerchantName ?? null,
     primaryCategory: t.PrimaryCategory ?? null,
     subCategory: t.SubCategory ?? null,

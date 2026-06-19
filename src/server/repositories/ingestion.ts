@@ -46,7 +46,7 @@ export interface TransactionAUpserter {
   amount: string; // numeric en chaîne (règle 8)
   currency: string;
   creditDebit: "Credit" | "Debit";
-  bankLabelRaw: string;
+  bankLabelRaw: string | null;
   cleanLabel: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
