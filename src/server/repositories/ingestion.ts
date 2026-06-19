@@ -118,6 +118,11 @@ export async function upsertCompte<TDb extends AnyPgDatabase>(
     .onConflictDoUpdate({
       target: bankAccounts.omnifiAccountId,
       set: {
+        // Un compte re-découvert via une AUTRE connexion suit la connexion la plus
+        // récente (la sandbox renvoie les mêmes AccountId sur chaque reconnexion ;
+        // sans ça le compte resterait collé à sa 1re connexion → mauvais
+        // institution_name au dashboard, et les nouvelles connexions à 0 compte).
+        connectionId,
         accountName: c.accountName,
         currency: c.currency,
         currentBalance: c.currentBalance,

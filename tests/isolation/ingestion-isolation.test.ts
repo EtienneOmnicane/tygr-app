@@ -167,7 +167,7 @@ describe("isolation des écritures d'ingestion (RLS, partitions incluses)", () =
     await prerequisCompte(sessionA, "conn-d1", "acc-shared");
 
     // 2e découverte du MÊME compte via une AUTRE connexion (conn-d2) + libellé différent.
-    await withWorkspace(sessionA, async (tx, ctx) => {
+    const conn2Id = await withWorkspace(sessionA, async (tx, ctx) => {
       const { connectionId } = await upsertConnexion(tx, ctx, {
         omnifiConnectionId: "conn-d2",
         institutionId: "mcb",
@@ -182,6 +182,7 @@ describe("isolation des écritures d'ingestion (RLS, partitions incluses)", () =
         currentBalance: "2000.00",
         isSelected: true,
       });
+      return connectionId;
     });
 
     const comptes = await withWorkspace(sessionA, (tx) =>
@@ -192,5 +193,8 @@ describe("isolation des écritures d'ingestion (RLS, partitions incluses)", () =
     expect(memeCompte.length).toBe(1);
     expect(memeCompte[0].accountName).toBe("Compte courant (maj)");
     expect(memeCompte[0].currentBalance).toBe("2000.00");
+    // …et le compte SUIT la connexion la plus récente (connection_id réaffecté),
+    // pour que le dashboard affiche le bon institution_name après reconnexion.
+    expect(memeCompte[0].connectionId).toBe(conn2Id);
   });
 });
