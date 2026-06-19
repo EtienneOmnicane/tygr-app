@@ -33,7 +33,10 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       lastSyncedAt: new Date("2026-06-12T07:00:00Z"),
     },
   ],
-  soldeConsolide: "7691000.00",
+  soldesParDevise: [
+    { currency: "MUR", total: "7691000.00" },
+    { currency: "USD", total: "179200.00" },
+  ],
   courbe: [
     { date: "2026-03-14", soldeConsolide: "2750000.00" },
     { date: "2026-03-21", soldeConsolide: "3120000.00" },
@@ -111,7 +114,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
  */
 export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
   comptes: DEMO_DASHBOARD.comptes,
-  soldeConsolide: DEMO_DASHBOARD.soldeConsolide,
+  soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
   courbe: [],
   syntheseMois: DEMO_DASHBOARD.syntheseMois,
   transactionsRecentes: [],
@@ -120,7 +123,7 @@ export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
 /** État VIDE : workspace connecté mais aucun compte (empty global + CTA). */
 export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
   comptes: [],
-  soldeConsolide: "0",
+  soldesParDevise: [],
   courbe: [],
   syntheseMois: { libelleMois: "2026-06", entrees: "0", sorties: "0", variation: "0" },
   transactionsRecentes: [],

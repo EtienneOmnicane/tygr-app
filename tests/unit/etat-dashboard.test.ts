@@ -19,7 +19,7 @@ const SYNTHESE = {
 function donnees(over: Partial<DonneesDashboard>): DonneesDashboard {
   return {
     comptes: [],
-    soldeConsolide: "0",
+    soldesParDevise: [],
     courbe: [],
     syntheseMois: SYNTHESE,
     transactionsRecentes: [],
@@ -46,7 +46,7 @@ describe("choisirEtatDashboard", () => {
 
   it("PARTIEL : comptes présents mais courbe vide (post-onboarding)", () => {
     const e = choisirEtatDashboard(
-      donnees({ comptes: UN_COMPTE, courbe: [], soldeConsolide: "1000.00" }),
+      donnees({ comptes: UN_COMPTE, courbe: [] }),
     );
     expect(e).toBe("partiel");
   });
@@ -56,7 +56,6 @@ describe("choisirEtatDashboard", () => {
       donnees({
         comptes: UN_COMPTE,
         courbe: [{ date: "2026-06-12", soldeConsolide: "1000.00" }],
-        soldeConsolide: "1000.00",
       }),
     );
     expect(e).toBe("complet");

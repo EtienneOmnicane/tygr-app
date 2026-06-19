@@ -1,49 +1,73 @@
 /**
  * Side-panel KPI du dashboard (UI_GUIDELINES §1.3) — carte SOLDE + carte
  * DÉTAILS (entrées / sorties / variation). Présentationnel PUR : reçoit les
- * sorties des services (`soldeConsolide`, `syntheseMois`) en props, NE recalcule
+ * sorties des services (`soldesParDevise`, `syntheseMois`) en props, NE recalcule
  * rien. Montants formatés via `formatMontant` (chaînes, zéro float, règle 8).
  *
- * Le solde = dernier EOD consolidé (même source que la fin de courbe) — pas
- * `current_balance` (décision revue : KPI et courbe coïncident). Mention « au
- * JJ/MM » pour assumer que c'est l'EOD.
+ * Le solde = somme des soldes COURANTS par devise (`soldesCourantsParDevise`) —
+ * source indépendante de `balance_history` (vide tant qu'Omni-FI n'expose pas
+ * `/balances/history`). Multi-devises (CLAUDE.md) : UNE LIGNE PAR DEVISE, jamais
+ * d'addition cross-devise. Mention « au JJ/MM » = date de dernière synchro.
  *
  * Couleurs : entrées `inflow-700` / sorties `outflow-700` — vert/rouge réservés
  * à la donnée (§3.1). Solde en `primary` (§1.3). Tout en `tabular-nums` (§0).
  */
-import type { SyntheseMois } from "@/server/repositories/dashboard";
+import type {
+  SoldeParDevise,
+  SyntheseMois,
+} from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function SidePanelKpi({
-  soldeConsolide,
+  soldesParDevise,
   syntheseMois,
   devise,
   dateSolde,
 }: {
-  /** Solde consolidé courant (dernier EOD), chaîne décimale. */
-  soldeConsolide: string;
+  /** Soldes consolidés courants, une entrée par devise (chaînes décimales). */
+  soldesParDevise: SoldeParDevise[];
   /** Synthèse du mois (entrées/sorties/variation), chaînes décimales. */
   syntheseMois: SyntheseMois;
-  /** Devise de base du workspace (MUR au MVP mono-devise). */
+  /** Devise de base du workspace (sert de repli quand aucun compte/solde). */
   devise: string;
-  /** Date du dernier EOD, formatée « JJ/MM » pour la méta de la carte solde. */
+  /** Date de dernière synchro, formatée « JJ/MM » pour la méta de la carte solde. */
   dateSolde: string;
 }) {
+  // Repli : aucun solde (aucun compte sélectionné) → on montre 0 dans la devise de
+  // base, plutôt qu'une carte vide. Le multi-devises empile une ligne par devise.
+  const lignesSolde: SoldeParDevise[] =
+    soldesParDevise.length > 0
+      ? soldesParDevise
+      : [{ currency: devise, total: "0" }];
+  const monoDevise = lignesSolde.length === 1;
+
   return (
     <>
-      {/* Carte SOLDE (§1.3) : montant 28px/700 tabular en primary. */}
+      {/* Carte SOLDE (§1.3) : une ligne par devise. Mono-devise → gros montant
+          28px/700 ; multi-devises → pile compacte (chaque devise sur sa ligne). */}
       <StateCard>
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-            Solde
+            {monoDevise ? "Solde" : "Soldes par devise"}
           </span>
           <span className="text-xs text-text-muted">au {dateSolde}</span>
         </div>
-        <p className="mt-4 text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary">
-          {formatMontant(soldeConsolide, devise)}
-        </p>
+        <div className={monoDevise ? "mt-4" : "mt-4 flex flex-col gap-2"}>
+          {lignesSolde.map((s) => (
+            <p
+              key={s.currency}
+              className={
+                monoDevise
+                  ? "text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary"
+                  : "text-xl font-bold leading-tight tracking-tight tabular-nums text-primary"
+              }
+            >
+              {formatMontant(s.total, s.currency)}
+            </p>
+          ))}
+        </div>
       </StateCard>
 
       {/* Carte DÉTAILS (§1.3) : rangées KPI entrées/sorties/variation. */}
