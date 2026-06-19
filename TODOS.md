@@ -129,6 +129,74 @@ Reste deux dettes à la frontière Backend :
   a été ÉCARTÉ — la provenance vit dans la carte comptes (plus lisible), et `TransactionRecente`
   ne porte pas le nom (que `bankAccountId`). À rouvrir avec DASH-INST1 si besoin produit.
 
+### Solde Total dérivé des soldes courants, par devise (2026-06-19)
+
+Le « Solde Total » du dashboard était à 0 et la courbe bloquée sur « en cours de
+synchronisation » parce que TOUT dépendait de `balance_history`, VIDE (sa seule source
+`/balances/history` est 404 chez Omni-FI, cf. §10). Décision PO (2026-06-19) : dériver le
+Solde Total des **soldes courants** (`bank_accounts.current_balance`, bien remplis), **par
+devise** (multi-devises, jamais d'addition cross-devise).
+
+- [x] **DASH-SOLDE1 (Backend) — `soldesCourantsParDevise`** — ✅ LIVRÉ
+  (branche `feat/dashboard-solde-multidevise`). `repositories/dashboard.ts` : nouvelle
+  fonction (somme `current_balance` GROUP BY devise, SQL/numeric, comptes sélectionnés) +
+  type `SoldeParDevise { currency, total }`. Indépendant de `balance_history`. 2 tests
+  d'isolation (multi-devises MUR+USD, source = current_balance).
+- [ ] **DASH-SOLDE2 (P1, FRONTIÈRE FRONT) — câbler le Solde Total par devise dans l'UI** —
+  Effort S, **gardien Front**. La carte « SOLDE » (`dashboard-content.tsx` / le KPI haut)
+  consomme aujourd'hui `soldeConsolide: string` (un montant unique = 0). À remplacer par la
+  consommation de `soldesCourantsParDevise(tx)` → afficher une ligne par devise (« 8 074 400
+  MUR » + « 179 200 USD »), `tabular-nums`. La page (`(dashboard)/page.tsx`) doit appeler la
+  nouvelle fonction et passer `SoldeParDevise[]` au composant. **Déclencheur** : merge de
+  DASH-SOLDE1. Backend prêt (contract-first) ; Front câble le rendu.
+- [ ] **DASH-FX1 (P2) — conversion FX vers `base_currency` (un seul « Solde Total »)** —
+  Effort M, gardien Backend. Pour afficher UN chiffre consolidé (pas une ligne par devise),
+  il faut convertir USD/EUR → MUR (`base_currency` du workspace) avec un **taux + date
+  annotés** (CLAUDE.md : conversion FX annotée, jamais de float). EXIGE une source de taux
+  (table de taux, API FX). **Déclencheur** : besoin produit d'un total unique cross-devise.
+  Tant qu'absent, l'affichage par devise (DASH-SOLDE2) est la voie correcte — aucun taux
+  inventé.
+
+### Synchronisation automatique des soldes/transactions (2026-06-19)
+
+À la connexion (Finish → `finaliserConnexionDropinAction`), les COMPTES sont déjà rattachés
+auto (découverte `/accounts`). Mais les SOLDES (rafraîchis) et les TRANSACTIONS exigent
+aujourd'hui un clic manuel « Synchroniser mes comptes » (`synchroniserConnexionsAction`).
+
+- [ ] **DASH-AUTOSYNC1 (P1) — synchro auto en arrière-plan** — Effort M-L, gardien Backend.
+  Éviter que l'utilisateur doive cliquer « Synchroniser » après chaque ajout de banque.
+  Pistes : (a) **cron Inngest** périodique (déjà au stack) qui rejoue
+  `synchroniserConnexionsDepuisOmnifi` + `synchroniserCompteComplet` par workspace ; (b)
+  **webhook Omni-FI** (si disponible) déclenchant la synchro sur événement amont ; (c)
+  déclenchement **post-Finish** (enchaîner une synchro légère après finalisation). Contraintes
+  NON négociables : rate-limit amont (`sync` 1/15min/connexion, CLAUDE.md), idempotence
+  (upserts déjà idempotents), isolation tenant (`withWorkspace`), pas de PII en log. **À
+  concevoir dans un chantier dédié** (scheduling + observabilité), PAS dans une PR de feature.
+  **Déclencheur** : DÛ pour un MVP production (sinon données « figées » entre deux clics
+  manuels). Lié à OMNIFI_API_FEEDBACK.md (la voie curseur `/sync` aiderait pour les deltas).
+
+### Purge locale des données de démo (runbook dev, 2026-06-19)
+
+Question récurrente : « comment repartir d'une base ne contenant QUE mes connexions
+manuelles ? ». Réponse : les 4 banques (Absa/Bank One/MCB/SBM) viennent de l'**EndUser
+sandbox côté Omni-FI** (provisionné), pas de notre seed. Purger la base LOCALE est
+possible, mais la prochaine synchro re-rapatrie tout ce que l'EndUser a côté Omni-FI (le
+vrai « reset » serait un EndUser neuf côté Omni-FI, hors de notre portée).
+
+Procédure de purge LOCALE (dev uniquement, JAMAIS en prod — `transactions_cache` est
+append-only avec trigger ; on passe par l'owner pour contourner) :
+```bash
+# Dans le conteneur de validation, rôle owner (le trigger BEFORE DELETE bloque tygr_app) :
+docker exec -i tygr_postgres psql -U tygr_owner -d tygr <<'SQL'
+  -- ordre = enfants avant parents (FK) ; truncate cascade contourne l'append-only.
+  TRUNCATE transactions_cache, balance_history, bank_accounts, bank_connections RESTART IDENTITY CASCADE;
+SQL
+# Puis re-synchroniser UNIQUEMENT les banques voulues via le widget / bouton.
+```
+NB : `TRUNCATE … CASCADE` par l'owner outrepasse le trigger `BEFORE DELETE` (qui ne se
+déclenche pas sur TRUNCATE) — acceptable EN DEV seulement. En prod, l'effacement reste
+logique (`is_removed`), jamais physique.
+
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 
 Symptôme : base injoignable (Neon/wsproxy down) → 500 brut + crash de

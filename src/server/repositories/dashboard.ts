@@ -38,6 +38,19 @@ export interface CompteConnecte {
   lastSyncedAt: Date | null;
 }
 
+/**
+ * Solde consolidé COURANT d'une devise (somme des `current_balance` des comptes de
+ * cette devise). Multi-devises (CLAUDE.md) : on NE somme JAMAIS entre devises — on
+ * expose une ligne PAR devise, l'UI les affiche côte à côte (« 7 074 400 MUR » +
+ * « 179 200 USD »). La conversion vers la base_currency (FX annoté) est un chantier
+ * séparé (TODOS DASH-FX1) ; tant qu'il n'existe pas, on n'invente aucun taux.
+ */
+export interface SoldeParDevise {
+  currency: string;
+  /** Somme des soldes courants de la devise, chaîne décimale (règle 8). */
+  total: string;
+}
+
 export interface PointCourbe {
   date: string; // YYYY-MM-DD (jour comptable Maurice)
   soldeConsolide: string; // somme EOD multi-comptes, chaîne numeric
@@ -115,6 +128,30 @@ export async function soldeConsolideCourant(tx: Tx): Promise<string> {
       ),
     );
   return res[0]?.total ?? "0";
+}
+
+/**
+ * Soldes consolidés COURANTS par devise — somme de `bank_accounts.current_balance`
+ * des comptes sélectionnés, GROUP BY devise. C'est la source du « Solde Total » du
+ * dashboard : elle ne dépend PAS de `balance_history` (vide tant qu'Omni-FI n'expose
+ * pas `/balances/history`, cf. OMNIFI_API_FEEDBACK.md §10), contrairement à
+ * `soldeConsolideCourant` (réservé aux usages EOD historiques).
+ *
+ * Multi-devises (CLAUDE.md, règle 8) : agrégat EN SQL (numeric), une ligne par
+ * devise, jamais d'addition cross-devise. Les comptes à `current_balance` NULL sont
+ * ignorés par `sum`. Ordonné par devise pour un affichage stable.
+ */
+export async function soldesCourantsParDevise(tx: Tx): Promise<SoldeParDevise[]> {
+  const lignes = await tx
+    .select({
+      currency: bankAccounts.currency,
+      total: sql<string>`coalesce(sum(${bankAccounts.currentBalance}), 0)::text`,
+    })
+    .from(bankAccounts)
+    .where(eq(bankAccounts.isSelected, true))
+    .groupBy(bankAccounts.currency)
+    .orderBy(bankAccounts.currency);
+  return lignes;
 }
 
 /**
