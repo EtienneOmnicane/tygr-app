@@ -30,9 +30,18 @@ import {
   type OmniFISuccessPayload,
 } from "@omni-fi/react-link";
 
+/** Normalise le payload de `onSuccess` en LISTE de connexions (interne). */
+function connexionsDepuisPayload(
+  payload: OmniFISuccessPayload | OmniFIConnection[],
+): OmniFIConnection[] {
+  if (Array.isArray(payload)) return payload;
+  return Array.isArray(payload?.connections) ? payload.connections : [];
+}
+
 /**
- * Normalise le payload de `onSuccess` en LISTE de connexions, quelle que soit la
- * forme que le CDN nous envoie.
+ * Extrait les PublicTokens valides du payload `onSuccess`, quelle que soit la forme
+ * que le CDN nous envoie. Fonction PURE (testée) — toute la robustesse du contrat
+ * externe instable est ici, pas dans le composant React.
  *
  * ⚠️ DIVERGENCE CONTRAT SDK (vérifiée runtime 2026-06-19, cf. OMNIFI_API_FEEDBACK.md) :
  * les TYPES et le README vendorés (`@omni-fi/react-link`) déclarent
@@ -40,15 +49,20 @@ import {
  * loader CDN déployé (`omni-fi-connect.js`, `e.onSuccess(n.connections)`) passe le
  * TABLEAU NU. Notre code suivait les types → `payload.connections` était `undefined`
  * → `TypeError: Cannot read properties of undefined (reading 'map')`, le widget
- * restait bloqué sur « Finishing… ». On accepte donc les DEUX formes : on survit que
- * le CDN se réaligne sur sa doc (objet) OU reste tel quel (tableau), sans nouveau
- * déploiement de notre part.
+ * restait bloqué sur « Finishing… ».
+ *
+ * Trois niveaux de tolérance, parce que le contrat amont n'est pas stable :
+ *  1. forme du conteneur : tableau nu OU `{ connections }` ;
+ *  2. élément dégénéré : `c?.publicToken` — un élément null/undefined ne fait pas crasher ;
+ *  3. token invalide : on ne garde que les strings non vides.
+ * Aucun de ces cas ne doit jeter (sinon retour du blocage « Finishing… »).
  */
-export function connexionsDepuisPayload(
+export function publicTokensDepuisPayload(
   payload: OmniFISuccessPayload | OmniFIConnection[],
-): OmniFIConnection[] {
-  if (Array.isArray(payload)) return payload;
-  return Array.isArray(payload?.connections) ? payload.connections : [];
+): string[] {
+  return connexionsDepuisPayload(payload)
+    .map((c) => c?.publicToken)
+    .filter((t): t is string => typeof t === "string" && t.length > 0);
 }
 
 /**
@@ -82,11 +96,9 @@ export function OmniFiLinkLauncher({
       // Signal de fin (clic « Finish ») : on remonte les publicToken (jamais loggés)
       // à la finalisation serveur. Le payload peut porter PLUSIEURS banques.
       // Le handshake `parentOrigin` (qui empêchait ce callback en sandbox) est
-      // RÉSOLU côté CDN (ready/ack, vérifié runtime 2026-06-19). On normalise la
-      // forme du payload (tableau nu OU { connections }) — cf. connexionsDepuisPayload.
-      const tokens = connexionsDepuisPayload(payload)
-        .map((c) => c.publicToken)
-        .filter((t): t is string => typeof t === "string" && t.length > 0);
+      // RÉSOLU côté CDN (ready/ack, vérifié runtime 2026-06-19). Toute la tolérance
+      // de forme/robustesse est dans la fonction pure testée `publicTokensDepuisPayload`.
+      const tokens = publicTokensDepuisPayload(payload);
       if (tokens.length > 0) onConnexions(tokens);
     },
     onExit: onClose,
