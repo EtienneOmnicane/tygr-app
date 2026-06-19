@@ -25,9 +25,31 @@ import { useEffect } from "react";
 
 import {
   useOmniFILink,
+  type OmniFIConnection,
   type OmniFIEnv,
   type OmniFISuccessPayload,
 } from "@omni-fi/react-link";
+
+/**
+ * Normalise le payload de `onSuccess` en LISTE de connexions, quelle que soit la
+ * forme que le CDN nous envoie.
+ *
+ * ⚠️ DIVERGENCE CONTRAT SDK (vérifiée runtime 2026-06-19, cf. OMNIFI_API_FEEDBACK.md) :
+ * les TYPES et le README vendorés (`@omni-fi/react-link`) déclarent
+ * `OmniFISuccessPayload = { connections: OmniFIConnection[] }` (un OBJET), MAIS le
+ * loader CDN déployé (`omni-fi-connect.js`, `e.onSuccess(n.connections)`) passe le
+ * TABLEAU NU. Notre code suivait les types → `payload.connections` était `undefined`
+ * → `TypeError: Cannot read properties of undefined (reading 'map')`, le widget
+ * restait bloqué sur « Finishing… ». On accepte donc les DEUX formes : on survit que
+ * le CDN se réaligne sur sa doc (objet) OU reste tel quel (tableau), sans nouveau
+ * déploiement de notre part.
+ */
+export function connexionsDepuisPayload(
+  payload: OmniFISuccessPayload | OmniFIConnection[],
+): OmniFIConnection[] {
+  if (Array.isArray(payload)) return payload;
+  return Array.isArray(payload?.connections) ? payload.connections : [];
+}
 
 /**
  * Environnement CDN du widget (NEXT_PUBLIC_OMNIFI_ENV : "staging" pour le sandbox
@@ -56,14 +78,13 @@ export function OmniFiLinkLauncher({
   const { open, isReady } = useOmniFILink({
     token,
     env: envWidget(),
-    onSuccess: (payload: OmniFISuccessPayload) => {
+    onSuccess: (payload: OmniFISuccessPayload | OmniFIConnection[]) => {
       // Signal de fin (clic « Finish ») : on remonte les publicToken (jamais loggés)
       // à la finalisation serveur. Le payload peut porter PLUSIEURS banques.
-      // NB : en sandbox, un bug du widget CDN empêchait ce callback (canal postMessage
-      // « parentOrigin not established ») — correctif attendu côté API Omni-FI
-      // (cf. OMNIFI_API_FEEDBACK.md §5). En attendant, une re-synchro manuelle via
-      // GET /connections reste disponible (synchroniserConnexionsAction).
-      const tokens = payload.connections
+      // Le handshake `parentOrigin` (qui empêchait ce callback en sandbox) est
+      // RÉSOLU côté CDN (ready/ack, vérifié runtime 2026-06-19). On normalise la
+      // forme du payload (tableau nu OU { connections }) — cf. connexionsDepuisPayload.
+      const tokens = connexionsDepuisPayload(payload)
         .map((c) => c.publicToken)
         .filter((t): t is string => typeof t === "string" && t.length > 0);
       if (tokens.length > 0) onConnexions(tokens);

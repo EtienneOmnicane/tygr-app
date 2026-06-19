@@ -118,10 +118,11 @@ export async function demarrerConnexionAction(
 }
 
 /**
- * Entrée du widget DROP-IN (hook `useOmniFILink`) : `onSuccess` rend
- * `{ connections: [...] }` → le composant nous transmet la LISTE des PublicTokens
- * (un par connexion). On borne la liste (1..20 connexions, tokens bornés) pour ne
- * pas accepter de payload non contrôlé.
+ * Entrée du widget DROP-IN (hook `useOmniFILink`) : `onSuccess` remonte les
+ * connexions abouties → le composant (après normalisation de la forme du payload,
+ * cf. `omnifi-link-launcher.tsx`) nous transmet la LISTE des PublicTokens (un par
+ * connexion). On borne la liste (1..20 connexions, tokens bornés) pour ne pas
+ * accepter de payload non contrôlé.
  */
 const dropinSchema = z
   .object({
