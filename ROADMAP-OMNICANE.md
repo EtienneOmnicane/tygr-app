@@ -193,12 +193,21 @@ Option i18n (next-intl) si bilingue voulu plutôt que bascule sèche. **P3, hors
 
 ---
 
-## Ordre recommandé (synthèse)
+## ⚠️ Correctif (2026-06-19, vérifié) : pas de base Neon cloud aujourd'hui
 
-1. **DB-MIGRATE1** — appliquer le fix migration sur Neon (P1, rapide, évite que le crash
-   `/transactions` réapparaisse en prod). *Le câblage est mergé (#72), reste à l'exécuter sur Neon.*
-2. **DASH-AUTOSYNC1 / 4bis** — pourquoi 0 transaction ? (P1, c'est ce qui vide les écrans en démo).
-3. **Entités + rôles (points 2 & 3)** — LE chantier démo n°1. Plan écrit d'abord (`/plan-eng-review`).
-4. **Test API prod (point 5)** — plan dédié, garde-fous sécu (P2, avant démo « vrai compte »).
-5. **Déploiement (point 7)** — comparatif + choix + runbook (P2).
+Vérification de l'env : `DATABASE_URL` ET `DATABASE_URL_ADMIN` pointent sur le conteneur
+Docker **local** (`tygr_postgres:5432`), via `NEON_WSPROXY_LOCAL=localhost:5433`. **Aucune
+URL `neon.tech`, aucun `.env.production/.staging`.** « Neon » n'est que le DRIVER
+(`@neondatabase/serverless`, WebSocket) ; la seule base réelle est le Docker local, déjà à
+jour (fix #72 appliqué). **Conséquence** : **DB-MIGRATE1 n'a rien à migrer maintenant** — il n'y
+a pas de base cloud. Il devient un **point de déploiement** : DÛ le jour où une instance cloud est
+créée (dépend donc du point 7). On ne migre pas une base qui n'existe pas.
+
+## Ordre recommandé (synthèse, corrigé)
+
+1. **DASH-AUTOSYNC1 / 4bis** — pourquoi 0 transaction ? (P1, c'est ce qui vide les écrans en démo).
+2. **Entités + rôles (points 2 & 3)** — LE chantier démo n°1. Plan écrit d'abord (`/plan-eng-review`).
+3. **Test API prod (point 5)** — plan dédié, garde-fous sécu (P2, avant démo « vrai compte »).
+4. **Déploiement (point 7)** — comparatif + choix + création de l'instance cloud + runbook (P2).
+5. **DB-MIGRATE1** — baseline+migrate sur la base cloud, **une fois qu'elle existe** (étape 4).
 6. **Scalabilité (6)** puis **refacto anglais (8)** — post-démo (P3).

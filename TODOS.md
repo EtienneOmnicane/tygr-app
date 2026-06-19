@@ -26,15 +26,16 @@ idempotent reproduisant à l'identique le format du suivi (sha256 du .sql brut,
 schéma `drizzle`, created_at = `when` du journal). Pipeline `db:provision → db:migrate
 → deploy` enfin RÉELLE (avant : étape migrate fantôme, cf. commentaire provision.mjs:6).
 
-- [ ] **DB-MIGRATE1 (P1) — appliquer baseline+migrate sur Neon et la CI** — Effort S,
-  gardien Backend. La correction n'a touché QUE la base LOCALE (`tygr_postgres`). **Neon
-  (staging/prod) a très probablement le même drift** (0005/0006 jamais appliquées par un
-  migrator). Sur une base pré-existante : `npm run db:baseline` UNE FOIS (adopte
-  l'existant sans rejeu), puis `npm run db:migrate`. **Sur base NEUVE** : `db:migrate`
-  direct (PAS de baseline), puis **re-`db:provision`** pour poser les GRANT DELETE des
-  tables liste-blanche créées entre-temps (cf. suivi #3bis). **Déclencheur** : 1er déploiement
-  / prochaine synchro Neon. Le pipeline CI (règle 9) doit intégrer l'étape `db:migrate`
-  après `db:provision`.
+- [ ] **DB-MIGRATE1 (P2, point de DÉPLOIEMENT) — baseline+migrate sur la base cloud** —
+  Effort S, gardien Backend. ⚠️ **CORRIGÉ 2026-06-19** : il n'existe AUCUNE base Neon cloud
+  aujourd'hui. `DATABASE_URL` ET `DATABASE_URL_ADMIN` pointent sur le Docker LOCAL
+  (`tygr_postgres:5432` via `NEON_WSPROXY_LOCAL`) ; aucune URL `neon.tech`, aucun
+  `.env.production`. « Neon » = juste le driver WebSocket. **La seule base réelle (Docker local)
+  est DÉJÀ à jour** (fix appliqué). Donc rien à migrer maintenant. **Dépend du déploiement**
+  (point 7 ROADMAP) : le jour où une instance cloud est créée, lancer `db:baseline` UNE FOIS
+  (si base pré-existante) puis `db:migrate` — OU sur base NEUVE `db:migrate` direct (PAS de
+  baseline) puis re-`db:provision` (GRANT DELETE liste-blanche, cf. #3bis). **Déclencheur** :
+  création de l'instance cloud / 1er déploiement réel.
 - [ ] **DB-MIGRATE2 (P2) — intégrer `db:migrate` à la CI bloquante** — Effort S. La
   pipeline canonique (CLAUDE.md règle 9 : lint→typecheck→tests→isolation→build→migrations)
   n'a pas d'étape migrate exécutée. Ajouter `db:provision && db:migrate` contre une base
