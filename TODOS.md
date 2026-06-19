@@ -207,6 +207,34 @@ NB : `TRUNCATE … CASCADE` par l'owner outrepasse le trigger `BEFORE DELETE` (q
 déclenche pas sur TRUNCATE) — acceptable EN DEV seulement. En prod, l'effacement reste
 logique (`is_removed`), jamais physique.
 
+### Findings /design-review du Dashboard (UI, 2026-06-19)
+
+Audit `--quick` du Dashboard contre `UI_GUIDELINES`/`DESIGN.md` (Visual QA headless
+`/demo/dashboard`). **Verdict : Design A− / AI-Slop A** — dashboard propre, layout
+asymétrique conforme, typo réelle (Instrument Sans/Geist), ZÉRO pattern slop. 3 findings
+mineurs, AUCUN bloquant, NON corrigés (décision PO 2026-06-19 : tracer, le dashboard est
+suffisant) :
+
+- [ ] **DR-F1 (P2, medium) — catégories de transactions en ANGLAIS dans l'UI française** —
+  Effort S, gardien Front (avec appui Backend si mapping côté data). `transactions-table.tsx:54`
+  (et la table dashboard) affiche `t.primaryCategory` BRUT → « Income », « Utilities »,
+  « Rent » dans une interface 100 % française (catégories OBIE anglaises côté Omni-FI). C'est
+  le finding le PLUS visible. Piste : table de correspondance FR (`Income`→« Revenus »,
+  `Utilities`→« Charges », `Rent`→« Loyer », `Bank Charges`→« Frais bancaires »…) appliquée à
+  l'affichage, ou exposer une catégorie déjà localisée. **Déclencheur** : 1re relecture FR
+  sérieuse / démo client francophone.
+- [ ] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
+  Effort S, gardien Front. `connected-accounts-card.tsx:68` met banque + compte sur UNE ligne
+  `truncate` (300px) → « The Mauritius Commercial Bank · MCB — … », le nom de compte est mangé
+  (le `title`/tooltip sauve l'info au survol seulement). Piste : 2 lignes (banque en label
+  `text-muted` au-dessus, nom de compte dessous) plutôt qu'une ligne tronquée. **Déclencheur** :
+  chantier polish side-panel.
+- [ ] **DR-F3 (P3, polish) — méta « au JJ/MM » sous un solde COURANT** —
+  Effort S, gardien Front. La carte SOLDE affiche « au 12/06 » (`dateSolde` = dernier point de
+  courbe / dernière synchro) alors que le montant est le solde COURANT (`current_balance`), pas
+  l'EOD de cette date → léger décalage sémantique. Piste : « à l'instant » / libellé de dernière
+  synchro explicite, ou retirer la méta pour le solde courant. **Déclencheur** : chantier polish.
+
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 
 Symptôme : base injoignable (Neon/wsproxy down) → 500 brut + crash de
