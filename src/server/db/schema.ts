@@ -191,6 +191,13 @@ export const bankConnections = pgTable(
       .notNull()
       .unique(),
     institutionId: varchar("institution_id", { length: 64 }).notNull(),
+    /**
+     * Nom lisible de l'institution (`OmniFiConnection.InstitutionName`, ex.
+     * « Absa Internet Banking »). NULLABLE : expand-compatible (les connexions
+     * créées avant cette colonne restent à NULL ; l'UI dégrade proprement —
+     * DASH-INST1). Renseigné/rafraîchi à chaque ingestion de connexion.
+     */
+    institutionName: varchar("institution_name", { length: 140 }),
     status: varchar("status", { length: 20 }).notNull().default("active"),
     /** Rate-limit amont : aucun POST /sync avant cet horodatage. */
     nextSyncAvailableAt: timestamp("next_sync_available_at", {

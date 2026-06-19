@@ -25,6 +25,8 @@ type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 export interface ConnexionAUpserter {
   omnifiConnectionId: string;
   institutionId: string;
+  /** Nom lisible de l'institution (ex. « Absa Internet Banking ») ; null si absent. */
+  institutionName: string | null;
   status: string;
   nextSyncAvailableAt: Date | null;
 }
@@ -72,6 +74,7 @@ export async function upsertConnexion<TDb extends AnyPgDatabase>(
       workspaceId: ctx.workspaceId,
       omnifiConnectionId: c.omnifiConnectionId,
       institutionId: c.institutionId,
+      institutionName: c.institutionName,
       status: c.status,
       nextSyncAvailableAt: c.nextSyncAvailableAt,
       createdBy: ctx.userId,
@@ -79,6 +82,9 @@ export async function upsertConnexion<TDb extends AnyPgDatabase>(
     .onConflictDoUpdate({
       target: bankConnections.omnifiConnectionId,
       set: {
+        // On rafraîchit le nom à chaque ingestion (l'institution peut être
+        // renommée amont, ou la 1re ingestion l'avait laissé NULL).
+        institutionName: c.institutionName,
         status: c.status,
         nextSyncAvailableAt: c.nextSyncAvailableAt,
       },

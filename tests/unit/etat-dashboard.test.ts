@@ -31,6 +31,7 @@ const UN_COMPTE = [
   {
     bankAccountId: "acc-1",
     accountName: "Compte test",
+    institutionName: "Banque test",
     currency: "MUR",
     currentBalance: "1000.00",
     lastSyncedAt: new Date("2026-06-12T00:00:00Z"),

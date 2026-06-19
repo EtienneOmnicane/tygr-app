@@ -62,3 +62,21 @@ export function validerCreditDebit(valeur: string): "Credit" | "Debit" {
   }
   return valeur;
 }
+
+/** Longueur max du nom d'institution persisté (= varchar de `bank_connections.institution_name`). */
+export const INSTITUTION_NAME_MAX = 140;
+
+/**
+ * Normalise le nom d'institution remonté par l'API (`OmniFiConnection.InstitutionName`)
+ * avant persistance. C'est une string libre amont (non contractuelle) : on est défensif.
+ * - absente / vide après trim → `null` (la colonne est nullable, l'UI dégrade) ;
+ * - trim des espaces de bord ;
+ * - tronquée à `INSTITUTION_NAME_MAX` pour ne jamais dépasser la colonne (sinon
+ *   l'insert échouerait et ferait planter toute la synchro pour un simple libellé).
+ */
+export function normaliserNomInstitution(valeur: string | null | undefined): string | null {
+  if (typeof valeur !== "string") return null;
+  const trim = valeur.trim();
+  if (trim.length === 0) return null;
+  return trim.length > INSTITUTION_NAME_MAX ? trim.slice(0, INSTITUTION_NAME_MAX) : trim;
+}

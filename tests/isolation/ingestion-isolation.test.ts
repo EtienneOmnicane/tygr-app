@@ -50,6 +50,7 @@ async function prerequisCompte(
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: omnifiConnId,
       institutionId: "mcb",
+      institutionName: "MCB (fixture)",
       status: "active",
       nextSyncAvailableAt: null,
     });
@@ -155,5 +156,41 @@ describe("isolation des écritures d'ingestion (RLS, partitions incluses)", () =
     // Une seule version ACTIVE (celle du 11) ; l'ancienne (10) est tombstoned.
     expect(actives.length).toBe(1);
     expect(actives[0].transactionDate).toBe("2026-06-11");
+  });
+
+  // DASH-DEDUP1 : un compte re-synchronisé NE crée PAS de doublon (le Front a
+  // signalé des comptes en double à l'écran → on prouve ici que l'upsert respecte
+  // la contrainte UNIQUE(omnifi_account_id), MÊME quand le compte est re-découvert
+  // via une connexion DIFFÉRENTE (cas réel : l'utilisateur reconnecte sa banque).
+  it("idempotence compte : ré-upsert du même omnifi_account_id ne duplique pas (DASH-DEDUP1)", async () => {
+    // 1re découverte du compte via la connexion conn-d1.
+    await prerequisCompte(sessionA, "conn-d1", "acc-shared");
+
+    // 2e découverte du MÊME compte via une AUTRE connexion (conn-d2) + libellé différent.
+    await withWorkspace(sessionA, async (tx, ctx) => {
+      const { connectionId } = await upsertConnexion(tx, ctx, {
+        omnifiConnectionId: "conn-d2",
+        institutionId: "mcb",
+        institutionName: "MCB (reconnexion)",
+        status: "active",
+        nextSyncAvailableAt: null,
+      });
+      await upsertCompte(tx, ctx, connectionId, {
+        omnifiAccountId: "acc-shared", // MÊME identifiant Omni-FI
+        accountName: "Compte courant (maj)",
+        currency: "MUR",
+        currentBalance: "2000.00",
+        isSelected: true,
+      });
+    });
+
+    const comptes = await withWorkspace(sessionA, (tx) =>
+      tx.select().from(schema.bankAccounts),
+    );
+    const memeCompte = comptes.filter((c) => c.omnifiAccountId === "acc-shared");
+    // UNE SEULE ligne (pas de doublon) ; le 2e upsert a MIS À JOUR (libellé/solde).
+    expect(memeCompte.length).toBe(1);
+    expect(memeCompte[0].accountName).toBe("Compte courant (maj)");
+    expect(memeCompte[0].currentBalance).toBe("2000.00");
   });
 });

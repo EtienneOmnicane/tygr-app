@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriverDateComptableMaurice,
+  INSTITUTION_NAME_MAX,
   normaliserMontant,
+  normaliserNomInstitution,
   validerCreditDebit,
 } from "@/server/ingestion/conversion";
 import { OmniFiInvalidResponseError } from "@/server/omnifi";
@@ -53,5 +55,34 @@ describe("validerCreditDebit", () => {
     expect(validerCreditDebit("Credit")).toBe("Credit");
     expect(validerCreditDebit("Debit")).toBe("Debit");
     expect(() => validerCreditDebit("Other")).toThrow(OmniFiInvalidResponseError);
+  });
+});
+
+describe("normaliserNomInstitution (DASH-INST1 — string libre amont, défensif)", () => {
+  it("conserve un nom normal", () => {
+    expect(normaliserNomInstitution("Absa Internet Banking")).toBe("Absa Internet Banking");
+  });
+
+  it("trim les espaces de bord", () => {
+    expect(normaliserNomInstitution("  MCB  ")).toBe("MCB");
+  });
+
+  it("absent / vide / blanc → null (colonne nullable, l'UI dégrade)", () => {
+    expect(normaliserNomInstitution(null)).toBeNull();
+    expect(normaliserNomInstitution(undefined)).toBeNull();
+    expect(normaliserNomInstitution("")).toBeNull();
+    expect(normaliserNomInstitution("   ")).toBeNull();
+  });
+
+  it("non-string (réponse amont inattendue) → null sans throw", () => {
+    expect(normaliserNomInstitution(42 as never)).toBeNull();
+    expect(normaliserNomInstitution({} as never)).toBeNull();
+  });
+
+  it("tronque au-delà de la longueur de colonne (jamais d'insert qui dépasse)", () => {
+    const long = "X".repeat(INSTITUTION_NAME_MAX + 50);
+    const out = normaliserNomInstitution(long);
+    expect(out).not.toBeNull();
+    expect(out!.length).toBe(INSTITUTION_NAME_MAX);
   });
 });

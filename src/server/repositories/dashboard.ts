@@ -15,6 +15,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
   bankAccounts,
+  bankConnections,
   balanceHistory,
   transactionsCache,
 } from "@/server/db/schema";
@@ -30,6 +31,8 @@ type Tx = WorkspaceTx<AnyPgDatabase>;
 export interface CompteConnecte {
   bankAccountId: string;
   accountName: string;
+  /** Nom lisible de la banque (« Absa Internet Banking »), via la connexion ; null si absent. */
+  institutionName: string | null;
   currency: string;
   currentBalance: string | null;
   lastSyncedAt: Date | null;
@@ -69,11 +72,15 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
     .select({
       bankAccountId: bankAccounts.id,
       accountName: bankAccounts.accountName,
+      // Provenance bancaire (DASH-INST1) : le nom vit sur la connexion. innerJoin
+      // sûr car bank_accounts.connection_id est NOT NULL (tout compte a une connexion).
+      institutionName: bankConnections.institutionName,
       currency: bankAccounts.currency,
       currentBalance: bankAccounts.currentBalance,
       lastSyncedAt: bankAccounts.lastSyncedAt,
     })
     .from(bankAccounts)
+    .innerJoin(bankConnections, eq(bankAccounts.connectionId, bankConnections.id))
     .where(eq(bankAccounts.isSelected, true))
     .orderBy(bankAccounts.accountName);
   return lignes;
