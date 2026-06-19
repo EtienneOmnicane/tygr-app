@@ -62,6 +62,25 @@ type EtatFinalisationUI = EtatFinalisation & { complet?: boolean };
 
 const ETAT_FINALISATION_VIDE: EtatFinalisationUI = { erreur: null, succes: null };
 
+/** Icône « flèches circulaires » (↻) du bouton de synchronisation. Décorative. */
+function IconeSynchro() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" />
+      <path d="M12.2 1.8v2.6h-2.6M3.8 14.2v-2.6h2.6" />
+    </svg>
+  );
+}
+
 /**
  * Launcher chargé via `next/dynamic` (`ssr:false`) : le hook `useOmniFILink` touche
  * `window` / un script CDN et ne doit pas s'exécuter côté serveur.
@@ -183,21 +202,22 @@ export function BankConnectWidget({
         </form>
 
         {/* Re-synchronisation manuelle (GET /connections) — relit l'état réel chez
-            Omni-FI et rattache les comptes. Sert surtout de RATTRAPAGE quand une
-            banque connectée n'apparaît pas (widget non finalisé). Présenté comme un
-            LIEN D'ACTION (§2.3), pas un bouton de même rang que l'action principale :
-            son libellé dit QUAND s'en servir. */}
+            Omni-FI et rattache/met à jour les comptes. Action PERMANENTE de
+            rafraîchissement des données (et repli si le widget n'a pas finalisé).
+            Lien d'action (§2.3), de rang secondaire à l'action principale ; le
+            tooltip précise ce qu'elle fait. Idempotent côté serveur. */}
         <button
           type="button"
           onClick={synchroniser}
           disabled={Boolean(tokenActif) || redirection}
-          title="Relit vos connexions chez votre banque et rattache les comptes manquants."
-          className="inline-flex h-10 items-center gap-1 rounded-control px-2 text-sm
+          title="Relit vos connexions chez votre banque et met à jour vos comptes (y compris ceux qui n’apparaîtraient pas encore)."
+          className="inline-flex h-10 items-center gap-1.5 rounded-control px-2 text-sm
             font-semibold text-primary transition-colors hover:text-primary-600
             hover:underline focus:outline-none focus-visible:ring-2
             focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-48"
         >
-          Une banque n’apparaît pas ?
+          <IconeSynchro />
+          Synchroniser mes comptes
         </button>
       </div>
 
