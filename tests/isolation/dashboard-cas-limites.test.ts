@@ -17,6 +17,7 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   courbeTresorerie,
   soldeConsolideCourant,
+  soldesCourantsParDevise,
   syntheseMois,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
@@ -147,6 +148,39 @@ describe("syntheseMois — cas limites", () => {
     expect(juin.entrees).toBe("750.00"); // le 111 de juillet n'est pas compté
     const juil = await withWorkspace(session, (tx) => syntheseMois(tx, "2026-07"));
     expect(juil.entrees).toBe("111.00");
+  });
+});
+
+describe("soldesCourantsParDevise — multi-devises (DASH-INST1 / solde courant)", () => {
+  // Données propres à ce describe : on pose des current_balance (les comptes du
+  // setup n'en ont pas) + un 3e compte USD pour prouver le GROUP BY devise. On
+  // insère hors RLS (reset role), comme le test « borne haute exclusive ».
+  const ACC_USD = "cccc3333-cccc-4ccc-8ccc-cccccccccccc";
+  beforeAll(async () => {
+    await client.exec(`reset role;`);
+    await client.exec(`
+      update bank_accounts set current_balance = '7074400.00' where id = '${ACC1}';
+      update bank_accounts set current_balance = '1000000.00' where id = '${ACC2}';
+      insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected) values
+        ('${ACC_USD}','${WS}','${CONN}','oa-usd','Compte USD','USD','179200.00',true);
+    `);
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("somme par devise, jamais d'addition cross-devise (MUR + USD séparés)", async () => {
+    const soldes = await withWorkspace(session, (tx) => soldesCourantsParDevise(tx));
+    // MUR = 7074400 + 1000000 = 8074400 ; USD = 179200. Ordonné par devise (MUR<USD).
+    expect(soldes).toEqual([
+      { currency: "MUR", total: "8074400.00" },
+      { currency: "USD", total: "179200.00" },
+    ]);
+  });
+
+  it("ne dépend PAS de balance_history (source = current_balance)", async () => {
+    // balance_history du WS ne contient que du MUR ; le compte USD n'y est pas, et
+    // il ressort quand même → preuve que la source est bien bank_accounts.
+    const soldes = await withWorkspace(session, (tx) => soldesCourantsParDevise(tx));
+    expect(soldes.some((s) => s.currency === "USD" && s.total === "179200.00")).toBe(true);
   });
 });
 
