@@ -36,6 +36,7 @@ import {
   upsertCompte,
   upsertConnexion,
 } from "@/server/repositories/ingestion";
+import { normaliserNomInstitution } from "@/server/ingestion/conversion";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 type Tx = WorkspaceTx<AnyPgDatabase>;
@@ -160,18 +161,22 @@ function soldeCourant(balances: OmniFiBalance[] | undefined): string | null {
  */
 async function persisterConnexionEtComptes(
   executer: ExecuterWorkspace,
-  echange: { ConnectionId: string; InstitutionId: string },
+  echange: {
+    ConnectionId: string;
+    InstitutionId: string;
+    // OPTIONNEL : présent quand la source le porte (GET /connections → sync), absent
+    // sur link-exchange (OmniFiPublicTokenExchangeData = ConnectionId/InstitutionId/
+    // CustomerType seulement). Quand absent → null ; l'upsert rafraîchira le nom au
+    // prochain passage d'un chemin qui le porte (DASH-INST1).
+    InstitutionName?: string | null;
+  },
   comptes: OmniFiAccount[],
 ): Promise<number> {
   return executer(async (tx, ctx) => {
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: echange.ConnectionId,
       institutionId: echange.InstitutionId,
-      // link-exchange ne renvoie PAS InstitutionName (OmniFiPublicTokenExchangeData
-      // = ConnectionId/InstitutionId/CustomerType seulement). On insère donc null ;
-      // le nom sera renseigné au prochain `ingererConnexions` (GET /connections, qui
-      // porte InstitutionName) — l'upsert rafraîchit institutionName même si NULL au départ.
-      institutionName: null,
+      institutionName: normaliserNomInstitution(echange.InstitutionName),
       status: "active",
       nextSyncAvailableAt: null,
     });
@@ -346,14 +351,24 @@ export async function synchroniserConnexionsDepuisOmnifi(
   });
 
   // 2. Lister les connexions actives de cet EndUser (ApiKey), pagination suivie.
-  const connexions: Array<{ ConnectionId: string; InstitutionId: string }> = [];
+  const connexions: Array<{
+    ConnectionId: string;
+    InstitutionId: string;
+    InstitutionName: string | null;
+  }> = [];
   let pageC = 1;
   for (;;) {
     const env = await client.listerConnexions(clientUserId, { page: pageC });
     for (const c of env.Data.Connections ?? []) {
       // On ne rattache que les connexions exploitables (actives).
       if (c.Status === "active" || c.Status === "Active") {
-        connexions.push({ ConnectionId: c.ConnectionId, InstitutionId: c.InstitutionId });
+        // GET /connections porte InstitutionName → on le propage pour le persister
+        // (DASH-INST1 ; ce chemin = bouton « Synchroniser mes comptes »).
+        connexions.push({
+          ConnectionId: c.ConnectionId,
+          InstitutionId: c.InstitutionId,
+          InstitutionName: c.InstitutionName ?? null,
+        });
       }
     }
     const totalPages = env.Meta?.TotalPages ?? 1;
