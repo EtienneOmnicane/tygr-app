@@ -19,6 +19,7 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import { peutAdministrer } from "@/lib/permissions";
 import { WorkspaceSwitcher } from "@/components/shell/workspace-switcher";
 import { AppNav } from "@/components/shell/app-nav";
+import { BankCtaLink } from "@/components/shell/bank-cta";
 
 export function AppHeader({
   workspaceId,
@@ -53,6 +54,9 @@ export function AppHeader({
           role={role}
           memberships={memberships}
         />
+        {/* CTA permanent vers /banques : seul accès à la connexion bancaire une
+            fois les états vides disparus (cf. bank-cta.tsx). Gating role à l'intérieur. */}
+        <BankCtaLink role={role} />
         {peutAdministrer(role) && (
           <Link
             href="/admin/membres"
