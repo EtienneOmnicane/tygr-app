@@ -19,14 +19,30 @@ const DECALAGE_MAURICE_MIN = 4 * 60;
  * Normalise un montant décimal OBIE en chaîne `numeric(15,2)` canonique.
  * Manipulation de chaîne uniquement (règle 8). Rejette tout format inattendu
  * avec une erreur nommée — pas de coercition silencieuse.
+ *
+ * L'API renvoie des montants à 4 décimales (« 750.0000 », convention OBIE/minor
+ * units étendue) alors que la colonne est `numeric(15,2)`. On accepte donc un
+ * nombre arbitraire de décimales, MAIS on n'en garde que 2 : les décimales au-delà
+ * de la 2e DOIVENT être des zéros (sinon ce serait une perte de centimes), sans
+ * quoi on lève une erreur nommée plutôt que d'arrondir en silence (décision PO
+ * 2026-06-19 : pas d'arrondi caché sur des montants bancaires, règle 8). « 750.0000 »
+ * → « 750.00 » (zéro perte) ; « 12.3456 » → rejet bruyant.
  */
 export function normaliserMontant(montant: string): string {
-  if (typeof montant !== "string" || !/^\d{1,13}(\.\d{1,2})?$/.test(montant.trim())) {
+  const t = typeof montant === "string" ? montant.trim() : "";
+  if (!/^\d{1,13}(\.\d+)?$/.test(t)) {
     throw new OmniFiInvalidResponseError(
-      `montant OBIE non conforme (attendu décimal positif ≤2 décimales)`,
+      `montant OBIE non conforme (attendu décimal positif)`,
     );
   }
-  const [entier, decimales = ""] = montant.trim().split(".");
+  const [entier, decimales = ""] = t.split(".");
+  // Décimales au-delà de la 2e : tolérées UNIQUEMENT si nulles (pas de perte).
+  const surplus = decimales.slice(2);
+  if (surplus.length > 0 && /[^0]/.test(surplus)) {
+    throw new OmniFiInvalidResponseError(
+      `montant OBIE à >2 décimales significatives (perte de précision refusée)`,
+    );
+  }
   const cents = decimales.padEnd(2, "0").slice(0, 2);
   // Retire les zéros de tête superflus sans vider l'entier.
   const entierNorm = entier.replace(/^0+(?=\d)/, "");

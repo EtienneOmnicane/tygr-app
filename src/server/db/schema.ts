@@ -292,7 +292,11 @@ export const transactionsCache = pgTable(
     amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
     currency: char("currency", { length: 3 }).notNull(),
     creditDebit: varchar("credit_debit", { length: 6 }).notNull(),
-    bankLabelRaw: text("bank_label_raw").notNull(),
+    // Nullable : l'API ne fournit pas toujours de Description (constaté sandbox
+    // 2026-06-19 : transactions sans libellé). « Pas de libellé brut » = null est
+    // sémantiquement valide ; cette colonne est PII et n'est JAMAIS lue côté UI
+    // (on affiche clean_label, déjà nullable, sinon un fallback neutre).
+    bankLabelRaw: text("bank_label_raw"),
     cleanLabel: varchar("clean_label", { length: 255 }),
     primaryCategory: varchar("primary_category", { length: 120 }),
     subCategory: varchar("sub_category", { length: 120 }),

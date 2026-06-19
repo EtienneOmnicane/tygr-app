@@ -50,6 +50,13 @@
       "when": 1781851686337,
       "tag": "0006_add-institution-name",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781872993828,
+      "tag": "0007_panoramic_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

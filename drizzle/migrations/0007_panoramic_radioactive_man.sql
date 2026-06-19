@@ -1,0 +1,1 @@
+ALTER TABLE "transactions_cache" ALTER COLUMN "bank_label_raw" DROP NOT NULL;

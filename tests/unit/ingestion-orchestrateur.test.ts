@@ -80,6 +80,19 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.creditDebit).toBe("Debit");
     expect(l.isRemoved).toBe(false);
   });
+
+  // Regression: DASH-AUTOSYNC1 — l'API sandbox renvoie Description absent +
+  // montants à 4 décimales nulles ; sans fix la synchro plantait (NOT NULL puis
+  // regex montant) → 0 transaction. Found by /investigate 2026-06-19.
+  it("Description absente → bankLabelRaw null (l'API ne fournit pas toujours de libellé)", () => {
+    const l = versLignePersistee(txOBIE({ Description: undefined }));
+    expect(l.bankLabelRaw).toBeNull();
+  });
+
+  it("montant à 4 décimales NULLES (format API) → numeric(15,2) sans perte", () => {
+    const l = versLignePersistee(txOBIE({ Amount: { Amount: "750.0000", Currency: "MUR" } }));
+    expect(l.amount).toBe("750.00");
+  });
 });
 
 describe("synchroniserCompte — pagination par page", () => {
