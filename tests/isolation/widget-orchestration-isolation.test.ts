@@ -52,6 +52,7 @@ function clientFactice(over: {
   exchange?: Partial<{ ConnectionId: string; InstitutionId: string; CustomerType: "business" }>;
   accounts?: Array<{ AccountId: string; Status: string; Currency: string; PartyName?: string; Balances?: unknown[] }>;
   connections?: Array<{ ConnectionId: string; InstitutionId: string; InstitutionName?: string; Status: string }>;
+  transactions?: Array<Record<string, unknown>>;
 } = {}): OmniFiClient {
   return {
     creerLinkToken: vi.fn().mockResolvedValue({ LinkToken: "lt_x", Expiration: "2026-06-15T00:15:00Z" }),
@@ -83,6 +84,12 @@ function clientFactice(over: {
         ],
       },
       Links: {},
+      Meta: { TotalPages: 1 },
+    }),
+    // GET /accounts/{id}/transactions (ingestion des transactions au fil de la synchro).
+    listerTransactionsPage: vi.fn().mockResolvedValue({
+      Data: { Transaction: over.transactions ?? [] },
+      Links: { Next: null },
       Meta: { TotalPages: 1 },
     }),
   } as unknown as OmniFiClient;
@@ -453,5 +460,38 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
       synchroniserConnexionsDepuisOmnifi(c, execWs(VIEWER_A, WS_A)),
     ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
     expect(c.listerConnexions).not.toHaveBeenCalled();
+  });
+
+  it("importe AUSSI les transactions du compte (débloque Détails + Transactions récentes)", async () => {
+    // La synchro ne doit pas seulement rattacher les comptes : elle ingère leurs
+    // transactions (pipeline par page) — sinon le dashboard reste vide.
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-tx", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-tx", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "9000.00", Currency: "MUR" } }] }],
+      transactions: [
+        {
+          TransactionId: "tx-sync-1",
+          AccountId: "oa-tx",
+          Description: "PAIEMENT CLIENT",
+          Amount: { Amount: "1500.00", Currency: "MUR" },
+          CreditDebitIndicator: "Credit",
+          Status: "Booked",
+          BookingDateTime: "2026-06-10T05:30:00Z",
+        },
+      ],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    // ≥ 1 : la synchro ingère les transactions de TOUS les comptes sélectionnés du
+    // workspace (l'état PGlite accumule les comptes des tests précédents) — la preuve
+    // ciblée est la persistance de NOTRE transaction ci-dessous.
+    expect(r.transactionsImportees).toBeGreaterThanOrEqual(1);
+    expect(c.listerTransactionsPage).toHaveBeenCalled();
+
+    // La transaction est bien persistée et visible sous le tenant A.
+    const txns = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(schema.transactionsCache)).filter((t) => t.omnifiTxnId === "tx-sync-1"),
+    );
+    expect(txns.length).toBe(1);
+    expect(txns[0].creditDebit).toBe("Credit");
   });
 });

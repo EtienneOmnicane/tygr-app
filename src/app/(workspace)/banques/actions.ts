@@ -202,9 +202,13 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       // fermer sans connecter). Message neutre.
       return { erreur: null, succes: null };
     }
+    const base = `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`;
     return {
       erreur: null,
-      succes: `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`,
+      succes:
+        r.transactionsImportees > 0
+          ? `${base} ${r.transactionsImportees} transaction(s) importée(s).`
+          : base,
     };
   } catch (erreur) {
     return {
