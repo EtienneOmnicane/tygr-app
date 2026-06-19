@@ -76,6 +76,41 @@ Plan de référence : `PLAN-transactions-page.md`.
   de la tâche CTA (refonte responsive = surface nav/switcher large). Signalé à l'humain
   dans la note de PR.
 
+### Refonte lisibilité Dashboard (UI, 2026-06-19)
+
+Travail UI livré (branche `feat/ui-dashboard-refactor`) : bouton de re-synchro
+renommé « Synchroniser mes comptes » (+ icône ↻) dans `bank-connect-widget.tsx` ;
+carte « Comptes connectés » préparée à afficher la PROVENANCE bancaire (contract-first).
+Reste deux dettes à la frontière Backend :
+
+- [ ] **DASH-INST1 (P1) — persister le nom d'institution (`institution_name`)** —
+  relevé 2026-06-19, effort M, **gardien Backend**. L'API Omni-FI FOURNIT
+  `OmniFiConnection.InstitutionName` (`server/omnifi/types.ts:56`) mais l'ingestion
+  (`server/ingestion/index.ts:55` → `upsertConnexion`) ne le persiste PAS : la table
+  `bank_connections` n'a que `institution_id` (ID opaque), aucune colonne nom. La carte
+  comptes affiche donc « Compte courant » sans la banque. **Côté UI c'est PRÊT**
+  (`connected-accounts-card.tsx` : type `CompteAffiche` + `libelleCompte`, dégradation
+  propre si absent — affiche « Absa · Compte courant » dès que la donnée arrive, zéro
+  retouche UI). **À faire (Backend)** : (1) migration expand `bank_connections.institution_name`
+  (varchar, nullable) ; (2) ingestion persiste `conn.InstitutionName` ; (3) `listerComptes`
+  (`repositories/dashboard.ts`) jointure `bank_connections` → expose `institutionName`
+  dans `CompteConnecte`. **Déclencheur** : cette demande produit (lisibilité provenance,
+  2026-06-19) → DÛ. Ne touche PAS l'append-only/montants ; touche le contrat de lecture.
+- [ ] **DASH-DEDUP1 (P2, investigation) — doublons de comptes signalés en UI** —
+  relevé 2026-06-19, effort S (investigation), gardien Backend. Une demande produit
+  évoquait des comptes dupliqués à l'écran. **Analyse UI** : impossible par construction
+  côté données — `bank_accounts.omnifi_account_id` est `UNIQUE` (`schema.ts:228`) et
+  `upsertCompte` fait `onConflictDoUpdate` sur cette colonne (`repositories/ingestion.ts:112`) ;
+  la carte utilise la PK UUID `bankAccountId` comme `key` React. **Décision (PO, 2026-06-19)** :
+  NE PAS ajouter de dedupe côté React — il masquerait un éventuel bug d'ingestion au lieu
+  de le corriger (anti-pattern). **À faire SI le symptôme se reproduit** : capture + contexte,
+  puis investiguer l'ingestion (deux `bank_accounts` distincts pour le même compte réel ?
+  `isSelected` mal posé ?). Pas d'action UI. **Déclencheur** : nouvelle observation de doublon
+  avec preuve.
+- Note : afficher la banque PAR LIGNE de transaction (table dashboard 4 colonnes serrées)
+  a été ÉCARTÉ — la provenance vit dans la carte comptes (plus lisible), et `TransactionRecente`
+  ne porte pas le nom (que `bankAccountId`). À rouvrir avec DASH-INST1 si besoin produit.
+
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 
 Symptôme : base injoignable (Neon/wsproxy down) → 500 brut + crash de
