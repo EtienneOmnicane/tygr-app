@@ -62,6 +62,19 @@ Plan de référence : `PLAN-transactions-page.md`.
   `/demo/dashboard-states` (pas le vrai shell) casse à 375px : badge « Démo · Visual
   QA » sur 3 lignes, nav qui déborde (« Transactions » coupé). **Déclencheur** :
   chantier responsive / TODO P2 UI-ES1. Hors production, n'affecte que la capture.
+- [ ] **Header applicatif (`AppHeader`) non responsive — déborde < ~1100px (P2, UI)** —
+  relevé au Visual QA du CTA banque, 2026-06-19. Effort M. Le VRAI header
+  (`src/components/shell/app-header.tsx`) aligne logo + nav + switcher + CTA + Membres
+  + déconnexion en flex SANS `flex-wrap` ni menu hamburger : il débordait DÉJÀ avant ce
+  travail (mesuré 471px > 375px viewport mobile, header seul). Le nouveau CTA permanent
+  « Connecter une banque » (label long) AGGRAVE la magnitude (→ 925px à 375px) sans
+  créer le problème. **Desktop ≥1280px : aucun débordement (parcours FM réel OK).**
+  Contexte produit : TYGR cible des Financial Managers en usage desktop ; le mobile
+  n'est pas un parcours prioritaire et n'a aucune stratégie responsive à ce jour.
+  **Déclencheur de résolution** : premier chantier responsive du shell (menu condensé /
+  hamburger < md, ou CTA réduit à une icône `+` seule sur petit écran). Hors périmètre
+  de la tâche CTA (refonte responsive = surface nav/switcher large). Signalé à l'humain
+  dans la note de PR.
 
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 
