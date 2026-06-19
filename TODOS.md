@@ -443,7 +443,36 @@ traité (voir ci-dessous). Différés :
   BookingDateTime par l'amont ne crée plus de doublon. RLS scope la mise à jour
   au workspace courant.
 
-### Dette résolue / intégrée à la PR 2 ingestion (2026-06-15)
+### Migration ingestion curseur → PAGE (2026-06-19)
+
+L'orchestrateur d'ingestion est passé du modèle par curseur (`/transactions/sync`,
+delta Added/Modified/Removed/NextCursor) au modèle par PAGE (`/transactions`,
+`Links.Next`/`Meta.TotalPages`), Omni-FI ayant confirmé que `/sync` est une
+extension future NON déployée (cf. OMNIFI_API_FEEDBACK.md §10). Branche
+`feat/ingestion-pagination-page`. Conséquences tracées :
+
+- [ ] **INGEST-CURSOR1 (P2) — retirer la colonne orpheline `sync_cursor`** —
+  Effort S (déclencheur : prochaine migration touchant `bank_accounts`, ou revue
+  de fin d'epic). Depuis la migration page, `bank_accounts.sync_cursor`
+  (`schema.ts`) n'est plus écrite ni lue (seul `last_synced_at` est maintenu via
+  `marquerSynchronise`). Colonne laissée en place EXPRÈS pour ne pas coupler ce
+  changement de code à une migration DB (risque séparé). À dropper proprement
+  (migration `ALTER TABLE … DROP COLUMN`, backward-compatible avec le code N-1).
+- [ ] **INGEST-DELTA1 (P2) — surcoût du re-téléchargement complet** — Effort M
+  (déclencheur : volumes prod réels OU Omni-FI déploie `/transactions/sync`).
+  Le modèle par page relit TOUTE la liste des transactions à chaque sync (pas de
+  delta) ; l'`upsert` idempotent absorbe les doublons mais le coût réseau/CPU croît
+  avec l'historique. Acceptable au MVP (volumes sandbox faibles, arbitrage PO
+  2026-06-19). Atténuations possibles : borne `fromBookingDateTime` si l'API la
+  supporte, ou repasser au curseur le jour où `/sync` existe (le code était déjà
+  écrit pour, cf. historique git).
+
+### Dette résolue / intégrée à la PR 2 ingestion (2026-06-15) — ⚠️ SUPERSEDED par la migration page (2026-06-19)
+
+> Q3 (`bornerCount`/`COUNT_MAX`) et Q4 (`HasMore`/`NextCursor`) ci-dessous étaient
+> SPÉCIFIQUES au modèle curseur, désormais abandonné. Q3 devient `bornerPageSize`
+> (pageSize borné [1, 100]) ; Q4 devient la garde `MAX_PAGES` sur la boucle par page
+> (l'amont peut mentir sur `Links.Next`). Conservé pour historique.
 
 Q3 et Q4 (différées depuis la cross-review PR 1) intégrées dans l'orchestrateur
 `src/server/ingestion/orchestrateur.ts` :

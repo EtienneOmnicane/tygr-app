@@ -132,7 +132,7 @@ async function main() {
   for (const omnifiAccountId of accountIds) {
     console.log(`\nCompte ${omnifiAccountId} :`);
     // Rattacher le compte à une connexion existante (la 1re du workspace).
-    const { bankAccountId, curseur } = await executer(async (tx, ctx) => {
+    const { bankAccountId } = await executer(async (tx, ctx) => {
       const conn = await tx
         .select({ id: schema.bankConnections.id })
         .from(schema.bankConnections)
@@ -143,14 +143,14 @@ async function main() {
           "Aucune connexion en base — /connections n'a rien renvoyé pour ce clientUserId.",
         );
       }
-      const { bankAccountId, syncCursor } = await upsertCompte(tx, ctx, conn[0].id, {
+      const { bankAccountId } = await upsertCompte(tx, ctx, conn[0].id, {
         omnifiAccountId,
         accountName: `Compte ${omnifiAccountId.slice(0, 8)}`,
         currency: "MUR",
         currentBalance: null,
         isSelected: true,
       });
-      return { bankAccountId, curseur: syncCursor };
+      return { bankAccountId };
     });
 
     console.log("  API — sync transactions + balances/history :");
@@ -158,7 +158,6 @@ async function main() {
       omnifiAccountId,
       bankAccountId,
       clientUserId,
-      curseurInitial: curseur,
     });
     totalTx += r.sync.transactionsTraitees;
     totalSoldes += r.soldes;

@@ -1,0 +1,134 @@
+Retour d'intégration — API & SDK Omni-FI (Link Widget)
+
+Émetteur : équipe TYGR (intégration trésorerie multi-tenant)
+Période : Epic 3 — connexion bancaire via le Link Widget, environnement sandbox / staging
+Objet : anomalies bloquantes ou coûteuses rencontrées sur l'API, le SDK et la documentation, avec preuves et recommandations.
+
+Ce document est factuel et constructif : chaque point indique le symptôme observé, l'impact sur l'intégration, la preuve (réponse HTTP / message exact) et une recommandation. L'objectif est d'aider l'équipe API à fiabiliser l'expérience d'intégration pour les prochains clients.
+
+------------------------------------------------------------
+Synthèse
+
+  1. URL de base sandbox erronée dans la doc (hôte mort sandbox.omni-fi.co) — [Bloquant]
+  2. SDK omni-fi-react-link non publié → installation impossible — [Bloquant]
+  3. Nom du package erroné dans la doc (@omnifi/react) — [Élevé]
+  4. Exigence HTTPS du widget non documentée — [Élevé]
+  5. Widget : onSuccess jamais émis + widget impossible à fermer via « Finish » — [Critique]
+  6. Auth : confusion client_id (« Issuing for ») vs « APICLIENT ID » UUID ; 401 peu explicite — [Moyen]
+
+------------------------------------------------------------
+1. URL de base du sandbox erronée (hôte inexistant)
+
+Symptôme. L'URL de base sandbox indiquée dans la documentation ne résout pas (DNS NXDOMAIN). Aucun appel n'était possible.
+
+- URL actuellement dans la doc (morte) : https://sandbox.omni-fi.co → NXDOMAIN
+- URL valide à utiliser : https://api-stage.omni-fi.co → GET /health/ répond HTTP 200
+
+Impact. Blocage total au démarrage : impossible d'atteindre l'API. Temps perdu à suspecter notre réseau / VPN avant de comprendre que l'hôte documenté n'existait pas.
+
+À noter (confusion supplémentaire). Un autre hôte, stage.omni-fi.co, répond aussi mais correspond au CDN du widget, pas à l'API REST. Trois hôtes proches (sandbox mort, api-stage = API, staging-connect/stage = widget) sans distinction claire dans la doc.
+
+Recommandation. Corriger l'URL de base sandbox dans la documentation et la spec OpenAPI. Distinguer explicitement l'hôte de l'API REST du CDN du widget. Idéalement, exposer un endpoint /health documenté pour permettre un test de connectivité immédiat.
+
+------------------------------------------------------------
+2. Package SDK introuvable publiquement → vendoring manuel obligatoire
+
+Symptôme. Le SDK (dépôt omni-fi-react-link) n'est publié sur aucun registre npm (public ou privé accessible). npm install échoue en 404. Le dépôt GitHub existe mais ne versionne pas le dossier dist/ (généré par tsup), si bien qu'une installation directe depuis GitHub récupère une coquille non importable (pas de build).
+
+Impact. Impossible d'installer le SDK par les moyens standard. Nous avons dû : cloner le dépôt omni-fi-react-link, installer ses dépendances, builder le dist/ manuellement, puis vendorer le résultat dans notre dépôt (vendor/, dépendance file:). Cela introduit une dette de supply-chain (code tiers buildé localement, non reproductible, non audité) que nous suivons de notre côté.
+
+Preuve.
+- npm install @omni-fi/react-link → 404 Not Found.
+- Dépôt omni-fi-react-link : « No packages published » ; package.json déclare "files": ["dist", …] mais dist/ absent du dépôt.
+
+Recommandation (par ordre de préférence).
+1. Publier le package sur npm (public) ou sur un registre privé documenté, avec instructions d'authentification (.npmrc).
+2. À défaut, ajouter un script prepare au package.json du SDK (build automatique à l'installation), pour qu'une install github: produise un dist/ exploitable.
+3. À défaut, committer le dist/ dans le dépôt.
+
+------------------------------------------------------------
+3. Nom du package erroné dans la documentation
+
+Symptôme. La documentation référence le package sous le nom @omnifi/react (sans tiret). Le nom réel du package buildé est @omni-fi/react-link (avec tiret).
+
+Impact. Tous nos imports, types et configuration de build calés sur le nom documenté ne résolvaient pas. Nous avons construit un module de typage temporaire (« stub ») sur le mauvais nom, puis dû tout réaligner une fois le vrai nom découvert dans le package.json du dépôt. Travail refait inutilement.
+
+Preuve.
+- Documentation : import { … } from "@omnifi/react".
+- vendor/omni-fi-react-link/package.json → "name": "@omni-fi/react-link".
+- Exports réels : useOmniFILink, getScriptUrl, OMNIFI_EVENTS + types (OmniFIConfig, OmniFISuccessPayload, OmniFIConnection, …). À noter aussi une divergence de casse par rapport à la doc/Fern (ex. OmniFISuccessPayload).
+
+Recommandation. Aligner la documentation, les exemples et la spec OpenAPI sur le nom réel @omni-fi/react-link. Documenter la liste exacte des exports et leur casse.
+
+------------------------------------------------------------
+4. Exigence HTTPS du widget non documentée
+
+Symptôme. Le widget (et l'endpoint link-token) exige une origine HTTPS pour le RedirectOrigin. Toute origine http://localhost est rejetée. Cette contrainte n'est pas documentée ; elle n'apparaît qu'au moment de l'appel, sous forme d'erreur.
+
+Impact. Blocage en développement local (où l'origine par défaut est http://localhost:3000). Nous avons dû mettre en place : un service local en HTTPS (certificat auto-signé) et notre propre allowlist d'origines côté serveur (avec un opt-in explicite pour le dev), pour éviter d'exposer le jeton d'échange (PublicToken) à une origine non maîtrisée.
+
+Preuve.
+- POST /connections/link-token avec RedirectOrigin: "http://localhost:3000"
+  → HTTP 400 — "RedirectOrigin: Value error, RedirectOrigin must use HTTPS scheme."
+- Le même appel avec une origine https://… → HTTP 201 (LinkToken émis).
+
+Recommandation. Documenter explicitement l'exigence HTTPS du RedirectOrigin (et du widget en général), idéalement dès le guide de démarrage. Préciser la marche à suivre pour le développement local (HTTPS / tunnel). Documenter le mécanisme d'allowlist d'origines attendu côté link-token.
+
+------------------------------------------------------------
+5. Widget : onSuccess jamais émis + widget impossible à fermer via « Finish » (CRITIQUE)
+
+C'est l'anomalie bloquante. La connexion réussit côté Omni-FI, mais l'application hôte n'en est jamais notifiée, et le widget ne peut pas être fermé normalement.
+
+Symptôme. L'utilisateur connecte sa banque ; le widget affiche l'écran final « Your account has been successfully connected » avec un bouton « Finish » (puis « Continue »). Or :
+- Cliquer sur « Finish » ne ferme PAS le widget : rien ne se passe, le widget reste affiché. L'utilisateur est obligé de le fermer manuellement via la croix (×).
+- Cette fermeture par la croix déclenche un appel revoke côté Omni-FI (fin de session widget) — c'est-à-dire qu'on révoque la session au lieu de la finaliser proprement.
+- L'événement onSuccess n'est jamais émis vers l'application hôte → aucune finalisation côté intégrateur (le PublicToken n'est jamais remonté), bien que la connexion soit réellement persistée côté Omni-FI.
+- Le LinkToken étant à usage unique, réessayer ne change rien.
+
+Preuve (onglet Réseau, parcours sandbox sandbox@example.com).
+``
+exchange → context → envelope → institutions → link-connect → accounts → accounts → revoke
+`
+link-connect et accounts : succès (réponses inspectées : PublicToken, ConnectionId, comptes + soldes présents). Le revoke final correspond à la fermeture manuelle par la croix (le bouton « Finish » étant inopérant).
+
+Cause racine (console navigateur, reproductible). Le widget hébergé n'établit pas le canal postMessage avec la page parente :
+`
+Blocked a frame with origin "https://staging-connect.omni-fi.co"
+  from accessing a frame with origin "https://localhost:3000".
+  Protocols, domains, and ports must match.
+
+[omni-fi-link] Cannot send success message: parentOrigin is not established.
+`
+Tant que parentOrigin n'est pas « établi », le widget ne peut envoyer aucun message vers la page — ni onSuccess, ni l'action attendue du bouton « Finish ». C'est cohérent avec les deux symptômes : pas de notification de succès et « Finish » sans effet.
+
+Ce qui est écarté côté intégrateur. Le SDK transmet bien notre onSuccess au script CDN (window.OmniFI.connect({...})). Le RedirectOrigin passé au link-token est l'origine réelle de la page (https://localhost:3000). Le flux réseau jusqu'aux comptes est un succès. Le blocage est uniquement sur le canal de retour iframe → page parente.
+
+Pistes côté Omni-FI.
+- L'origine parente https://localhost:3000 n'est probablement pas autorisée par le widget — il existe vraisemblablement une allowlist d'origines parentes côté widget/serveur, distincte du RedirectOrigin, non documentée.
+- Ou le handshake d'« établissement du parentOrigin » échoue (timing / vérification trop stricte / certificat local de dev).
+
+Recommandations.
+1. Autoriser les origines parentes légitimes à établir le canal postMessage (au minimum https://localhost:3000 en dev + les domaines des intégrateurs), et documenter comment déclarer une origine.
+2. Émettre onSuccess dès la connexion réussie, indépendamment des appels de nettoyage (revoke).
+3. Rendre le bouton « Finish » fonctionnel : il doit fermer le widget et notifier l'hôte, sans forcer une fermeture manuelle par la croix (qui révoque la session).
+
+------------------------------------------------------------
+6. Auth ApiKey : ambiguïté du client_id + 401 non explicite
+
+L'écran de génération de clé (« Generate master API key ») affiche deux identifiants pour le même ApiClient :
+- Issuing for: TYGR (client_6068df62…) — un identifiant préfixé client_
+- APICLIENT ID: 06e004dc-… (UUID)
+
+L'en-tête Authorization: ApiKey <client_id>:<secret> attend le client_… (le « Issuing for »), pas l'UUID. Rien ne l'indique, et utiliser l'UUID renvoie un 401 au message générique :
+`
+ApiKey <UUID>:<secret>          → 401  "Invalid client credentials."
+ApiKey client_6068df62…:<secret> → l'auth passe (200/201)
+`
+
+Recommandations.
+1. Préciser dans la doc quel identifiant va dans l'en-tête ApiKey (et à quoi sert l'autre).
+2. Étiqueter sur l'écran de génération la valeur à copier pour l'auth.
+3. Différencier les erreurs : client_id inconnu vs secret invalide vs secret révoqué (un 401 unique n'aide pas au diagnostic).
+
+------------------------------------------------------------
+*Environnement testé : sandbox / staging (api-stage.omni-fi.co pour l'API REST, staging-cdn / staging-connect.omni-fi.co pour le widget). Identifiants sandbox du widget : sandbox@example.com / sandbox_password` (happy path). Document à l'usage de l'équipe API Omni-FI ; valeurs sensibles (secrets, jetons) volontairement omises.*

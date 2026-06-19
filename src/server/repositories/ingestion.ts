@@ -215,18 +215,18 @@ export async function upsertSoldes<TDb extends AnyPgDatabase>(
 }
 
 /**
- * Avance le curseur de sync d'un compte — DANS la même transaction que les
- * upserts (plan : pas de trou entre données persistées et curseur). Met aussi à
- * jour last_synced_at.
+ * Marque la dernière synchronisation d'un compte (`last_synced_at`). Le modèle
+ * d'ingestion est par PAGE (on relit toujours depuis la page 1) : il n'y a plus de
+ * curseur à persister — la colonne `sync_cursor` reste orpheline (dette TODOS,
+ * retrait différé pour ne pas coupler ce changement à une migration).
  */
-export async function avancerCurseur<TDb extends AnyPgDatabase>(
+export async function marquerSynchronise<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   bankAccountId: string,
-  nextCursor: string,
   maintenant: Date,
 ): Promise<void> {
   await tx
     .update(bankAccounts)
-    .set({ syncCursor: nextCursor, lastSyncedAt: maintenant })
+    .set({ lastSyncedAt: maintenant })
     .where(eq(bankAccounts.id, bankAccountId));
 }

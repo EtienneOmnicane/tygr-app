@@ -4,11 +4,18 @@
  * repositories scopés (withWorkspace). Pur de toute I/O DB directe : il reçoit un
  * `executer` = withWorkspace lié à la session, et délègue la persistance.
  *
- * Résout deux dettes de la cross-review PR 1, là où elles mordent réellement :
- * - Q3 : `count` du sync borné [1, COUNT_MAX] avant tout appel réseau.
- * - Q4 : garde anti-boucle-infinie — on NE reboucle JAMAIS si l'amont renvoie
- *   HasMore=true avec un NextCursor vide/identique (sinon on re-demande la 1re
- *   page à l'infini en ré-ingérant les mêmes lignes).
+ * Modèle = pagination par PAGE (contrat réel déployé, aligné OBIE ; confirmé
+ * Omni-FI 2026-06-19) : on relit la liste complète des transactions du compte,
+ * page après page, en suivant `Links.Next` / `Meta.TotalPages`. L'ancien modèle
+ * par curseur (`/transactions/sync`, delta Added/Modified/Removed) est une
+ * extension future NON déployée (cf. OMNIFI_API_FEEDBACK.md §10) ; on ne s'y fige
+ * pas. Pas de delta incrémental : l'`upsert` idempotent (clé `omnifi_account_id`
+ * UNIQUE) absorbe les doublons d'un re-téléchargement complet.
+ *
+ * Gardes conservées :
+ * - `bornerPageSize` : `pageSize` borné [1, PAGE_SIZE_MAX] avant tout appel réseau.
+ * - `MAX_PAGES` : filet anti-boucle-infinie si l'amont ment sur `Links.Next` /
+ *   `Meta.TotalPages` (jamais de boucle non bornée).
  */
 import type { OmniFiClient, OmniFiTransaction } from "@/server/omnifi";
 import type { ExecuterWorkspace } from "@/server/db/tenancy";
@@ -19,16 +26,17 @@ import {
   validerCreditDebit,
 } from "./conversion";
 import {
-  avancerCurseur,
+  marquerSynchronise,
   upsertTransactions,
   type TransactionAUpserter,
 } from "@/server/repositories/ingestion";
 
-/** Borne dure du `count` de sync (doc Omni-FI § Transactions : max 500). */
-export const COUNT_MAX = 500;
-const COUNT_DEFAUT = 100;
+/** Borne dure du `pageSize` (défaut amont = 20 ; on plafonne pour ne pas demander
+ *  des pages déraisonnables). */
+export const PAGE_SIZE_MAX = 100;
+const PAGE_SIZE_DEFAUT = 100;
 
-/** Plafond de sécurité d'itérations — filet si l'amont ment sur HasMore. */
+/** Plafond de sécurité d'itérations — filet si l'amont ment sur Links.Next/TotalPages. */
 export const MAX_PAGES = 1000;
 
 export class IngestionBoucleError extends Error {
@@ -39,12 +47,11 @@ export class IngestionBoucleError extends Error {
   }
 }
 
-
-/** Borne le count dans [1, COUNT_MAX] (Q3). */
-export function bornerCount(count: number | undefined): number {
-  if (count === undefined) return COUNT_DEFAUT;
-  if (!Number.isInteger(count) || count < 1) return 1;
-  return Math.min(count, COUNT_MAX);
+/** Borne le pageSize dans [1, PAGE_SIZE_MAX]. */
+export function bornerPageSize(pageSize: number | undefined): number {
+  if (pageSize === undefined) return PAGE_SIZE_DEFAUT;
+  if (!Number.isInteger(pageSize) || pageSize < 1) return 1;
+  return Math.min(pageSize, PAGE_SIZE_MAX);
 }
 
 /** Mappe une transaction OBIE → ligne à persister (conversions règle 8 / E20). */
@@ -67,14 +74,13 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
 export interface ResultatSync {
   pages: number;
   transactionsTraitees: number;
-  curseurFinal: string;
 }
 
 /**
- * Synchronise les transactions d'UN compte par curseur, jusqu'à épuisement.
- * Chaque page : appel client → conversion → upsert + avance curseur DANS une
- * même transaction withWorkspace (atomicité données/curseur). Reprend du curseur
- * fourni (incrémental) ou de zéro (historique complet) si `curseurInitial` vide.
+ * Synchronise les transactions d'UN compte par PAGE, jusqu'à épuisement. Chaque
+ * page : appel client → conversion → upsert dans une transaction withWorkspace.
+ * On relit toujours depuis la page 1 (pas de delta côté API) ; `lastSyncedAt` est
+ * marqué en fin de parcours.
  */
 export async function synchroniserCompte(
   client: OmniFiClient,
@@ -83,54 +89,48 @@ export async function synchroniserCompte(
     omnifiAccountId: string;
     bankAccountId: string;
     clientUserId: string;
-    curseurInitial: string | null;
-    count?: number;
+    pageSize?: number;
     maintenant?: () => Date;
   },
 ): Promise<ResultatSync> {
-  const count = bornerCount(params.count); // Q3
+  const pageSize = bornerPageSize(params.pageSize);
   const maintenant = params.maintenant ?? (() => new Date());
-  let curseur = params.curseurInitial ?? undefined;
-  let pages = 0;
+  let page = 1;
   let total = 0;
 
   for (;;) {
-    const page = await client.syncTransactions(
+    const env = await client.listerTransactionsPage(
       params.omnifiAccountId,
       params.clientUserId,
-      { cursor: curseur, count },
+      { page, pageSize },
     );
 
-    const aIngerer = [...page.Added, ...page.Modified];
-    const lignes = aIngerer.map(versLignePersistee);
-
-    // Persistance + avance du curseur dans UNE transaction scopée (pas de trou).
-    await executer(async (tx, ctx) => {
-      if (lignes.length > 0) {
-        await upsertTransactions(tx, ctx, params.bankAccountId, lignes);
-      }
-      await avancerCurseur(tx, params.bankAccountId, page.NextCursor, maintenant());
-    });
-
+    const lignes = env.Data.Transaction.map(versLignePersistee);
+    if (lignes.length > 0) {
+      await executer((tx, ctx) =>
+        upsertTransactions(tx, ctx, params.bankAccountId, lignes),
+      );
+    }
     total += lignes.length;
-    pages += 1;
 
-    if (!page.HasMore) {
-      return { pages, transactionsTraitees: total, curseurFinal: page.NextCursor };
-    }
+    const totalPages = env.Meta?.TotalPages ?? 1;
+    // Fin : plus de lien suivant OU on a atteint la dernière page annoncée.
+    if (!env.Links?.Next || page >= totalPages) break;
 
-    // Q4 — garde anti-boucle-infinie : HasMore=true mais le curseur n'avance pas
-    // (vide ou identique au précédent) ⇒ on reboucle sur la même page à l'infini.
-    if (!page.NextCursor || page.NextCursor === curseur) {
+    // Filet anti-boucle-infinie : l'amont prétend qu'il reste des pages au-delà du
+    // plafond → on s'arrête plutôt que d'itérer sans borne (Links.Next peut mentir).
+    if (page >= MAX_PAGES) {
       throw new IngestionBoucleError(
-        "HasMore=true mais NextCursor vide/inchangé — pagination amont incohérente, arrêt pour éviter une boucle infinie",
+        `MAX_PAGES (${MAX_PAGES}) atteint — arrêt de sécurité (pagination amont incohérente)`,
       );
     }
-    if (pages >= MAX_PAGES) {
-      throw new IngestionBoucleError(
-        `MAX_PAGES (${MAX_PAGES}) atteint — arrêt de sécurité`,
-      );
-    }
-    curseur = page.NextCursor;
+    page += 1;
   }
+
+  // Trace de dernière synchro (sans curseur : le modèle par page repart de 1).
+  await executer((tx) =>
+    marquerSynchronise(tx, params.bankAccountId, maintenant()),
+  );
+
+  return { pages: page, transactionsTraitees: total };
 }
