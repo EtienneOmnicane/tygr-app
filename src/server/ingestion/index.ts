@@ -16,7 +16,7 @@
 import type { OmniFiClient, OmniFiConnection } from "@/server/omnifi";
 import type { ExecuterWorkspace } from "@/server/db/tenancy";
 
-import { normaliserMontant } from "./conversion";
+import { normaliserMontant, normaliserNomInstitution } from "./conversion";
 import { synchroniserCompte, type ResultatSync } from "./orchestrateur";
 import {
   upsertConnexion,
@@ -53,6 +53,7 @@ export async function ingererConnexions(
       upsertConnexion(tx, ctx, {
         omnifiConnectionId: conn.ConnectionId,
         institutionId: conn.InstitutionId,
+        institutionName: normaliserNomInstitution(conn.InstitutionName),
         status: conn.Status,
         nextSyncAvailableAt: conn.NextSyncAvailableAt
           ? new Date(conn.NextSyncAvailableAt)

@@ -83,7 +83,17 @@ renommé « Synchroniser mes comptes » (+ icône ↻) dans `bank-connect-widget
 carte « Comptes connectés » préparée à afficher la PROVENANCE bancaire (contract-first).
 Reste deux dettes à la frontière Backend :
 
-- [ ] **DASH-INST1 (P1) — persister le nom d'institution (`institution_name`)** —
+- [x] **DASH-INST1 (P1) — persister le nom d'institution (`institution_name`)** —
+  ✅ **LIVRÉ 2026-06-19 (Backend, branche `feat/ingestion-institution-name`)**. Les 3
+  étapes faites : (1) migration `0006_add-institution-name.sql` (`institution_name`
+  varchar(140) nullable, expand-safe) ; (2) ingestion persiste
+  `normaliserNomInstitution(conn.InstitutionName)` via `upsertConnexion` (+ rafraîchi
+  au `onConflictDoUpdate`) ; (3) `listerComptes` joint `bank_connections` (innerJoin,
+  `connection_id` NOT NULL) → `CompteConnecte.institutionName`. Nuance : à la
+  finalisation widget (`link-exchange` ne renvoie pas `InstitutionName`) on insère
+  `null` ; le nom est renseigné au prochain `ingererConnexions` (GET /connections).
+  Fonction pure `normaliserNomInstitution` (trim/null/troncature) + 5 tests. Reste
+  HISTORIQUE ci-dessous :
   relevé 2026-06-19, effort M, **gardien Backend**. L'API Omni-FI FOURNIT
   `OmniFiConnection.InstitutionName` (`server/omnifi/types.ts:56`) mais l'ingestion
   (`server/ingestion/index.ts:55` → `upsertConnexion`) ne le persiste PAS : la table
@@ -96,7 +106,15 @@ Reste deux dettes à la frontière Backend :
   (`repositories/dashboard.ts`) jointure `bank_connections` → expose `institutionName`
   dans `CompteConnecte`. **Déclencheur** : cette demande produit (lisibilité provenance,
   2026-06-19) → DÛ. Ne touche PAS l'append-only/montants ; touche le contrat de lecture.
-- [ ] **DASH-DEDUP1 (P2, investigation) — doublons de comptes signalés en UI** —
+- [x] **DASH-DEDUP1 (P2, investigation) — doublons de comptes signalés en UI** —
+  ✅ **AUDITÉ + PROUVÉ 2026-06-19 (Backend, même branche)**. Verdict : l'upsert compte
+  est correct — `onConflictDoUpdate({ target: omnifi_account_id })` met à JOUR au lieu
+  d'insérer. Plus qu'une présomption : un **test d'isolation dédié** prouve sur PGlite
+  qu'un même `omnifi_account_id` re-découvert via une connexion DIFFÉRENTE ne crée
+  qu'UNE ligne `bank_accounts` (le 2e upsert rafraîchit libellé/solde). Aucun doublon
+  possible au niveau données. SI un doublon réapparaît en UI : ce serait un compte avec
+  un `omnifi_account_id` réellement distinct côté Omni-FI (à investiguer alors avec
+  capture). Reste HISTORIQUE ci-dessous :
   relevé 2026-06-19, effort S (investigation), gardien Backend. Une demande produit
   évoquait des comptes dupliqués à l'écran. **Analyse UI** : impossible par construction
   côté données — `bank_accounts.omnifi_account_id` est `UNIQUE` (`schema.ts:228`) et

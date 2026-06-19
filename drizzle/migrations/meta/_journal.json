@@ -43,6 +43,13 @@
       "when": 1781712001000,
       "tag": "0005_pilier1-gen",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781851686337,
+      "tag": "0006_add-institution-name",
+      "breakpoints": true
     }
   ]
 }

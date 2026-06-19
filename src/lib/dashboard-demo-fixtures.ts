@@ -19,6 +19,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
     {
       bankAccountId: "demo-acc-mcb-4521",
       accountName: "MCB — Compte courant business",
+      institutionName: "The Mauritius Commercial Bank",
       currency: "MUR",
       currentBalance: "5230000.00",
       lastSyncedAt: new Date("2026-06-12T08:00:00Z"),
@@ -26,6 +27,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
     {
       bankAccountId: "demo-acc-sbm-0937",
       accountName: "SBM — Compte opérations",
+      institutionName: "State Bank of Mauritius",
       currency: "MUR",
       currentBalance: "2461000.00",
       lastSyncedAt: new Date("2026-06-12T07:00:00Z"),

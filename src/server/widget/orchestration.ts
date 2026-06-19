@@ -167,6 +167,11 @@ async function persisterConnexionEtComptes(
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: echange.ConnectionId,
       institutionId: echange.InstitutionId,
+      // link-exchange ne renvoie PAS InstitutionName (OmniFiPublicTokenExchangeData
+      // = ConnectionId/InstitutionId/CustomerType seulement). On insère donc null ;
+      // le nom sera renseigné au prochain `ingererConnexions` (GET /connections, qui
+      // porte InstitutionName) — l'upsert rafraîchit institutionName même si NULL au départ.
+      institutionName: null,
       status: "active",
       nextSyncAvailableAt: null,
     });

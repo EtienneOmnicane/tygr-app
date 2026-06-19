@@ -15,7 +15,9 @@ import type { CompteConnecte } from "@/server/repositories/dashboard";
 
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 
-type CompteAffiche = CompteConnecte & { institutionName?: string | null };
+// `institutionName` fait désormais partie de `CompteConnecte` (string | null) depuis
+// DASH-INST1 ; plus besoin de l'ajouter en intersection.
+type CompteAffiche = CompteConnecte;
 
 const CAS: Array<{ titre: string; comptes: CompteAffiche[] }> = [
   {
@@ -44,6 +46,7 @@ const CAS: Array<{ titre: string; comptes: CompteAffiche[] }> = [
     comptes: [
       {
         bankAccountId: "d3",
+        institutionName: null, // cas « provenance absente » — dégradation propre
         accountName: "Compte courant",
         currency: "MUR",
         currentBalance: "1200000.00",

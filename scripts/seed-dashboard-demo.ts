@@ -235,6 +235,7 @@ async function main() {
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: "demo-conn-mcb",
       institutionId: "mcb",
+      institutionName: "The Mauritius Commercial Bank",
       status: "active",
       nextSyncAvailableAt: null,
     });
