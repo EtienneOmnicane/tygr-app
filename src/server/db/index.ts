@@ -125,6 +125,7 @@ export {
 export {
   listerComptes,
   soldeConsolideCourant,
+  soldesCourantsParDevise,
   courbeTresorerie,
   syntheseMois,
   transactionsRecentes,
@@ -132,6 +133,7 @@ export {
 export type {
   CompteConnecte,
   PointCourbe,
+  SoldeParDevise,
   SyntheseMois,
   TransactionRecente,
 } from "@/server/repositories/dashboard";

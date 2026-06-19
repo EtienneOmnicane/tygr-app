@@ -22,7 +22,7 @@ import { redirect } from "next/navigation";
 import {
   courbeTresorerie,
   listerComptes,
-  soldeConsolideCourant,
+  soldesCourantsParDevise,
   syntheseMois,
   transactionsRecentes,
   withWorkspace,
@@ -72,10 +72,12 @@ export default async function PageDashboard() {
 
   // UN SEUL withWorkspace : les 5 lectures + la devise de base partagent le tx.
   const { donnees, devise } = await withWorkspace(session, async (tx) => {
-    const [comptes, soldeConsolide, courbe, synthese, transactions, ligneWs] =
+    const [comptes, soldesParDevise, courbe, synthese, transactions, ligneWs] =
       await Promise.all([
         listerComptes(tx),
-        soldeConsolideCourant(tx),
+        // Solde Total = soldes COURANTS par devise (indépendant de balance_history,
+        // vide tant qu'Omni-FI n'expose pas /balances/history). DASH-SOLDE2.
+        soldesCourantsParDevise(tx),
         courbeTresorerie(tx, { from, to }),
         syntheseMois(tx, mois),
         transactionsRecentes(tx),
@@ -89,7 +91,7 @@ export default async function PageDashboard() {
       devise: rows[0]?.base_currency ?? "MUR",
       donnees: {
         comptes,
-        soldeConsolide,
+        soldesParDevise,
         courbe,
         syntheseMois: synthese,
         transactionsRecentes: transactions,

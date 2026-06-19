@@ -15,6 +15,7 @@
 import type {
   CompteConnecte,
   PointCourbe,
+  SoldeParDevise,
   SyntheseMois,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
@@ -30,7 +31,8 @@ import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
 export interface DonneesDashboard {
   comptes: CompteConnecte[];
-  soldeConsolide: string;
+  /** Solde Total = soldes courants par devise (une ligne par devise, jamais d'addition cross-devise). */
+  soldesParDevise: SoldeParDevise[];
   courbe: PointCourbe[];
   syntheseMois: SyntheseMois;
   transactionsRecentes: TransactionRecente[];
@@ -44,7 +46,7 @@ export function DashboardContent({
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
 }) {
-  const { comptes, soldeConsolide, courbe, syntheseMois, transactionsRecentes } =
+  const { comptes, soldesParDevise, courbe, syntheseMois, transactionsRecentes } =
     donnees;
 
   // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
@@ -69,7 +71,7 @@ export function DashboardContent({
       aside={
         <>
           <SidePanelKpi
-            soldeConsolide={soldeConsolide}
+            soldesParDevise={soldesParDevise}
             syntheseMois={syntheseMois}
             devise={devise}
             dateSolde={dateSolde}
