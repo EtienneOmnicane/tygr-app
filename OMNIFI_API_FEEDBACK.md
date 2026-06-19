@@ -16,12 +16,13 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 2 | Package SDK non publié → vendoring manuel obligatoire | Bloquant | Contourné (clone + build + vendoring) |
 | 3 | Nom du package erroné dans la doc (`@omnifi/react`) | Élevé | Contourné (corrigé en `@omni-fi/react-link`) |
 | 4 | Exigence HTTPS du widget non documentée | Élevé | Contourné (HTTPS local + allowlist) |
-| 5 | Widget CDN : `postMessage` bloqué (« parentOrigin not established ») → `onSuccess` jamais émis | **Critique** | Contourné (re-sync serveur `GET /connections`) — **fix attendu côté API** |
+| 5 | Widget CDN : `postMessage` bloqué (« parentOrigin not established ») → `onSuccess` jamais émis | **Critique** | **✅ Résolu côté Omni-FI** (handshake `ready`/`ready-ack`, vérifié runtime 2026-06-19 — voir §9). Doublon de #9 |
 | 6 | Auth : confusion `client_id` (« Issuing for ») vs « APICLIENT ID » UUID ; message `401` peu explicite | Moyen | Contourné (deviné le bon identifiant) |
 | 7 | EndUser non auto-créé : `ClientUserId` arbitraire → `404`, non documenté dans le parcours | Moyen | Contourné (`POST /clients/end-users`) |
 | 8 | Nom du query param `client_user_id` (snake_case) — non documenté, et `GET /connections` répond `403` (param ignoré) au lieu d'un `400`/`404` explicite | Moyen | **Résolu côté TYGR** (notre bug : on envoyait `clientUserId`) — suggestion d'amélioration côté API |
-| 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis | **Critique** | **Non contournable côté TYGR — fix attendu côté widget** |
-| 10 | Routes documentées mais **non déployées** sur staging : `GET /accounts/{id}/transactions/sync` et `GET /accounts/{id}/balances/history` → `404`. De plus la pagination réelle (`page`) diverge de la doc (curseur `NextCursor`/`HasMore`) | **Élevé** | **Bloqué (data historique)** — code gelé sur le contrat Fern en attendant l'alignement serveur |
+| 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis | **Critique** | **✅ Résolu côté Omni-FI** (handshake `ready`/`ready-ack`, vérifié runtime 2026-06-19) |
+| 10 | Routes documentées mais **non déployées** sur staging : `GET /accounts/{id}/transactions/sync` et `GET /accounts/{id}/balances/history` → `404`. De plus la pagination réelle (`page`) diverge de la doc (curseur `NextCursor`/`HasMore`) | **Élevé** | **⏳ Confirmé « extensions futures » par Omni-FI (2026-06-19)** — TYGR construit sur les routes par PAGE |
+| 11 | SDK : CDN passe à `onSuccess` un **tableau nu**, mais types + README promettent `{ connections }` → `TypeError .map` | **Critique** | **✅ Contourné côté TYGR** (normalisation des 2 formes + tests) ; alignement SDK recommandé |
 
 ---
 
@@ -122,7 +123,7 @@ Conséquence : le widget **ne peut jamais envoyer le message de succès** à la 
 
 > **Mise à jour 2026-06-18 — précisions après investigation.**
 > - **Le repli `GET /connections` est désormais RÉSOLU côté intégrateur** : le `403` venait d'un **bug dans notre client** (param envoyé en `clientUserId` au lieu de `client_user_id` ; cf. **§8**), pas d'un défaut d'autorisation côté API. Une fois le nom corrigé, le repli fonctionne (`200`, connexions listées).
-> - **Le flux nominal (`onSuccess`) reste bloqué** par le `parentOrigin` (cf. **§9** ci-dessous) — c'est le seul point réellement bloquant restant, et il est côté widget.
+> - ~~**Le flux nominal (`onSuccess`) reste bloqué** par le `parentOrigin`~~ → **RÉSOLU côté Omni-FI le 2026-06-19** (handshake `ready`/`ready-ack`, cf. addendum **§9**). Le flux nominal fonctionne désormais de bout en bout ; le repli `GET /connections` devient un filet optionnel. Une divergence de contrat SDK révélée au passage (forme du payload) est traitée au **§11**.
 
 **Diagnostic complémentaire `parentOrigin` (cf. §9).** Après lecture du backend `omni-fi-core` (branche `staging`), nous confirmons que **`RedirectOrigin` et `WIDGET_ALLOWED_ORIGIN` ne sont PAS la cause** :
 - `RedirectOrigin` (passé à `POST /connections/link-token`) est l'origine HTTPS du `postMessage` **de retour** (le `PublicToken`) — nous l'envoyons correctement (`https://localhost:3000`).
@@ -182,6 +183,20 @@ Blocked a frame with origin "https://staging-connect.omni-fi.co"
 2. **Autoriser les origines légitimes** des intégrateurs (au minimum `https://localhost:3000` en développement, et leurs domaines de production) ; documenter **comment** une origine parente est déclarée.
 3. **Garantir l'émission de `onSuccess`** une fois la connexion persistée, indépendamment des appels de nettoyage (`revoke`), et émettre un **`onError`** explicite dans les cas où la finalisation est réellement impossible (plutôt qu'un échec silencieux).
 
+> **✅ RÉSOLU côté Omni-FI — vérifié runtime 2026-06-19.** Le widget établit désormais
+> le `parentOrigin` via un **handshake `ready` / `ready-ack`** : au montage, l'iframe émet
+> `omni-fi:ready` vers `window.parent` (`targetOrigin: "*"`) ; le loader CDN répond
+> `omni-fi:ready-ack` (`case r.READY: … y(r.READY_ACK)`), ce qui amorce l'origine parente.
+> Le code est présent et correct des deux côtés du bundle servi (loader `omni-fi-connect.js`
+> + iframe `staging-connect.omni-fi.co/assets/index-*.js`, `last-modified` 2026-06-18 18:59).
+> **Preuve de bout en bout** (Chrome, parcours Absa sandbox réel, `https://localhost:3000`) :
+> plus aucun `parentOrigin is not established` ; `onSuccess` **est appelé** (stack
+> `omni-fi-connect.js:48` → notre callback) ; `finaliserConnexionDropinAction` tourne
+> côté serveur (1 PublicToken, échange + découverte comptes) ; redirection Dashboard
+> effective. **Merci pour ce correctif — c'était bien le point bloquant.** ⚠️ Il a toutefois
+> mis au jour une **divergence de contrat du SDK** sur la FORME du payload `onSuccess`,
+> détaillée au **§11**.
+
 ---
 
 ## 10. Routes `/transactions/sync` et `/balances/history` documentées mais NON déployées + divergence de pagination
@@ -213,24 +228,74 @@ GET /accounts/{id}/balances       → HTTP 200  (soldes COURANTS / latest par ty
 
 ---
 
+## 11. SDK `@omni-fi/react-link` : le CDN passe à `onSuccess` un TABLEAU NU, mais types + README promettent `{ connections }`
+
+**Contexte.** Découvert immédiatement après la résolution du `parentOrigin` (§9) : une fois
+`onSuccess` enfin appelé, **notre intégration plantait** sur la première ligne du callback.
+
+**Symptôme (runtime, Chrome, parcours sandbox réel).**
+```
+Uncaught TypeError: Cannot read properties of undefined (reading 'map')
+    at OmniFiLinkLauncher.useOmniFILink [as onSuccess]   (omnifi-link-launcher.tsx)
+    at F (omni-fi-connect.js:48)
+```
+Conséquence visible : le widget reste bloqué sur **« Finishing… »** indéfiniment, aucune
+finalisation, aucune redirection — alors que la connexion est persistée côté Omni-FI.
+
+**Cause-racine : divergence entre le contrat TYPÉ/documenté et le contrat RUNTIME du CDN.**
+- **Types vendorés** (`@omni-fi/react-link`, `dist/index.d.ts:63-64`) :
+  `interface OmniFISuccessPayload { connections: OmniFIConnection[] }` → un **objet**.
+- **README vendoré** (mêmes lignes d'exemple) : `onSuccess({ connections }) { … }` → un **objet**.
+- **Loader CDN déployé** (`omni-fi-connect.js`, ~ligne 48) :
+  ```js
+  case r.SUCCESS: e.onSuccess && n.connections && (e.onSuccess(n.connections))
+  ```
+  → il invoque `onSuccess` avec **le tableau nu** `n.connections`, **pas** `{ connections: … }`.
+
+Autrement dit : **le SDK npm/vendoré et le CDN runtime sont désynchronisés sur la forme du
+payload.** Un intégrateur qui suit les types (ce que TypeScript impose) écrit
+`payload.connections.map(...)` → `payload.connections` vaut `undefined` → `TypeError`.
+La forme des éléments, elle, est cohérente (`{ publicToken, connectionId, institutionId, … }`
+en camelCase — conforme aux types).
+
+**Contournement côté TYGR (livré, non bloquant).** Notre callback **normalise les deux formes**
+(`Array.isArray(payload) ? payload : payload.connections`), couvert par 5 tests de
+non-régression. On est donc robustes que le CDN se réaligne sur sa doc **ou** reste tel quel —
+aucun redéploiement requis de notre part dans les deux cas.
+
+**Recommandation.** Aligner les deux contrats, dans le sens qui vous convient :
+1. soit **le CDN émet `{ connections }`** (conforme aux types/README publiés) ;
+2. soit **les types + README passent à `OmniFIConnection[]`** (conformes au CDN réel).
+L'essentiel est qu'un intégrateur TypeScript qui fait confiance à `OmniFISuccessPayload`
+n'obtienne pas un `undefined` à l'exécution. C'est exactement le type de divergence qu'un
+premier intégrateur peut révéler avant la publication npm — autant la régler avant que le
+SDK ne soit figé sur le registre public.
+
+---
+
 ## Conclusion — état de l'intégration côté TYGR
 
-**L'intégration TYGR du Link Widget est terminée et prête.** Le code (flux nominal `onSuccess` → finalisation serveur, repli de re-synchronisation `GET /connections`, allowlist d'origines HTTPS, gestion multi-connexions, isolation tenant) est en place, testé et mergé. Après investigation (tests `curl` hors navigateur + lecture du code source `omni-fi-core`), l'état des blocages est désormais clarifié :
+**L'intégration TYGR du Link Widget est terminée, prête, et le parcours de connexion
+fonctionne désormais DE BOUT EN BOUT** (vérifié runtime 2026-06-19 : clic « Finish » →
+`onSuccess` → finalisation serveur → redirection Dashboard). Le code (flux nominal,
+repli de re-synchronisation `GET /connections`, allowlist d'origines HTTPS, gestion
+multi-connexions, isolation tenant) est en place, testé et mergé. État des points soulevés :
 
-| # | Blocage | Cause-racine | Responsabilité | Statut |
+| # | Point | Cause-racine | Responsabilité | Statut |
 |---|---------|--------------|----------------|--------|
-| 8 | `GET /connections` → `403` | **Notre bug** : param envoyé en `clientUserId` au lieu de `client_user_id` (ignoré → `403`) | Intégrateur (corrigé) ; suggestion mineure API | **Résolu côté TYGR** |
-| 9 | `onSuccess` jamais émis | `parentOrigin` jamais établi (handshake `postMessage` non amorcé dans le widget `link-app`) | **Omni-FI** (widget) | **Bloquant — fix attendu côté widget** |
-| 10 | Transactions + historique des soldes non récupérables | Routes `/transactions/sync` et `/balances/history` documentées mais **non déployées** (`404`) ; pagination réelle (`page`) ≠ doc (curseur) | **Omni-FI** (API ≠ doc) | **Bloqué — code gelé sur le contrat Fern, en attente d'alignement** |
+| 8 | `GET /connections` → `403` | **Notre bug** : param envoyé en `clientUserId` au lieu de `client_user_id` (ignoré → `403`) | Intégrateur (corrigé) ; suggestion mineure API | **✅ Résolu** |
+| 9 | `onSuccess` jamais émis | `parentOrigin` jamais établi (handshake non amorcé) | Omni-FI (widget) | **✅ Résolu côté Omni-FI** (handshake `ready`/`ready-ack`, vérifié runtime) |
+| 11 | `onSuccess` → `TypeError .map` | CDN passe un **tableau nu** ; types + README promettent `{ connections }` | Omni-FI (SDK ≠ CDN) ; contourné côté TYGR | **✅ Contourné côté TYGR** (normalisation + tests) ; **alignement SDK recommandé** |
+| 10 | Transactions + historique des soldes non récupérables | Routes `/transactions/sync` et `/balances/history` documentées mais **non déployées** (`404`) ; pagination réelle (`page`) ≠ doc (curseur) | **Omni-FI** (API ≠ doc) | **⏳ Confirmé « extensions futures » par Omni-FI (2026-06-19)** — base à construire sur les routes par PAGE |
 
 Faits établis :
-- nos **credentials sont valides** (auth `ApiKey` acceptée — `405`, pas `401/403`, sur une autre route) ;
-- notre **`RedirectOrigin` est correct** (`https://localhost:3000`, l'origine réelle de la page, en HTTPS) ;
-- le **403 sur `GET /connections` était notre erreur** (mauvais nom de query param), désormais corrigée — l'API renvoie `200` avec les connexions ;
-- **les comptes + soldes courants sont récupérés** (le repli serveur fonctionne, comptes visibles dans le Dashboard) ;
-- **deux blocages restent côté Omni-FI** : (a) le widget n'établit pas `parentOrigin` (#9, correctif dans `link-app`) ; (b) les endpoints `/transactions/sync` et `/balances/history` sont documentés mais non déployés (#10, l'API doit s'aligner sur sa doc — ou l'inverse).
+- nos **credentials sont valides** ; notre **`RedirectOrigin` est correct** (`https://localhost:3000`, HTTPS) ;
+- le **parcours bancaire complet fonctionne** : connexion → `onSuccess` → échange `PublicToken` → découverte des comptes → redirection (preuve serveur : `finaliserConnexionDropinAction` appelée, 1 token, échange + comptes en ~2,3 s) ;
+- **un seul point reste côté Omni-FI** : #10 — les routes `/transactions/sync` (delta par curseur) et `/balances/history` (série EOD) ; **Omni-FI confirme (2026-06-19) qu'il s'agit d'extensions futures non encore actées**. Conformément à ce retour, **TYGR construira l'ingestion des transactions sur les routes paginées par PAGE** (`/accounts/{id}/transactions`, `Data`+`Links`+`Meta.TotalPages`) — c'est le contrat actuel aligné OBIE ; la voie curseur reste un ajout futur côté API.
 
-**En attente d'un alignement côté Omni-FI** (widget `parentOrigin` **et** routes transactions/historique conformes à la doc). Le jour où c'est aligné, l'intégration TYGR fonctionnera **sans réécriture** : notre client suit déjà le contrat Fern documenté.
+**Bilan : le Link Widget est pleinement opérationnel.** Reste à brancher l'ingestion des
+transactions sur le modèle par page (chantier TYGR en cours), l'historique de soldes étant
+différé tant qu'Omni-FI n'expose pas de série EOD.
 
 ---
 
