@@ -51,7 +51,7 @@ const execWs =
 function clientFactice(over: {
   exchange?: Partial<{ ConnectionId: string; InstitutionId: string; CustomerType: "business" }>;
   accounts?: Array<{ AccountId: string; Status: string; Currency: string; PartyName?: string; Balances?: unknown[] }>;
-  connections?: Array<{ ConnectionId: string; InstitutionId: string; Status: string }>;
+  connections?: Array<{ ConnectionId: string; InstitutionId: string; InstitutionName?: string; Status: string }>;
 } = {}): OmniFiClient {
   return {
     creerLinkToken: vi.fn().mockResolvedValue({ LinkToken: "lt_x", Expiration: "2026-06-15T00:15:00Z" }),
@@ -393,6 +393,31 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
       (await tx.select().from(bankConnections)).some((x) => x.omnifiConnectionId === "conn-sync-A"),
     );
     expect(vuB).toBe(false);
+  });
+
+  it("persiste InstitutionName depuis GET /connections (DASH-INST1)", async () => {
+    // Régression : ce chemin (bouton « Synchroniser mes comptes ») jetait
+    // InstitutionName — la connexion restait institution_name=NULL malgré la donnée
+    // API. On vérifie qu'il est désormais capturé et persisté.
+    const c = clientFactice({
+      connections: [
+        {
+          ConnectionId: "conn-named",
+          InstitutionId: "absa",
+          InstitutionName: "Absa Internet Banking",
+          Status: "active",
+        },
+      ],
+      accounts: [
+        { AccountId: "oa-named", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] },
+      ],
+    });
+    await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    const conn = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(bankConnections)).find((x) => x.omnifiConnectionId === "conn-named"),
+    );
+    expect(conn?.institutionName).toBe("Absa Internet Banking");
   });
 
   it("idempotent : deux synchros n'accumulent pas (upserts)", async () => {
