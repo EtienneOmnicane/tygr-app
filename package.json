@@ -12,6 +12,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:provision": "node scripts/provision.mjs",
+    "db:baseline": "node scripts/baseline-migrations.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
     "seed:admin": "node scripts/seed-admin.mjs"
   },
   "dependencies": {

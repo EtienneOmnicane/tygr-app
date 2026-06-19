@@ -5,6 +5,42 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Outillage migrations DB — db:migrate câblé + drift résolu (2026-06-19)
+
+`/investigate` : `/transactions` plantait au runtime sur « relation "categories"
+does not exist » (RSC `page.tsx:62` → `listerCategories` → `categorisation.ts:414`).
+ROOT CAUSE = **drift de migration** : la base locale était restée à 0003/0004 ;
+les migrations **0005 (Pilier 1 : categories, transaction_categorizations,
+categorization_audit)** et 0006 n'avaient jamais été appliquées. Cause STRUCTURELLE :
+**aucun script `db:migrate` n'existait** (db:generate générait les .sql, rien ne les
+APPLIQUAIT) + la table de suivi `drizzle.__drizzle_migrations` n'existait pas (les
+0000→0006 avaient été posées à la main). PGlite reconstruit tout le schéma → tests
+verts, drift invisible en CI unitaire.
+
+Corrigé (LOCAL prouvé) : 0005 appliquée (owner) + `db:provision` rejoué (GRANT/RLS
+sur les 3 tables ; `categorization_audit` reste INSERT/SELECT seul, trigger
+append-only 0005 OK). Requête exacte rejouée sous `tygr_app` + RLS → passe (0 row).
+Outillage AJOUTÉ (`scripts/migrate.mjs` + `scripts/baseline-migrations.mjs`,
+`db:migrate`/`db:baseline` dans package.json) : migrator Drizzle officiel + baseline
+idempotent reproduisant à l'identique le format du suivi (sha256 du .sql brut,
+schéma `drizzle`, created_at = `when` du journal). Pipeline `db:provision → db:migrate
+→ deploy` enfin RÉELLE (avant : étape migrate fantôme, cf. commentaire provision.mjs:6).
+
+- [ ] **DB-MIGRATE1 (P1) — appliquer baseline+migrate sur Neon et la CI** — Effort S,
+  gardien Backend. La correction n'a touché QUE la base LOCALE (`tygr_postgres`). **Neon
+  (staging/prod) a très probablement le même drift** (0005/0006 jamais appliquées par un
+  migrator). Sur une base pré-existante : `npm run db:baseline` UNE FOIS (adopte
+  l'existant sans rejeu), puis `npm run db:migrate`. **Sur base NEUVE** : `db:migrate`
+  direct (PAS de baseline), puis **re-`db:provision`** pour poser les GRANT DELETE des
+  tables liste-blanche créées entre-temps (cf. suivi #3bis). **Déclencheur** : 1er déploiement
+  / prochaine synchro Neon. Le pipeline CI (règle 9) doit intégrer l'étape `db:migrate`
+  après `db:provision`.
+- [ ] **DB-MIGRATE2 (P2) — intégrer `db:migrate` à la CI bloquante** — Effort S. La
+  pipeline canonique (CLAUDE.md règle 9 : lint→typecheck→tests→isolation→build→migrations)
+  n'a pas d'étape migrate exécutée. Ajouter `db:provision && db:migrate` contre une base
+  éphémère au CI pour ATTRAPER ce drift (un .sql généré mais jamais appliqué casserait
+  alors le CI, pas le runtime). **Déclencheur** : mise en place du workflow CI/CD.
+
 ### Page /transactions — câblée et opérationnelle (UI, 2026-06-17)
 
 L'UI complète de `/transactions` (table dense, pagination, injection
