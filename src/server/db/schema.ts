@@ -235,8 +235,11 @@ export const bankAccounts = pgTable(
     isSelected: boolean("is_selected").notNull().default(true),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     /**
-     * `NextCursor` Omni-FI du sync incrémental, par compte. Avancé UNIQUEMENT
-     * dans la même transaction SQL que les upserts (plan : pas de trou).
+     * ORPHELIN depuis 2026-06-19 : l'ingestion est passée au modèle par PAGE
+     * (`/transactions`, `Links.Next`/`Meta.TotalPages`) ; il n'y a plus de curseur
+     * à persister. Colonne laissée en place volontairement (pas de migration
+     * couplée à ce changement) — retrait tracé en dette TODOS (INGEST-CURSOR1).
+     * Vestige de l'ancien `/transactions/sync` (extension future non déployée).
      */
     syncCursor: text("sync_cursor"),
   },

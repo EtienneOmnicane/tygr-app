@@ -1,7 +1,7 @@
 /**
  * Point d'entrée d'ingestion Omni-FI (PR 2). Surface livrée : persistance d'une
  * connexion/d'un compte, et synchronisation COMPLÈTE d'un compte connu
- * (transactions par curseur + soldes EOD). Tout accès données passe par
+ * (transactions par PAGE + soldes EOD). Tout accès données passe par
  * `executer` = withWorkspace(session, fn) (règle 2) : le workspace_id vient du
  * contexte, jamais d'un paramètre. Pas de PII en log (règle 8).
  *
@@ -64,8 +64,9 @@ export async function ingererConnexions(
 }
 
 /**
- * Synchronise UN compte déjà rattaché : transactions (curseur, Q3/Q4) + soldes
- * EOD (page-based, suit Links.Next). Composable depuis un cron/route.
+ * Synchronise UN compte déjà rattaché : transactions (par PAGE, suit Links.Next/
+ * Meta.TotalPages) + soldes EOD (par page également). Composable depuis un cron/
+ * route. Pas de curseur : chaque sync relit la liste complète (upsert idempotent).
  */
 export async function synchroniserCompteComplet(
   client: OmniFiClient,
@@ -74,9 +75,8 @@ export async function synchroniserCompteComplet(
     omnifiAccountId: string;
     bankAccountId: string;
     clientUserId: string;
-    curseurInitial: string | null;
     fenetreSoldes?: { fromStatementDateTime?: string; toStatementDateTime?: string };
-    count?: number;
+    pageSize?: number;
     maintenant?: () => Date;
   },
 ): Promise<{ sync: ResultatSync; soldes: number }> {

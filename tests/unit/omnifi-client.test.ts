@@ -73,21 +73,27 @@ describe("chemin heureux — décodage d'enveloppe", () => {
     expect(headers["x-fapi-interaction-id"]).toBe("fixed-interaction-id");
   });
 
-  it("syncTransactions transmet cursor + count et encode l'accountId", async () => {
-    const data = { Added: [], Modified: [], Removed: [], NextCursor: "n", HasMore: false };
-    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }));
+  it("listerTransactionsPage transmet page + pageSize, encode l'accountId et renvoie l'enveloppe", async () => {
+    const data = { Transaction: [] };
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson({ Data: data, Links: { Next: null }, Meta: { TotalPages: 1 } }),
+    );
     const client = creerClient(fetchMock as unknown as typeof fetch);
 
-    const r = await client.syncTransactions("acc/42", CLIENT_USER_ID, {
-      cursor: "cur",
-      count: 200,
+    const env = await client.listerTransactionsPage("acc/42", CLIENT_USER_ID, {
+      page: 2,
+      pageSize: 50,
     });
 
-    expect(r.HasMore).toBe(false);
+    // Enveloppe complète conservée (Links/Meta) pour que l'ingestion itère par page.
+    expect(env.Data.Transaction).toEqual([]);
+    expect(env.Meta?.TotalPages).toBe(1);
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain("/accounts/acc%2F42/transactions/sync");
-    expect(url).toContain("cursor=cur");
-    expect(url).toContain("count=200");
+    expect(url).toContain("/accounts/acc%2F42/transactions");
+    expect(url).not.toContain("/transactions/sync");
+    expect(url).toContain("page=2");
+    expect(url).toContain("pageSize=50");
+    expect(url).toContain("client_user_id=");
   });
 });
 
@@ -127,9 +133,9 @@ describe("mapping des erreurs API (règle 3)", () => {
     );
     const client = creerClient(fetchMock as unknown as typeof fetch);
 
-    const erreur: OmniFiApiError = await client
-      .syncTransactions("acc", CLIENT_USER_ID)
-      .catch((e) => e);
+    const erreur = (await client
+      .listerTransactionsPage("acc", CLIENT_USER_ID)
+      .catch((e) => e)) as OmniFiApiError;
 
     expect(erreur).toBeInstanceOf(OmniFiApiError);
     expect(erreur.estRateLimit).toBe(true);

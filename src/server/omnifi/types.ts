@@ -102,14 +102,14 @@ export interface OmniFiTransaction {
   IsActive?: boolean;
 }
 
-/* --- Transactions sync par curseur (docs § GET /accounts/{id}/transactions/sync) --- */
+/* --- Transactions paginées par PAGE (GET /accounts/{id}/transactions) ---
+ * Contrat réel déployé (aligné OBIE — confirmé Omni-FI 2026-06-19) : liste plate
+ * `Data.Transaction[]` + pagination via l'enveloppe `Links.Next` / `Meta.TotalPages`.
+ * (L'ancien `/transactions/sync` par curseur — Added/Modified/Removed/NextCursor —
+ * est une extension future NON déployée ; cf. OMNIFI_API_FEEDBACK.md §10.) */
 
-export interface OmniFiTransactionsSyncData {
-  Added: OmniFiTransaction[];
-  Modified: OmniFiTransaction[];
-  Removed: Array<{ TransactionId: string }>;
-  NextCursor: string;
-  HasMore: boolean;
+export interface OmniFiTransactionsData {
+  Transaction: OmniFiTransaction[];
 }
 
 /* --- Résumé agrégé (docs § GET /accounts/{id}/transactions/summary) --- */

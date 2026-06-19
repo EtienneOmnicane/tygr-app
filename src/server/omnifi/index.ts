@@ -28,7 +28,7 @@ export type {
   OmniFiHistoricalBalance,
   OmniFiTransaction,
   OmniFiTransactionsSummaryData,
-  OmniFiTransactionsSyncData,
+  OmniFiTransactionsData,
   // Flux Link Widget (PR-W1)
   CreerLinkTokenParams,
   BankCredentials,

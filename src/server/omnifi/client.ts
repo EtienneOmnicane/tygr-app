@@ -48,7 +48,7 @@ import type {
   OmniFiSyncJobAccountsData,
   OmniFiAccountsData,
   OmniFiTransactionsSummaryData,
-  OmniFiTransactionsSyncData,
+  OmniFiTransactionsData,
   OmniFiMfaResendData,
   OmniFiMfaInputData,
   BankCredentials,
@@ -285,22 +285,32 @@ export class OmniFiClient {
   }
 
   /**
-   * GET /accounts/{AccountId}/transactions/sync — sync incrémental par curseur.
-   * Omettre `cursor` pour l'historique complet ; relancer tant que HasMore=true
-   * avec le NextCursor renvoyé (docs § Transactions). La boucle d'itération vit
-   * côté ingestion (PR 2) : ce client expose une page à la fois.
-   * Pagination par curseur (≠ Links/Meta) → on renvoie directement le Data.
+   * GET /accounts/{AccountId}/transactions — liste paginée par PAGE (contrat réel
+   * déployé, aligné OBIE ; confirmé Omni-FI 2026-06-19). Renvoie l'enveloppe
+   * complète `{ Data: { Transaction[] }, Links, Meta }` : l'appelant (ingestion)
+   * itère via `Links.Next` / `Meta.TotalPages` (cf. `historiqueSoldes`,
+   * `listerConnexions`). `pageSize` défaut amont = 20.
+   *
+   * Remplace l'ancien `/transactions/sync` par curseur (Added/Modified/Removed/
+   * NextCursor/HasMore), qui est une extension future NON déployée — cf.
+   * OMNIFI_API_FEEDBACK.md §10. Pas de delta incrémental : on relit la liste
+   * complète, l'upsert idempotent (clé `omnifi_account_id`) absorbe les doublons.
    */
-  async syncTransactions(
+  listerTransactionsPage(
     accountId: string,
     clientUserId: string,
-    options: { cursor?: string; count?: number } = {},
-  ): Promise<OmniFiTransactionsSyncData> {
-    const enveloppe = await this.requete<OmniFiTransactionsSyncData>(
-      `/accounts/${encodeURIComponent(accountId)}/transactions/sync`,
-      { query: { client_user_id: clientUserId, cursor: options.cursor, count: options.count } },
+    pagination: { page?: number; pageSize?: number } = {},
+  ): Promise<OmniFiEnveloppe<OmniFiTransactionsData>> {
+    return this.requete<OmniFiTransactionsData>(
+      `/accounts/${encodeURIComponent(accountId)}/transactions`,
+      {
+        query: {
+          client_user_id: clientUserId,
+          page: pagination.page,
+          pageSize: pagination.pageSize,
+        },
+      },
     );
-    return enveloppe.Data;
   }
 
   /**

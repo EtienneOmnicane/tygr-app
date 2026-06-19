@@ -1,15 +1,16 @@
 /**
- * Orchestrateur d'ingestion — Q3 (count borné), Q4 (garde anti-boucle), boucle
- * de curseur, mapping. Client Omni-FI factice (aucun réseau), `executer` factice
- * qui capture les upserts sans vraie DB.
+ * Orchestrateur d'ingestion — pagination par PAGE (pageSize borné, garde MAX_PAGES,
+ * arrêt sur Links.Next/Meta.TotalPages), mapping. Client Omni-FI factice (aucun
+ * réseau), `executer` factice qui capture les appels sans vraie DB.
  */
 import { describe, expect, it, vi } from "vitest";
 
 import type { OmniFiClient, OmniFiTransaction } from "@/server/omnifi";
 import {
-  bornerCount,
-  COUNT_MAX,
+  bornerPageSize,
   IngestionBoucleError,
+  MAX_PAGES,
+  PAGE_SIZE_MAX,
   synchroniserCompte,
   versLignePersistee,
 } from "@/server/ingestion/orchestrateur";
@@ -24,6 +25,18 @@ function txOBIE(over: Partial<OmniFiTransaction> = {}): OmniFiTransaction {
     Status: "Booked",
     BookingDateTime: "2026-06-10T05:30:00Z",
     ...over,
+  };
+}
+
+/** Enveloppe OBIE { Data: { Transaction }, Links, Meta } pour une page de transactions. */
+function pageTx(
+  transactions: OmniFiTransaction[],
+  opts: { next?: string | null; totalPages?: number } = {},
+) {
+  return {
+    Data: { Transaction: transactions },
+    Links: { Next: opts.next ?? null },
+    Meta: { TotalPages: opts.totalPages ?? 1 },
   };
 }
 
@@ -46,14 +59,14 @@ function executerFactice() {
   return { executer, upserts };
 }
 
-describe("Q3 — bornerCount", () => {
-  it("défaut sans valeur, plafonne à COUNT_MAX, plancher à 1", () => {
-    expect(bornerCount(undefined)).toBe(100);
-    expect(bornerCount(50)).toBe(50);
-    expect(bornerCount(99999)).toBe(COUNT_MAX);
-    expect(bornerCount(0)).toBe(1);
-    expect(bornerCount(-5)).toBe(1);
-    expect(bornerCount(1.5)).toBe(1);
+describe("bornerPageSize", () => {
+  it("défaut sans valeur, plafonne à PAGE_SIZE_MAX, plancher à 1", () => {
+    expect(bornerPageSize(undefined)).toBe(100);
+    expect(bornerPageSize(50)).toBe(50);
+    expect(bornerPageSize(99999)).toBe(PAGE_SIZE_MAX);
+    expect(bornerPageSize(0)).toBe(1);
+    expect(bornerPageSize(-5)).toBe(1);
+    expect(bornerPageSize(1.5)).toBe(1);
   });
 });
 
@@ -69,25 +82,13 @@ describe("versLignePersistee — mapping + conversions", () => {
   });
 });
 
-describe("synchroniserCompte — boucle de curseur", () => {
-  it("parcourt plusieurs pages jusqu'à HasMore=false", async () => {
+describe("synchroniserCompte — pagination par page", () => {
+  it("parcourt plusieurs pages en suivant Links.Next jusqu'à la dernière", async () => {
     const client = {
-      syncTransactions: vi
+      listerTransactionsPage: vi
         .fn()
-        .mockResolvedValueOnce({
-          Added: [txOBIE({ TransactionId: "a" })],
-          Modified: [],
-          Removed: [],
-          NextCursor: "c1",
-          HasMore: true,
-        })
-        .mockResolvedValueOnce({
-          Added: [txOBIE({ TransactionId: "b" })],
-          Modified: [],
-          Removed: [],
-          NextCursor: "c2",
-          HasMore: false,
-        }),
+        .mockResolvedValueOnce(pageTx([txOBIE({ TransactionId: "a" })], { next: "url2", totalPages: 2 }))
+        .mockResolvedValueOnce(pageTx([txOBIE({ TransactionId: "b" })], { next: null, totalPages: 2 })),
     } as unknown as OmniFiClient;
     const { executer } = executerFactice();
 
@@ -95,25 +96,59 @@ describe("synchroniserCompte — boucle de curseur", () => {
       omnifiAccountId: "acc-1",
       bankAccountId: "ba-1",
       clientUserId: "cu-1",
-      curseurInitial: null,
     });
 
     expect(r.pages).toBe(2);
     expect(r.transactionsTraitees).toBe(2);
-    expect(r.curseurFinal).toBe("c2");
-    // count borné transmis au client
-    expect((client.syncTransactions as ReturnType<typeof vi.fn>).mock.calls[0][2].count).toBe(100);
+    const mock = client.listerTransactionsPage as ReturnType<typeof vi.fn>;
+    // pageSize borné transmis ; pages 1 puis 2.
+    expect(mock.mock.calls[0][2].pageSize).toBe(100);
+    expect(mock.mock.calls[0][2].page).toBe(1);
+    expect(mock.mock.calls[1][2].page).toBe(2);
   });
 
-  it("Q4 — HasMore=true + NextCursor vide → IngestionBoucleError (pas de boucle infinie)", async () => {
+  it("s'arrête dès qu'il n'y a pas de Links.Next (page unique)", async () => {
     const client = {
-      syncTransactions: vi.fn().mockResolvedValue({
-        Added: [],
-        Modified: [],
-        Removed: [],
-        NextCursor: "",
-        HasMore: true,
-      }),
+      listerTransactionsPage: vi
+        .fn()
+        .mockResolvedValue(pageTx([txOBIE()], { next: null, totalPages: 1 })),
+    } as unknown as OmniFiClient;
+    const { executer } = executerFactice();
+
+    const r = await synchroniserCompte(client, executer, {
+      omnifiAccountId: "acc-1",
+      bankAccountId: "ba-1",
+      clientUserId: "cu-1",
+    });
+
+    expect(r.pages).toBe(1);
+    expect(r.transactionsTraitees).toBe(1);
+    expect((client.listerTransactionsPage as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+  });
+
+  it("page vide → 0 transaction, pas d'erreur, marque quand même la synchro", async () => {
+    const client = {
+      listerTransactionsPage: vi.fn().mockResolvedValue(pageTx([], { next: null, totalPages: 1 })),
+    } as unknown as OmniFiClient;
+    const { executer, upserts } = executerFactice();
+
+    const r = await synchroniserCompte(client, executer, {
+      omnifiAccountId: "acc-1",
+      bankAccountId: "ba-1",
+      clientUserId: "cu-1",
+    });
+
+    expect(r.transactionsTraitees).toBe(0);
+    // Aucun upsert de transactions (lignes vides), mais marquerSynchronise est appelé.
+    expect(upserts.length).toBe(1);
+  });
+
+  it("MAX_PAGES — l'amont prétend qu'il reste des pages au-delà du plafond → IngestionBoucleError", async () => {
+    // Links.Next toujours présent ET TotalPages très grand → sans garde, boucle infinie.
+    const client = {
+      listerTransactionsPage: vi
+        .fn()
+        .mockResolvedValue(pageTx([txOBIE()], { next: "toujours-plus", totalPages: MAX_PAGES + 5 })),
     } as unknown as OmniFiClient;
     const { executer } = executerFactice();
 
@@ -122,29 +157,6 @@ describe("synchroniserCompte — boucle de curseur", () => {
         omnifiAccountId: "acc-1",
         bankAccountId: "ba-1",
         clientUserId: "cu-1",
-        curseurInitial: null,
-      }),
-    ).rejects.toBeInstanceOf(IngestionBoucleError);
-  });
-
-  it("Q4 — HasMore=true + NextCursor identique au précédent → IngestionBoucleError", async () => {
-    const client = {
-      syncTransactions: vi.fn().mockResolvedValue({
-        Added: [],
-        Modified: [],
-        Removed: [],
-        NextCursor: "meme-curseur",
-        HasMore: true,
-      }),
-    } as unknown as OmniFiClient;
-    const { executer } = executerFactice();
-
-    await expect(
-      synchroniserCompte(client, executer, {
-        omnifiAccountId: "acc-1",
-        bankAccountId: "ba-1",
-        clientUserId: "cu-1",
-        curseurInitial: "meme-curseur",
       }),
     ).rejects.toBeInstanceOf(IngestionBoucleError);
   });
