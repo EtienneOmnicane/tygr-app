@@ -31,12 +31,13 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { peutModifier } from "@/lib/permissions";
 import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
-import { workspaces } from "@/server/db/schema";
+import { bankAccounts, workspaces } from "@/server/db/schema";
 import {
   upsertCompte,
   upsertConnexion,
 } from "@/server/repositories/ingestion";
 import { normaliserNomInstitution } from "@/server/ingestion/conversion";
+import { synchroniserCompte } from "@/server/ingestion/orchestrateur";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 type Tx = WorkspaceTx<AnyPgDatabase>;
@@ -324,6 +325,8 @@ export async function finaliserConnexionDropin(
 export interface ResultatSynchronisation {
   connexions: number;
   comptesRattaches: number;
+  /** Transactions importées (toutes pages, tous comptes) lors de cette synchro. */
+  transactionsImportees: number;
 }
 
 /**
@@ -395,7 +398,35 @@ export async function synchroniserConnexionsDepuisOmnifi(
     comptesRattaches += await persisterConnexionEtComptes(executer, cx, comptes);
   }
 
-  return { connexions: connexions.length, comptesRattaches };
+  // 4. Ingestion des TRANSACTIONS de chaque compte rattaché (pagination par page,
+  //    cf. orchestrateur d'ingestion). Sans ça, le dashboard (Détails, Transactions
+  //    récentes) reste vide alors que l'API a des transactions. On relit les comptes
+  //    du workspace (couple bankAccountId/omnifiAccountId) DANS le tx scopé (RLS).
+  const comptesAIngerer = await executer(async (tx) =>
+    tx
+      .select({
+        bankAccountId: bankAccounts.id,
+        omnifiAccountId: bankAccounts.omnifiAccountId,
+      })
+      .from(bankAccounts)
+      .where(eq(bankAccounts.isSelected, true)),
+  );
+
+  let transactionsImportees = 0;
+  for (const cpt of comptesAIngerer) {
+    const r = await synchroniserCompte(client, executer, {
+      omnifiAccountId: cpt.omnifiAccountId,
+      bankAccountId: cpt.bankAccountId,
+      clientUserId,
+    });
+    transactionsImportees += r.transactionsTraitees;
+  }
+
+  return {
+    connexions: connexions.length,
+    comptesRattaches,
+    transactionsImportees,
+  };
 }
 
 /* ------------------------------------------------------------------ */

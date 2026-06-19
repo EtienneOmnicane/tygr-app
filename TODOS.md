@@ -160,9 +160,19 @@ devise** (multi-devises, jamais d'addition cross-devise).
 ### Synchronisation automatique des soldes/transactions (2026-06-19)
 
 À la connexion (Finish → `finaliserConnexionDropinAction`), les COMPTES sont déjà rattachés
-auto (découverte `/accounts`). Mais les SOLDES (rafraîchis) et les TRANSACTIONS exigent
-aujourd'hui un clic manuel « Synchroniser mes comptes » (`synchroniserConnexionsAction`).
+auto (découverte `/accounts`). Le bouton « Synchroniser mes comptes »
+(`synchroniserConnexionsDepuisOmnifi`) ingère désormais AUSSI les **transactions** de chaque
+compte (pagination par page → `upsertTransactions`), ce qui remplit Détails + Transactions
+récentes (livré 2026-06-19, branche `feat/dashboard-solde-ui`). Restent automatisation +
+soldes EOD :
 
+- [ ] **DASH-AUTOSYNC2 (P2) — ré-ingestion globale à chaque clic** — Effort S, gardien
+  Backend. `synchroniserConnexionsDepuisOmnifi` ré-ingère les transactions de TOUS les
+  comptes `is_selected` du workspace à chaque appel (pas seulement les connexions
+  nouvellement ajoutées) → coût API qui croît avec le nombre de comptes. Acceptable au MVP
+  (idempotent, volumes faibles). **Déclencheur** : nombreux comptes en prod / plainte de
+  lenteur. Piste : ne synchroniser que les comptes des connexions touchées, ou borner par
+  `lastSyncedAt` (skip si récent).
 - [ ] **DASH-AUTOSYNC1 (P1) — synchro auto en arrière-plan** — Effort M-L, gardien Backend.
   Éviter que l'utilisateur doive cliquer « Synchroniser » après chaque ajout de banque.
   Pistes : (a) **cron Inngest** périodique (déjà au stack) qui rejoue
