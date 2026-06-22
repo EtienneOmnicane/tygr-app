@@ -7,7 +7,7 @@
  * Le solde = somme des soldes COURANTS par devise (`soldesCourantsParDevise`) —
  * source indépendante de `balance_history` (vide tant qu'Omni-FI n'expose pas
  * `/balances/history`). Multi-devises (CLAUDE.md) : UNE LIGNE PAR DEVISE, jamais
- * d'addition cross-devise. Mention « au JJ/MM » = date de dernière synchro.
+ * d'addition cross-devise. Mention « au JJ/MM/AAAA » = date de dernière synchro.
  *
  * Couleurs : entrées `inflow-700` / sorties `outflow-700` — vert/rouge réservés
  * à la donnée (§3.1). Solde en `primary` (§1.3). Tout en `tabular-nums` (§0).
@@ -18,6 +18,7 @@ import type {
 } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
+import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function SidePanelKpi({
@@ -32,7 +33,7 @@ export function SidePanelKpi({
   syntheseMois: SyntheseMois;
   /** Devise de base du workspace (sert de repli quand aucun compte/solde). */
   devise: string;
-  /** Date de dernière synchro, formatée « JJ/MM » pour la méta de la carte solde. */
+  /** Date de dernière synchro, formatée « JJ/MM/AAAA » pour la méta de la carte solde. */
   dateSolde: string;
 }) {
   // Repli : aucun solde (aucun compte sélectionné) → on montre 0 dans la devise de
@@ -77,7 +78,7 @@ export function SidePanelKpi({
             Détails
           </span>
           <span className="text-xs text-text-muted">
-            {moisLisible(syntheseMois.libelleMois)}
+            {formaterMoisAnnee(syntheseMois.libelleMois)}
           </span>
         </div>
         <dl className="mt-4 flex flex-col gap-5">
@@ -123,15 +124,4 @@ function KpiRow({
       </dd>
     </div>
   );
-}
-
-/** "2026-06" → "Juin 2026". Purement présentationnel. */
-function moisLisible(libelleMois: string): string {
-  const [annee, mois] = libelleMois.split("-");
-  const noms = [
-    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
-  ];
-  const idx = Number(mois) - 1;
-  return idx >= 0 && idx < 12 ? `${noms[idx]} ${annee}` : libelleMois;
 }

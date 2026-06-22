@@ -21,6 +21,7 @@ import type {
 } from "@/server/repositories/dashboard";
 
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
+import { formaterDateCourteNumerique } from "@/lib/format-date";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
@@ -63,8 +64,8 @@ export function DashboardContent({
   // Sinon : comptes connectés → on monte le shell complet. Chaque zone gère son
   // propre vide (PARTIEL) sans masquer le solde déjà disponible.
   const dateSolde = courbe.length
-    ? jourMoisCourt(courbe[courbe.length - 1].date)
-    : jourMoisCourt(dernierSync(comptes));
+    ? formaterDateCourteNumerique(courbe[courbe.length - 1].date)
+    : formaterDateCourteNumerique(dernierSync(comptes));
 
   return (
     <DashboardShell
@@ -115,10 +116,4 @@ function dernierSync(comptes: CompteConnecte[]): string {
     .sort((a, b) => b.getTime() - a.getTime());
   const d = dates[0] ?? new Date();
   return d.toISOString().slice(0, 10);
-}
-
-/** "2026-06-12" → "12/06". Présentationnel. */
-function jourMoisCourt(date: string): string {
-  const [, mois, jour] = date.split("-");
-  return `${jour}/${mois}`;
 }
