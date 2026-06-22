@@ -29,6 +29,20 @@ const FMT_JOUR_MOIS_AN = new Intl.DateTimeFormat("fr-FR", {
   timeZone: "UTC",
 });
 
+const FMT_DATE_NUMERIQUE = new Intl.DateTimeFormat("fr-FR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+// Noms de mois pleins (libellé "Juin 2026") — un seul endroit, plus de
+// redéfinition locale dans les composants (dette C8, CLAUDE.md « Formatage »).
+const MOIS_PLEINS = [
+  "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+] as const;
+
 /** Vrai si la chaîne est une date `YYYY-MM-DD` plausible (forme stricte). */
 export function estDateISO(valeur: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(valeur)) return false;
@@ -54,4 +68,28 @@ export function formaterDateComptable(transactionDate: string): string {
 export function formaterDateComptableLongue(transactionDate: string): string {
   if (!estDateISO(transactionDate)) return transactionDate;
   return FMT_JOUR_MOIS_AN.format(new Date(`${transactionDate}T00:00:00Z`));
+}
+
+/**
+ * Formate une date « nue » `YYYY-MM-DD` en numérique court FR « 12/06/2026 »
+ * (méta du solde, en-têtes compacts). Même garde fuseau (lecture UTC) et même
+ * défense que les autres : entrée invalide → restituée telle quelle.
+ */
+export function formaterDateCourteNumerique(transactionDate: string): string {
+  if (!estDateISO(transactionDate)) return transactionDate;
+  return FMT_DATE_NUMERIQUE.format(new Date(`${transactionDate}T00:00:00Z`));
+}
+
+/**
+ * Formate un libellé de mois `YYYY-MM` en « Juin 2026 » (en-tête de synthèse
+ * mensuelle). Entrée hors forme `YYYY-MM` (ou mois hors 01..12) → restituée
+ * telle quelle (défense). Pas de `new Date` : on indexe la table de mois, donc
+ * aucun risque de décalage de fuseau.
+ */
+export function formaterMoisAnnee(libelleMois: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(libelleMois);
+  if (!m) return libelleMois;
+  const idx = Number(m[2]) - 1;
+  if (idx < 0 || idx >= 12) return libelleMois;
+  return `${MOIS_PLEINS[idx]} ${m[1]}`;
 }

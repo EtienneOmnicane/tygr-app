@@ -18,6 +18,7 @@ import type {
 } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
+import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function SidePanelKpi({
@@ -77,7 +78,7 @@ export function SidePanelKpi({
             Détails
           </span>
           <span className="text-xs text-text-muted">
-            {moisLisible(syntheseMois.libelleMois)}
+            {formaterMoisAnnee(syntheseMois.libelleMois)}
           </span>
         </div>
         <dl className="mt-4 flex flex-col gap-5">
@@ -123,15 +124,4 @@ function KpiRow({
       </dd>
     </div>
   );
-}
-
-/** "2026-06" → "Juin 2026". Purement présentationnel. */
-function moisLisible(libelleMois: string): string {
-  const [annee, mois] = libelleMois.split("-");
-  const noms = [
-    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
-  ];
-  const idx = Number(mois) - 1;
-  return idx >= 0 && idx < 12 ? `${noms[idx]} ${annee}` : libelleMois;
 }
