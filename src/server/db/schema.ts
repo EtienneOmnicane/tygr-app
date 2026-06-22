@@ -338,7 +338,7 @@ export const bankAccounts = pgTable(
  * - `currency` AJOUTÉE : « toute table portant un montant porte sa devise »
  *   (CLAUDE.md, multi-devise first) — le plan l'omettait, la règle gagne.
  * - `booking_date_time` AJOUTÉE : horodatage brut UTC dont dérive
- *   `transaction_date` (AT TIME ZONE 'Asia/Port_Louis', E20) — sans lui, la
+ *   `transaction_date` (AT TIME ZONE 'Indian/Mauritius', E20) — sans lui, la
  *   date comptable est invérifiable et l'export perd le tri amont.
  *
  * PII (règle 8) : `bank_label_raw` est un libellé bancaire brut — jamais dans

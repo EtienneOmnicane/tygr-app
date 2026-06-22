@@ -42,7 +42,7 @@ describe("normaliserMontant (règle 8 — sans float)", () => {
   });
 });
 
-describe("deriverDateComptableMaurice (E20 — Asia/Port_Louis, UTC+4)", () => {
+describe("deriverDateComptableMaurice (E20 — Indian/Mauritius, UTC+4)", () => {
   it("une transaction à 22h UTC tombe le LENDEMAIN à Maurice", () => {
     // 2026-06-10T22:00:00Z + 4h = 2026-06-11T02:00 Maurice
     expect(deriverDateComptableMaurice("2026-06-10T22:00:00Z")).toBe("2026-06-11");
