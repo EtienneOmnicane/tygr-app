@@ -116,12 +116,18 @@ l'ingestion.
 DEUX étages d'isolation, à ne JAMAIS confondre ni inverser :
 - **Étage 1 — TENANT (dur)** : RLS `workspace_id` (POLITIQUE_TENANT). Anti-IDOR
   cross-client. INCHANGÉ par le multi-entités. Fuite ici = cross-client (critique).
-- **Étage 2 — ENTITÉ (scopé)** : policy RLS `entity_scope` sur `bank_accounts` via le
-  GUC `app.current_entity_scope` (posé par `withWorkspace` depuis `member_entity_scopes`,
-  JAMAIS un paramètre client). « Vision Entité » = GUC = CSV d'entités ; « Vision
-  Globale » = GUC vide = tout le tenant. Transactions/soldes héritent du scope par
-  JOINTURE sur bank_accounts (pas de duplication d'entity_id sur l'append-only). Fuite
-  ici = intra-groupe (grave, pas cross-client) — mais traitée comme un gate bloquant.
+- **Étage 2 — ENTITÉ (scopé)** : policy RLS `entity_scope` **AS RESTRICTIVE FOR ALL**
+  (USING + WITH CHECK, migration 0009 ; était FOR SELECT en 0008) sur `bank_accounts` via
+  le GUC `app.current_entity_scope` (posé par `withWorkspace` depuis `member_entity_scopes`,
+  JAMAIS un paramètre client). RESTRICTIVE ⇒ se combine en **AND** avec `tenant_isolation`
+  (PERMISSIVE) — une PERMISSIVE s'OR'erait et ne filtrerait rien. « Vision Entité » = GUC =
+  CSV d'entités ; « Vision Globale » = GUC vide = tout le tenant. La policy borne lecture
+  ET écriture : USING (SELECT/UPDATE/DELETE) interdit de cibler un compte hors scope ;
+  WITH CHECK (INSERT/UPDATE) interdit d'INSÉRER ou de DÉPLACER un compte hors scope.
+  Transactions/soldes héritent du scope par JOINTURE sur bank_accounts (pas de duplication
+  d'entity_id sur l'append-only) — d'où la règle « jamais de lecture des tables filles sans
+  joindre bank_accounts » (ENTITY-READ-JOIN1). Fuite ici = intra-groupe (grave, pas
+  cross-client) — mais traitée comme un gate bloquant.
 
 Invariants :
 - `entity_id` vit UNIQUEMENT sur `bank_accounts` (NULLABLE = « non assigné »). Ne JAMAIS
@@ -139,7 +145,18 @@ Invariants :
 - Vision Entité / Globale : `member_entity_scopes` (N:N user↔entity). AUCUNE ligne =
   Vision Globale. Le scope se résout depuis le CONTEXTE, jamais d'un paramètre client.
 - Pas de nouveau rôle au MVP : Vision Entité = membre scopé (pas un rôle). Gestion
-  entités/scopes/assignation = ADMIN-only.
+  entités/scopes/assignation = ADMIN-only. ⚠️ Deux gardes COMPLÉMENTAIRES, à ne pas
+  confondre : (1) la policy `entity_scope` FOR ALL borne l'écriture au **périmètre entité**
+  (structurel, fail-closed, ignore le rôle) ; (2) la garde **applicative** `ctx.role ===
+  "ADMIN"` réserve l'assignation `compte → entité` à l'ADMIN. La RLS ne connaît pas le rôle :
+  un membre MANAGER non scopé (Vision Globale) passe la policy mais doit être bloqué côté
+  Server Action par la garde de rôle. Ne JAMAIS exposer un chemin d'assignation sans CETTE
+  garde applicative en plus de la RLS.
+- Écriture bornée (ENTITY-WRITE-SCOPE1) : en Vision Globale (GUC vide) tout passe — l'ingestion
+  (`upsertCompte`, INSERT `entity_id` NULL) tourne en Vision Globale (gardée `peutModifier`).
+  Un membre SCOPÉ ne peut créer/déplacer un compte que DANS son périmètre ; un INSERT
+  `entity_id=NULL` sous Vision Entité est refusé (fail-closed voulu — un membre borné ne
+  crée pas de comptes non-assignés).
 - Omni-FI « Parties » volontairement IGNORÉES au MVP : assignation MANUELLE côté TYGR
   (sas). Pré-remplissage via PartyId = dette P2 (ENTITY-PARTY1), PAS une dette d'isolation.
 - Provisioning : `entities` et `member_entity_scopes` dans la liste blanche DELETE de
