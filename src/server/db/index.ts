@@ -132,6 +132,7 @@ export {
   syntheseMois,
   syntheseMoisParDevise,
   syntheseParMois,
+  grilleMois,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 export type {

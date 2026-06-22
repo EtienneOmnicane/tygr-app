@@ -339,8 +339,8 @@ export async function syntheseMoisParDevise(
  * neutre → série inchangée.
  *
  * Mois SANS transaction : ABSENT de la série (pas de ligne fabriquée — on ne sait
- * pas dans quelle devise mettre un 0 en multi-devise). Le Front comble l'axe s'il
- * le souhaite. Ordre : chronologique (mois) puis devise (rendu stable).
+ * pas dans quelle devise mettre un 0 en multi-devise). Le Front comble l'axe via
+ * `grilleMois` (cf. ci-dessous). Ordre : chronologique (mois) puis devise (stable).
  */
 export async function syntheseParMois(
   tx: Tx,
@@ -364,6 +364,8 @@ export async function syntheseParMois(
       )::text`,
     })
     .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage de la policy entity_scope (sur bank_accounts) par
+    // jointure (sûre : bank_account_id NOT NULL). Même garantie que syntheseMois.
     .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
     .where(
       and(
@@ -377,6 +379,34 @@ export async function syntheseParMois(
     .groupBy(mois, transactionsCache.currency)
     .orderBy(mois, transactionsCache.currency);
   return lignes;
+}
+
+/**
+ * Grille des `nbMois` derniers mois (du plus ancien au plus récent), ancrée sur
+ * `moisAncrage` ("YYYY-MM", typiquement le mois courant à Maurice). PURE (sans DB,
+ * sans `Date` locale) → testable : on décompose l'ancre en année/mois et on recule
+ * mois par mois en arithmétique entière (pas de dérive de fuseau).
+ *
+ * Sert à COMBLER l'axe temporel de `syntheseParMois`, qui omet les mois sans
+ * transaction (il ne peut pas inventer la devise d'un 0 en multi-devise). Le Front
+ * mappe cette grille sur la série pour obtenir un axe CONTINU.
+ *
+ * @returns ex. nbMois=3, moisAncrage="2026-03" → ["2026-01","2026-02","2026-03"].
+ */
+export function grilleMois(nbMois: number, moisAncrage: string): string[] {
+  const [anneeStr, moisStr] = moisAncrage.split("-");
+  let annee = Number(anneeStr);
+  let mois = Number(moisStr); // 1..12
+  const grille: string[] = [];
+  for (let i = 0; i < nbMois; i++) {
+    grille.push(`${annee}-${String(mois).padStart(2, "0")}`);
+    mois -= 1;
+    if (mois === 0) {
+      mois = 12;
+      annee -= 1;
+    }
+  }
+  return grille.reverse(); // du plus ancien au plus récent
 }
 
 /**

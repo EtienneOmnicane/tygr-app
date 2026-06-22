@@ -16,6 +16,7 @@ import type {
   CompteConnecte,
   PointCourbe,
   SoldeParDevise,
+  SyntheseMensuelle,
   SyntheseMois,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
@@ -29,6 +30,7 @@ import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
+import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
 export interface DonneesDashboard {
@@ -37,6 +39,10 @@ export interface DonneesDashboard {
   soldesParDevise: SoldeParDevise[];
   courbe: PointCourbe[];
   syntheseMois: SyntheseMois;
+  /** Série entrées/sorties des N derniers mois (tendance), à plat par (mois, devise). */
+  serieMensuelle: SyntheseMensuelle[];
+  /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
+  grilleMensuelle: string[];
   transactionsRecentes: TransactionRecente[];
 }
 
@@ -48,8 +54,15 @@ export function DashboardContent({
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
 }) {
-  const { comptes, soldesParDevise, courbe, syntheseMois, transactionsRecentes } =
-    donnees;
+  const {
+    comptes,
+    soldesParDevise,
+    courbe,
+    syntheseMois,
+    serieMensuelle,
+    grilleMensuelle,
+    transactionsRecentes,
+  } = donnees;
 
   // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
   // (état "vide" ; "partiel"/"complet" montent le shell ci-dessous — chaque zone
@@ -94,6 +107,13 @@ export function DashboardContent({
         {/* Vision Entrées / Sorties du mois (demande métier) — au-dessus de la
             table, dans la devise de base (cf. note multidevise du composant). */}
         <CashFlowSummary syntheseMois={syntheseMois} devise={devise} />
+
+        {/* Tendance : entrées/sorties des N derniers mois (barres + tableau). */}
+        <MonthlyCashflow
+          serie={serieMensuelle}
+          grille={grilleMensuelle}
+          devise={devise}
+        />
 
         {/* Table : vide par section si pas encore de transactions. */}
         {transactionsRecentes.length > 0 ? (
