@@ -7,7 +7,7 @@ jour)** : voir le decision log du plan
 
 ### Localisation — identifiant de fuseau Maurice erroné (2026-06-22, Lot 2)
 
-- [ ] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — corriger « Asia/Port_Louis » →
+- [x] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — RÉSOLU 2026-06-22 (hotfix/tz-mauritius-correction) — corriger « Asia/Port_Louis » →
   « Indian/Mauritius »** — Effort S. Découvert au Lot 2 (pastille de fraîcheur §3.7) :
   `Asia/Port_Louis` **n'existe pas** comme identifiant IANA et fait planter `Intl`
   (`RangeError: Invalid time zone specified`), y compris sous full-ICU (Node 25, ICU 78).

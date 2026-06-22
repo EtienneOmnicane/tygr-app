@@ -8,7 +8,7 @@
  * ⚠️ Distinction cruciale (CLAUDE.md « Localisation & temps ») : ce module ne fait
  * AUCUNE conversion de fuseau. Il reçoit une date au format `YYYY-MM-DD` (ou un
  * libellé `YYYY-MM`) DÉJÀ calculée à Maurice par le Backend (E20 :
- * `transaction_date` dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'`).
+ * `transaction_date` dérive de `BookingDateTime AT TIME ZONE 'Indian/Mauritius'`).
  * La date est « nue » (date comptable Maurice), on la met juste en forme pour
  * l'œil — on ne la compare pas, on ne la décale pas.
  *
