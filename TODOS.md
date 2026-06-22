@@ -470,8 +470,19 @@ RETIRÉS (redondants : le layout court-circuite avant les pages).
 
 ### Empty States transverses (UI, 2026-06-17)
 
-- [ ] **UI-ES1 (P2) — faire dériver `DashboardEmptyState` du `EmptyState` générique**
-  — Effort S (déclencheur : merge de `feat/activate-nav-empty-states`). Le composant
+- [x] **UI-ES1 (P2) — faire dériver `DashboardEmptyState` du `EmptyState` générique**
+  — ✅ **LIVRÉ 2026-06-22** (Front, branche `feat/empty-state-derive`). `DashboardEmptyState`
+  ne reclone plus StateCard + StateIllustration + la classe CTA : il choisit copy/illustration/
+  CTA selon son domaine (/banques) puis DÉLÈGUE le rendu à `<EmptyState>` (−62 lignes dupliquées).
+  Le générique a été étendu pour l'accueillir, sans casser ses 4 usages réels (layout, échéances,
+  graphiques, global-error) : `message` passe à `ReactNode` (nom de compte en gras inline) et `cta`
+  devient l'union `EmptyStateCta` (`{label,href}` → `<Link>` | `{label,onClick}` → `<button>`,
+  rétrocompat du handler `onConnect`). Contrat public de `DashboardEmptyState` inchangé
+  (`accountLabel?`, `onConnect?`). Stop-loss : lint + typecheck + 395 tests verts. Visual QA
+  (`/demo/dashboard-states` cas « compte connecté » + `/demo/dashboard` onglet Vide « aucune
+  banque ») : rendu visuellement IDENTIQUE à avant le refactor, 0 erreur console. Reste HISTORIQUE
+  ci-dessous :
+  Effort S (déclencheur : merge de `feat/activate-nav-empty-states`). Le composant
   générique `src/components/ui/states/empty-state.tsx` (livré avec les pages
   graphiques/échéances/transactions) recouvre le markup de `DashboardEmptyState`
   (illustration + titre + message + CTA lien `primary`). `DashboardEmptyState` reste
