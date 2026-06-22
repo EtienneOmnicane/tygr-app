@@ -9,6 +9,15 @@
  * calculé EN SQL (jamais d'addition de floats côté JS). Les montants ressortent
  * en CHAÎNES décimales — la couche UI les formate (tabular-nums) sans recalcul.
  * Les transactions tombstone (is_removed=true) sont exclues de toute lecture.
+ *
+ * Étage 2 — ENTITÉ (ENTITY-READ-JOIN1) : la policy RLS RESTRICTIVE `entity_scope`
+ * vit sur `bank_accounts` (migration 0008). Les soldes/transactions n'héritent du
+ * périmètre entité QUE par une JOINTURE sur `bank_accounts` (pas de policy dédiée sur
+ * l'append-only/partitionné). Toute lecture de `transactions_cache`/`balance_history`
+ * ici joint donc `bank_accounts` pour que le scope morde par héritage : en Vision
+ * Globale (GUC vide) la RESTRICTIVE laisse tout passer (agrégats inchangés) ; en Vision
+ * Entité, les comptes hors périmètre (et les non assignés) sont masqués. Ne JAMAIS
+ * lire ces tables filles sans cette jointure (sinon fuite intra-groupe — étage 2).
  */
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -126,7 +135,14 @@ export async function soldeConsolideCourant(tx: Tx): Promise<string> {
         eq(balanceHistory.bankAccountId, dernier.bankAccountId),
         eq(balanceHistory.balanceDate, dernier.maxDate),
       ),
-    );
+    )
+    // ENTITY-READ-JOIN1 : héritage de la policy entity_scope par jointure sur
+    // bank_accounts. La sous-requête `dernier` peut calculer des dates max pour des
+    // comptes hors scope, mais ce join les ÉLIMINE (la policy masque ces bank_accounts
+    // → pas de correspondance), donc la somme ne porte que sur le périmètre. NOT NULL
+    // garanti sur bank_account_id. (Fonction sans appelant applicatif vivant à ce jour,
+    // mais corrigée pour ne pas laisser une fuite balance_history par une autre porte.)
+    .innerJoin(bankAccounts, eq(balanceHistory.bankAccountId, bankAccounts.id));
   return res[0]?.total ?? "0";
 }
 
@@ -168,6 +184,12 @@ export async function courbeTresorerie(
       soldeConsolide: sql<string>`sum(${balanceHistory.balance})::text`,
     })
     .from(balanceHistory)
+    // ENTITY-READ-JOIN1 : la policy RLS entity_scope vit sur bank_accounts. Cette
+    // jointure (sûre : balance_history.bank_account_id est NOT NULL) la fait HÉRITER
+    // sur les soldes EOD → en Vision Entité, seuls les comptes du périmètre comptent
+    // dans la courbe ; en Vision Globale (GUC vide) la RESTRICTIVE laisse tout passer
+    // → agrégat inchangé. Sans elle, la lecture directe fuit les autres entités.
+    .innerJoin(bankAccounts, eq(balanceHistory.bankAccountId, bankAccounts.id))
     .where(
       and(
         gte(balanceHistory.balanceDate, fenetre.from),
@@ -199,6 +221,11 @@ export async function syntheseMois(
       )::text`,
     })
     .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage de la policy entity_scope (sur bank_accounts) par
+    // jointure (sûre : transactions_cache.bank_account_id est NOT NULL). En Vision
+    // Entité, la synthèse entrées/sorties ne compte que les transactions du périmètre ;
+    // en Vision Globale la RESTRICTIVE n'exclut rien → totaux inchangés.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
     .where(
       and(
         eq(transactionsCache.isRemoved, false),
@@ -236,6 +263,13 @@ export async function transactionsRecentes(
       bankAccountId: transactionsCache.bankAccountId,
     })
     .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage de la policy entity_scope (sur bank_accounts) par
+    // jointure (sûre : transactions_cache.bank_account_id est NOT NULL). En Vision
+    // Entité, seules les transactions des comptes du périmètre remontent ; en Vision
+    // Globale la RESTRICTIVE laisse tout passer → liste inchangée. La jointure ne
+    // change ni les colonnes sélectionnées (toutes issues de transactions_cache) ni la
+    // cardinalité (1 compte par transaction), donc le contrat TransactionRecente tient.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
     .where(eq(transactionsCache.isRemoved, false))
     .orderBy(desc(transactionsCache.transactionDate), desc(transactionsCache.bookingDateTime))
     .limit(limite);
