@@ -171,6 +171,54 @@ const POLITIQUE_TENANT = {
   withCheck: sql`workspace_id = nullif(current_setting('app.current_workspace_id', true), '')::uuid`,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* Entités multi-tenant (Option B — entités SOUS le workspace).        */
+/* Plan de référence : PLAN-entites-multi-tenant.md §1. Une ENTITÉ (BU  */
+/* « Sucrière », « Énergie »…) est un découpage INTERNE au tenant, pas  */
+/* une frontière de tenant (1 credential bancaire = comptes de N        */
+/* entités). entity_id vit UNIQUEMENT sur bank_accounts (NULLABLE =     */
+/* « non assigné ») ; transactions/soldes héritent du scope par         */
+/* JOINTURE — jamais de dénormalisation sur l'append-only/partitionné.  */
+/* Déclarée AVANT bank_accounts : sa contrainte UNIQUE(id, ws) est la   */
+/* cible de la FK composite scopée de bank_accounts.entity_id.          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Référentiel des entités (BU) d'un workspace. Propriété TYGR : Omni-FI ne
+ * connaît pas ce découpage (les « Parties » API sont volontairement ignorées au
+ * MVP — dette P2 ENTITY-PARTY1). Éditable / archivable (`is_active`), jamais de
+ * DELETE physique applicatif (référencée par bank_accounts en ON DELETE
+ * RESTRICT) ; la suppression logique passe par is_active=false.
+ */
+export const entities = pgTable(
+  "entities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    name: varchar("name", { length: 120 }).notNull(),
+    /** Code interne Omnicane optionnel (mapping futur, jamais une clé d'isolation). */
+    code: varchar("code", { length: 40 }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées workspace
+    // (même pattern que categories_id_workspace_unique). Permet d'exiger en base
+    // qu'une entité référencée (par bank_accounts ou member_entity_scopes)
+    // appartienne au MÊME workspace que la ligne référençante — une entity_id
+    // d'un autre tenant devient impossible.
+    unique("entities_id_workspace_unique").on(t.id, t.workspaceId),
+    // Pas deux entités homonymes dans un même groupe.
+    unique("entities_workspace_name_unique").on(t.workspaceId, t.name),
+    index("entities_workspace_id_idx").on(t.workspaceId),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
 /** Connexions bancaires Omni-FI (une connexion = une banque, cf. doc API). */
 export const bankConnections = pgTable(
   "bank_connections",
@@ -249,10 +297,34 @@ export const bankAccounts = pgTable(
      * Vestige de l'ancien `/transactions/sync` (extension future non déployée).
      */
     syncCursor: text("sync_cursor"),
+    /**
+     * Entité (BU) propriétaire du compte. NULLABLE = « compte non assigné »
+     * (état par défaut à l'ingestion — Omni-FI ne connaît pas les entités, §0.2
+     * du plan). Expand-safe : les comptes ingérés avant cette colonne restent à
+     * NULL, l'UI dégrade proprement (sas d'assignation ADMIN). La FK est COMPOSITE
+     * et scopée workspace (ci-dessous) : une entity_id d'un autre tenant est
+     * impossible. ⚠️ entity_id est VOLONTAIREMENT absent du onConflictDoUpdate.set
+     * de l'ingestion (upsertCompte) : un compte assigné conserve son entité au
+     * re-sync (invariant du plan §1.5).
+     */
+    entityId: uuid("entity_id"),
   },
   (t) => [
     index("bank_accounts_workspace_id_idx").on(t.workspaceId),
     index("bank_accounts_connection_id_idx").on(t.connectionId),
+    // FK COMPOSITE scopée workspace (cœur de l'isolation intra-groupe, §1.3) :
+    // l'entité référencée DOIT appartenir au même workspace que le compte. Cible
+    // entities(id, workspace_id) [UNIQUE]. ON DELETE RESTRICT : effacer une
+    // entité encore référencée échoue — l'app archive (is_active=false), jamais
+    // de cascade vers les comptes. Même garantie que la FK composite de categories.
+    foreignKey({
+      columns: [t.entityId, t.workspaceId],
+      foreignColumns: [entities.id, entities.workspaceId],
+      name: "bank_accounts_entity_workspace_fk",
+    }).onDelete("restrict"),
+    // Sas d'assignation + scope entité : retrouver les comptes d'une entité (ou
+    // les non-assignés, entity_id IS NULL) dans un workspace.
+    index("bank_accounts_workspace_entity_idx").on(t.workspaceId, t.entityId),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
@@ -518,6 +590,54 @@ export const categorizationAudit = pgTable(
       t.workspaceId,
       t.transactionId,
       t.transactionDate,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Périmètre entité d'un membre (N:N user ↔ entity) — « Vision Entité ».*/
+/* Plan §1.4. Borne un membre à ≥1 entités. AUCUNE ligne pour un        */
+/* (user, workspace) = « Vision Globale » (voit tout le tenant =        */
+/* consolidation). Le scope est résolu DEPUIS LE CONTEXTE par           */
+/* withWorkspace (3ᵉ GUC app.current_entity_scope) — JAMAIS un          */
+/* paramètre client. Table de DROITS (non append-only) : DELETE légitime*/
+/* (liste blanche provisioning) ; retirer un membre purge ses scopes.   */
+/* ------------------------------------------------------------------ */
+export const memberEntityScopes = pgTable(
+  "member_entity_scopes",
+  {
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    userId: uuid("user_id").notNull(),
+    entityId: uuid("entity_id").notNull(),
+  },
+  (t) => [
+    // Idempotence : un (workspace, user, entity) ne peut exister qu'une fois.
+    primaryKey({ columns: [t.workspaceId, t.userId, t.entityId] }),
+    // FK COMPOSITE membership : on ne scope QUE des membres RÉELS du workspace.
+    // ON DELETE CASCADE LÉGITIME (table de droits, NON append-only) : retirer un
+    // membre (workspace_members) purge automatiquement ses scopes. Cible la PK
+    // composite workspace_members(user_id, workspace_id).
+    foreignKey({
+      columns: [t.userId, t.workspaceId],
+      foreignColumns: [workspaceMembers.userId, workspaceMembers.workspaceId],
+      name: "member_entity_scopes_member_fk",
+    }).onDelete("cascade"),
+    // FK COMPOSITE entité scopée workspace : même garantie cross-tenant que
+    // bank_accounts.entity_id (§1.3). ON DELETE RESTRICT vers les entités (jamais
+    // cascade) — on archive une entité, on ne l'efface pas tant qu'elle est
+    // référencée.
+    foreignKey({
+      columns: [t.entityId, t.workspaceId],
+      foreignColumns: [entities.id, entities.workspaceId],
+      name: "member_entity_scopes_entity_fk",
+    }).onDelete("restrict"),
+    // Résolution du scope à l'ouverture de session (withWorkspace, par userId).
+    index("member_entity_scopes_workspace_user_idx").on(
+      t.workspaceId,
+      t.userId,
     ),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
