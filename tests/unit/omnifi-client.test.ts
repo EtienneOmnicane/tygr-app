@@ -334,15 +334,14 @@ describe("configuration (lecture d'env, règle 8)", () => {
     expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
   });
 
-  it("S1 — les 3 hôtes documentés sont acceptés", () => {
+  it("S1 — les hôtes SANDBOX documentés sont acceptés (sous verrou sandbox)", () => {
     // NOTE (2026-06-16) : "sandbox.omni-fi.co" (coquille doc, NXDOMAIN) retiré de
-    // l'allow-list. Hôtes valides : api (prod), api-stage (API pré-prod, dump
-    // tuteur), stage (CDN widget). Base SANS /v1 : routes à la racine.
-    for (const hote of [
-      "api.omni-fi.co",
-      "api-stage.omni-fi.co",
-      "stage.omni-fi.co",
-    ]) {
+    // l'allow-list. Hôtes sandbox valides : api-stage (API pré-prod, dump tuteur),
+    // stage (CDN widget). Base SANS /v1 : routes à la racine.
+    // ⚠️ MAJ verrou sandbox (2026-06-22) : api.omni-fi.co (PROD) n'est plus accepté
+    // sous OMNIFI_ENV=sandbox (cf. cas dédié ci-dessous) — il reste dans l'allow-list
+    // anti-fuite de secret, mais le verrou + la cohérence env↔hôte le refusent.
+    for (const hote of ["api-stage.omni-fi.co", "stage.omni-fi.co"]) {
       vi.stubEnv("OMNIFI_ENV", "sandbox");
       vi.stubEnv("OMNIFI_BASE_URL", `https://${hote}`);
       vi.stubEnv("OMNIFI_CLIENT_ID", "c");
@@ -350,6 +349,27 @@ describe("configuration (lecture d'env, règle 8)", () => {
       _reinitialiserConfigOmniFi();
       expect(obtenirConfigOmniFi().baseUrl).toBe(`https://${hote}`);
     }
+  });
+
+  it("🔒 verrou sandbox — OMNIFI_ENV=production refusé (recette sandbox uniquement)", () => {
+    // L'hôte est cohérent (prod), mais le VERROU interdit tout chemin de prod.
+    vi.stubEnv("OMNIFI_ENV", "production");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api.omni-fi.co");
+    vi.stubEnv("OMNIFI_CLIENT_ID", "c");
+    vi.stubEnv("OMNIFI_SECRET", "s");
+    _reinitialiserConfigOmniFi();
+    expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
+  });
+
+  it("🔒 verrou sandbox — hôte de PROD (api.omni-fi.co) refusé même en OMNIFI_ENV=sandbox", () => {
+    // Le verrou ET la garde de cohérence refusent un hôte de prod sous sandbox : on
+    // ne peut pas taper la prod par accident avec un .env mal réglé.
+    vi.stubEnv("OMNIFI_ENV", "sandbox");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api.omni-fi.co");
+    vi.stubEnv("OMNIFI_CLIENT_ID", "c");
+    vi.stubEnv("OMNIFI_SECRET", "s");
+    _reinitialiserConfigOmniFi();
+    expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
   });
 
   it("base URL avec slash final → normalisée (pas de // dans l'URL finale)", async () => {

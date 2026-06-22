@@ -15,6 +15,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -196,5 +197,80 @@ describe("isolation des écritures d'ingestion (RLS, partitions incluses)", () =
     // …et le compte SUIT la connexion la plus récente (connection_id réaffecté),
     // pour que le dashboard affiche le bon institution_name après reconnexion.
     expect(memeCompte[0].connectionId).toBe(conn2Id);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Invariant Entités (Option B) — l'ingestion ne pose JAMAIS d'entity_id */
+/* automatiquement, et ne l'écrase JAMAIS au re-sync (plan §1.5,        */
+/* schema.ts:306). C'est le contrat « ingestion → sas ADMIN » : un       */
+/* compte naît NON ASSIGNÉ (NULL = fail-closed, invisible en Vision      */
+/* Entité), l'ADMIN l'assigne ensuite ; un re-sync préserve l'entité.    */
+/* Garde-fou de RÉGRESSION : si un jour entity_id entre dans le          */
+/* onConflictDoUpdate.set de upsertCompte, le test 2 vire au rouge.      */
+/* ------------------------------------------------------------------ */
+describe("invariant Entités : ingestion crée entity_id NULL et ne l'écrase pas (re-sync)", () => {
+  it("1. un compte fraîchement ingéré a entity_id = NULL (non assigné, fail-closed)", async () => {
+    const baA = await prerequisCompte(sessionA, "conn-ent-1", "acc-ent-1");
+    const compte = await withWorkspace(sessionA, (tx) =>
+      tx
+        .select({ entityId: schema.bankAccounts.entityId })
+        .from(schema.bankAccounts)
+        .where(eq(schema.bankAccounts.id, baA)),
+    );
+    expect(compte[0].entityId).toBeNull();
+  });
+
+  it("2. re-sync d'un compte DÉJÀ assigné NE réécrase PAS son entity_id (préservation, plan §1.5)", async () => {
+    // 1er sync : le compte naît NULL.
+    const baA = await prerequisCompte(sessionA, "conn-ent-2", "acc-ent-2");
+
+    // L'ADMIN l'assigne à une entité (on pose l'entité + l'assignation EN BASE,
+    // owner, pour rester focalisé sur l'invariant d'ingestion — l'assignation via
+    // Server Action est déjà couverte par entites-admin-isolation).
+    const ENT_A = "5c000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into entities (id, workspace_id, name, code, is_active) values
+        ('${ENT_A}', '${WS_A}', 'Sucrière', 'SUC', true);
+      update bank_accounts set entity_id = '${ENT_A}' where id = '${baA}';
+    `);
+    await client.exec(`set role tygr_app;`);
+
+    // 2e sync : MÊME omnifi_account_id, libellé/solde mis à jour (re-découverte).
+    await withWorkspace(sessionA, async (tx, ctx) => {
+      const { connectionId } = await upsertConnexion(tx, ctx, {
+        omnifiConnectionId: "conn-ent-2b",
+        institutionId: "mcb",
+        institutionName: "MCB (re-sync)",
+        status: "active",
+        nextSyncAvailableAt: null,
+      });
+      await upsertCompte(tx, ctx, connectionId, {
+        omnifiAccountId: "acc-ent-2", // même compte
+        accountName: "Compte courant (re-sync)",
+        currency: "MUR",
+        currentBalance: "9999.00",
+        isSelected: true,
+      });
+    });
+
+    // L'entity_id assigné a SURVÉCU au re-sync (il n'est pas dans le set du upsert) ;
+    // le reste (libellé/solde) a bien été mis à jour → preuve que l'upsert a bien
+    // tourné, et que SEUL entity_id est préservé.
+    const compte = await withWorkspace(sessionA, (tx) =>
+      tx
+        .select({
+          entityId: schema.bankAccounts.entityId,
+          accountName: schema.bankAccounts.accountName,
+          currentBalance: schema.bankAccounts.currentBalance,
+        })
+        .from(schema.bankAccounts)
+        .where(eq(schema.bankAccounts.omnifiAccountId, "acc-ent-2")),
+    );
+    expect(compte).toHaveLength(1);
+    expect(compte[0].entityId).toBe(ENT_A); // ⬅️ préservé
+    expect(compte[0].accountName).toBe("Compte courant (re-sync)"); // ⬅️ mis à jour
+    expect(compte[0].currentBalance).toBe("9999.00"); // ⬅️ mis à jour
   });
 });
