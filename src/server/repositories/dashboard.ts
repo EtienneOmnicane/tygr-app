@@ -87,6 +87,20 @@ export interface SyntheseMoisDevise {
   variation: string; // entrees - sorties (calcul SQL), pour CETTE devise
 }
 
+/**
+ * Un point de la SÉRIE temporelle mensuelle (Cash In/Out), pour UN mois et UNE
+ * devise. Alimente un graphique Front (barres entrées/sorties par mois). Multi-
+ * devises (règle 8) : une ligne par (mois, devise) — JAMAIS d'addition cross-devise,
+ * aucune conversion FX (chantier DASH-FX1). `mois` = "YYYY-MM" (mois comptable Maurice).
+ */
+export interface SyntheseMensuelle {
+  mois: string; // "YYYY-MM" (mois comptable Maurice)
+  currency: string;
+  entrees: string;
+  sorties: string;
+  variation: string; // entrees - sorties (calcul SQL), pour CE mois ET CETTE devise
+}
+
 export interface TransactionRecente {
   omnifiTxnId: string;
   transactionDate: string;
@@ -299,6 +313,69 @@ export async function syntheseMoisParDevise(
     )
     .groupBy(transactionsCache.currency)
     .orderBy(transactionsCache.currency);
+  return lignes;
+}
+
+/**
+ * SÉRIE temporelle mensuelle des entrées/sorties (Cash In/Out), groupée PAR MOIS
+ * et PAR DEVISE — destinée à alimenter un graphique Front (barres mensuelles).
+ *
+ * Fenêtre : les `nbMois` derniers mois jusqu'à `moisFin` INCLUS. `moisFin` est
+ * passé explicitement (déterministe + testable ; le mois « courant » dépend du
+ * fuseau Maurice et se calcule côté appelant, JAMAIS d'un now() opaque ici).
+ *
+ * FUSEAU (CLAUDE.md, non négociable) : on groupe sur `transaction_date`, qui est
+ * DÉJÀ la date comptable Maurice (dérivée à l'ingestion via
+ * deriverDateComptableMaurice, AT TIME ZONE Indian/Mauritius). Il ne faut donc PAS
+ * re-convertir le fuseau ici — la colonne est déjà en jour calendaire Maurice
+ * (même raison que syntheseMois, qui filtre directement sur transaction_date). Un
+ * date_trunc('month', transaction_date) donne donc bien le mois comptable Maurice.
+ *
+ * Multi-devises (règle 8) : GROUP BY (mois, devise) → une ligne par couple, JAMAIS
+ * d'addition cross-devise, aucune conversion FX (DASH-FX1). Sommes conditionnelles
+ * sur le sens EN SQL, en numeric (chaînes en sortie), tombstones exclus. Héritage
+ * du scope entité par jointure sur bank_accounts (ENTITY-READ-JOIN1) : en Vision
+ * Entité la série ne compte que le périmètre ; en Vision Globale, RESTRICTIVE
+ * neutre → série inchangée.
+ *
+ * Mois SANS transaction : ABSENT de la série (pas de ligne fabriquée — on ne sait
+ * pas dans quelle devise mettre un 0 en multi-devise). Le Front comble l'axe s'il
+ * le souhaite. Ordre : chronologique (mois) puis devise (rendu stable).
+ */
+export async function syntheseParMois(
+  tx: Tx,
+  opts: { moisFin: string; nbMois: number }, // moisFin "YYYY-MM", nbMois ≥ 1
+): Promise<SyntheseMensuelle[]> {
+  // Borne haute EXCLUSIVE = 1er jour du mois SUIVANT moisFin.
+  const finExclusive = `${opts.moisFin}-01`;
+  // Borne basse INCLUSIVE = 1er jour de (moisFin - (nbMois-1) mois). Calcul EN SQL
+  // à partir de la chaîne (déterministe) : interval sur la date de début de moisFin.
+  const reculMois = opts.nbMois - 1;
+  const mois = sql<string>`to_char(date_trunc('month', ${transactionsCache.transactionDate}), 'YYYY-MM')`;
+  const lignes = await tx
+    .select({
+      mois: mois,
+      currency: transactionsCache.currency,
+      entrees: sql<string>`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Credit'), 0)::text`,
+      sorties: sql<string>`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Debit'), 0)::text`,
+      variation: sql<string>`(
+        coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Credit'), 0)
+        - coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Debit'), 0)
+      )::text`,
+    })
+    .from(transactionsCache)
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        // ≥ 1er jour de (moisFin - reculMois mois).
+        sql`${transactionsCache.transactionDate} >= (${finExclusive}::date - (${reculMois} || ' month')::interval)`,
+        // < 1er jour du mois suivant moisFin (borne haute exclusive).
+        sql`${transactionsCache.transactionDate} < (${finExclusive}::date + interval '1 month')`,
+      ),
+    )
+    .groupBy(mois, transactionsCache.currency)
+    .orderBy(mois, transactionsCache.currency);
   return lignes;
 }
 

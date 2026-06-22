@@ -89,6 +89,22 @@ export function estDateISO(valeur: string): boolean {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === valeur;
 }
 
+const FMT_MOIS_MAURICE = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric",
+  month: "2-digit",
+  timeZone: FUSEAU_MAURICE,
+});
+
+/**
+ * Mois calendaire COURANT à l'Île Maurice (`YYYY-MM`). Conversion EXPLICITE vers
+ * Indian/Mauritius (CLAUDE.md, non négociable) : un instant UTC du 31 à 22h tombe
+ * le 1er du mois suivant à Maurice (+4h). `maintenant` injectable pour des tests
+ * déterministes (défaut = now). en-CA donne « YYYY-MM-DD » → on garde « YYYY-MM ».
+ */
+export function moisCourantMaurice(maintenant: Date = new Date()): string {
+  return FMT_MOIS_MAURICE.format(maintenant).slice(0, 7);
+}
+
 /**
  * Formate une date comptable « nue » `YYYY-MM-DD` en « 11 juin » (jour + mois court).
  * Retourne la chaîne d'entrée telle quelle si elle n'est pas une date valide

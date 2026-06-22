@@ -12,6 +12,7 @@ import {
   formaterDateCourteNumerique,
   formaterFraicheurRelative,
   formaterMoisAnnee,
+  moisCourantMaurice,
 } from "@/lib/format-date";
 
 /** Maintenant fixe pour des tests de fraîcheur déterministes (injecté). */
@@ -145,5 +146,23 @@ describe("formaterFraicheurRelative — seuils §3.7", () => {
     );
     expect(f.horodatageAbsolu).toContain("12/06/2026");
     expect(f.horodatageAbsolu).toContain("12:00");
+  });
+});
+
+describe("moisCourantMaurice", () => {
+  it("renvoie le mois courant Maurice au format YYYY-MM", () => {
+    // 2026-06-22 12:00 UTC = 16:00 Maurice → juin.
+    expect(moisCourantMaurice(new Date("2026-06-22T12:00:00Z"))).toBe("2026-06");
+  });
+
+  it("FUSEAU : 30/06 22:00 UTC est déjà JUILLET à Maurice (UTC+4)", () => {
+    // 30/06 22:00 UTC = 01/07 02:00 Maurice → bascule de mois. Sans conversion
+    // explicite (CLAUDE.md), on aurait renvoyé « 2026-06 » à tort.
+    expect(moisCourantMaurice(new Date("2026-06-30T22:00:00Z"))).toBe("2026-07");
+  });
+
+  it("FUSEAU : 01/01 01:00 UTC est encore le 1er janvier à Maurice (05:00), même année", () => {
+    // Pas de bascule d'année ici (05:00 Maurice) — borne haute du même mois.
+    expect(moisCourantMaurice(new Date("2026-01-01T01:00:00Z"))).toBe("2026-01");
   });
 });
