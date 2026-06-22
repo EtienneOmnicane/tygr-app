@@ -13,6 +13,7 @@ import type { TransactionRecente } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
 import { formaterDateComptable } from "@/lib/format-date";
+import { categorieFr } from "@/lib/categories-fr";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function TransactionsTable({
@@ -52,7 +53,7 @@ export function TransactionsTable({
                 {t.cleanLabel ?? "Opération bancaire"}
               </span>
               <span className="truncate text-xs text-text-muted">
-                {t.primaryCategory ?? "Non catégorisé"}
+                {categorieFr(t.primaryCategory)}
               </span>
               <span
                 className={`text-right text-sm font-semibold tabular-nums ${
