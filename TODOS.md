@@ -7,18 +7,26 @@ jour)** : voir le decision log du plan
 
 ### Localisation — identifiant de fuseau Maurice erroné (2026-06-22, Lot 2)
 
-- [x] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — RÉSOLU 2026-06-22 (hotfix/tz-mauritius-correction) — corriger « Asia/Port_Louis » →
-  « Indian/Mauritius »** — Effort S. Découvert au Lot 2 (pastille de fraîcheur §3.7) :
-  `Asia/Port_Louis` **n'existe pas** comme identifiant IANA et fait planter `Intl`
-  (`RangeError: Invalid time zone specified`), y compris sous full-ICU (Node 25, ICU 78).
-  Le bon nom canonique de Maurice (UTC+4) est **`Indian/Mauritius`**. Le code du Lot 2
-  (`src/lib/format-date.ts`, `FUSEAU_MAURICE`) utilise déjà le bon identifiant.
-  RESTE à corriger les mentions **documentaires** trompeuses, qui induiraient un futur
-  agent en erreur : `CLAUDE.md` (section « Localisation & temps » + « Formatage » :
-  `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'`) et l'en-tête historique de
-  `format-date.ts`. **Déclencheur** : tout code FRONT qui convertit un instant vers le
-  fuseau Maurice (le Backend calcule la date comptable en SQL — vérifier que le SQL
-  emploie aussi `Indian/Mauritius`, sinon c'est une dette BACKEND bloquante, pas doc).
+- [x] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — corriger « Asia/Port_Louis » →
+  « Indian/Mauritius »** — Effort S. **RÉSOLU 2026-06-22** (`hotfix/tz-mauritius-correction`).
+  Découvert au Lot 2 (pastille de fraîcheur §3.7) : `Asia/Port_Louis` **n'existe pas**
+  comme identifiant IANA et fait planter `Intl` (`RangeError: Invalid time zone
+  specified`), y compris sous full-ICU (Node 25, ICU 78). Le bon nom canonique de
+  Maurice (UTC+4) est **`Indian/Mauritius`**. Le seul code passant une chaîne de fuseau
+  à `Intl` (`src/lib/format-date.ts`, `FUSEAU_MAURICE`) utilisait DÉJÀ le bon
+  identifiant — aucune ligne exécutée n'était en cause ; le risque était purement
+  documentaire (un futur agent se fiant au commentaire). Correctif : remplacement des
+  mentions **affirmatives** trompeuses dans `CLAUDE.md` (« Localisation & temps » +
+  « Formatage »), `docs/cahier_des_charges.md` §3.bis, les en-têtes de
+  `src/server/ingestion/conversion.ts`, `src/server/db/schema.ts`, `src/lib/format-date.ts`,
+  et les libellés de test (`ingestion-conversion.test.ts`, `format-date.test.ts`).
+  CONSERVÉES volontairement (citent `Asia/Port_Louis` comme l'erreur À ÉVITER, les
+  remplacer les viderait de sens) : les garde-fous `format-date.ts:54,145` et le constat
+  historique archivé sur `balanceDate` (cross-review 2026-06-15, plus bas). **Vérifié**
+  côté Backend : aucune clause SQL `AT TIME ZONE` n'est exécutée dans `drizzle/` à ce
+  jour (la dérivation `transaction_date` se fait en TS par offset fixe UTC+4 dans
+  `deriverDateComptableMaurice`) — donc PAS de dette Backend bloquante ; le jour où une
+  telle clause SQL sera posée, elle devra employer `Indian/Mauritius`.
 
 ### Entités multi-tenant (Option B) — dettes ouvertes par le plan (2026-06-22)
 
@@ -351,24 +359,36 @@ suffisant) :
 > **PROGRAMMÉS (2026-06-22)** : DR-F1/F2/F3 sont raccrochés au chantier
 > **`PLAN-audit-ergonomie-soldes.md`** (audit ergonomique soldes/totaux, plan validé
 > humain le 2026-06-22, arbitrages §7 tranchés). Ils ne sont plus « un jour » mais
-> assignés à un lot d'implémentation nommé (règle 9). Statut au feu vert : planifiés,
-> implémentation lot par lot à venir (fil séparé, branches `feat/lot*`).
+> assignés à un lot d'implémentation nommé (règle 9). **Avancement : DR-F3 livré au Lot 2
+> (PR #79, mergée), DR-F1 + DR-F2 livrés au Lot 3+4 (branche `feat/lot3-4-polish-ui`).**
+> Reste C8 (Lot 6, dette de formateurs de date) ci-dessous.
 
-- [ ] **DR-F1 (P2, medium) — catégories de transactions en ANGLAIS dans l'UI française** —
-  Effort S, gardien Front. `transactions-table.tsx:54` (dashboard + `/transactions`) affiche
-  `t.primaryCategory` BRUT → « Income », « Utilities », « Rent » dans une interface 100 %
-  française (catégories OBIE anglaises côté Omni-FI). Finding le PLUS visible. **DÉCISION
-  ACTÉE (2026-06-22)** : table de correspondance FR **côté affichage** (`Income`→« Revenus »,
-  `Utilities`→« Charges », `Rent`→« Loyer », `Bank Charges`→« Frais bancaires »…), fallback
-  « Non catégorisé ». Catégorie localisée côté service REPORTÉE. **Déclencheur** : chantier
-  `PLAN-audit-ergonomie-soldes.md` **Lot 3**.
-- [ ] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
-  Effort S, gardien Front. `connected-accounts-card.tsx:68` met banque + compte sur UNE ligne
-  `truncate` (300px) → « The Mauritius Commercial Bank · MCB — … », le nom de compte est mangé
-  (le `title`/tooltip sauve l'info au survol seulement). **DÉCISION ACTÉE (2026-06-22)** :
-  2 lignes (banque en label `text-muted` au-dessus, nom de compte dessous, chacun `truncate`
-  indépendamment ; le montant JAMAIS tronqué). **Déclencheur** : chantier
-  `PLAN-audit-ergonomie-soldes.md` **Lot 4**.
+- [x] **DR-F1 (P2, medium) — catégories de transactions en ANGLAIS dans l'UI française** —
+  ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 3). Table de correspondance FR
+  **côté affichage** : `src/lib/categories-fr.ts` (`categorieFr`, fonction pure) mappe la
+  `primaryCategory` OBIE (`Income`→« Revenus », `Utilities`→« Charges », `Rent`→« Loyer »,
+  `Insurance`→« Assurances », `Taxes`→« Taxes », `Payroll`→« Salaires », `Banking & Finance`/
+  `Bank Charges`→« Frais bancaires »), fallback « Non catégorisé » pour toute clé inconnue/nulle
+  (filet anti-anglais). Appliquée dans `components/dashboard/transactions-table.tsx`. Couverture :
+  `tests/unit/categories-fr.test.ts` (6 cas, bornes incluses). Visual QA `/demo/dashboard` :
+  colonne CATÉGORIE = Revenus/Charges/Loyer, 0 anglais. Catégorie localisée côté service
+  REPORTÉE (dette tracée, langue pivot anglaise conservée en base pour export/réconciliation).
+  **ÉCART de périmètre vs le finding initial** : le finding citait aussi `/transactions`, MAIS
+  cette page n'affiche PAS `primaryCategory` — elle affiche la catégorie de VENTILATION MANUELLE
+  (`categorie.name` via `CategorisationStatusBadge`), saisie par l'utilisateur et DÉJÀ en français
+  (cf. `types-transactions.ts` : « indépendant de primaryCategory »). La traduire eût été incorrect.
+  DR-F1 ne concernait donc que la catégorie OBIE auto, affichée uniquement sur le dashboard.
+- [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
+  ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
+  refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`
+  indépendant, omise si `institutionName` null), nom de compte dessous (`text-[13px]`, `truncate`
+  indépendant), montant à droite JAMAIS tronqué (`shrink-0 whitespace-nowrap tabular-nums`). Le
+  flex parent porte `min-w-0` pour autoriser le `truncate` des enfants. Nettoyage : type
+  `CompteAffiche` supprimé (le composant prend `CompteConnecte` directement — `institutionName`
+  est dans le contrat depuis DASH-INST1) ; commentaire d'en-tête « contract-first » périmé corrigé.
+  Visual QA `/demo/comptes-provenance` (4ᵉ cas « noms TRÈS longs » ajouté à la démo, contrainte
+  300px) : « The Mauritius Commercial Bank… » + « Compte courant… » tronquent SÉPARÉMENT, le
+  montant `Rs 999 999 999,00` reste intégralement visible. Zéro troncature de chiffre clé.
 - [ ] **DR-F3 (P3 → réévalué medium, polish/correction) — méta « au JJ/MM » TROMPEUSE sous un
   solde COURANT** — Effort S, gardien Front. `side-panel-kpi.tsx:55` affiche « au 12/06 »
   (`dateSolde` = **dernier point de courbe**, EOD) alors que le montant est le solde COURANT
