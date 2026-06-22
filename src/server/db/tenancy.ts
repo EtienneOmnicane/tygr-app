@@ -19,7 +19,11 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
-import { workspaceMembers, type WorkspaceRole } from "@/server/db/schema";
+import {
+  memberEntityScopes,
+  workspaceMembers,
+  type WorkspaceRole,
+} from "@/server/db/schema";
 
 export const workspaceSessionSchema = z
   .object({
@@ -79,10 +83,29 @@ export type WorkspaceTx<TDb extends AnyPgDatabase> = Parameters<
   Parameters<TDb["transaction"]>[0]
 >[0];
 
+/**
+ * Périmètre entité (étage 2) du membre pour la session courante. LISIBLE par les
+ * repositories qui veulent le connaître — mais ce n'est JAMAIS la source de
+ * l'autorité : l'autorité est la policy RLS `entity_scope` sur bank_accounts,
+ * pilotée par le GUC posé ci-dessous. Ce champ ne sert qu'à informer l'UI / des
+ * agrégats, jamais à décider d'un accès en aval (plan §2.4).
+ *
+ * - `{ mode: "GLOBALE" }`   : aucune ligne member_entity_scopes → voit tout le
+ *                             tenant (Vision Globale). Le GUC n'est PAS posé.
+ * - `{ mode: "ENTITES" }`   : ≥1 ligne → périmètre borné. Le GUC porte le CSV des
+ *                             entityIds ; la RLS masque tout compte hors liste
+ *                             (et tout compte entity_id IS NULL).
+ */
+export type ScopeEntite =
+  | { mode: "GLOBALE" }
+  | { mode: "ENTITES"; entityIds: string[] };
+
 export interface WorkspaceContext {
   role: WorkspaceRole;
   workspaceId: string;
   userId: string;
+  /** Étage 2 (lisible, non-autoritaire — l'autorité est la RLS). */
+  entityScope: ScopeEntite;
 }
 
 /**
@@ -148,10 +171,55 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
         throw new WorkspaceAccessDeniedError();
       }
 
+      // ── ÉTAGE 2 — 3ᵉ GUC app.current_entity_scope (périmètre entité) ────────
+      // Posé ICI, APRÈS la re-validation de la membership : on ne calcule un
+      // scope que pour un (userId, activeWorkspaceId) confirmé membre. La valeur
+      // dérive EXCLUSIVEMENT de member_entity_scopes — JAMAIS d'un paramètre
+      // client (anti-élargissement, plan §2.4). La lecture passe par `tx` qui
+      // porte déjà app.current_workspace_id (RLS active) ; on ajoute en plus un
+      // filtre explicite (userId + workspaceId) = défense en profondeur.
+      //
+      // Sémantique (cohérente avec la policy entity_scope de 0008) :
+      //   • 0 ligne  → Vision Globale : on NE POSE PAS le GUC (il reste vide) ;
+      //     la policy RESTRICTIVE laisse tout passer → tout le tenant.
+      //   • ≥1 ligne → Vision Entité : GUC = CSV des entity_id autorisés. La
+      //     policy masque tout compte hors liste (et tout compte entity_id NULL).
+      // Un membre scopé reçoit TOUJOURS son CSV ⇒ il ne peut jamais « retomber »
+      // en Vision Globale par omission (fail-closed).
+      const scopes = await tx
+        .select({ entityId: memberEntityScopes.entityId })
+        .from(memberEntityScopes)
+        .where(
+          and(
+            eq(memberEntityScopes.userId, userId),
+            eq(memberEntityScopes.workspaceId, activeWorkspaceId),
+          ),
+        );
+
+      let entityScope: ScopeEntite;
+      if (scopes.length === 0) {
+        entityScope = { mode: "GLOBALE" };
+        // GUC volontairement NON posé : absence = Vision Globale (la policy
+        // RESTRICTIVE court-circuite sur nullif(...) IS NULL).
+      } else {
+        const entityIds = scopes.map((s) => s.entityId);
+        // set_config PARAMÉTRÉ (3ᵉ argument true = local à la txn, comme les 2
+        // GUC précédents) : la valeur est LIÉE (${csv}), zéro interpolation de
+        // chaîne dans le SQL (CLAUDE.md règle 2). Le CSV est composé d'UUID lus
+        // en base (typés `uuid` par la colonne) — pas d'entrée client à
+        // échapper. La policy fait string_to_array(...)::uuid[] côté SQL.
+        const csv = entityIds.join(",");
+        await tx.execute(
+          sql`select set_config('app.current_entity_scope', ${csv}, true)`,
+        );
+        entityScope = { mode: "ENTITES", entityIds };
+      }
+
       return fn(tx as WorkspaceTx<TDb>, {
         role: membership[0].role as WorkspaceRole,
         workspaceId: activeWorkspaceId,
         userId,
+        entityScope,
       });
     });
   };
