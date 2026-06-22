@@ -31,7 +31,11 @@
 import { and, eq, gte, ilike, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
-import { transactionsCache } from "@/server/db/schema";
+import {
+  bankAccounts,
+  bankConnections,
+  transactionsCache,
+} from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import {
   estDateComptableValide,
@@ -50,6 +54,11 @@ export interface TransactionLigne {
   id: string;
   transactionDate: string;
   bankAccountId: string;
+  /** Nom OBIE du compte porteur (ex. « Main Operating Account »), via bank_accounts. */
+  accountName: string;
+  /** Nom lisible de la banque (ex. « Bank One », « SBM »), via bank_connections ;
+   *  null si l'institution n'a pas encore été renseignée (DASH-INST1, expand-safe). */
+  institutionName: string | null;
   amount: string;
   currency: string;
   creditDebit: "Credit" | "Debit";
@@ -229,6 +238,11 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       id: transactionsCache.id,
       transactionDate: transactionsCache.transactionDate,
       bankAccountId: transactionsCache.bankAccountId,
+      // Provenance bancaire par transaction (challenge mapping 2026-06-22) : nom du
+      // compte (bank_accounts) + nom de l'institution (bank_connections). Exposés ICI
+      // pour que l'UI affiche « Bank One » sans reconstruire une map fragile côté Front.
+      accountName: bankAccounts.accountName,
+      institutionName: bankConnections.institutionName,
       amount: transactionsCache.amount,
       currency: transactionsCache.currency,
       creditDebit: transactionsCache.creditDebit,
@@ -240,6 +254,17 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       statut: statutExpr,
     })
     .from(transactionsCache)
+    // Jointures de provenance. innerJoin SÛR : transactions_cache.bank_account_id est
+    // NOT NULL et bank_accounts.connection_id est NOT NULL → 1 transaction = 1 compte =
+    // 1 connexion (cardinalité inchangée, aucune ligne perdue). BONUS sécurité
+    // (ENTITY-READ-JOIN1) : joindre bank_accounts fait HÉRITER la policy RLS
+    // entity_scope (étage 2) → en Vision Entité, les transactions des comptes hors
+    // périmètre sont masquées ; en Vision Globale (GUC vide), liste inchangée.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .innerJoin(
+      bankConnections,
+      eq(bankAccounts.connectionId, bankConnections.id),
+    )
     .leftJoin(
       agg,
       sql`agg.txn_id = ${transactionsCache.id} and agg.txn_date = ${transactionsCache.transactionDate}`,
