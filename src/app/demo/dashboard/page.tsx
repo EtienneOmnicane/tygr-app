@@ -5,8 +5,13 @@
  * à la production : monte `DashboardContent` avec les fixtures UI (données
  * fictives `src/lib/`, hors auth/DB) pour capturer succès / partiel / vide avant
  * le câblage réel (PR D). Source de vérité visuelle : docs/UI_GUIDELINES.md.
+ *
+ * Sélecteur « Fraîcheur » (Lot 2 §3.7) : réécrit `lastSyncedAt` des comptes
+ * relativement à MAINTENANT (now − 2h / 12h / 30h) pour capturer les 3 seuils de
+ * la pastille (frais / récent / périmé + CTA). Dérivé ici côté client — la fixture
+ * partagée garde ses dates fixes (cohérence avec la fixture serveur).
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   DEMO_DASHBOARD,
@@ -19,12 +24,7 @@ import {
 } from "@/components/dashboard/dashboard-content";
 
 type EtatDemo = "succes" | "partiel" | "vide";
-
-const JEUX: Record<EtatDemo, DonneesDashboard> = {
-  succes: DEMO_DASHBOARD,
-  partiel: DEMO_DASHBOARD_PARTIEL,
-  vide: DEMO_DASHBOARD_VIDE,
-};
+type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "succes", label: "Succès" },
@@ -32,8 +32,40 @@ const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "vide", label: "Vide" },
 ];
 
+const ONGLETS_FRAICHEUR: Array<{ id: FraicheurDemo; label: string; heures: number }> = [
+  { id: "frais", label: "Frais (<6h)", heures: 2 },
+  { id: "recent", label: "Récent (<24h)", heures: 12 },
+  { id: "perime", label: "Périmé (≥24h)", heures: 30 },
+];
+
+/** Réécrit `lastSyncedAt` des comptes à now − `heures` (pour capturer un seuil). */
+function avecFraicheur(
+  base: DonneesDashboard,
+  heures: number,
+): DonneesDashboard {
+  const ts = new Date(Date.now() - heures * 3_600_000);
+  return {
+    ...base,
+    comptes: base.comptes.map((c) => ({ ...c, lastSyncedAt: ts })),
+  };
+}
+
 export default function DashboardPreviewPage() {
   const [etat, setEtat] = useState<EtatDemo>("succes");
+  const [fraicheur, setFraicheur] = useState<FraicheurDemo>("frais");
+
+  const donnees = useMemo<DonneesDashboard>(() => {
+    const heures =
+      ONGLETS_FRAICHEUR.find((o) => o.id === fraicheur)?.heures ?? 2;
+    const base =
+      etat === "succes"
+        ? DEMO_DASHBOARD
+        : etat === "partiel"
+          ? DEMO_DASHBOARD_PARTIEL
+          : DEMO_DASHBOARD_VIDE;
+    // L'état « vide » n'a pas de compte → la fraîcheur n'a pas d'effet (pas de pastille).
+    return etat === "vide" ? base : avecFraicheur(base, heures);
+  }, [etat, fraicheur]);
 
   return (
     <div className="min-h-screen bg-surface-page">
@@ -48,7 +80,7 @@ export default function DashboardPreviewPage() {
         Données fictives (fixtures) — sélectionnez un état pour la capture.
       </div>
 
-      <div className="px-6 pt-6">
+      <div className="flex flex-wrap items-center gap-6 px-6 pt-6">
         <div
           role="tablist"
           aria-label="État du dashboard à prévisualiser"
@@ -74,9 +106,39 @@ export default function DashboardPreviewPage() {
             );
           })}
         </div>
+
+        {/* Sélecteur de fraîcheur (§3.7) — inerte en état « vide ». */}
+        <div
+          role="tablist"
+          aria-label="Fraîcheur du solde à prévisualiser"
+          className={`inline-flex gap-1 rounded-control bg-surface-inset p-1 ${
+            etat === "vide" ? "opacity-50" : ""
+          }`}
+        >
+          {ONGLETS_FRAICHEUR.map((o) => {
+            const actif = fraicheur === o.id;
+            return (
+              <button
+                key={o.id}
+                type="button"
+                role="tab"
+                aria-selected={actif}
+                disabled={etat === "vide"}
+                onClick={() => setFraicheur(o.id)}
+                className={
+                  actif
+                    ? "rounded-[6px] bg-ink px-4 py-1.5 text-sm font-semibold text-text-onink disabled:cursor-not-allowed"
+                    : "rounded-[6px] px-4 py-1.5 text-sm font-medium text-text-muted transition-colors hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed"
+                }
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <DashboardContent donnees={JEUX[etat]} devise="MUR" />
+      <DashboardContent donnees={donnees} devise="MUR" />
     </div>
   );
 }

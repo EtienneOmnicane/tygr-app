@@ -7,7 +7,16 @@
  * Le solde = somme des soldes COURANTS par devise (`soldesCourantsParDevise`) —
  * source indépendante de `balance_history` (vide tant qu'Omni-FI n'expose pas
  * `/balances/history`). Multi-devises (CLAUDE.md) : UNE LIGNE PAR DEVISE, jamais
- * d'addition cross-devise. Mention « au JJ/MM/AAAA » = date de dernière synchro.
+ * d'addition cross-devise.
+ *
+ * Hiérarchie HYBRIDE (décision audit 2026-06-22 §7-1) :
+ *  - mono-devise  → un gros montant 28px/700 primary (ancre « trésorerie en 3 s »).
+ *  - multi-devises → pile égalitaire 20px/700, VIRGULES DÉCIMALES ALIGNÉES (symbole
+ *    en colonne gauche étroite, montant nu `text-right tabular-nums`). Aucune devise
+ *    privilégiée, aucune conversion FX d'affichage.
+ *
+ * Fraîcheur (§3.7) : la méta « au JJ/MM » (faux EOD, anti-pattern DR-F3) est
+ * remplacée par une PASTILLE branchée sur `lastSyncedAt` du solde courant.
  *
  * Couleurs : entrées `inflow-700` / sorties `outflow-700` — vert/rouge réservés
  * à la donnée (§3.1). Solde en `primary` (§1.3). Tout en `tabular-nums` (§0).
@@ -16,16 +25,19 @@ import type {
   SoldeParDevise,
   SyntheseMois,
 } from "@/server/repositories/dashboard";
+import type { Fraicheur } from "@/lib/format-date";
 
-import { formatMontant } from "@/lib/format-montant";
+import { formatMontant, symbolePrefixe } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
+import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 
 export function SidePanelKpi({
   soldesParDevise,
   syntheseMois,
   devise,
-  dateSolde,
+  fraicheur,
+  compteLabel,
 }: {
   /** Soldes consolidés courants, une entrée par devise (chaînes décimales). */
   soldesParDevise: SoldeParDevise[];
@@ -33,8 +45,13 @@ export function SidePanelKpi({
   syntheseMois: SyntheseMois;
   /** Devise de base du workspace (sert de repli quand aucun compte/solde). */
   devise: string;
-  /** Date de dernière synchro, formatée « JJ/MM/AAAA » pour la méta de la carte solde. */
-  dateSolde: string;
+  /**
+   * Fraîcheur du solde courant (`formaterFraicheurRelative` sur `lastSyncedAt`).
+   * `null` quand aucune synchro connue (aucun compte/solde) → pastille masquée.
+   */
+  fraicheur: Fraicheur | null;
+  /** Compte de la synchro la plus récente — enrichit le tooltip de la pastille. */
+  compteLabel?: string | null;
 }) {
   // Repli : aucun solde (aucun compte sélectionné) → on montre 0 dans la devise de
   // base, plutôt qu'une carte vide. Le multi-devises empile une ligne par devise.
@@ -46,29 +63,28 @@ export function SidePanelKpi({
 
   return (
     <>
-      {/* Carte SOLDE (§1.3) : une ligne par devise. Mono-devise → gros montant
-          28px/700 ; multi-devises → pile compacte (chaque devise sur sa ligne). */}
+      {/* Carte SOLDE (§1.3) : une ligne par devise. Mono → gros montant ;
+          multi → pile égalitaire à décimales alignées (§7-1). */}
       <StateCard>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
             {monoDevise ? "Solde" : "Soldes par devise"}
           </span>
-          <span className="text-xs text-text-muted">au {dateSolde}</span>
+          {fraicheur && (
+            <BalanceFreshnessPill
+              fraicheur={fraicheur}
+              compteLabel={compteLabel}
+            />
+          )}
         </div>
-        <div className={monoDevise ? "mt-4" : "mt-4 flex flex-col gap-2"}>
-          {lignesSolde.map((s) => (
-            <p
-              key={s.currency}
-              className={
-                monoDevise
-                  ? "text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary"
-                  : "text-xl font-bold leading-tight tracking-tight tabular-nums text-primary"
-              }
-            >
-              {formatMontant(s.total, s.currency)}
-            </p>
-          ))}
-        </div>
+
+        {monoDevise ? (
+          <p className="mt-4 text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary">
+            {formatMontant(lignesSolde[0].total, lignesSolde[0].currency)}
+          </p>
+        ) : (
+          <SoldesMultiDevises lignes={lignesSolde} />
+        )}
       </StateCard>
 
       {/* Carte DÉTAILS (§1.3) : rangées KPI entrées/sorties/variation. */}
@@ -104,6 +120,41 @@ export function SidePanelKpi({
         </dl>
       </StateCard>
     </>
+  );
+}
+
+/**
+ * Pile multi-devises à DÉCIMALES ALIGNÉES (§7-1). Grille 2 colonnes : symbole
+ * (gauche, largeur auto) + montant NU aligné à droite (`tabular-nums` →
+ * les virgules s'empilent). Repli : devise inconnue (pas de symbole préfixe) →
+ * `formatMontant` complet (code ISO en suffixe), pas d'alignement forcé.
+ */
+function SoldesMultiDevises({ lignes }: { lignes: SoldeParDevise[] }) {
+  return (
+    <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
+      {lignes.map((s) => {
+        const symbole = symbolePrefixe(s.currency);
+        return symbole ? (
+          <div key={s.currency} className="contents">
+            <span className="text-xl font-bold leading-tight text-primary">
+              {symbole}
+            </span>
+            <span className="text-right text-xl font-bold leading-tight tracking-tight tabular-nums text-primary">
+              {formatMontant(s.total, "")}
+            </span>
+          </div>
+        ) : (
+          // Devise inconnue : on ne sépare pas (le code ISO va en suffixe) ;
+          // le montant occupe les 2 colonnes, toujours aligné à droite.
+          <span
+            key={s.currency}
+            className="col-span-2 text-right text-xl font-bold leading-tight tracking-tight tabular-nums text-primary"
+          >
+            {formatMontant(s.total, s.currency)}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 

@@ -84,6 +84,16 @@ export function formatMontant(
     : `${nombre}${ESPACE_FINE}${code}`; // repli → code ISO en suffixe
 }
 
+/**
+ * Symbole de préfixe d'une devise connue (`MUR`→`Rs`, `USD`→`$`, `EUR`→`€`), ou
+ * `null` si inconnue (repli ISO suffixe). Sert à l'affichage multi-devises qui
+ * sépare le symbole du corps numérique pour ALIGNER les virgules décimales —
+ * source unique de la table (pas de duplication dans un composant).
+ */
+export function symbolePrefixe(devise: string): string | null {
+  return SYMBOLES_PREFIXE[devise.trim().toUpperCase()] ?? null;
+}
+
 /** Vrai si le montant décimal est négatif (sortie). Test sur la chaîne. */
 export function estNegatif(montant: string): boolean {
   return montant.trim().startsWith("-");

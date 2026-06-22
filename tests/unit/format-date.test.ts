@@ -10,8 +10,14 @@ import {
   formaterDateComptable,
   formaterDateComptableLongue,
   formaterDateCourteNumerique,
+  formaterFraicheurRelative,
   formaterMoisAnnee,
 } from "@/lib/format-date";
+
+/** Maintenant fixe pour des tests de fraîcheur déterministes (injecté). */
+const MAINTENANT = new Date("2026-06-22T12:00:00Z");
+/** Décale `MAINTENANT` de `h` heures dans le passé. */
+const ilYa = (h: number) => new Date(MAINTENANT.getTime() - h * 3_600_000);
 
 describe("estDateISO", () => {
   it("accepte une date YYYY-MM-DD valide", () => {
@@ -83,5 +89,61 @@ describe("formaterMoisAnnee", () => {
     expect(formaterMoisAnnee("2026-00")).toBe("2026-00"); // mois 00
     expect(formaterMoisAnnee("2026-06-11")).toBe("2026-06-11"); // pas un YYYY-MM
     expect(formaterMoisAnnee("juin")).toBe("juin");
+  });
+});
+
+describe("formaterFraicheurRelative — seuils §3.7", () => {
+  it("<6h → niveau « frais » (success)", () => {
+    expect(formaterFraicheurRelative(ilYa(2), MAINTENANT).niveau).toBe("frais");
+    // Borne haute exclusive : 5h59 est encore frais.
+    expect(
+      formaterFraicheurRelative(ilYa(5.98), MAINTENANT).niveau,
+    ).toBe("frais");
+  });
+
+  it("[6h, 24h) → niveau « recent » (warning), bornes incluses/exclues", () => {
+    // Pile 6h bascule en recent (seuil < 6h pour rester frais).
+    expect(formaterFraicheurRelative(ilYa(6), MAINTENANT).niveau).toBe("recent");
+    expect(formaterFraicheurRelative(ilYa(23), MAINTENANT).niveau).toBe("recent");
+  });
+
+  it("≥24h → niveau « perime » (danger, CTA Reconnecter)", () => {
+    expect(formaterFraicheurRelative(ilYa(24), MAINTENANT).niveau).toBe("perime");
+    expect(formaterFraicheurRelative(ilYa(72), MAINTENANT).niveau).toBe("perime");
+  });
+
+  it("libellé relatif FR : heures puis jours", () => {
+    expect(formaterFraicheurRelative(ilYa(2), MAINTENANT).libelle).toBe(
+      "il y a 2 heures",
+    );
+    expect(formaterFraicheurRelative(ilYa(48), MAINTENANT).libelle).toBe(
+      "avant-hier",
+    );
+    expect(formaterFraicheurRelative(ilYa(72), MAINTENANT).libelle).toBe(
+      "il y a 3 jours",
+    );
+  });
+
+  it("moins d'une heure → « à l’instant » (jamais « il y a 0 h »)", () => {
+    expect(formaterFraicheurRelative(ilYa(0.2), MAINTENANT).libelle).toBe(
+      "à l’instant",
+    );
+  });
+
+  it("delta NÉGATIF (horloge client en avance) borné à 0 → « à l’instant »", () => {
+    const futur = new Date(MAINTENANT.getTime() + 3_600_000);
+    const f = formaterFraicheurRelative(futur, MAINTENANT);
+    expect(f.niveau).toBe("frais");
+    expect(f.libelle).toBe("à l’instant");
+  });
+
+  it("horodatage absolu converti à Maurice (Asia/Port_Louis, UTC+4)", () => {
+    // 08:00 UTC = 12:00 à Maurice ; date numérique FR.
+    const f = formaterFraicheurRelative(
+      new Date("2026-06-12T08:00:00Z"),
+      MAINTENANT,
+    );
+    expect(f.horodatageAbsolu).toContain("12/06/2026");
+    expect(f.horodatageAbsolu).toContain("12:00");
   });
 });
