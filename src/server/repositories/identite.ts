@@ -18,6 +18,7 @@ import { and, count, eq, gte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
+  bankAccounts,
   loginAttempts,
   users,
   workspaceMembers,
@@ -162,6 +163,88 @@ export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
           workspaceId: l.workspaceId,
           role: l.role as WorkspaceRole,
         }));
+      });
+    },
+
+    /**
+     * Workspace à activer PAR DÉFAUT au login (DASH-WSACTIF1). Choisit le
+     * workspace de l'utilisateur qui contient LE PLUS de comptes bancaires, afin
+     * que le dashboard affiche des chiffres dès la connexion (le « 0,00 Rs »
+     * venait du choix arbitraire du 1er membership trié par UUID — un workspace
+     * « groupe » vide pouvait gagner sur une BU pleine de comptes). Repli
+     * déterministe par NOM en cas d'égalité (jamais l'ordre d'insertion).
+     * Renvoie null si l'utilisateur n'est membre d'aucun workspace.
+     *
+     * SÉCURITÉ (CLAUDE.md règle 2) — deux étages de RLS, jamais contournés :
+     * - `workspace_members` est lu via `own_memberships_select` (GUC
+     *   app.current_user_id posé en transaction) → SEULEMENT les memberships de
+     *   l'utilisateur. Le choix du défaut ne peut donc porter que sur SES
+     *   workspaces (pas d'énumération d'autrui).
+     * - `bank_accounts` est sous `tenant_isolation` keyée sur
+     *   app.current_workspace_id (PAS current_user_id). On NE PEUT donc PAS
+     *   compter les comptes par une jointure sous le seul GUC user (la policy
+     *   bank_accounts rendrait 0 ligne, GUC workspace absent → fail-closed). On
+     *   pose donc, workspace par workspace de l'utilisateur (membre PROUVÉ par
+     *   l'étage précédent — exactement ce que withWorkspace fera ensuite), le GUC
+     *   app.current_workspace_id, puis on COMPTE sous la RLS normale. Chaque
+     *   comptage est ainsi scopé à un tenant légitime ; jamais de fuite d'un
+     *   autre tenant (un workspace dont l'utilisateur n'est pas membre n'apparaît
+     *   pas dans la liste, donc n'est jamais compté).
+     *
+     * Le nombre de workspaces par utilisateur est petit (quelques unités) ; le
+     * surcoût au login est négligeable. workspace_id n'est JAMAIS un paramètre
+     * client : il est dérivé des memberships de l'utilisateur.
+     */
+    async membershipParDefaut(userId: string): Promise<string | null> {
+      return db.transaction(async (tx) => {
+        // Étage 1 — memberships de l'utilisateur (own_memberships_select).
+        await tx.execute(
+          sql`select set_config('app.current_user_id', ${userId}, true)`,
+        );
+        const mesWorkspaces = await tx
+          .select({
+            workspaceId: workspaceMembers.workspaceId,
+            nom: workspaces.name,
+          })
+          .from(workspaceMembers)
+          .innerJoin(
+            workspaces,
+            eq(workspaces.id, workspaceMembers.workspaceId),
+          )
+          .where(eq(workspaceMembers.userId, userId))
+          .orderBy(workspaces.name);
+
+        if (mesWorkspaces.length === 0) {
+          return null;
+        }
+        // Cas trivial : un seul workspace → pas besoin de compter.
+        if (mesWorkspaces.length === 1) {
+          return mesWorkspaces[0].workspaceId;
+        }
+
+        // Étage 2 — comptage des comptes par workspace (chacun sous son propre
+        // contexte workspace, membre prouvé). On garde le 1er de la liste déjà
+        // triée par nom comme repli déterministe en cas d'égalité de comptes.
+        let meilleurId = mesWorkspaces[0].workspaceId;
+        let meilleurCompte = -1;
+        for (const ws of mesWorkspaces) {
+          await tx.execute(
+            sql`select set_config('app.current_workspace_id', ${ws.workspaceId}, true)`,
+          );
+          const r = await tx
+            .select({ n: count() })
+            .from(bankAccounts)
+            .where(eq(bankAccounts.workspaceId, ws.workspaceId));
+          const n = r[0]?.n ?? 0;
+          // Strictement supérieur : à égalité, on garde le précédent → comme la
+          // liste est triée par nom ASC et qu'on l'itère dans cet ordre, le
+          // gagnant à égalité est le 1er par nom (déterministe).
+          if (n > meilleurCompte) {
+            meilleurCompte = n;
+            meilleurId = ws.workspaceId;
+          }
+        }
+        return meilleurId;
       });
     },
 

@@ -101,6 +101,8 @@ export const identite: RepositoryIdentite = {
   enregistrerTentativeIp: (ip, succeeded) =>
     obtenirIdentite().enregistrerTentativeIp(ip, succeeded),
   membershipsDe: (userId) => obtenirIdentite().membershipsDe(userId),
+  membershipParDefaut: (userId) =>
+    obtenirIdentite().membershipParDefaut(userId),
   membershipsAvecNom: (userId) =>
     obtenirIdentite().membershipsAvecNom(userId),
 };

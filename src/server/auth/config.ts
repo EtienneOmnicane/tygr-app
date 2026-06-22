@@ -76,12 +76,15 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   callbacks: {
     async jwt({ token, user, trigger, session }) {
       // `user` n'est défini qu'à la connexion : on fige userId et on résout le
-      // workspace actif par défaut = premier membership (tri déterministe par
-      // workspace_id, lu sous RLS via own_memberships_select).
+      // workspace actif par défaut = celui qui contient LE PLUS de comptes
+      // bancaires (DASH-WSACTIF1), repli déterministe par nom à égalité. Évite le
+      // « 0,00 Rs » d'un workspace « groupe » vide qui gagnait par hasard sur une
+      // BU pleine (l'ancien choix = 1er membership trié par UUID, arbitraire).
+      // Lu sous RLS (own_memberships_select + tenant_isolation), jamais un
+      // paramètre client. Null si aucun membership → AucunWorkspaceActifError.
       if (user?.id) {
         token.userId = user.id;
-        const memberships = await identite.membershipsDe(user.id);
-        token.activeWorkspaceId = memberships[0]?.workspaceId ?? null;
+        token.activeWorkspaceId = await identite.membershipParDefaut(user.id);
       }
 
       // Bascule de workspace (Epic 2 / unstable_update) — DÉFENSE EN PROFONDEUR
