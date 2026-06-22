@@ -21,7 +21,7 @@ import type {
 } from "@/server/repositories/dashboard";
 
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
-import { formaterDateCourteNumerique } from "@/lib/format-date";
+import { formaterFraicheurRelative } from "@/lib/format-date";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
@@ -63,9 +63,12 @@ export function DashboardContent({
 
   // Sinon : comptes connectés → on monte le shell complet. Chaque zone gère son
   // propre vide (PARTIEL) sans masquer le solde déjà disponible.
-  const dateSolde = courbe.length
-    ? formaterDateCourteNumerique(courbe[courbe.length - 1].date)
-    : formaterDateCourteNumerique(dernierSync(comptes));
+  // Fraîcheur (§3.7 / DR-F3) : on qualifie l'âge du SOLDE COURANT via la synchro la
+  // plus récente (`lastSyncedAt`), JAMAIS via le dernier point de courbe (EOD).
+  const synchro = synchroLaPlusRecente(comptes);
+  const fraicheur = synchro
+    ? formaterFraicheurRelative(synchro.lastSyncedAt)
+    : null;
 
   return (
     <DashboardShell
@@ -75,7 +78,8 @@ export function DashboardContent({
             soldesParDevise={soldesParDevise}
             syntheseMois={syntheseMois}
             devise={devise}
-            dateSolde={dateSolde}
+            fraicheur={fraicheur}
+            compteLabel={synchro?.compteLabel}
           />
           {/* Pile aside : SOLDE → DÉTAILS (SidePanelKpi) → COMPTES CONNECTÉS. */}
           <ConnectedAccountsCard comptes={comptes} />
@@ -108,12 +112,24 @@ export function DashboardContent({
   );
 }
 
-/** Dernière date de sync parmi les comptes (fallback pour la méta solde). */
-function dernierSync(comptes: CompteConnecte[]): string {
-  const dates = comptes
-    .map((c) => c.lastSyncedAt)
-    .filter((d): d is Date => d != null)
-    .sort((a, b) => b.getTime() - a.getTime());
-  const d = dates[0] ?? new Date();
-  return d.toISOString().slice(0, 10);
+/**
+ * Compte dont la synchro est la plus récente (pour la fraîcheur du solde §3.7).
+ * Retourne la `Date` BRUTE de `lastSyncedAt` (pas une chaîne : le calcul de delta
+ * vit dans `formaterFraicheurRelative`) + un label lisible pour le tooltip.
+ * `null` si aucun compte n'a jamais été synchronisé.
+ */
+function synchroLaPlusRecente(
+  comptes: CompteConnecte[],
+): { lastSyncedAt: Date; compteLabel: string } | null {
+  const synchronises = comptes.filter(
+    (c): c is CompteConnecte & { lastSyncedAt: Date } => c.lastSyncedAt != null,
+  );
+  if (synchronises.length === 0) return null;
+  const recent = synchronises.reduce((a, b) =>
+    b.lastSyncedAt.getTime() > a.lastSyncedAt.getTime() ? b : a,
+  );
+  return {
+    lastSyncedAt: recent.lastSyncedAt,
+    compteLabel: recent.institutionName ?? recent.accountName,
+  };
 }
