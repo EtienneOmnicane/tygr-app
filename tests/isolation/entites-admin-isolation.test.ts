@@ -15,13 +15,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/server/db/schema";
-import { entities, memberEntityScopes } from "@/server/db/schema";
+import { memberEntityScopes } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   assignerCompteEntite,
@@ -33,6 +32,7 @@ import {
   EntiteNonAutoriseError,
   CompteIntrouvableError,
   listerEntites,
+  listerMembresWorkspace,
   listerScopesMembre,
   MembreNonScopableError,
   renommerEntite,
@@ -351,5 +351,82 @@ describe("contre-preuve — un ADMIN du workspace opère normalement (pas de fau
     }
     expect(thrown).not.toBeNull();
     expect(flatten(thrown)).toMatch(/foreign key|violates|constraint|policy|row-level/i);
+  });
+});
+
+describe("listerMembresWorkspace — membres + scope joint (anti-N+1), ADMIN-only, tenant-scopé", () => {
+  it("13. un MANAGER ne peut PAS lister les membres (garde ADMIN du repository)", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) => listerMembresWorkspace(tx, ctx)),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("14. ne remonte QUE les membres du workspace courant (RLS tenant) — pas de fuite cross-tenant", async () => {
+    // Depuis WS_A : on voit ADMIN_A / MANAGER_A / VIEWER_A, jamais ADMIN_B.
+    const membresA = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerMembresWorkspace(tx, ctx),
+    );
+    const idsA = membresA.map((m) => m.userId).sort();
+    expect(idsA).toEqual([ADMIN_A, MANAGER_A, VIEWER_A].sort());
+    expect(idsA).not.toContain(ADMIN_B);
+
+    // Symétrie : depuis WS_B, on ne voit QUE ADMIN_B (témoin d'isolation).
+    const membresB = await withWorkspace(sAdminB, (tx, ctx) =>
+      listerMembresWorkspace(tx, ctx),
+    );
+    expect(membresB.map((m) => m.userId)).toEqual([ADMIN_B]);
+  });
+
+  it("15. expose nom/email/rôle exacts depuis users ⋈ workspace_members", async () => {
+    const membres = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerMembresWorkspace(tx, ctx),
+    );
+    const viewer = membres.find((m) => m.userId === VIEWER_A);
+    expect(viewer).toBeDefined();
+    expect(viewer?.nomComplet).toBe("Viewer A");
+    expect(viewer?.email).toBe("viewer@a.mu");
+    expect(viewer?.role).toBe("VIEWER");
+    expect(membres.find((m) => m.userId === ADMIN_A)?.role).toBe("ADMIN");
+    expect(membres.find((m) => m.userId === MANAGER_A)?.role).toBe("MANAGER");
+  });
+
+  it("16. scopeInitial reflète le périmètre joint : [] pour un membre Vision Globale, sinon ses entityIds", async () => {
+    // On FIXE l'état de départ (indépendance vis-à-vis des tests précédents) :
+    // VIEWER_A scopé sur 2 entités, MANAGER_A en Vision Globale (aucun scope).
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, {
+        userId: VIEWER_A,
+        entityIds: [ENT_SUCRE, ENT_ENERGIE],
+      }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: MANAGER_A, entityIds: [] }),
+    );
+
+    const membres = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerMembresWorkspace(tx, ctx),
+    );
+
+    // Membre scopé : la jointure agrège ses 2 entityIds (ordre indifférent).
+    const viewer = membres.find((m) => m.userId === VIEWER_A);
+    expect(viewer?.scopeInitial.slice().sort()).toEqual(
+      [ENT_SUCRE, ENT_ENERGIE].slice().sort(),
+    );
+
+    // Membre Vision Globale : array_remove(NULL) → [] (JAMAIS [null], piège du LEFT JOIN).
+    const manager = membres.find((m) => m.userId === MANAGER_A);
+    expect(manager?.scopeInitial).toEqual([]);
+    expect(manager?.scopeInitial).not.toContain(null);
+  });
+
+  it("17. une seule ligne par membre même avec plusieurs scopes (pas de duplication par le LEFT JOIN)", async () => {
+    // VIEWER_A a 2 scopes (cf. test 16) : il ne doit apparaître qu'UNE fois (GROUP BY).
+    const membres = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerMembresWorkspace(tx, ctx),
+    );
+    const occurrences = membres.filter((m) => m.userId === VIEWER_A).length;
+    expect(occurrences).toBe(1);
+    // Et le total reste 3 membres (pas de lignes dupliquées).
+    expect(membres).toHaveLength(3);
   });
 });

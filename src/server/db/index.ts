@@ -181,6 +181,7 @@ export type {
 export {
   listerEntites,
   listerScopesMembre,
+  listerMembresWorkspace,
   creerEntite,
   renommerEntite,
   archiverEntite,
@@ -192,4 +193,4 @@ export {
   EntiteNomDupliqueError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
-export type { EntiteLue } from "@/server/repositories/entites";
+export type { EntiteLue, MembreScope } from "@/server/repositories/entites";

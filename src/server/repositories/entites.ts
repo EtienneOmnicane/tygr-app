@@ -28,9 +28,11 @@ import {
   bankAccounts,
   entities,
   memberEntityScopes,
+  users,
   workspaceMembers,
 } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
+import type { WorkspaceRole } from "@/server/db/schema";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
@@ -94,6 +96,21 @@ export interface EntiteLue {
   isActive: boolean;
   /** Nb de comptes assignés à cette entité (agrégat scopé workspace). */
   nbComptes: number;
+}
+
+/**
+ * Un membre du workspace courant + son périmètre « Vision Entité » résolu en UNE
+ * requête (l'écran d'assignation consomme ceci, plan §3.3 L4). `scopeInitial = []`
+ * → Vision Globale (aucune ligne member_entity_scopes). Le Front mappe directement
+ * ce contrat sur sa `MembreVue` (userId/nomComplet/email/role/scopeInitial).
+ */
+export interface MembreScope {
+  userId: string;
+  nomComplet: string;
+  email: string;
+  role: WorkspaceRole;
+  /** entityIds du périmètre du membre ; [] = Vision Globale. */
+  scopeInitial: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -165,6 +182,74 @@ export async function listerScopesMembre<TDb extends AnyPgDatabase>(
     .from(memberEntityScopes)
     .where(eq(memberEntityScopes.userId, userId));
   return lignes.map((l) => l.entityId);
+}
+
+/**
+ * Liste TOUS les membres du workspace courant AVEC leur périmètre « Vision Entité »,
+ * résolu en UNE seule requête (anti-N+1 : remplace la boucle Front qui appelait
+ * listerScopesMembre par membre — feedback back, plan §3.3 L4). ADMIN-only.
+ *
+ * Jointure :
+ *   workspace_members ⋈ users           (nom/email/rôle ; users hors RLS, pas tenant)
+ *   ⟕ member_entity_scopes              (périmètre, 0..N lignes par membre)
+ *   GROUP BY membre → array_agg des entity_id (scopeInitial).
+ *
+ * Isolation : workspace_members ET member_entity_scopes sont sous RLS tenant_isolation
+ * → `tx` porte app.current_workspace_id, donc SEULS les membres/scopes du tenant courant
+ * remontent. On AJOUTE un filtre explicite workspace_id = ctx (défense en profondeur,
+ * la RLS suffirait) ET la jointure member_entity_scopes est bornée au MÊME workspace
+ * (un scope ne peut de toute façon pas viser un autre tenant — FK composite). `users`
+ * n'est pas tenant : la frontière vient de workspace_members, pas de la table users.
+ *
+ * array_remove(array_agg(...), NULL) : un LEFT JOIN sans scope produit une ligne NULL
+ * que array_agg agrégerait en `{NULL}` → on la retire pour rendre `[]` (Vision Globale)
+ * et non `[null]`. Tri par nom (UI ordonnée, déterministe).
+ */
+export async function listerMembresWorkspace<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+): Promise<MembreScope[]> {
+  exigerAdmin(ctx);
+  const lignes = await tx
+    .select({
+      userId: workspaceMembers.userId,
+      nomComplet: users.fullName,
+      email: users.email,
+      role: workspaceMembers.role,
+      // array_agg + array_remove(NULL) → string[] des entity_id (jamais [null]).
+      // ::text[] : on renvoie des UUID en chaînes (cohérent avec scopeInitial Front).
+      scopeInitial: sql<
+        string[]
+      >`coalesce(array_remove(array_agg(${memberEntityScopes.entityId}), null), '{}')::text[]`,
+    })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .leftJoin(
+      memberEntityScopes,
+      and(
+        eq(memberEntityScopes.userId, workspaceMembers.userId),
+        // Borne la jointure au MÊME workspace (défense en profondeur ; la RLS et la
+        // FK composite l'imposent déjà).
+        eq(memberEntityScopes.workspaceId, ctx.workspaceId),
+      ),
+    )
+    // RLS scope déjà au workspace ; filtre explicite (défense en profondeur).
+    .where(eq(workspaceMembers.workspaceId, ctx.workspaceId))
+    .groupBy(
+      workspaceMembers.userId,
+      users.fullName,
+      users.email,
+      workspaceMembers.role,
+    )
+    .orderBy(users.fullName);
+
+  return lignes.map((l) => ({
+    userId: l.userId,
+    nomComplet: l.nomComplet,
+    email: l.email,
+    role: l.role as WorkspaceRole,
+    scopeInitial: l.scopeInitial,
+  }));
 }
 
 /* ------------------------------------------------------------------ */

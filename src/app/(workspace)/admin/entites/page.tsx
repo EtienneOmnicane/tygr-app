@@ -2,17 +2,15 @@
  * Écran d'assignation des Entités (BU) aux membres — réservé à l'ADMIN du
  * workspace courant (Groupe « Omnicane »). Epic 3 / Entités L3.
  *
- * Câblage L3/L4 (PR wiring) : les ENTITÉS et le PÉRIMÈTRE de chaque membre sont
- * désormais lus côté serveur (listerEntites + listerScopesMembre, dans
+ * Câblage L3/L4 (PR wiring) : les ENTITÉS, les MEMBRES et le PÉRIMÈTRE de chaque
+ * membre sont lus côté serveur (listerEntites + listerMembresWorkspace, dans
  * withWorkspace), puis passés en props au composant client. L'enregistrement
  * passe par la vraie Server Action `definirScopesAction` (cf. ./actions.ts).
  *
- * ⚠️ TODO(back) — TROU DE CONTRAT : il n'existe pas encore de requête serveur
- * pour LISTER LES MEMBRES d'un workspace (nom/email/rôle/userId). La liste des
- * membres reste donc MOCKÉE (MEMBRES_MOCK ci-dessous) en attendant une fonction
- * `listerMembresWorkspace(tx, ctx)` côté repository (cf. OMNIFI/feedback back).
- * Tout le RESTE est réellement câblé. Dès que la requête existe, remplacer
- * MEMBRES_MOCK par l'appel serveur — l'UI ne bouge pas.
+ * La liste des membres provient désormais de `listerMembresWorkspace(tx, ctx)` :
+ * UNE requête jointe (workspace_members ⋈ users ⟕ member_entity_scopes) qui
+ * remonte nom/email/rôle/userId ET le scopeInitial de chaque membre — le mock
+ * MEMBRES_MOCK et la boucle N+1 (un listerScopesMembre par membre) ont disparu.
  *
  * Gating (D2 #37 + S3) : le rôle est re-validé à chaque requête via
  * withWorkspace. Un non-ADMIN ne reçoit PAS un écran désactivé mais un 404
@@ -26,7 +24,11 @@ import {
   exigerSessionWorkspace,
   NonAuthentifieError,
 } from "@/server/auth/session";
-import { listerEntites, listerScopesMembre, withWorkspace } from "@/server/db";
+import {
+  listerEntites,
+  listerMembresWorkspace,
+  withWorkspace,
+} from "@/server/db";
 
 import {
   AssignationEntites,
@@ -35,38 +37,6 @@ import {
 } from "./assignation-entites";
 
 export const metadata = { title: "Entités — TYGR" };
-
-/**
- * TODO(back) : à remplacer par `listerMembresWorkspace(tx, ctx)` quand la requête
- * existera. Les `userId` sont des UUID factices : un enregistrement réel renverra
- * « Ressource introuvable » (MembreNonScopableError → 404), ce que l'UI gère
- * proprement. Forme alignée sur le futur contrat attendu.
- */
-const MEMBRES_MOCK: Array<{
-  userId: string;
-  nomComplet: string;
-  email: string;
-  role: "ADMIN" | "MANAGER" | "VIEWER";
-}> = [
-  {
-    userId: "00000000-0000-4000-8000-000000000001",
-    nomComplet: "Aïsha Ramnauth",
-    email: "aisha.ramnauth@omnicane.mu",
-    role: "ADMIN",
-  },
-  {
-    userId: "00000000-0000-4000-8000-000000000002",
-    nomComplet: "Jean-Claude Bissoondoyal",
-    email: "jc.bissoondoyal@omnicane.mu",
-    role: "MANAGER",
-  },
-  {
-    userId: "00000000-0000-4000-8000-000000000003",
-    nomComplet: "Priya Goorah",
-    email: "priya.goorah@omnicane.mu",
-    role: "VIEWER",
-  },
-];
 
 export default async function PageEntites() {
   let session;
@@ -78,8 +48,8 @@ export default async function PageEntites() {
     throw erreur;
   }
 
-  // Lecture serveur sous RLS : rôle + référentiel d'entités + périmètre de chaque
-  // membre, dans une seule transaction scopée workspace.
+  // Lecture serveur sous RLS : rôle + référentiel d'entités + membres (avec leur
+  // périmètre joint), dans une seule transaction scopée workspace.
   const donnees = await withWorkspace(session, async (tx, ctx) => {
     if (!peutAdministrer(ctx.role)) {
       // S3 / D2 #37 : surface admin CACHÉE (404, pas 403). On sort AVANT toute
@@ -88,15 +58,9 @@ export default async function PageEntites() {
     }
 
     const entites = await listerEntites(tx, ctx);
-
-    // TODO(back) : un seul appel `listerMembresWorkspace` remplacera et la liste
-    // ET cette boucle de scopes (à fusionner en une requête jointe côté repo).
-    const membres: MembreVue[] = await Promise.all(
-      MEMBRES_MOCK.map(async (m) => ({
-        ...m,
-        scopeInitial: await listerScopesMembre(tx, ctx, m.userId),
-      })),
-    );
+    // Une seule requête jointe : membres du workspace + scopeInitial de chacun
+    // (plus de boucle N+1 ni de mock). Le contrat MembreScope mappe MembreVue.
+    const membres: MembreVue[] = await listerMembresWorkspace(tx, ctx);
 
     return { entites, membres };
   });
