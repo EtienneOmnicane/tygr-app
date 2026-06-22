@@ -75,9 +75,9 @@ beforeAll(async () => {
       ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob');
     insert into workspace_members (user_id,workspace_id,role) values
       ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER');
-    insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,created_by) values
-      ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','${ALICE}'),
-      ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','${BOB}');
+    insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,institution_name,created_by) values
+      ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','Mauritius Commercial Bank','${ALICE}'),
+      ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','Bank One','${BOB}');
     insert into bank_accounts (id,workspace_id,connection_id,omnifi_account_id,account_name,currency) values
       ('${ACC_A}','${WS_A}','cccc0001-cccc-4ccc-8ccc-cccccccccccc','a-a','CC','MUR'),
       ('dddd0002-dddd-4ddd-8ddd-dddddddddddd','${WS_B}','cccc0002-cccc-4ccc-8ccc-cccccccccccc','a-b','CC','MUR');
@@ -255,5 +255,32 @@ describe("filtres", () => {
       listerTransactions(tx, ctx, parse({ bankAccountId: ACC_A, limite: 100 })),
     );
     expect(page.lignes.map((l) => l.id)).toEqual(ORDRE_ATTENDU);
+  });
+
+  // Provenance bancaire par transaction (challenge mapping 2026-06-22) : la jointure
+  // bank_accounts ⋈ bank_connections expose accountName + institutionName.
+  describe("provenance : nom de compte + nom d'institution joints", () => {
+    it("chaque ligne porte accountName (bank_accounts) et institutionName (bank_connections)", async () => {
+      const page = await withWorkspace(sessionA, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      );
+      expect(page.lignes.length).toBeGreaterThan(0);
+      // WS_A : compte « CC » rattaché à la connexion « Mauritius Commercial Bank ».
+      for (const l of page.lignes) {
+        expect(l.accountName).toBe("CC");
+        expect(l.institutionName).toBe("Mauritius Commercial Bank");
+      }
+    });
+
+    it("l'institution suit le TENANT : depuis B, c'est « Bank One », jamais celle de A", async () => {
+      const page = await withWorkspace(sessionB, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      );
+      expect(page.lignes.length).toBeGreaterThan(0);
+      for (const l of page.lignes) {
+        expect(l.institutionName).toBe("Bank One");
+        expect(l.institutionName).not.toBe("Mauritius Commercial Bank");
+      }
+    });
   });
 });

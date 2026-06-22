@@ -72,6 +72,21 @@ export interface SyntheseMois {
   variation: string; // entrees - sorties (calcul SQL)
 }
 
+/**
+ * Synthèse entrées/sorties/variation d'un mois POUR UNE DEVISE. Multi-devises
+ * (CLAUDE.md règle 8) : `syntheseMoisParDevise` renvoie UNE entrée PAR devise — on
+ * n'additionne JAMAIS des MUR et des USD (ce que faisait `syntheseMois`, qui sommait
+ * `amount` toutes devises confondues et affichait le total dans la base_currency :
+ * faux dès qu'un workspace a des comptes en plusieurs devises). Aucune conversion FX
+ * (chantier DASH-FX1) : on expose les flux côte à côte, par devise.
+ */
+export interface SyntheseMoisDevise {
+  currency: string;
+  entrees: string;
+  sorties: string;
+  variation: string; // entrees - sorties (calcul SQL), pour CETTE devise
+}
+
 export interface TransactionRecente {
   omnifiTxnId: string;
   transactionDate: string;
@@ -202,6 +217,12 @@ export async function courbeTresorerie(
 }
 
 /**
+ * @deprecated MULTI-DEVISE CASSÉ : cette fonction somme `amount` SANS GROUP BY devise
+ * → pour un workspace avec des comptes MUR + USD, elle additionne des roupies et des
+ * dollars et l'UI affiche le total dans la base_currency (faux). Conservée le temps que
+ * le Front migre les cartes (SidePanelKpi « Détails » + CashFlowSummary) vers
+ * `syntheseMoisParDevise` (une ligne par devise). NE PAS l'utiliser dans du code neuf.
+ *
  * Synthèse entrées/sorties/variation d'un mois (YYYY-MM). Somme conditionnelle
  * EN SQL sur le sens ; exclut les tombstones. Montants en chaînes.
  */
@@ -239,6 +260,46 @@ export async function syntheseMois(
     sorties: res[0]?.sorties ?? "0",
     variation: res[0]?.variation ?? "0",
   };
+}
+
+/**
+ * Synthèse entrées/sorties/variation d'un mois (YYYY-MM) VENTILÉE PAR DEVISE —
+ * remplace `syntheseMois` pour le multi-devise (challenge mapping 2026-06-22). GROUP BY
+ * devise : une ligne par devise présente sur le mois, JAMAIS d'addition cross-devise
+ * (CLAUDE.md règle 8). Mêmes règles que `syntheseMois` (somme conditionnelle EN SQL sur
+ * le sens, exclusion des tombstones, montants en chaînes) + héritage du scope entité
+ * par jointure sur bank_accounts (ENTITY-READ-JOIN1). Ordonné par devise (affichage
+ * stable). Mois sans transaction → tableau vide (l'UI affiche 0 dans la devise de base).
+ */
+export async function syntheseMoisParDevise(
+  tx: Tx,
+  mois: string, // "YYYY-MM"
+): Promise<SyntheseMoisDevise[]> {
+  const debut = `${mois}-01`;
+  const lignes = await tx
+    .select({
+      currency: transactionsCache.currency,
+      entrees: sql<string>`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Credit'), 0)::text`,
+      sorties: sql<string>`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Debit'), 0)::text`,
+      variation: sql<string>`(
+        coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Credit'), 0)
+        - coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Debit'), 0)
+      )::text`,
+    })
+    .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage de la policy entity_scope (sur bank_accounts) par
+    // jointure (sûre : bank_account_id NOT NULL). Même garantie que syntheseMois.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        gte(transactionsCache.transactionDate, debut),
+        sql`${transactionsCache.transactionDate} < (${debut}::date + interval '1 month')`,
+      ),
+    )
+    .groupBy(transactionsCache.currency)
+    .orderBy(transactionsCache.currency);
+  return lignes;
 }
 
 /**

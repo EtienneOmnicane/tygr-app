@@ -347,6 +347,40 @@ devise** (multi-devises, jamais d'addition cross-devise).
   Tant qu'absent, l'affichage par devise (DASH-SOLDE2) est la voie correcte — aucun taux
   inventé.
 
+### Challenge intégrité/mapping des données (2026-06-22, investigation)
+
+Trois constats remontés (« 0,00 Rs », « tout en Rs », « Main Operating Account » au lieu
+de la banque). Diagnostic ci-dessous ; deux corrections Backend livrées
+(`syntheseMoisParDevise`, provenance dans `listerTransactions`), le reste tracé.
+
+- [ ] **DASH-WSACTIF1 (P1, FRONTIÈRE FRONT/SESSION) — le dashboard lit le MAUVAIS workspace → « 0,00 Rs »** —
+  Effort S-M, gardien Front/Auth. **Ce n'est PAS un bug d'agrégation** : `soldesCourantsParDevise`
+  est correct et la base contient bien 7 074 400 MUR + 179 200 USD — mais sur le workspace
+  « Omnicane Trading BU ». L'utilisateur `enardou@omni-fi.co` est **ADMIN de « Omni-FI HQ » (0
+  compte)** et seulement MANAGER de Trading BU ; sa session active pointe HQ → solde vide → « 0,00 Rs ».
+  Le bandeau « Historique en cours de synchronisation » est un FAUX indice (il qualifie la
+  courbe `balance_history`, légitimement vide tant qu'Omni-FI n'expose pas l'EOD). **Correctif** :
+  sélecteur de workspace visible + workspace actif par défaut = celui qui a des comptes (ou le
+  dernier consulté). **Déclencheur** : recette tuteur. Hors périmètre data-mapping (touche auth/session).
+- [x] **DASH-CASHFLOW-DEVISE1 (Backend) — `syntheseMois` sommait cross-devise (« tout en Rs »)** —
+  ✅ LIVRÉ. `syntheseMois` additionnait `amount` MUR+USD sans GROUP BY → la carte Cash In/Out
+  affichait un total mélangé dans la base_currency (faux dès qu'un workspace a plusieurs devises).
+  Ajout de **`syntheseMoisParDevise`** (GROUP BY currency, renvoie `currency`), `syntheseMois`
+  conservé @deprecated le temps de la migration Front. Prouvé en isolation (MUR/USD séparés).
+- [ ] **DASH-CASHFLOW-DEVISE2 (P1, FRONTIÈRE FRONT) — câbler `syntheseMoisParDevise` dans l'UI** —
+  Effort S, gardien Front. Migrer `CashFlowSummary` + la carte « Détails » de `SidePanelKpi` de
+  `syntheseMois` (déprécié) vers `syntheseMoisParDevise` (une ligne par devise, comme le Solde).
+  Contrat Backend prêt (`SyntheseMoisDevise`, ré-exporté). **Déclencheur** : ce ticket.
+- [x] **TX-PROVENANCE1 (Backend) — exposer le nom d'institution par transaction** —
+  ✅ LIVRÉ. `listerTransactions` joint désormais `bank_accounts` + `bank_connections` et expose
+  `accountName` + `institutionName` sur `TransactionLigne` (la colonne vit sur
+  `bank_connections.institution_name`, PAS `bank_accounts` comme supposé). Bonus : la jointure
+  `bank_accounts` fait hériter le scope entité (ENTITY-READ-JOIN1).
+- [ ] **TX-PROVENANCE2 (P2, FRONTIÈRE FRONT) — afficher la banque dans la table /transactions** —
+  Effort S, gardien Front. La table montre `account_name` (« Main Operating Account ») ; l'adapter
+  (`transactions/adapter.ts`) peut maintenant remplir `compteNom` avec `institutionName`
+  (« Bank One ») ou l'afficher en sous-texte, la donnée étant exposée par ligne. **Déclencheur** : ce ticket.
+
 ### Synchronisation automatique des soldes/transactions (2026-06-19)
 
 À la connexion (Finish → `finaliserConnexionDropinAction`), les COMPTES sont déjà rattachés
