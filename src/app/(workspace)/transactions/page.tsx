@@ -71,16 +71,20 @@ export default async function PageTransactions() {
     isActive: c.isActive,
   }));
 
-  // Nom affiché du compte porteur : on privilégie le NOM DE BANQUE
+  // Nom affiché du compte porteur DANS LA TABLE : on privilégie le NOM DE BANQUE
   // (`institutionName`, déjà fourni par `listerComptes` via la connexion) plutôt
   // que le libellé interne `accountName` (souvent générique, « Main Operating
   // Account » à l'identique sur tous les comptes). Repli sur `accountName` si la
   // banque est inconnue, pour ne jamais afficher de vide.
   const nomCompte = (c: (typeof comptes)[number]) =>
     c.institutionName ?? c.accountName;
+  // Le FILTRE, lui, porte les deux champs : la toolbar groupe par institution
+  // (<optgroup>) et affiche l'accountName dedans — l'institution n'est donc plus
+  // répétée N fois. (Distinct du nom de la table ci-dessus, volontairement.)
   const comptesFiltre = comptes.map((c) => ({
     bankAccountId: c.bankAccountId,
-    nom: nomCompte(c),
+    accountName: c.accountName,
+    institutionName: c.institutionName,
   }));
   const nomParCompte = new Map(
     comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
