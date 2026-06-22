@@ -5,6 +5,21 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Localisation — identifiant de fuseau Maurice erroné (2026-06-22, Lot 2)
+
+- [ ] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — corriger « Asia/Port_Louis » →
+  « Indian/Mauritius »** — Effort S. Découvert au Lot 2 (pastille de fraîcheur §3.7) :
+  `Asia/Port_Louis` **n'existe pas** comme identifiant IANA et fait planter `Intl`
+  (`RangeError: Invalid time zone specified`), y compris sous full-ICU (Node 25, ICU 78).
+  Le bon nom canonique de Maurice (UTC+4) est **`Indian/Mauritius`**. Le code du Lot 2
+  (`src/lib/format-date.ts`, `FUSEAU_MAURICE`) utilise déjà le bon identifiant.
+  RESTE à corriger les mentions **documentaires** trompeuses, qui induiraient un futur
+  agent en erreur : `CLAUDE.md` (section « Localisation & temps » + « Formatage » :
+  `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'`) et l'en-tête historique de
+  `format-date.ts`. **Déclencheur** : tout code FRONT qui convertit un instant vers le
+  fuseau Maurice (le Backend calcule la date comptable en SQL — vérifier que le SQL
+  emploie aussi `Indian/Mauritius`, sinon c'est une dette BACKEND bloquante, pas doc).
+
 ### Entités multi-tenant (Option B) — dettes ouvertes par le plan (2026-06-22)
 
 Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Entités

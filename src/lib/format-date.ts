@@ -47,6 +47,40 @@ const MOIS_PLEINS = [
   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
 ] as const;
 
+// Horodatage ABSOLU Maurice (tooltip de fraîcheur) : « 12/06/2026 12:00 ».
+// Contrairement aux dates comptables « nues », ici on convertit EXPLICITEMENT un
+// instant (TIMESTAMPTZ lastSyncedAt) vers le fuseau de Maurice (CLAUDE.md
+// Localisation). ⚠️ L'identifiant IANA correct est « Indian/Mauritius » (UTC+4) :
+// « Asia/Port_Louis » (écrit dans CLAUDE.md / l'en-tête historique) N'EXISTE PAS et
+// fait planter `Intl` (RangeError). Dette doc remontée (voir TODOS TZ-DOC1).
+const FUSEAU_MAURICE = "Indian/Mauritius";
+
+const FMT_HORODATAGE_MAURICE = new Intl.DateTimeFormat("fr-FR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: FUSEAU_MAURICE,
+});
+
+const RTF_FR = new Intl.RelativeTimeFormat("fr-FR", { numeric: "auto" });
+
+/** Niveau de fraîcheur du solde (mappé aux tokens §3.7). */
+export type NiveauFraicheur = "frais" | "recent" | "perime";
+
+export interface Fraicheur {
+  /** frais <6h (success) · recent <24h (warning) · perime ≥24h (danger). */
+  niveau: NiveauFraicheur;
+  /** Libellé relatif FR : « il y a 2 h », « hier », « il y a 3 j ». */
+  libelle: string;
+  /** Horodatage absolu Maurice pour le tooltip : « 12/06/2026 à 08:00 ». */
+  horodatageAbsolu: string;
+}
+
+const SIX_HEURES_MS = 6 * 3_600_000;
+const VINGT_QUATRE_HEURES_MS = 24 * 3_600_000;
+
 /** Vrai si la chaîne est une date `YYYY-MM-DD` plausible (forme stricte). */
 export function estDateISO(valeur: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(valeur)) return false;
@@ -96,4 +130,47 @@ export function formaterMoisAnnee(libelleMois: string): string {
   const idx = Number(m[2]) - 1;
   if (idx < 0 || idx >= 12) return libelleMois;
   return `${MOIS_PLEINS[idx]} ${m[1]}`;
+}
+
+/**
+ * Fraîcheur d'un solde COURANT à partir de sa dernière synchro `lastSyncedAt`
+ * (UI_GUIDELINES §3.7 — pastille success/warning/danger). C'est la VRAIE réponse à
+ * DR-F3 : on qualifie l'âge de la donnée instantanée, on n'affiche JAMAIS un EOD de
+ * courbe comme « date du solde ».
+ *
+ * Seuils : <6h → `frais` (vert) · <24h → `recent` (ambre) · ≥24h → `perime` (rouge,
+ * CTA Reconnecter côté UI). Le libellé relatif (« il y a 2 h ») sort de
+ * `Intl.RelativeTimeFormat` (locale fr, zéro dépendance — règle 9). L'horodatage
+ * absolu (tooltip) est converti à Maurice (Asia/Port_Louis, CLAUDE.md Localisation).
+ *
+ * `maintenant` est injectable pour des tests déterministes (pas de mock de Date
+ * global). Un delta négatif (horloge client en avance sur le serveur) est borné à 0
+ * → « à l'instant », jamais « dans 2 h ».
+ */
+export function formaterFraicheurRelative(
+  derniereSynchro: Date,
+  maintenant: Date = new Date(),
+): Fraicheur {
+  const deltaMs = Math.max(0, maintenant.getTime() - derniereSynchro.getTime());
+
+  const niveau: NiveauFraicheur =
+    deltaMs < SIX_HEURES_MS
+      ? "frais"
+      : deltaMs < VINGT_QUATRE_HEURES_MS
+        ? "recent"
+        : "perime";
+
+  const heures = Math.floor(deltaMs / 3_600_000);
+  const libelle =
+    heures < 1
+      ? "à l’instant"
+      : heures < 24
+        ? RTF_FR.format(-heures, "hour")
+        : RTF_FR.format(-Math.floor(heures / 24), "day");
+
+  return {
+    niveau,
+    libelle,
+    horodatageAbsolu: FMT_HORODATAGE_MAURICE.format(derniereSynchro),
+  };
 }
