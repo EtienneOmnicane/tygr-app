@@ -232,7 +232,7 @@ export async function supprimerSplit<TDb extends AnyPgDatabase>(
   return { supprime: true };
 }
 
-interface EvenementAudit {
+export interface EvenementAudit {
   transactionId: string;
   transactionDate: string;
   action: "CREATE" | "UPDATE" | "DELETE";
@@ -245,8 +245,11 @@ interface EvenementAudit {
  * Écrit une ligne d'audit immuable. Résout le nom de catégorie pour un snapshot
  * lisible (la catégorie peut être renommée/désactivée plus tard). INSERT
  * uniquement (la table est append-only : UPDATE/DELETE rejetés par trigger).
+ *
+ * Exporté pour que le moteur de règles (regles-categorisation.ts) écrive l'audit
+ * par la MÊME source unique (un split RULE produit un événement CREATE/source=RULE).
  */
-async function ecrireAudit<TDb extends AnyPgDatabase>(
+export async function ecrireAudit<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   ctx: WorkspaceContext,
   evt: EvenementAudit,
