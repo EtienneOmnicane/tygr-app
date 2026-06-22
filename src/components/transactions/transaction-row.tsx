@@ -14,6 +14,7 @@ import { formatMontant } from "@/lib/format-montant";
 import { formaterDateComptable } from "@/lib/format-date";
 
 import { CategorisationStatusBadge } from "./categorisation-status-badge";
+import { FlowTag } from "./flow-tag";
 import type { TransactionListItem } from "./types-transactions";
 
 /** Retire un éventuel signe « - » de tête (on reconstruit le signe via `sens`). */
@@ -95,13 +96,21 @@ export function TransactionRow({
       {/* Montant — aligné droite, tabular-nums, couleur sémantique. Toujours visible
           (info critique), même en mobile. Police légèrement réduite en mobile pour
           que les montants à 6 chiffres (« −152 340,00 MUR ») tiennent sans rogner
-          la colonne Libellé. */}
-      <td
-        className={`whitespace-nowrap px-3 py-[14px] text-right text-[13px] font-semibold tabular-nums sm:px-4 sm:text-sm ${
-          sortie ? "text-outflow-700" : "text-inflow-700"
-        }`}
-      >
-        {formatMontant(montantSigne, transaction.devise, { signeExplicite: true })}
+          la colonne Libellé. Sous le montant : tag Entrée/Sortie pour une lecture
+          immédiate du flux (le sens EST une donnée → vert/rouge légitime, §3.1). */}
+      <td className="whitespace-nowrap px-3 py-[14px] text-right sm:px-4">
+        <span
+          className={`block text-[13px] font-semibold tabular-nums sm:text-sm ${
+            sortie ? "text-outflow-700" : "text-inflow-700"
+          }`}
+        >
+          {formatMontant(montantSigne, transaction.devise, {
+            signeExplicite: true,
+          })}
+        </span>
+        <span className="mt-1 flex justify-end">
+          <FlowTag sens={transaction.sens} />
+        </span>
       </td>
     </tr>
   );
