@@ -7,11 +7,43 @@ jour)** : voir le decision log du plan
 
 ### Entités multi-tenant (Option B) — dettes ouvertes par le plan (2026-06-22)
 
-Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Entités
-(L1→L5 : `entities`, `bank_accounts.entity_id`, `member_entity_scopes`, policy RLS
-`entity_scope` + 3ᵉ GUC) couvre l'isolation à deux étages. Les trois dettes ci-dessous
-sont des extensions **explicitement hors périmètre du socle** (anti-scope-creep,
-règle 7). Aucune ne touche l'isolation tenant (sinon elle serait INTERDITE, règle 9).
+Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Entités L1→L2
+(`entities`, `bank_accounts.entity_id`, `member_entity_scopes`, policy RLS `entity_scope`
++ 3ᵉ GUC) couvre l'**étage 1 (tenant, dur — inattaquable, prouvé en cross-review)** et
+pose la garde **étage 2 (entité)** sur `bank_accounts`. Les dettes ci-dessous sont hors
+périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation **tenant**
+(sinon INTERDITE, règle 9) — toutes sont **intra-groupe (étage 2)**.
+
+> 🔒 **GATE D'ACTIVATION (cross-review sécu, contexte vierge, 2026-06-22)** — NON
+> NÉGOCIABLE. L'étage 2 n'est complet QUE pour la lecture **via jointure** sur
+> `bank_accounts`. Deux trous **latents** ont été **prouvés runtime** (non exploitables
+> tant que personne n'est en Vision Entité — le socle L1→L2 ne livre AUCUN chemin
+> d'écriture vers `member_entity_scopes`) : la lecture sans jointure fuit
+> (`ENTITY-READ-JOIN1`) et l'**écriture `bank_accounts` n'est pas scopée**
+> (`ENTITY-WRITE-SCOPE1`). **Interdiction formelle** : ne JAMAIS livrer en production un
+> chemin qui crée une ligne `member_entity_scopes` (= un membre en Vision Entité) tant
+> que `ENTITY-READ-JOIN1` ET `ENTITY-WRITE-SCOPE1` ne sont pas TOUTES DEUX levées. Les
+> deux sont **P1 bloquantes avant prod Vision Entité**. Fuites prouvées par
+> `tests/isolation/entites-isolation.test.ts` (describe « fuites latentes ÉTAGE 2 »).
+
+- [ ] **ENTITY-READ-JOIN1 (P1) — brancher les repos de LECTURE sur la jointure `bank_accounts` pour hériter du scope entité** —
+  Effort S, gardien Backend. Ouvert 2026-06-22 (découvert pendant l'implémentation L1→L2,
+  branche `feat/entities-data-model`). La policy `entity_scope` (étage 2) vit sur
+  `bank_accounts` ; transactions/soldes n'en héritent **que via une JOINTURE** sur
+  `bank_accounts`. Or des repos de lecture lisent les tables filles SANS cette jointure —
+  vérifié : `transactionsRecentes` (`dashboard.ts:238`, `from(transactionsCache)` nu).
+  Conséquence : en Vision Entité, ces lectures verraient les transactions d'une autre
+  entité du **même** workspace. ⚠️ **Pas une fuite cross-tenant** : `transactions_cache`
+  porte sa propre policy `tenant_isolation` (étage 1 intact) — l'écart est **intra-groupe**
+  (étage 2). À faire : ajouter `innerJoin(bankAccounts, …)` (ou un `WHERE bank_account_id
+  IN (select id from bank_accounts)` qui passe la RLS) à `transactionsRecentes`,
+  `courbeTresorerie`, `syntheseMois` et tout repo lisant `transactions_cache`/
+  `balance_history` directement, pour que la policy `entity_scope` morde par héritage.
+  **Déclencheur** : socle Entités mergé — **BLOQUANT avant le premier déploiement où une
+  Vision Entité est activée** (P1, SLA « avant prod »). Tant que personne n'a de ligne
+  `member_entity_scopes` (tout le monde en Vision Globale), l'écart est inerte. Corrige
+  aussi l'affirmation « masque déjà en lecture par jointure » d'ENTITY-WRITE-SCOPE1 :
+  vraie pour les repos QUI joignent, à généraliser par cette dette.
 
 - [ ] **ENTITY-PARTY1 (P2) — pré-remplir le sas d'assignation via les « Parties » Omni-FI** —
   Effort M, gardien Backend. Ouvert 2026-06-22. La doc API expose `GET
@@ -23,14 +55,28 @@ règle 7). Aucune ne touche l'isolation tenant (sinon elle serait INTERDITE, rè
   l'autorité. **Déclencheur** : retour terrain « trop de saisie manuelle » **ET** preuve
   sandbox que les Parties sont fiablement peuplées. **NON une dette d'isolation.**
 
-- [ ] **ENTITY-WRITE-SCOPE1 (P1) — borner l'ÉCRITURE (catégorisation) au périmètre entité du membre** —
-  Effort S, gardien Backend. Ouvert 2026-06-22. La catégorisation (splits) est ouverte
-  à tous les membres (décision PO 2026-06-17). La policy `entity_scope` masque déjà en
-  LECTURE les transactions hors périmètre (par jointure sur `bank_accounts`) → un membre
-  Vision Entité ne **voit** pas les transactions d'une autre entité. Reste à durcir
-  l'ÉCRITURE (refus serveur même si l'ID est forgé) dans `categorisation.ts`. **Déclencheur** :
-  socle Entités mergé **ET** confirmation PO (PLAN §3.2). Raccroché au chantier « rôles
-  Vision Entité » (ROADMAP §3).
+- [ ] **ENTITY-WRITE-SCOPE1 (P1, BLOQUANTE avant prod Vision Entité) — l'étage 2 ne borne PAS l'ÉCRITURE** —
+  Effort S-M, gardien Backend. Ouvert 2026-06-22, **sévérité relevée par la cross-review
+  sécu (contexte vierge)** : la formulation initiale « durcissement de la catégorisation »
+  **sous-évaluait** le fait. La policy `entity_scope` est `FOR SELECT` uniquement → en
+  Vision Entité, **l'ÉCRITURE sur `bank_accounts` n'est pas scopée du tout** (seul
+  `tenant_isolation`/workspace gouverne). **Prouvé runtime** : un VIEWER scopé Sucrière
+  exécutant `UPDATE bank_accounts SET … ` (sans WHERE) mute AUSSI les comptes Énergie +
+  le compte non assigné ; un `INSERT` d'un compte assigné à Énergie (hors scope) réussit.
+  ⚠️ **NUANCE (ce qui borne le risque)** : ce n'est PAS une fuite de **confidentialité** —
+  `UPDATE/DELETE … RETURNING` ne renvoie que les lignes **visibles au SELECT** (donc
+  in-scope) ; un `DELETE`/`UPDATE` ciblant une valeur d'Énergie renvoie `[]` et ne
+  détruit/altère PAS la ligne hors scope. C'est un trou d'**intégrité/autorisation** (un
+  membre borné peut altérer en masse des comptes qu'il ne devrait pas toucher), pas un
+  oracle. **Non exploitable dans le socle L1→L2** : aucun chemin ne crée de Vision Entité
+  (pas de repo `entites.ts`/`definirScopesMembre`), et l'assignation compte→entité est
+  ADMIN-only (Vision Globale). À faire : policy `entity_scope` RESTRICTIVE FOR
+  UPDATE/DELETE (USING+WITH CHECK honorant le scope, avec exception ADMIN explicite) sur
+  `bank_accounts` ; ET borner l'écriture catégorisation (`categorisation.ts`) si elle
+  devient scopée. **Déclencheur** : AVANT tout déploiement livrant un chemin d'écriture
+  vers `member_entity_scopes` (cf. GATE d'activation ci-dessus). Couvert par le test
+  « écriture VIEWER scopé hors périmètre » (assertion du comportement ACTUEL, à inverser
+  quand la dette est levée). Raccroché au chantier « rôles Vision Entité » (ROADMAP §3).
 
 - [ ] **ENTITY-INGEST1 (P2) — pré-assignation automatique `compte → entité` à l'ingestion** —
   Effort S, gardien Backend. Ouvert 2026-06-22. Au MVP, un compte neuf naît `entity_id =

@@ -73,6 +73,14 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --      - bank_accounts              : cascade depuis bank_connections / dé-rattachement
 --      - categories                 : référentiel éditable (Pilier 1)
 --      - transaction_categorizations: splits éditables (correction de catégorie, Pilier 1)
+--      - entities                   : référentiel d'entités (BU) éditable (archivage
+--                                     logique is_active ; un DELETE physique reste
+--                                     possible pour une entité JAMAIS référencée —
+--                                     les FK composites en ON DELETE RESTRICT
+--                                     protègent celles qui le sont)
+--      - member_entity_scopes       : table de DROITS (Vision Entité, N:N) éditable —
+--                                     révoquer/réattribuer un périmètre = DELETE
+--                                     légitime ; NON append-only
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
@@ -105,7 +113,9 @@ BEGIN
     'bank_connections',
     'bank_accounts',
     'categories',
-    'transaction_categorizations'
+    'transaction_categorizations',
+    'entities',
+    'member_entity_scopes'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
