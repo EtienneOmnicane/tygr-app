@@ -14,47 +14,68 @@ import { estNegatif, estZero, formatMontant } from "@/lib/format-montant";
 
 const NB = " "; // espace fine insécable
 
-describe("formatMontant", () => {
-  it("groupe les milliers et met la virgule décimale FR", () => {
+describe("formatMontant — devise en préfixe symbolique (audit 2026-06-22)", () => {
+  it("MUR → préfixe « Rs » séparé par une espace fine insécable", () => {
     expect(formatMontant("7691000.00", "MUR")).toBe(
-      `7${NB}691${NB}000,00${NB}MUR`,
+      `Rs${NB}7${NB}691${NB}000,00`,
     );
   });
 
+  it("USD → préfixe « $ »", () => {
+    expect(formatMontant("500", "USD")).toBe(`$${NB}500,00`);
+  });
+
+  it("EUR → préfixe « € »", () => {
+    expect(formatMontant("12.5", "EUR")).toBe(`€${NB}12,50`);
+  });
+
+  it("code en minuscules est reconnu (insensible à la casse)", () => {
+    expect(formatMontant("500", "mur")).toBe(`Rs${NB}500,00`);
+  });
+
+  it("REPLI : devise inconnue → code ISO en SUFFIXE", () => {
+    expect(formatMontant("1200", "ZAR")).toBe(`1${NB}200,00${NB}ZAR`);
+  });
+
+  it("devise vide → montant NU (aucune espace parasite — saisie d'input)", () => {
+    // split-allocation-modal s'appuie sur ce contrat (montantSaisi nu).
+    expect(formatMontant("100", "")).toBe("100,00");
+    expect(formatMontant("100", "  ")).toBe("100,00");
+  });
+});
+
+describe("formatMontant — bornes financières (anti-float, signe, zéro)", () => {
   it("préserve les centimes EXACTS sur un gros montant (anti-float)", () => {
     // 9 007 199 254 740 993 dépasse Number.MAX_SAFE_INTEGER : un parseFloat
     // perdrait le dernier chiffre. Le formatage sur chaîne le garde intact.
     expect(formatMontant("9007199254740993.01", "MUR")).toBe(
-      `9${NB}007${NB}199${NB}254${NB}740${NB}993,01${NB}MUR`,
+      `Rs${NB}9${NB}007${NB}199${NB}254${NB}740${NB}993,01`,
     );
   });
 
-  it("rend le signe moins typographique pour un négatif", () => {
-    expect(formatMontant("-384250.00", "MUR")).toBe(`−384${NB}250,00${NB}MUR`);
+  it("rend le signe moins typographique pour un négatif (préfixe AVANT le signe)", () => {
+    expect(formatMontant("-384250.00", "MUR")).toBe(`Rs${NB}−384${NB}250,00`);
   });
 
   it("ajoute un + avec signeExplicite sur un positif non nul", () => {
     expect(formatMontant("1530000.00", "MUR", { signeExplicite: true })).toBe(
-      `+1${NB}530${NB}000,00${NB}MUR`,
+      `Rs${NB}+1${NB}530${NB}000,00`,
     );
   });
 
   it("n'ajoute PAS de + sur zéro même avec signeExplicite", () => {
     expect(formatMontant("0", "MUR", { signeExplicite: true })).toBe(
-      `0,00${NB}MUR`,
+      `Rs${NB}0,00`,
     );
   });
 
-  it("normalise une valeur sans décimales à 2 décimales", () => {
-    expect(formatMontant("500", "USD")).toBe(`500,00${NB}USD`);
-  });
-
-  it("normalise une décimale à un seul chiffre", () => {
-    expect(formatMontant("12.5", "EUR")).toBe(`12,50${NB}EUR`);
+  it("n'ajoute PAS de − sur un zéro SIGNÉ « -0.00 » (règle « zéro sans signe »)", () => {
+    // Un zéro signé (sortie FX / arrondi) ne doit jamais afficher « −0,00 ».
+    expect(formatMontant("-0.00", "MUR")).toBe(`Rs${NB}0,00`);
   });
 
   it("gère les petits montants sous 1000 sans séparateur", () => {
-    expect(formatMontant("42.00", "MUR")).toBe(`42,00${NB}MUR`);
+    expect(formatMontant("42.00", "MUR")).toBe(`Rs${NB}42,00`);
   });
 });
 
