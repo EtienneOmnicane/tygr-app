@@ -157,6 +157,7 @@ export {
   VentilationDepasseError,
   TransactionIntrouvableError,
   CategorieIntrouvableError,
+  CategorieNonAutoriseeError,
 } from "@/server/repositories/categorisation";
 export type {
   RefTransaction,

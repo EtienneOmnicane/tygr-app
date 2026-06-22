@@ -407,6 +407,34 @@ export class CategorieIntrouvableError extends Error {
 }
 
 /**
+ * Levée quand une MUTATION du référentiel (créer/renommer/archiver une catégorie)
+ * est tentée par un non-ADMIN. Décision PO 2026-06-22 (révision de 2026-06-17) :
+ * administrer la taxonomie est réservé à l'ADMIN. La garde est portée par le
+ * REPOSITORY (calque sur entites.ts) : le rôle vient du CONTEXTE (re-résolu à
+ * chaque requête par withWorkspace), jamais d'un paramètre — et TOUT chemin
+ * d'écriture (Server Action présente ou future) hérite de la garde, pas seulement
+ * l'action d'aujourd'hui. Non-énumérant.
+ */
+export class CategorieNonAutoriseeError extends Error {
+  readonly code = "CATEGORY_NOT_AUTHORIZED";
+  constructor() {
+    super("Action non autorisée.");
+    this.name = "CategorieNonAutoriseeError";
+  }
+}
+
+/**
+ * Exige le rôle ADMIN pour muter le référentiel. La LECTURE (listerCategories)
+ * reste ouverte à tous les membres : les pickers de ventilation en ont besoin
+ * (la saisie de splits demeure ouverte, seule l'administration est restreinte).
+ */
+function exigerAdminReferentiel(ctx: WorkspaceContext): void {
+  if (ctx.role !== "ADMIN") {
+    throw new CategorieNonAutoriseeError();
+  }
+}
+
+/**
  * Liste les catégories ACTIVES du workspace (les archivées sont masquées des
  * pickers). Scopé par la RLS au workspace courant. Triées par nom.
  */
@@ -444,6 +472,7 @@ export async function creerCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   input: { name: string; parentId: string | null },
 ): Promise<{ categoryId: string }> {
+  exigerAdminReferentiel(ctx);
   const inserted = await tx
     .insert(categories)
     .values({
@@ -464,6 +493,9 @@ export async function renommerCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   input: { categoryId: string; name: string },
 ): Promise<void> {
+  // Rôle AVANT existence : un non-ADMIN obtient « non autorisé » même sur une
+  // catégorie inexistante → pas d'oracle d'existence (règle 3).
+  exigerAdminReferentiel(ctx);
   const maj = await tx
     .update(categories)
     .set({ name: input.name })
@@ -491,6 +523,8 @@ export async function archiverCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   categoryId: string,
 ): Promise<void> {
+  // Rôle AVANT existence (cf. renommerCategorie) — pas d'oracle d'existence.
+  exigerAdminReferentiel(ctx);
   const maj = await tx
     .update(categories)
     .set({ isActive: false })

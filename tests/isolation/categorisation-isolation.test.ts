@@ -25,6 +25,7 @@ import {
   ajouterSplit,
   archiverCategorie,
   CategorieIntrouvableError,
+  CategorieNonAutoriseeError,
   creerCategorie,
   listerCategories,
   listerSplits,
@@ -41,10 +42,14 @@ const withWorkspace = createWithWorkspace(db);
 
 const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const ALICE = "11111111-1111-4111-8111-111111111111";
-const BOB = "22222222-2222-4222-8222-222222222222";
+const ALICE = "11111111-1111-4111-8111-111111111111"; // MANAGER de A
+const BOB = "22222222-2222-4222-8222-222222222222"; // MANAGER de B
+const ADELE = "44444444-4444-4444-8444-444444444444"; // ADMIN de A (CRUD référentiel)
+const VICTOR = "33333333-3333-4333-8333-333333333333"; // VIEWER de A
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
 const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
+const sessionAdmin = { userId: ADELE, activeWorkspaceId: WS_A };
+const sessionViewer = { userId: VICTOR, activeWorkspaceId: WS_A };
 
 // Données fixes par workspace.
 const TXN_A = "eeee1111-eeee-4eee-8eee-eeeeeeeeeeee";
@@ -67,9 +72,11 @@ beforeAll(async () => {
     insert into workspaces (id,name,kind,omnifi_client_user_id) values
       ('${WS_A}','BU A','INTERNAL_BU','eu-a'), ('${WS_B}','BU B','INTERNAL_BU','eu-b');
     insert into users (id,email,full_name) values
-      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob');
+      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob'),
+      ('${ADELE}','ad@g.mu','Adele'), ('${VICTOR}','v@g.mu','Victor');
     insert into workspace_members (user_id,workspace_id,role) values
-      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER');
+      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER'),
+      ('${ADELE}','${WS_A}','ADMIN'), ('${VICTOR}','${WS_A}','VIEWER');
     insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,created_by) values
       ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','${ALICE}'),
       ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','${BOB}');
@@ -327,20 +334,62 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
   });
 });
 
-describe("CRUD référentiel de catégories", () => {
-  it("creerCategorie crée une Nature, listerCategories la renvoie", async () => {
-    const r = await withWorkspace(sessionA, (tx, ctx) =>
+describe("CRUD référentiel de catégories — réservé ADMIN (décision PO 2026-06-22)", () => {
+  it("ADMIN : creerCategorie crée une Nature, listerCategories la renvoie", async () => {
+    const r = await withWorkspace(sessionAdmin, (tx, ctx) =>
       creerCategorie(tx, ctx, { name: "Salaires", parentId: null }),
     );
     expect(r.categoryId).toBeTruthy();
+    // listerCategories reste ouvert à tous (lecture pour les pickers) : un membre
+    // simple voit la catégorie créée.
     const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
     expect(cats.some((c) => c.name === "Salaires")).toBe(true);
   });
 
-  it("creerCategorie avec parentId d'un AUTRE workspace → rejeté (FK composite)", async () => {
+  it("MANAGER ne peut PAS créer de catégorie (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Interdit", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("VIEWER ne peut PAS créer de catégorie (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Interdit2", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("MANAGER ne peut PAS renommer ni archiver (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        renommerCategorie(tx, ctx, { categoryId: CAT_A, name: "Renommé" }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A)),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("rôle vérifié AVANT existence : MANAGER visant une catégorie inexistante → NonAutorisee (pas d'oracle)", async () => {
+    // Un non-ADMIN n'apprend même pas si la catégorie existe : la garde de rôle
+    // précède le check d'existence (anti-oracle, règle 3).
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        renommerCategorie(tx, ctx, {
+          categoryId: "99999999-9999-4999-8999-999999999999",
+          name: "X",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("ADMIN : creerCategorie avec parentId d'un AUTRE workspace → rejeté (FK composite)", async () => {
     let thrown: unknown = null;
     try {
-      await withWorkspace(sessionA, (tx, ctx) =>
+      await withWorkspace(sessionAdmin, (tx, ctx) =>
         creerCategorie(tx, ctx, { name: "Sous-cat", parentId: CAT_B }),
       );
     } catch (e) {
@@ -349,23 +398,27 @@ describe("CRUD référentiel de catégories", () => {
     expect(thrown, "parentId cross-workspace doit être rejeté").not.toBeNull();
   });
 
-  it("renommerCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+  it("ADMIN : renommerCategorie d'un autre workspace → CategorieIntrouvable (RLS, pas NonAutorisee)", async () => {
+    // Adèle EST ADMIN → passe la garde de rôle ; c'est la RLS qui masque CAT_B
+    // (autre tenant) → introuvable. Prouve que la garde de rôle ne court-circuite
+    // pas l'isolation tenant (les deux barrières coexistent).
     await expect(
-      withWorkspace(sessionA, (tx, ctx) =>
+      withWorkspace(sessionAdmin, (tx, ctx) =>
         renommerCategorie(tx, ctx, { categoryId: CAT_B, name: "Hack" }),
       ),
     ).rejects.toBeInstanceOf(CategorieIntrouvableError);
   });
 
-  it("archiverCategorie masque la catégorie mais PRÉSERVE les splits existants", async () => {
-    // CAT_A est utilisée par des splits (recréés ci-dessous). On l'archive.
+  it("ADMIN : archiverCategorie masque la catégorie mais PRÉSERVE les splits existants", async () => {
+    // Le split est posé via la VENTILATION (ouverte à tous → Alice/MANAGER) ;
+    // l'archivage est une mutation du référentiel → ADMIN (Adèle).
     await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [{ categoryId: CAT_A, amount: "500.00" }]),
     );
     const splitsAvant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
     expect(splitsAvant).toHaveLength(1);
 
-    await withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A));
+    await withWorkspace(sessionAdmin, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A));
 
     // La catégorie a disparu des pickers…
     const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
@@ -376,9 +429,9 @@ describe("CRUD référentiel de catégories", () => {
     expect(splitsApres[0].categoryId).toBe(CAT_A);
   });
 
-  it("archiverCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+  it("ADMIN : archiverCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
     await expect(
-      withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
+      withWorkspace(sessionAdmin, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
     ).rejects.toBeInstanceOf(CategorieIntrouvableError);
   });
 });
