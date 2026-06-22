@@ -30,6 +30,7 @@ import {
   upsertTransactions,
   type TransactionAUpserter,
 } from "@/server/repositories/ingestion";
+import { appliquerRegles } from "@/server/repositories/regles-categorisation";
 
 /** Borne dure du `pageSize` (défaut amont = 20 ; on plafonne pour ne pas demander
  *  des pages déraisonnables). */
@@ -133,6 +134,29 @@ export async function synchroniserCompte(
   await executer((tx) =>
     marquerSynchronise(tx, params.bankAccountId, maintenant()),
   );
+
+  // Catégorisation automatique BEST-EFFORT des transactions nouvellement
+  // ingérées : on applique les règles ACTIVES aux transactions de CE compte qui
+  // n'ont encore aucun split (MANUAL prime, jamais écrasé). Idempotent. Tourne en
+  // Vision Globale (chemin ingestion, GUC entité vide) ; appliquerRegles JOINT
+  // bank_accounts donc le scope serait honoré le cas échéant.
+  // Isolé dans un try/catch : la synchro des transactions est l'essentiel ; une
+  // règle bancale ne doit pas faire perdre des transactions déjà persistées.
+  // L'utilisateur peut relancer « Ré-analyser » (appliquerReglesAction). On logue
+  // le code sans PII (jamais le motif ni un libellé).
+  try {
+    await executer((tx, ctx) =>
+      appliquerRegles(tx, ctx, { bankAccountId: params.bankAccountId }),
+    );
+  } catch {
+    console.warn(
+      JSON.stringify({
+        evt: "regles_auto_echec",
+        action: "appliquer-regles-post-sync",
+        bankAccountId: params.bankAccountId,
+      }),
+    );
+  }
 
   return { pages: page, transactionsTraitees: total };
 }

@@ -40,9 +40,26 @@ function pageTx(
   };
 }
 
-/** executer factice : exécute le fn avec tx/ctx bidon, capture les appels DB. */
+/**
+ * executer factice : exécute le fn avec tx/ctx bidon, capture les appels DB.
+ * `select()` renvoie une chaîne qui se résout en [] (thenable) — suffisant pour
+ * que appliquerRegles (appelé en best-effort post-sync) trouve « aucune règle »
+ * et court-circuite proprement à {0,0}, sans dépendre d'une vraie DB. La logique
+ * RÉELLE du moteur de règles est prouvée par tests/isolation/regles-categorisation.
+ */
 function executerFactice() {
   const upserts: unknown[] = [];
+  // Builder de SELECT minimal : chaque maillon renvoie l'objet lui-même, et
+  // l'objet est thenable (résout []) pour les `await tx.select()...` d'appliquerRegles.
+  const selectChain: Record<string, unknown> = {
+    from: () => selectChain,
+    innerJoin: () => selectChain,
+    where: () => selectChain,
+    orderBy: () => selectChain,
+    limit: () => selectChain,
+    for: () => selectChain,
+    then: (resolve: (v: unknown[]) => unknown) => resolve([]),
+  };
   const tx = {
     update: () => ({ set: () => ({ where: async () => {} }) }),
     insert: () => ({
@@ -50,6 +67,7 @@ function executerFactice() {
         onConflictDoUpdate: async () => {},
       }),
     }),
+    select: () => selectChain,
   };
   const ctx = { workspaceId: "ws-1", userId: "u-1", role: "ADMIN" as const };
   const executer = async <T>(fn: (t: never, c: never) => Promise<T>) => {
@@ -152,8 +170,10 @@ describe("synchroniserCompte — pagination par page", () => {
     });
 
     expect(r.transactionsTraitees).toBe(0);
-    // Aucun upsert de transactions (lignes vides), mais marquerSynchronise est appelé.
-    expect(upserts.length).toBe(1);
+    // Aucun upsert de transactions (lignes vides), mais DEUX appels executer en
+    // fin de parcours : (1) marquerSynchronise, (2) appliquerRegles post-sync
+    // (best-effort ; aucune règle dans le mock → no-op {0,0}).
+    expect(upserts.length).toBe(2);
   });
 
   it("MAX_PAGES — l'amont prétend qu'il reste des pages au-delà du plafond → IngestionBoucleError", async () => {

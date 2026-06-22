@@ -182,6 +182,21 @@ schéma `drizzle`, created_at = `when` du journal). Pipeline `db:provision → d
   n'a pas d'étape migrate exécutée. Ajouter `db:provision && db:migrate` contre une base
   éphémère au CI pour ATTRAPER ce drift (un .sql généré mais jamais appliqué casserait
   alors le CI, pas le runtime). **Déclencheur** : mise en place du workflow CI/CD.
+- [ ] **DB-MIGRATE3 (P2) — `0009_entity-write-scope` absente du journal Drizzle** —
+  Effort S, gardien Backend. Découvert 2026-06-22 en générant la migration du moteur de
+  règles (`db:generate` a numéroté `0009`, collision). Le fichier
+  `drizzle/migrations/0009_entity-write-scope.sql` existe sur `main` (PR #85) mais n'a NI
+  entrée dans `meta/_journal.json` NI `meta/0009_snapshot.json` — il a été posé « à la main »
+  (comme les 0000→0006 historiques, cf. DB-MIGRATE1). Conséquence : l'état Drizzle est
+  désynchronisé du disque ; un futur `db:generate` peut re-collisionner ou diffuser un
+  snapshot incohérent. La suite d'isolation applique les `.sql` PAR NOM (pas via le journal)
+  → l'exécution réelle est correcte (0009 puis 0010 s'appliquent), seul l'outillage Drizzle
+  est en dette. **Contournement appliqué** (PR moteur de règles) : ma migration renommée
+  `0010_categorization-rules` + journal à `idx:10` (le trou idx:9 reflète honnêtement le
+  0009 hors-journal). **À faire** : régénérer un `meta/0009_snapshot.json` cohérent + entrée
+  journal pour `0009_entity-write-scope` (ou rebaseliner proprement). **Déclencheur** :
+  prochain `db:generate` qui touche le schéma, ou mise en place de DB-MIGRATE2.
+  **NON une dette d'isolation** (n'affecte ni la RLS ni l'append-only — purement outillage).
 
 ### Page /transactions — câblée et opérationnelle (UI, 2026-06-17)
 

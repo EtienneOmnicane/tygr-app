@@ -196,3 +196,23 @@ export {
   MembreNonScopableError,
 } from "@/server/repositories/entites";
 export type { EntiteLue, MembreScope } from "@/server/repositories/entites";
+
+// Moteur de règles de catégorisation : référentiel de règles + service
+// d'application (appliquerRegles crée des splits source='RULE' pour les
+// transactions non catégorisées qui matchent). Même frontière P0-a : les Server
+// Actions de regles/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement.
+export {
+  listerRegles,
+  creerRegle,
+  modifierRegle,
+  archiverRegle,
+  appliquerRegles,
+  RegleIntrouvableError,
+} from "@/server/repositories/regles-categorisation";
+export type {
+  RegleLue,
+  RegleACreer,
+  RegleAModifier,
+  ResultatApplication,
+} from "@/server/repositories/regles-categorisation";
