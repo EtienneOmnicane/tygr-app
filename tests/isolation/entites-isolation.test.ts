@@ -382,3 +382,86 @@ describe("contre-preuve — pas de faux positif (le mécanisme n'est pas cassé 
     );
   });
 });
+
+/**
+ * FUITES LATENTES CONNUES de l'étage 2 — prouvées par la cross-review sécu
+ * (contexte vierge, 2026-06-22). Ces tests asservissent le comportement ACTUEL
+ * (les trous EXISTENT) ; ils ne sont PAS rouges — ils documentent une limite
+ * connue et tracée (règle 5 : pas de .skip silencieux ; c'est un test explicite
+ * et vert qui prouve la limite). ⚠️ NON exploitable dans le socle L1→L2 : aucun
+ * chemin ne crée de Vision Entité (pas de definirScopesMembre). Quand la dette
+ * correspondante est levée, CES tests CASSERONT → ils forcent la mise à jour,
+ * rendant la dette non contournable (anti « la suite flatte l'étage 2 »).
+ */
+describe("fuites latentes ÉTAGE 2 (tracées — à inverser quand la dette est levée)", () => {
+  it("13. [ENTITY-READ-JOIN1] lecture SANS jointure de transactions_cache fuit les autres entités", async () => {
+    // La policy entity_scope vit sur bank_accounts. Une lecture directe de
+    // transactions_cache (sans join) n'est PAS filtrée par entité → un membre
+    // Vision Entité Sucrière voit AUSSI les transactions d'Énergie. C'est l'écart
+    // que ENTITY-READ-JOIN1 doit fermer (jointure ou policy dédiée).
+    const sansJoin = await withWorkspace(sessScoped, (tx) =>
+      tx.execute(
+        sql`select omnifi_txn_id as id from transactions_cache order by omnifi_txn_id`,
+      ),
+    );
+    const ids = (sansJoin.rows as { id: string }[]).map((r) => r.id);
+    // COMPORTEMENT ACTUEL (fuite intra-groupe) : Énergie + non assigné visibles
+    // malgré le scope Sucrière. À RETIRER quand ENTITY-READ-JOIN1 est levée.
+    expect(ids).toContain("tx-ene"); // ⚠️ fuite Énergie (étage 2 non hérité)
+    expect(ids).toContain("tx-none"); // ⚠️ fuite compte non assigné
+    // L'étage 1 (tenant) reste prouvé ailleurs : aucune transaction d'un AUTRE
+    // workspace ne fuit jamais (transactions_cache porte tenant_isolation).
+  });
+
+  it("13b. [ENTITY-READ-JOIN1] balance_history n'a AUCUNE garde entité (vecteur courbe de trésorerie)", async () => {
+    // Même trou de fond pour les soldes EOD (source de la courbe du dashboard) :
+    // aucune policy entity_scope n'existe sur balance_history → une lecture
+    // directe n'est jamais filtrée par entité. On documente l'absence de garde
+    // (le correctif ENTITY-READ-JOIN1 ajoutera la jointure ou une policy dédiée).
+    const aGardeEntite = await client.query<{ n: number }>(
+      `select count(*)::int as n from pg_policies
+       where tablename = 'balance_history' and policyname = 'entity_scope'`,
+    );
+    expect(aGardeEntite.rows[0].n).toBe(0); // ⚠️ aucune policy entité (à ajouter)
+  });
+
+  it("14. [ENTITY-WRITE-SCOPE1] un VIEWER scopé peut ÉCRIRE hors périmètre (intégrité, PAS confidentialité)", async () => {
+    // La policy entity_scope est FOR SELECT → l'écriture n'est pas scopée. Un
+    // VIEWER scopé Sucrière exécutant un UPDATE sans WHERE mute AUSSI Énergie.
+    await withWorkspace(sessScoped, (tx) =>
+      tx.update(bankAccounts).set({ accountName: "MUTÉ_HORS_SCOPE" }),
+    );
+    // Vérifié sous l'owner : le compte Énergie (hors scope du VIEWER) a été muté.
+    await client.exec(`reset role;`);
+    const energie = await client.query<{ account_name: string }>(
+      `select account_name from bank_accounts where id = '${ACC_ENERGIE}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(energie.rows[0].account_name).toBe("MUTÉ_HORS_SCOPE"); // ⚠️ écriture hors scope
+
+    // Remise en état (owner) pour l'indépendance des tests.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `update bank_accounts set account_name = 'Compte Sucrière' where id = '${ACC_SUCRE}';
+       update bank_accounts set account_name = 'Compte Énergie' where id = '${ACC_ENERGIE}';
+       update bank_accounts set account_name = 'Compte Non Assigné' where id = '${ACC_NONE}';`,
+    );
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("14b. [ENTITY-WRITE-SCOPE1] MAIS l'écriture hors scope ne fuit AUCUNE donnée (RETURNING ne voit que l'in-scope)", async () => {
+    // Contre-mesure prouvée : un UPDATE … RETURNING ne renvoie que les lignes
+    // visibles au SELECT (in-scope) → pas d'oracle/exfiltration de l'entité
+    // Énergie. C'est ce qui borne ENTITY-WRITE-SCOPE1 à un trou d'intégrité, pas
+    // de confidentialité. (no-op : on réécrit la valeur existante.)
+    const renvoye = await withWorkspace(sessScoped, (tx) =>
+      tx
+        .update(bankAccounts)
+        .set({ accountName: sql`account_name` })
+        .returning({ id: bankAccounts.id }),
+    );
+    const ids = renvoye.map((r) => r.id);
+    expect(ids).toEqual([ACC_SUCRE]); // RETURNING borné au scope → pas d'oracle
+    expect(ids).not.toContain(ACC_ENERGIE);
+  });
+});
