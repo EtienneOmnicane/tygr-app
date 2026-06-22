@@ -23,6 +23,7 @@ import { useId, useState } from "react";
 import type { PointCourbe } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
+import { formaterDateComptable } from "@/lib/format-date";
 import { StateCard, StateIllustration } from "@/components/dashboard/states/primitives";
 
 // Géométrie du viewBox (unités SVG, mises à l'échelle en %).
@@ -235,7 +236,7 @@ function Trace({
 
         {/* Axe X : première / dernière date (évite l'encombrement). */}
         <text x={PAD_L} y={VB_H - 8} className="fill-text-faint text-[10px]">
-          {jourMois(points[0].date)}
+          {formaterDateComptable(points[0].date)}
         </text>
         <text
           x={VB_W - PAD_R}
@@ -243,7 +244,7 @@ function Trace({
           textAnchor="end"
           className="fill-text-faint text-[10px]"
         >
-          {jourMois(points[points.length - 1].date)}
+          {formaterDateComptable(points[points.length - 1].date)}
         </text>
       </svg>
 
@@ -251,7 +252,7 @@ function Trace({
       {pActif && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
           <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {jourMois(pActif.date)}
+            {formaterDateComptable(pActif.date)}
           </p>
           <p className="mt-0.5 text-sm font-semibold tabular-nums text-text">
             {formatMontant(pActif.soldeConsolide, devise)}
@@ -268,15 +269,4 @@ function compact(v: number): string {
   if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} M`;
   if (abs >= 1_000) return `${Math.round(v / 1_000)} k`;
   return `${Math.round(v)}`;
-}
-
-/** "2026-06-12" → "12 juin". Présentationnel. */
-function jourMois(date: string): string {
-  const [, mois, jour] = date.split("-");
-  const noms = [
-    "janv.", "févr.", "mars", "avr.", "mai", "juin",
-    "juil.", "août", "sept.", "oct.", "nov.", "déc.",
-  ];
-  const idx = Number(mois) - 1;
-  return idx >= 0 && idx < 12 ? `${Number(jour)} ${noms[idx]}` : date;
 }

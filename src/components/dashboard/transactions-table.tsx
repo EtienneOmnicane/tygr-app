@@ -12,6 +12,7 @@
 import type { TransactionRecente } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
+import { formaterDateComptable } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function TransactionsTable({
@@ -45,7 +46,7 @@ export function TransactionsTable({
               className="grid grid-cols-[88px_1fr_140px_140px] items-center gap-4 py-3"
             >
               <span className="text-xs tabular-nums text-text-muted">
-                {jourMois(t.transactionDate)}
+                {formaterDateComptable(t.transactionDate)}
               </span>
               <span className="truncate text-sm text-text">
                 {t.cleanLabel ?? "Opération bancaire"}
@@ -72,15 +73,4 @@ export function TransactionsTable({
 function depouiller(montant: string): string {
   const t = montant.trim();
   return t.startsWith("-") ? t.slice(1) : t;
-}
-
-/** "2026-06-11" → "11 juin". Présentationnel. */
-function jourMois(date: string): string {
-  const [, mois, jour] = date.split("-");
-  const noms = [
-    "janv.", "févr.", "mars", "avr.", "mai", "juin",
-    "juil.", "août", "sept.", "oct.", "nov.", "déc.",
-  ];
-  const idx = Number(mois) - 1;
-  return idx >= 0 && idx < 12 ? `${Number(jour)} ${noms[idx]}` : date;
 }

@@ -13,6 +13,25 @@ Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Ent
 sont des extensions **explicitement hors périmètre du socle** (anti-scope-creep,
 règle 7). Aucune ne touche l'isolation tenant (sinon elle serait INTERDITE, règle 9).
 
+- [ ] **ENTITY-READ-JOIN1 (P1) — brancher les repos de LECTURE sur la jointure `bank_accounts` pour hériter du scope entité** —
+  Effort S, gardien Backend. Ouvert 2026-06-22 (découvert pendant l'implémentation L1→L2,
+  branche `feat/entities-data-model`). La policy `entity_scope` (étage 2) vit sur
+  `bank_accounts` ; transactions/soldes n'en héritent **que via une JOINTURE** sur
+  `bank_accounts`. Or des repos de lecture lisent les tables filles SANS cette jointure —
+  vérifié : `transactionsRecentes` (`dashboard.ts:238`, `from(transactionsCache)` nu).
+  Conséquence : en Vision Entité, ces lectures verraient les transactions d'une autre
+  entité du **même** workspace. ⚠️ **Pas une fuite cross-tenant** : `transactions_cache`
+  porte sa propre policy `tenant_isolation` (étage 1 intact) — l'écart est **intra-groupe**
+  (étage 2). À faire : ajouter `innerJoin(bankAccounts, …)` (ou un `WHERE bank_account_id
+  IN (select id from bank_accounts)` qui passe la RLS) à `transactionsRecentes`,
+  `courbeTresorerie`, `syntheseMois` et tout repo lisant `transactions_cache`/
+  `balance_history` directement, pour que la policy `entity_scope` morde par héritage.
+  **Déclencheur** : socle Entités mergé — **BLOQUANT avant le premier déploiement où une
+  Vision Entité est activée** (P1, SLA « avant prod »). Tant que personne n'a de ligne
+  `member_entity_scopes` (tout le monde en Vision Globale), l'écart est inerte. Corrige
+  aussi l'affirmation « masque déjà en lecture par jointure » d'ENTITY-WRITE-SCOPE1 :
+  vraie pour les repos QUI joignent, à généraliser par cette dette.
+
 - [ ] **ENTITY-PARTY1 (P2) — pré-remplir le sas d'assignation via les « Parties » Omni-FI** —
   Effort M, gardien Backend. Ouvert 2026-06-22. La doc API expose `GET
   /parties/{PartyId}/accounts` + `OBReadAccount6.PartyId/PartyName/OwnershipType`
