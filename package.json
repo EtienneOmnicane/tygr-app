@@ -14,7 +14,8 @@
     "db:provision": "node scripts/provision.mjs",
     "db:baseline": "node scripts/baseline-migrations.mjs",
     "db:migrate": "node scripts/migrate.mjs",
-    "seed:admin": "node scripts/seed-admin.mjs"
+    "seed:admin": "node scripts/seed-admin.mjs",
+    "seed:categories": "node scripts/seed-categories.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
