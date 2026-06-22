@@ -28,6 +28,7 @@ import { StateCard } from "@/components/dashboard/states/primitives";
 import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
+import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
 export interface DonneesDashboard {
@@ -89,6 +90,10 @@ export function DashboardContent({
       <div className="flex flex-col gap-6">
         {/* Ancre : courbe (gère son propre état partiel si courbe vide). */}
         <CashflowMainChart points={courbe} devise={devise} />
+
+        {/* Vision Entrées / Sorties du mois (demande métier) — au-dessus de la
+            table, dans la devise de base (cf. note multidevise du composant). */}
+        <CashFlowSummary syntheseMois={syntheseMois} devise={devise} />
 
         {/* Table : vide par section si pas encore de transactions. */}
         {transactionsRecentes.length > 0 ? (
