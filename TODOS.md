@@ -283,7 +283,19 @@ devise** (multi-devises, jamais d'addition cross-devise).
   fonction (somme `current_balance` GROUP BY devise, SQL/numeric, comptes sélectionnés) +
   type `SoldeParDevise { currency, total }`. Indépendant de `balance_history`. 2 tests
   d'isolation (multi-devises MUR+USD, source = current_balance).
-- [ ] **DASH-SOLDE2 (P1, FRONTIÈRE FRONT) — câbler le Solde Total par devise dans l'UI** —
+- [x] **DASH-SOLDE2 (P1, FRONTIÈRE FRONT) — câbler le Solde Total par devise dans l'UI** —
+  ✅ **LIVRÉ + MERGÉ** (Front). Câblage initial **PR #69** (`feat(dashboard): câble le Solde
+  Total par devise dans l'UI (DASH-SOLDE2)`, commit `5cb6115`) puis raffiné au **Lot 2 — PR #79**
+  (`feat(dashboard): carte SOLDE hybride + pastille de fraîcheur`, commit `4e9e8b0`).
+  `(dashboard)/page.tsx:80` appelle `soldesCourantsParDevise(tx)` et passe `SoldeParDevise[]`
+  à `SidePanelKpi` ; `side-panel-kpi.tsx` rend une **ligne par devise** (mono → gros montant
+  28px/700 `primary` ; multi → `SoldesMultiDevises`, pile égalitaire à virgules décimales
+  alignées, grille `[auto_1fr]`), tout en `tabular-nums`, via `formatMontant` (chaînes, zéro
+  float). Jamais d'addition cross-devise. Bonus inclus : la méta trompeuse « au JJ/MM »
+  (anti-pattern DR-F3) est remplacée par la pastille de fraîcheur sur `lastSyncedAt`.
+  L'ancien `soldeConsolide: string` ne sert plus qu'à la COURBE (EOD historique,
+  `cashflow-main-chart.tsx`). **Case cochée 2026-06-22** (le code était en `main`, seule la
+  case du registre restait ouverte). Reste HISTORIQUE ci-dessous :
   Effort S, **gardien Front**. La carte « SOLDE » (`dashboard-content.tsx` / le KPI haut)
   consomme aujourd'hui `soldeConsolide: string` (un montant unique = 0). À remplacer par la
   consommation de `soldesCourantsParDevise(tx)` → afficher une ligne par devise (« 8 074 400
