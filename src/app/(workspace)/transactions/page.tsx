@@ -71,12 +71,19 @@ export default async function PageTransactions() {
     isActive: c.isActive,
   }));
 
+  // Nom affiché du compte porteur : on privilégie le NOM DE BANQUE
+  // (`institutionName`, déjà fourni par `listerComptes` via la connexion) plutôt
+  // que le libellé interne `accountName` (souvent générique, « Main Operating
+  // Account » à l'identique sur tous les comptes). Repli sur `accountName` si la
+  // banque est inconnue, pour ne jamais afficher de vide.
+  const nomCompte = (c: (typeof comptes)[number]) =>
+    c.institutionName ?? c.accountName;
   const comptesFiltre = comptes.map((c) => ({
     bankAccountId: c.bankAccountId,
-    nom: c.accountName,
+    nom: nomCompte(c),
   }));
   const nomParCompte = new Map(
-    comptes.map((c) => [c.bankAccountId, c.accountName]),
+    comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
   );
   const aucuneBanque = comptes.length === 0;
 

@@ -15,6 +15,7 @@ import { formatMontant } from "@/lib/format-montant";
 import { formaterDateComptable } from "@/lib/format-date";
 import { categorieFr } from "@/lib/categories-fr";
 import { StateCard } from "@/components/dashboard/states/primitives";
+import { FlowTag } from "@/components/transactions/flow-tag";
 
 export function TransactionsTable({
   transactions,
@@ -55,12 +56,17 @@ export function TransactionsTable({
               <span className="truncate text-xs text-text-muted">
                 {categorieFr(t.primaryCategory)}
               </span>
-              <span
-                className={`text-right text-sm font-semibold tabular-nums ${
-                  sortie ? "text-outflow-700" : "text-inflow-700"
-                }`}
-              >
-                {formatMontant(montantSigne, devise, { signeExplicite: true })}
+              <span className="text-right">
+                <span
+                  className={`block text-sm font-semibold tabular-nums ${
+                    sortie ? "text-outflow-700" : "text-inflow-700"
+                  }`}
+                >
+                  {formatMontant(montantSigne, devise, { signeExplicite: true })}
+                </span>
+                <span className="mt-1 flex justify-end">
+                  <FlowTag sens={t.creditDebit} />
+                </span>
               </span>
             </div>
           );
