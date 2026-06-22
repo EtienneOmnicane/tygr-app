@@ -137,7 +137,7 @@ describe("formaterFraicheurRelative — seuils §3.7", () => {
     expect(f.libelle).toBe("à l’instant");
   });
 
-  it("horodatage absolu converti à Maurice (Asia/Port_Louis, UTC+4)", () => {
+  it("horodatage absolu converti à Maurice (Indian/Mauritius, UTC+4)", () => {
     // 08:00 UTC = 12:00 à Maurice ; date numérique FR.
     const f = formaterFraicheurRelative(
       new Date("2026-06-12T08:00:00Z"),

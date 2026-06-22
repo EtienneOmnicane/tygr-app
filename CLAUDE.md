@@ -22,10 +22,10 @@ Règle stricte, non négociable :
 - **Le système opère à l'Île Maurice (MUT, UTC+4).** Aucun changement d'heure d'été.
 - **Tous les timestamps en base sont `TIMESTAMPTZ` stockés en UTC.** Jamais de
   `timestamp` sans fuseau, jamais d'heure locale persistée.
-- **La conversion `Asia/Port_Louis` est EXPLICITE dans le code** pour tout calcul de
+- **La conversion `Indian/Mauritius` est EXPLICITE dans le code** pour tout calcul de
   clôture (date comptable d'une transaction, bornes de période, agrégats EOD, courbe
   90j). Une transaction à 22h UTC tombe le lendemain à Maurice : `transaction_date`
-  dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'` (E20). Interdit de
+  dérive de `BookingDateTime AT TIME ZONE 'Indian/Mauritius'` (E20). Interdit de
   comparer des dates « nues » sans avoir posé le fuseau.
 - **Multi-devise first (MUR, USD, EUR).** Le modèle ne suppose jamais le mono-MUR :
   toute table portant un montant porte sa devise ; les corporates mauriciens tiennent

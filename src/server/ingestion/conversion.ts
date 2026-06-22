@@ -7,7 +7,7 @@
  *   (Number(x)*100 perd des centimes). Le signe vient de CreditDebitIndicator,
  *   pas du montant (toujours positif côté OBIE).
  * - E20 (date comptable Maurice) : `transaction_date` dérive de `BookingDateTime`
- *   converti en `Asia/Port_Louis`. Une transaction à 22h UTC tombe le lendemain
+ *   converti en `Indian/Mauritius`. Une transaction à 22h UTC tombe le lendemain
  *   à Maurice. On NE compare jamais une date « nue » sans poser le fuseau.
  */
 import { OmniFiInvalidResponseError } from "@/server/omnifi";
@@ -51,7 +51,7 @@ export function normaliserMontant(montant: string): string {
 
 /**
  * Dérive la date comptable Maurice (YYYY-MM-DD) d'un `BookingDateTime` OBIE
- * (ISO 8601, UTC ou avec offset). E20 : conversion EXPLICITE vers Asia/Port_Louis.
+ * (ISO 8601, UTC ou avec offset). E20 : conversion EXPLICITE vers Indian/Mauritius.
  * On calcule en arithmétique d'epoch (pas de comparaison de date nue).
  */
 export function deriverDateComptableMaurice(bookingDateTime: string): string {
