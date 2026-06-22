@@ -133,6 +133,19 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   ne réécrase JAMAIS un `entity_id` déjà posé (invariant du socle, à préserver).
   **Déclencheur** : ENTITY-PARTY1 livrée. **NON une dette d'isolation.**
 
+- [ ] **ENTITY-UI1 (P2, FRONTIÈRE FRONT) — pages admin Entités : référentiel, sas d'assignation, sélecteur de scope** —
+  Effort M, **gardien Front**. Ouvert 2026-06-22. Le **Backend L3/L4 est livré** (repo
+  `src/server/repositories/entites.ts` + Server Actions `src/app/(workspace)/admin/entites/actions.ts` :
+  `creerEntiteAction`, `renommerEntiteAction`, `archiverEntiteAction`, `assignerCompteAction`,
+  `definirScopesAction` ; tous ADMIN-only, contrats `EntiteLue`/`EtatAction`). Reste l'UI (calque
+  `admin/membres/page.tsx` + `formulaire-provisioning.tsx`) : (1) liste des entités (`listerEntites`)
+  + formulaires créer/renommer/archiver ; (2) **sas** « Comptes à assigner » listant `entity_id IS
+  NULL` + picker d'entité par compte → `assignerCompteAction` ; (3) sélecteur multi-entités du
+  périmètre d'un membre → `definirScopesAction` (cases à cocher `name="entityIds"`, vide = Vision
+  Globale). Gating d'affichage : réservé ADMIN (la garde dure est déjà serveur). **Déclencheur** :
+  ce chantier L3 mergé → l'UI devient le maillon manquant pour activer une Vision Entité en
+  pratique. Ne touche ni l'isolation ni les montants (surface de rendu).
+
 ### Outillage migrations DB — db:migrate câblé + drift résolu (2026-06-19)
 
 `/investigate` : `/transactions` plantait au runtime sur « relation "categories"

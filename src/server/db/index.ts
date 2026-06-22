@@ -173,3 +173,23 @@ export type {
   TransactionLigne,
   PageTransactions,
 } from "@/server/repositories/transactions";
+
+// Gestion des Entités (Option B, L3) : référentiel d'entités + sas d'assignation +
+// périmètre Vision Entité (member_entity_scopes). Même frontière P0-a : les Server
+// Actions de admin/entites/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement. Garde ADMIN portée par le repository.
+export {
+  listerEntites,
+  listerScopesMembre,
+  creerEntite,
+  renommerEntite,
+  archiverEntite,
+  assignerCompteEntite,
+  definirScopesMembre,
+  EntiteNonAutoriseError,
+  EntiteIntrouvableError,
+  CompteIntrouvableError,
+  EntiteNomDupliqueError,
+  MembreNonScopableError,
+} from "@/server/repositories/entites";
+export type { EntiteLue } from "@/server/repositories/entites";
