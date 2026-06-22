@@ -37,19 +37,29 @@ pose la garde **étage 2 (entité)** sur `bank_accounts`. Les dettes ci-dessous 
 périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation **tenant**
 (sinon INTERDITE, règle 9) — toutes sont **intra-groupe (étage 2)**.
 
-> 🔒 **GATE D'ACTIVATION (cross-review sécu, contexte vierge, 2026-06-22)** — NON
-> NÉGOCIABLE. L'étage 2 n'est complet QUE pour la lecture **via jointure** sur
-> `bank_accounts`. Deux trous **latents** ont été **prouvés runtime** (non exploitables
-> tant que personne n'est en Vision Entité — le socle L1→L2 ne livre AUCUN chemin
-> d'écriture vers `member_entity_scopes`) : la lecture sans jointure fuit
-> (`ENTITY-READ-JOIN1`) et l'**écriture `bank_accounts` n'est pas scopée**
-> (`ENTITY-WRITE-SCOPE1`). **Interdiction formelle** : ne JAMAIS livrer en production un
-> chemin qui crée une ligne `member_entity_scopes` (= un membre en Vision Entité) tant
-> que `ENTITY-READ-JOIN1` ET `ENTITY-WRITE-SCOPE1` ne sont pas TOUTES DEUX levées. Les
-> deux sont **P1 bloquantes avant prod Vision Entité**. Fuites prouvées par
-> `tests/isolation/entites-isolation.test.ts` (describe « fuites latentes ÉTAGE 2 »).
+> 🔓 **GATE D'ACTIVATION — LES DEUX P1 SONT LEVÉES (2026-06-22)**. Historique : la
+> cross-review sécu (contexte vierge) avait identifié deux trous **latents** prouvés
+> runtime — lecture sans jointure (`ENTITY-READ-JOIN1`) et écriture non scopée
+> (`ENTITY-WRITE-SCOPE1`) — et posé une **interdiction formelle** de livrer un chemin
+> créant une ligne `member_entity_scopes` tant qu'ils n'étaient pas TOUS DEUX clos.
+> ✅ `ENTITY-READ-JOIN1` levée (PR #83, jointure repos) ; ✅ `ENTITY-WRITE-SCOPE1` levée
+> (PR `fix/entity-write-scope`, policy `entity_scope` FOR ALL USING+WITH CHECK, migration
+> 0009). L'étage 2 borne désormais lecture ET écriture, prouvé par
+> `tests/isolation/entites-isolation.test.ts` (blocs « étage 2 hérité par jointure » +
+> « écriture bornée par scope »). **Le verrou sécurité est donc OUVERT** ; ce qui reste
+> avant une Vision Entité réelle en prod n'est plus de l'isolation mais du **produit** :
+> livrer L3/L4 (repo `entites.ts` + Server Actions `definirScopesMembre`/sas, garde
+> **ADMIN applicative**) puis L5 (preuve runtime bout-en-bout du parcours VIEWER scopé).
 
-- [ ] **ENTITY-READ-JOIN1 (P1) — brancher les repos de LECTURE sur la jointure `bank_accounts` pour hériter du scope entité** —
+- [x] **ENTITY-READ-JOIN1 (P1) — brancher les repos de LECTURE sur la jointure `bank_accounts` pour hériter du scope entité** —
+  ✅ **RÉSOLU 2026-06-22 (PR #83, `fix/entity-read-join1`)**. `innerJoin(bankAccounts)` ajouté aux
+  4 fonctions de lecture de `dashboard.ts` (`transactionsRecentes`, `syntheseMois`,
+  `courbeTresorerie` + `soldeConsolideCourant` — même fuite latente sur `balance_history`,
+  bouchée par cohérence). Jointures sûres (`bank_account_id` NOT NULL) et neutres en Vision
+  Globale (policy RESTRICTIVE laisse tout passer GUC vide → agrégats inchangés, zéro régression).
+  Tests « fuites latentes 13/13b » INVERSÉS en preuve de levée sur les vraies fonctions repo
+  (Vision Entité Sucrière ne voit que Sucrière ; contre-preuve Vision Globale voit tout).
+  Reste HISTORIQUE ci-dessous :
   Effort S, gardien Backend. Ouvert 2026-06-22 (découvert pendant l'implémentation L1→L2,
   branche `feat/entities-data-model`). La policy `entity_scope` (étage 2) vit sur
   `bank_accounts` ; transactions/soldes n'en héritent **que via une JOINTURE** sur
@@ -78,7 +88,21 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   l'autorité. **Déclencheur** : retour terrain « trop de saisie manuelle » **ET** preuve
   sandbox que les Parties sont fiablement peuplées. **NON une dette d'isolation.**
 
-- [ ] **ENTITY-WRITE-SCOPE1 (P1, BLOQUANTE avant prod Vision Entité) — l'étage 2 ne borne PAS l'ÉCRITURE** —
+- [x] **ENTITY-WRITE-SCOPE1 (P1, BLOQUANTE avant prod Vision Entité) — l'étage 2 ne borne PAS l'ÉCRITURE** —
+  ✅ **RÉSOLU 2026-06-22 (PR `fix/entity-write-scope`)**. Migration `0009_entity-write-scope.sql` :
+  la policy `entity_scope` passe de `FOR SELECT` à **`AS RESTRICTIVE FOR ALL`** (USING + WITH
+  CHECK, même expression GUC). USING borne le ciblage (SELECT/UPDATE/DELETE), WITH CHECK borne
+  l'état résultant (INSERT/UPDATE) → un membre scopé ne peut ni muter/supprimer un compte hors
+  scope, ni l'INSÉRER/déplacer hors scope. **PAS d'« exception ADMIN » dans la RLS** (la dette
+  l'évoquait) : inutile et plus sûr ainsi — la RLS ignore le rôle, et l'ADMIN opère en Vision
+  Globale (GUC vide → branche TRUE → tout passe). La garde « assignation ADMIN-only » reste
+  **applicative** (futur `entites.ts`, L4). Backward-compat N-1 prouvée : ingestion (INSERT
+  `entity_id=NULL`) et re-sync tournent en Vision Globale → neutres ; aucune régression sur 397
+  tests. Tests d'écriture 14/14b/14c INVERSÉS (preuve : UPDATE sans WHERE ne mute que Sucrière ;
+  déplacement hors scope lève 42501 ; INSERT NULL OK en Globale, refusé en Vision Entité).
+  **Durcissement `categorisation.ts` NON inclus** (hors périmètre : la catégorisation masque
+  déjà en lecture par la jointure #83 ; à rouvrir SI elle devient scopée en écriture). Reste
+  HISTORIQUE ci-dessous :
   Effort S-M, gardien Backend. Ouvert 2026-06-22, **sévérité relevée par la cross-review
   sécu (contexte vierge)** : la formulation initiale « durcissement de la catégorisation »
   **sous-évaluait** le fait. La policy `entity_scope` est `FOR SELECT` uniquement → en

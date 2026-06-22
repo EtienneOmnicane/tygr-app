@@ -21,8 +21,9 @@
  * transactions_cache (sans jointure) reste non filtrée par entité : ce n'est pas une
  * faille cross-tenant (tenant_isolation couvre transactions_cache), mais l'étage 2 ne
  * mord que par la jointure — d'où la garde au niveau repository (jamais de lecture
- * directe de ces tables filles sans joindre bank_accounts). Reste OUVERTE : l'écriture
- * non scopée (ENTITY-WRITE-SCOPE1, tests 14/14b).
+ * directe de ces tables filles sans joindre bank_accounts). L'ÉCRITURE est elle aussi
+ * bornée depuis 0009 (ENTITY-WRITE-SCOPE1 — policy FOR ALL, USING + WITH CHECK) : voir le
+ * bloc « écriture bornée par scope » (tests 14/14b/14c). Les DEUX P1 du GATE sont levées.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -84,16 +85,19 @@ beforeAll(async () => {
     }
   }
 
-  // 2. Garde-fou : la policy entity_scope DOIT exister, être RESTRICTIVE et
-  //    porter son expression. Une policy absente/PERMISSIVE ferait croire à une
-  //    isolation prouvée alors que l'étage 2 serait inopérant (faux vert).
+  // 2. Garde-fou : la policy entity_scope DOIT exister, être RESTRICTIVE et porter
+  //    SES DEUX expressions (USING + WITH CHECK). Depuis 0009 (ENTITY-WRITE-SCOPE1),
+  //    elle est FOR ALL : USING borne la lecture/ciblage, WITH CHECK borne l'écriture.
+  //    Une policy absente / PERMISSIVE / FOR SELECT / sans WITH CHECK ferait croire à
+  //    une isolation prouvée alors que l'étage 2 (écriture) serait inopérant (faux vert).
   const pol = await client.query<{
     policyname: string;
     permissive: string;
     cmd: string;
     qual: string | null;
+    with_check: string | null;
   }>(
-    `select policyname, permissive, cmd, qual
+    `select policyname, permissive, cmd, qual, with_check
      from pg_policies where tablename = 'bank_accounts'`,
   );
   const entityScope = pol.rows.find((r) => r.policyname === "entity_scope");
@@ -109,10 +113,11 @@ beforeAll(async () => {
         `→ filtre inopérant), trouvée : ${entityScope.permissive}.`,
     );
   }
-  if (entityScope.cmd !== "SELECT" || entityScope.qual == null) {
+  if (entityScope.cmd !== "ALL" || entityScope.qual == null || entityScope.with_check == null) {
     throw new Error(
-      `Policy entity_scope doit être FOR SELECT avec expression USING — ` +
-        `trouvé cmd=${entityScope.cmd}, qual=${entityScope.qual}.`,
+      `Policy entity_scope doit être FOR ALL avec USING ET WITH CHECK (0009, ` +
+        `ENTITY-WRITE-SCOPE1) — trouvé cmd=${entityScope.cmd}, ` +
+        `qual=${entityScope.qual}, with_check=${entityScope.with_check}.`,
     );
   }
 
@@ -470,55 +475,121 @@ describe("étage 2 hérité par jointure — repos de lecture (ENTITY-READ-JOIN1
 });
 
 /**
- * FUITE LATENTE RESTANTE de l'étage 2 — ENTITY-WRITE-SCOPE1 (P1, écriture non scopée),
- * prouvée par la cross-review sécu (contexte vierge, 2026-06-22). NB : la fuite de
- * LECTURE (ENTITY-READ-JOIN1) est désormais LEVÉE au niveau repository (voir le bloc
- * « étage 2 hérité par jointure » plus haut) ; ne subsiste ici que l'écriture. Ces
- * tests asservissent le comportement ACTUEL (le trou EXISTE) ; ils ne sont PAS rouges —
- * ils documentent une limite connue et tracée (règle 5 : pas de .skip silencieux ;
- * c'est un test explicite et vert qui prouve la limite). ⚠️ NON exploitable dans le
- * socle L1→L2 : aucun chemin ne crée de Vision Entité (pas de definirScopesMembre).
- * Quand ENTITY-WRITE-SCOPE1 est levée, CES tests CASSERONT → ils forcent la mise à
- * jour, rendant la dette non contournable (anti « la suite flatte l'étage 2 »).
+ * ENTITY-WRITE-SCOPE1 LEVÉE (migration 0009) — la policy entity_scope passe de
+ * FOR SELECT à FOR ALL (USING + WITH CHECK). L'écriture sur bank_accounts est désormais
+ * bornée au périmètre entité : un membre scopé ne peut ni muter/supprimer un compte hors
+ * scope (USING), ni créer/déplacer un compte hors scope (WITH CHECK). Ces tests
+ * REMPLACENT les anciens « fuites latentes 14/14b » qui asservissaient le trou d'écriture
+ * (UPDATE sans WHERE mutant Énergie) : ils sont l'inversion attendue (la dette est close).
+ * En Vision Globale (GUC vide) la RESTRICTIVE laisse tout passer → l'ingestion et le sas
+ * ADMIN ne régressent pas (prouvé en 14c). La garde de RÔLE (assignation ADMIN-only) reste
+ * applicative — la RLS borne le périmètre, pas le rôle.
  */
-describe("fuite latente ÉTAGE 2 — écriture (ENTITY-WRITE-SCOPE1, à inverser quand levée)", () => {
-  it("14. [ENTITY-WRITE-SCOPE1] un VIEWER scopé peut ÉCRIRE hors périmètre (intégrité, PAS confidentialité)", async () => {
-    // La policy entity_scope est FOR SELECT → l'écriture n'est pas scopée. Un
-    // VIEWER scopé Sucrière exécutant un UPDATE sans WHERE mute AUSSI Énergie.
+describe("étage 2 — écriture bornée par scope (ENTITY-WRITE-SCOPE1 levée, policy FOR ALL)", () => {
+  it("14. un VIEWER scopé Sucrière : UPDATE sans WHERE ne mute QUE Sucrière (USING borne le ciblage)", async () => {
+    // Le même UPDATE qui FUITAIT avant 0009 (mutait Énergie + non assigné) ne touche
+    // plus que les lignes visibles au scope (USING) → Sucrière uniquement.
     await withWorkspace(sessScoped, (tx) =>
-      tx.update(bankAccounts).set({ accountName: "MUTÉ_HORS_SCOPE" }),
+      tx.update(bankAccounts).set({ accountName: "MUTÉ_IN_SCOPE" }),
     );
-    // Vérifié sous l'owner : le compte Énergie (hors scope du VIEWER) a été muté.
+    // Vérif sous l'owner (voit tout) : Sucrière muté, Énergie + non assigné INTACTS.
     await client.exec(`reset role;`);
-    const energie = await client.query<{ account_name: string }>(
-      `select account_name from bank_accounts where id = '${ACC_ENERGIE}'`,
+    const apres = await client.query<{ id: string; account_name: string }>(
+      `select id, account_name from bank_accounts where workspace_id = '${WS_A}' order by id`,
     );
     await client.exec(`set role tygr_app;`);
-    expect(energie.rows[0].account_name).toBe("MUTÉ_HORS_SCOPE"); // ⚠️ écriture hors scope
+    const parId = Object.fromEntries(
+      apres.rows.map((r) => [r.id, r.account_name]),
+    );
+    expect(parId[ACC_SUCRE]).toBe("MUTÉ_IN_SCOPE"); // in-scope : muté
+    expect(parId[ACC_ENERGIE]).toBe("Compte Énergie"); // hors scope : INTACT
+    expect(parId[ACC_NONE]).toBe("Compte Non Assigné"); // non assigné : INTACT
 
     // Remise en état (owner) pour l'indépendance des tests.
     await client.exec(`reset role;`);
     await client.exec(
-      `update bank_accounts set account_name = 'Compte Sucrière' where id = '${ACC_SUCRE}';
-       update bank_accounts set account_name = 'Compte Énergie' where id = '${ACC_ENERGIE}';
-       update bank_accounts set account_name = 'Compte Non Assigné' where id = '${ACC_NONE}';`,
+      `update bank_accounts set account_name = 'Compte Sucrière' where id = '${ACC_SUCRE}';`,
     );
     await client.exec(`set role tygr_app;`);
   });
 
-  it("14b. [ENTITY-WRITE-SCOPE1] MAIS l'écriture hors scope ne fuit AUCUNE donnée (RETURNING ne voit que l'in-scope)", async () => {
-    // Contre-mesure prouvée : un UPDATE … RETURNING ne renvoie que les lignes
-    // visibles au SELECT (in-scope) → pas d'oracle/exfiltration de l'entité
-    // Énergie. C'est ce qui borne ENTITY-WRITE-SCOPE1 à un trou d'intégrité, pas
-    // de confidentialité. (no-op : on réécrit la valeur existante.)
-    const renvoye = await withWorkspace(sessScoped, (tx) =>
-      tx
-        .update(bankAccounts)
-        .set({ accountName: sql`account_name` })
-        .returning({ id: bankAccounts.id }),
+  it("14b. un VIEWER scopé ne peut PAS déplacer son compte hors scope (WITH CHECK lève 42501)", async () => {
+    // Tentative de réassigner ACC_SUCRE (in-scope, donc CIBLABLE par le USING) vers
+    // Énergie (hors scope). L'état RÉSULTANT (entity_id = Énergie) viole le WITH CHECK.
+    // ⚠️ Sémantique PostgreSQL : une violation de WITH CHECK LÈVE (ERRCODE 42501),
+    // contrairement à un USING non satisfait (0 ligne silencieuse). On attend donc une
+    // exception — pas un RETURNING vide.
+    let thrown: unknown = null;
+    try {
+      await withWorkspace(sessScoped, (tx) =>
+        tx
+          .update(bankAccounts)
+          .set({ entityId: ENT_ENERGIE })
+          .where(eq(bankAccounts.id, ACC_SUCRE)),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown, "le déplacement hors scope doit être rejeté").not.toBeNull();
+    expect(flatten(thrown)).toMatch(/policy|row-level|violates|check/i);
+
+    // Sous l'owner : ACC_SUCRE est TOUJOURS rattaché à Sucrière (non déplacé).
+    await client.exec(`reset role;`);
+    const v = await client.query<{ entity_id: string }>(
+      `select entity_id from bank_accounts where id = '${ACC_SUCRE}'`,
     );
-    const ids = renvoye.map((r) => r.id);
-    expect(ids).toEqual([ACC_SUCRE]); // RETURNING borné au scope → pas d'oracle
-    expect(ids).not.toContain(ACC_ENERGIE);
+    await client.exec(`set role tygr_app;`);
+    expect(v.rows[0].entity_id).toBe(ENT_SUCRE);
+  });
+
+  it("14c. NON-RÉGRESSION Vision Globale : INSERT entity_id NULL (ingestion) OK ; SCOPÉ refusé", async () => {
+    // Ingestion (Vision Globale, GUC vide) : un compte neuf naît entity_id=NULL → le
+    // WITH CHECK (branche « GUC vide » = TRUE) laisse passer. C'est le chemin upsertCompte.
+    const NOUV = "acc0face-eeee-4eee-8eee-eeeeeeeeeeee";
+    await withWorkspace(sessGlobale, (tx) =>
+      tx.insert(bankAccounts).values({
+        id: NOUV,
+        workspaceId: WS_A,
+        connectionId: CONN_A,
+        omnifiAccountId: "oa-nouv",
+        accountName: "Compte Frais",
+        currency: "MUR",
+        currentBalance: "0.00",
+        isSelected: true,
+        // entityId omis → NULL (non assigné), comme à l'ingestion réelle.
+      }),
+    );
+    await client.exec(`reset role;`);
+    const cree = await client.query<{ n: number }>(
+      `select count(*)::int as n from bank_accounts where id = '${NOUV}'`,
+    );
+    expect(cree.rows[0].n).toBe(1); // créé en Vision Globale
+    // Nettoyage (owner — bank_accounts a le DELETE en liste blanche, mais on est owner).
+    await client.exec(`delete from bank_accounts where id = '${NOUV}';`);
+    await client.exec(`set role tygr_app;`);
+
+    // Fail-closed : le MÊME INSERT entity_id=NULL sous Vision Entité (SCOPED) est REFUSÉ
+    // (WITH CHECK : NULL n'est dans aucun scope). Un membre borné ne crée pas de comptes
+    // non-assignés. La FK + tenant_isolation sont satisfaites ; c'est bien entity_scope
+    // qui rejette → on cible le message RLS/policy.
+    let thrown: unknown = null;
+    try {
+      await withWorkspace(sessScoped, (tx) =>
+        tx.insert(bankAccounts).values({
+          id: "acc0dead-ffff-4fff-8fff-ffffffffffff",
+          workspaceId: WS_A,
+          connectionId: CONN_A,
+          omnifiAccountId: "oa-dead",
+          accountName: "Ne doit pas naître",
+          currency: "MUR",
+          currentBalance: "0.00",
+          isSelected: true,
+        }),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown, "INSERT NULL sous Vision Entité doit être refusé").not.toBeNull();
+    expect(flatten(thrown)).toMatch(/policy|row-level|violates|check/i);
   });
 });
