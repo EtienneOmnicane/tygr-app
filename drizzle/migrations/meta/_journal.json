@@ -64,6 +64,13 @@
       "when": 1782106015348,
       "tag": "0008_cuddly_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782125960692,
+      "tag": "0010_categorization-rules",
+      "breakpoints": true
     }
   ]
 }

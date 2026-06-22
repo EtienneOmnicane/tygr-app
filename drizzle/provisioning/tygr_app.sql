@@ -72,6 +72,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --      - bank_connections           : déconnexion d'une banque (cascade vers bank_accounts)
 --      - bank_accounts              : cascade depuis bank_connections / dé-rattachement
 --      - categories                 : référentiel éditable (Pilier 1)
+--      - categorization_rules        : règles de catégorisation éditables (config
+--                                     workspace, NON append-only — l'app archive
+--                                     via is_active, mais le DELETE physique d'une
+--                                     règle obsolète est légitime ; FK composite
+--                                     vers categories en ON DELETE no action)
 --      - transaction_categorizations: splits éditables (correction de catégorie, Pilier 1)
 --      - entities                   : référentiel d'entités (BU) éditable (archivage
 --                                     logique is_active ; un DELETE physique reste
@@ -113,6 +118,7 @@ BEGIN
     'bank_connections',
     'bank_accounts',
     'categories',
+    'categorization_rules',
     'transaction_categorizations',
     'entities',
     'member_entity_scopes'

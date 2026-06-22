@@ -596,6 +596,81 @@ export const categorizationAudit = pgTable(
 ).enableRLS();
 
 /* ------------------------------------------------------------------ */
+/* Moteur de règles de catégorisation (FYGR-style).                    */
+/* Une règle = un motif textuel (contains / starts_with) sur le libellé */
+/* d'une transaction → une catégorie cible. Le service d'application    */
+/* (appliquerRegles) crée un split à 100% du montant pour toute         */
+/* transaction NON encore catégorisée dont le libellé matche (MANUAL    */
+/* prime, jamais écrasé). Config de WORKSPACE (comme categories) :      */
+/* éditable / archivable (is_active), NON append-only → DELETE en liste */
+/* blanche provisioning. RLS tenant standard (pas de scope entité : une */
+/* règle vit au niveau workspace, pas BU).                              */
+/* ------------------------------------------------------------------ */
+
+export const RULE_MATCH_TYPES = ["contains", "starts_with"] as const;
+export type RuleMatchType = (typeof RULE_MATCH_TYPES)[number];
+
+export const categorizationRules = pgTable(
+  "categorization_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /** Motif recherché dans le libellé (clean_label, repli bank_label_raw). */
+    pattern: varchar("pattern", { length: 255 }).notNull(),
+    /** Stratégie de match : 'contains' (sous-chaîne) | 'starts_with' (préfixe). */
+    matchType: varchar("match_type", { length: 16 }).notNull(),
+    /** Catégorie appliquée quand le motif matche (split à 100%). */
+    categoryId: uuid("category_id").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    /** Ordre d'évaluation : la plus PETITE priorité gagne (1 règle / transaction). */
+    priority: integer("priority").notNull().default(0),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // FK category COMPOSITE scopée workspace (pattern obligatoire CLAUDE.md) : la
+    // catégorie cible DOIT appartenir au MÊME workspace que la règle → une
+    // category_id d'un autre tenant est impossible (garantie en base). ON DELETE
+    // par défaut (no action / restrict) : on n'efface pas une catégorie
+    // référencée par une règle (cohérent avec l'archivage logique des catégories).
+    foreignKey({
+      columns: [t.categoryId, t.workspaceId],
+      foreignColumns: [categories.id, categories.workspaceId],
+      name: "categorization_rules_category_workspace_fk",
+    }),
+    check(
+      "categorization_rules_match_type_check",
+      sql`${t.matchType} IN ('contains','starts_with')`,
+    ),
+    // Pattern non vide (un motif vide matcherait toutes les transactions).
+    check(
+      "categorization_rules_pattern_not_blank",
+      sql`length(trim(${t.pattern})) > 0`,
+    ),
+    // Pas deux règles identiques (même motif + stratégie + cible) dans un workspace.
+    unique("categorization_rules_workspace_unique").on(
+      t.workspaceId,
+      t.pattern,
+      t.matchType,
+      t.categoryId,
+    ),
+    // Couvre la lecture ordonnée des règles ACTIVES à l'application.
+    index("categorization_rules_workspace_active_priority_idx").on(
+      t.workspaceId,
+      t.isActive,
+      t.priority,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
 /* Périmètre entité d'un membre (N:N user ↔ entity) — « Vision Entité ».*/
 /* Plan §1.4. Borne un membre à ≥1 entités. AUCUNE ligne pour un        */
 /* (user, workspace) = « Vision Globale » (voit tout le tenant =        */
