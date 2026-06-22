@@ -131,6 +131,7 @@ export {
   courbeTresorerie,
   syntheseMois,
   syntheseMoisParDevise,
+  syntheseParMois,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 export type {
@@ -139,6 +140,7 @@ export type {
   SoldeParDevise,
   SyntheseMois,
   SyntheseMoisDevise,
+  SyntheseMensuelle,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
 
