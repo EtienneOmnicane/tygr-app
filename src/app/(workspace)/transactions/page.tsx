@@ -35,6 +35,7 @@ import type {
 import type { CategorieUI, SplitUI } from "@/components/ui/category";
 
 import {
+  creerCategorieAction,
   listerCategoriesAction,
   listerSplitsAction,
   listerTransactionsAction,
@@ -113,6 +114,13 @@ export default async function PageTransactions() {
     ? versPageUI(premiere.data, nomParCompte)
     : { lignes: [], curseurSuivant: null };
 
+  // Création rapide depuis le picker : une catégorie créée ainsi est une Nature
+  // (parentId null). Adapte la signature `(name) → action({name, parentId})`.
+  async function creerCategorieNature(name: string) {
+    "use server";
+    return creerCategorieAction({ name, parentId: null });
+  }
+
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
       <div className="mb-6">
@@ -129,6 +137,7 @@ export default async function PageTransactions() {
         comptes={comptesFiltre}
         actions={actionsTransactions}
         remplacerSplits={remplacerSplitsAction}
+        creerCategorie={creerCategorieNature}
         aucuneBanque={aucuneBanque}
       />
     </main>

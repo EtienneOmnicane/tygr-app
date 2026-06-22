@@ -49,6 +49,7 @@ export function TransactionsFeature({
   comptes,
   actions,
   remplacerSplits,
+  creerCategorie,
   /** Y a-t-il au moins une banque connectée ? (oriente l'Empty State.) */
   aucuneBanque,
 }: {
@@ -65,6 +66,13 @@ export function TransactionsFeature({
     ref: { transactionId: string; transactionDate: string },
     splits: Array<{ categoryId: string; amount: string }>,
   ) => Promise<ResultatAction>;
+  /**
+   * Crée une catégorie (Nature) depuis le picker de la modale (creerCategorieAction).
+   * Optionnel : absent (p. ex. démo) → pas de bouton « Ajouter une catégorie ».
+   */
+  creerCategorie?: (
+    name: string,
+  ) => Promise<ResultatAction<{ categoryId: string }>>;
   aucuneBanque: boolean;
 }) {
   const [lignes, setLignes] = useState<TransactionListItem[]>(initial.lignes);
@@ -285,6 +293,7 @@ export function TransactionsFeature({
             )
           }
           onSaved={apresSauvegarde}
+          onCreateCategorie={creerCategorie}
         />
       )}
     </div>
