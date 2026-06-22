@@ -26,6 +26,7 @@ const ITEMS: Item[] = [
   { label: "Graphiques", href: "/graphiques" },
   { label: "Échéances", href: "/echeances" },
   { label: "Transactions", href: "/transactions" },
+  { label: "Règles", href: "/regles" },
 ];
 
 export function AppNav() {
