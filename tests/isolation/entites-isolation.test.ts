@@ -13,14 +13,16 @@
  * rôle applicatif = drizzle/provisioning/tygr_app.sql, exécution sous `tygr_app`
  * NON-propriétaire (sinon la RLS est ignorée — vérifié au test 0).
  *
- * ⚠️ NB SCOPE-PAR-JOINTURE (dette ENTITY-READ-JOIN1, P1) : la policy entity_scope
- * vit sur bank_accounts. Les transactions/soldes n'héritent du périmètre QUE via
- * une JOINTURE sur bank_accounts. Les tests « transactions » ci-dessous joignent
- * donc explicitement bank_accounts — c'est le chemin correct, celui que les repos
- * de lecture devront tous adopter (cf. ENTITY-READ-JOIN1). Une lecture directe de
- * transactions_cache (sans jointure) n'est PAS filtrée par entité : ce n'est pas
- * une faille cross-tenant (tenant_isolation couvre transactions_cache), mais
- * l'étage 2 ne mord que par la jointure — d'où la dette bloquante avant prod.
+ * ⚠️ NB SCOPE-PAR-JOINTURE (dette ENTITY-READ-JOIN1, P1 — LEVÉE) : la policy
+ * entity_scope vit sur bank_accounts. Les transactions/soldes n'héritent du périmètre
+ * QUE via une JOINTURE sur bank_accounts. Les repos de lecture du dashboard joignent
+ * désormais bank_accounts (cf. dashboard.ts) — prouvé sur les VRAIES fonctions par le
+ * bloc « étage 2 hérité par jointure » ci-dessous. Une lecture SQL DIRECTE de
+ * transactions_cache (sans jointure) reste non filtrée par entité : ce n'est pas une
+ * faille cross-tenant (tenant_isolation couvre transactions_cache), mais l'étage 2 ne
+ * mord que par la jointure — d'où la garde au niveau repository (jamais de lecture
+ * directe de ces tables filles sans joindre bank_accounts). Reste OUVERTE : l'écriture
+ * non scopée (ENTITY-WRITE-SCOPE1, tests 14/14b).
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -33,6 +35,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "@/server/db/schema";
 import { bankAccounts, entities, memberEntityScopes } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
+// ENTITY-READ-JOIN1 : on prouve la levée au niveau des VRAIS repos de lecture
+// (la jointure bank_accounts y fait hériter la policy entity_scope), pas sur une
+// requête SQL brute — c'est le périmètre exact de la dette.
+import {
+  courbeTresorerie,
+  syntheseMois,
+  transactionsRecentes,
+} from "@/server/repositories/dashboard";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -137,6 +147,12 @@ beforeAll(async () => {
       ('${WS_A}','${ACC_SUCRE}','tx-suc','2026-06-05','2026-06-05T05:30:00Z','100.00','MUR','Credit','SUCRE','Sucre',false),
       ('${WS_A}','${ACC_ENERGIE}','tx-ene','2026-06-05','2026-06-05T05:30:00Z','200.00','MUR','Credit','ENERGIE','Energie',false),
       ('${WS_A}','${ACC_NONE}','tx-none','2026-06-05','2026-06-05T05:30:00Z','300.00','MUR','Credit','NONE','None',false);
+    -- Soldes EOD : un point par compte (même jour) pour prouver l'héritage du scope
+    -- par la courbe de trésorerie (courbeTresorerie joint bank_accounts).
+    insert into balance_history (workspace_id, bank_account_id, balance_date, balance, currency) values
+      ('${WS_A}','${ACC_SUCRE}','2026-06-05','5000.00','MUR'),
+      ('${WS_A}','${ACC_ENERGIE}','2026-06-05','8000.00','MUR'),
+      ('${WS_A}','${ACC_NONE}','2026-06-05','1000.00','MUR');
     -- Vision Entité : SCOPED ne couvre QUE Sucrière. GLOBALE n'a AUCUNE ligne.
     insert into member_entity_scopes (workspace_id, user_id, entity_id) values
       ('${WS_A}','${SCOPED}','${ENT_SUCRE}');
@@ -384,47 +400,88 @@ describe("contre-preuve — pas de faux positif (le mécanisme n'est pas cassé 
 });
 
 /**
- * FUITES LATENTES CONNUES de l'étage 2 — prouvées par la cross-review sécu
- * (contexte vierge, 2026-06-22). Ces tests asservissent le comportement ACTUEL
- * (les trous EXISTENT) ; ils ne sont PAS rouges — ils documentent une limite
- * connue et tracée (règle 5 : pas de .skip silencieux ; c'est un test explicite
- * et vert qui prouve la limite). ⚠️ NON exploitable dans le socle L1→L2 : aucun
- * chemin ne crée de Vision Entité (pas de definirScopesMembre). Quand la dette
- * correspondante est levée, CES tests CASSERONT → ils forcent la mise à jour,
- * rendant la dette non contournable (anti « la suite flatte l'étage 2 »).
+ * ENTITY-READ-JOIN1 LEVÉE — les repos de LECTURE du dashboard joignent désormais
+ * bank_accounts, donc la policy entity_scope (étage 2) MORD par héritage sur les
+ * transactions/soldes. On le prouve sur les VRAIES fonctions du repository
+ * (transactionsRecentes / syntheseMois / courbeTresorerie), pas sur une requête SQL
+ * brute : c'est le périmètre exact de la dette (« brancher les repos sur la jointure »).
+ *
+ * Ces tests REMPLACENT les anciens « fuites latentes 13/13b » qui asservissaient le
+ * comportement de fuite : ils sont l'inversion attendue (la dette est close). NB : une
+ * lecture SQL DIRECTE de transactions_cache (sans jointure) resterait non filtrée par
+ * entité — c'est pourquoi la garde vit dans le repository (CLAUDE.md : ne jamais lire
+ * ces tables filles sans joindre bank_accounts). L'étage 1 (tenant) reste prouvé plus
+ * haut, inchangé.
  */
-describe("fuites latentes ÉTAGE 2 (tracées — à inverser quand la dette est levée)", () => {
-  it("13. [ENTITY-READ-JOIN1] lecture SANS jointure de transactions_cache fuit les autres entités", async () => {
-    // La policy entity_scope vit sur bank_accounts. Une lecture directe de
-    // transactions_cache (sans join) n'est PAS filtrée par entité → un membre
-    // Vision Entité Sucrière voit AUSSI les transactions d'Énergie. C'est l'écart
-    // que ENTITY-READ-JOIN1 doit fermer (jointure ou policy dédiée).
-    const sansJoin = await withWorkspace(sessScoped, (tx) =>
-      tx.execute(
-        sql`select omnifi_txn_id as id from transactions_cache order by omnifi_txn_id`,
-      ),
+describe("étage 2 hérité par jointure — repos de lecture (ENTITY-READ-JOIN1 levée)", () => {
+  it("13. transactionsRecentes : Vision Entité Sucrière ne voit QUE Sucrière ; Globale voit tout", async () => {
+    const scoped = await withWorkspace(sessScoped, (tx) =>
+      transactionsRecentes(tx),
     );
-    const ids = (sansJoin.rows as { id: string }[]).map((r) => r.id);
-    // COMPORTEMENT ACTUEL (fuite intra-groupe) : Énergie + non assigné visibles
-    // malgré le scope Sucrière. À RETIRER quand ENTITY-READ-JOIN1 est levée.
-    expect(ids).toContain("tx-ene"); // ⚠️ fuite Énergie (étage 2 non hérité)
-    expect(ids).toContain("tx-none"); // ⚠️ fuite compte non assigné
-    // L'étage 1 (tenant) reste prouvé ailleurs : aucune transaction d'un AUTRE
-    // workspace ne fuit jamais (transactions_cache porte tenant_isolation).
+    const idsScoped = scoped.map((t) => t.omnifiTxnId);
+    expect(idsScoped).toEqual(["tx-suc"]); // Énergie + non assigné masqués par héritage
+    expect(idsScoped).not.toContain("tx-ene");
+    expect(idsScoped).not.toContain("tx-none");
+
+    // Contre-preuve anti-régression : Vision Globale (GUC vide) voit les 3.
+    const globale = await withWorkspace(sessGlobale, (tx) =>
+      transactionsRecentes(tx),
+    );
+    expect(globale.map((t) => t.omnifiTxnId).sort()).toEqual([
+      "tx-ene",
+      "tx-none",
+      "tx-suc",
+    ]);
   });
 
-  it("13b. [ENTITY-READ-JOIN1] balance_history n'a AUCUNE garde entité (vecteur courbe de trésorerie)", async () => {
-    // Même trou de fond pour les soldes EOD (source de la courbe du dashboard) :
-    // aucune policy entity_scope n'existe sur balance_history → une lecture
-    // directe n'est jamais filtrée par entité. On documente l'absence de garde
-    // (le correctif ENTITY-READ-JOIN1 ajoutera la jointure ou une policy dédiée).
-    const aGardeEntite = await client.query<{ n: number }>(
-      `select count(*)::int as n from pg_policies
-       where tablename = 'balance_history' and policyname = 'entity_scope'`,
+  it("13b. syntheseMois : la synthèse Vision Entité ne somme que le périmètre", async () => {
+    // Seul tx-suc (Crédit 100) est dans le scope Sucrière → entrées = 100.
+    const scoped = await withWorkspace(sessScoped, (tx) =>
+      syntheseMois(tx, "2026-06"),
     );
-    expect(aGardeEntite.rows[0].n).toBe(0); // ⚠️ aucune policy entité (à ajouter)
+    expect(scoped.entrees).toBe("100.00");
+
+    // Vision Globale : 100 + 200 + 300 = 600 (les 3 comptes).
+    const globale = await withWorkspace(sessGlobale, (tx) =>
+      syntheseMois(tx, "2026-06"),
+    );
+    expect(globale.entrees).toBe("600.00");
   });
 
+  it("13c. courbeTresorerie : le solde EOD consolidé Vision Entité exclut les autres entités", async () => {
+    const fenetre = { from: "2026-06-01", to: "2026-06-30" };
+
+    // Sucrière seule : 5000 au 05/06.
+    const scoped = await withWorkspace(sessScoped, (tx) =>
+      courbeTresorerie(tx, fenetre),
+    );
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].date).toBe("2026-06-05");
+    // sum(...)::text conserve l'échelle numeric de la colonne (2 décimales).
+    expect(scoped[0].soldeConsolide).toBe("5000.00");
+
+    // Vision Globale : 5000 + 8000 + 1000 = 14000 au même jour.
+    const globale = await withWorkspace(sessGlobale, (tx) =>
+      courbeTresorerie(tx, fenetre),
+    );
+    expect(globale).toHaveLength(1);
+    expect(globale[0].soldeConsolide).toBe("14000.00");
+  });
+});
+
+/**
+ * FUITE LATENTE RESTANTE de l'étage 2 — ENTITY-WRITE-SCOPE1 (P1, écriture non scopée),
+ * prouvée par la cross-review sécu (contexte vierge, 2026-06-22). NB : la fuite de
+ * LECTURE (ENTITY-READ-JOIN1) est désormais LEVÉE au niveau repository (voir le bloc
+ * « étage 2 hérité par jointure » plus haut) ; ne subsiste ici que l'écriture. Ces
+ * tests asservissent le comportement ACTUEL (le trou EXISTE) ; ils ne sont PAS rouges —
+ * ils documentent une limite connue et tracée (règle 5 : pas de .skip silencieux ;
+ * c'est un test explicite et vert qui prouve la limite). ⚠️ NON exploitable dans le
+ * socle L1→L2 : aucun chemin ne crée de Vision Entité (pas de definirScopesMembre).
+ * Quand ENTITY-WRITE-SCOPE1 est levée, CES tests CASSERONT → ils forcent la mise à
+ * jour, rendant la dette non contournable (anti « la suite flatte l'étage 2 »).
+ */
+describe("fuite latente ÉTAGE 2 — écriture (ENTITY-WRITE-SCOPE1, à inverser quand levée)", () => {
   it("14. [ENTITY-WRITE-SCOPE1] un VIEWER scopé peut ÉCRIRE hors périmètre (intégrité, PAS confidentialité)", async () => {
     // La policy entity_scope est FOR SELECT → l'écriture n'est pas scopée. Un
     // VIEWER scopé Sucrière exécutant un UPDATE sans WHERE mute AUSSI Énergie.
