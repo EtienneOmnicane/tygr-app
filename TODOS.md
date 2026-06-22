@@ -5,6 +5,41 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Entités multi-tenant (Option B) — dettes ouvertes par le plan (2026-06-22)
+
+Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Entités
+(L1→L5 : `entities`, `bank_accounts.entity_id`, `member_entity_scopes`, policy RLS
+`entity_scope` + 3ᵉ GUC) couvre l'isolation à deux étages. Les trois dettes ci-dessous
+sont des extensions **explicitement hors périmètre du socle** (anti-scope-creep,
+règle 7). Aucune ne touche l'isolation tenant (sinon elle serait INTERDITE, règle 9).
+
+- [ ] **ENTITY-PARTY1 (P2) — pré-remplir le sas d'assignation via les « Parties » Omni-FI** —
+  Effort M, gardien Backend. Ouvert 2026-06-22. La doc API expose `GET
+  /parties/{PartyId}/accounts` + `OBReadAccount6.PartyId/PartyName/OwnershipType`
+  (entités légales API). Décision PO : assignation `compte → entité` MANUELLE au MVP
+  (découplée d'une garantie sandbox non vérifiée — même classe de piège que les
+  hypothèses d'unicité `omnifi_account_id`). Cette dette = persister `party_id`/
+  `party_name` à l'ingestion pour **pré-proposer** un regroupement au sas, sans en faire
+  l'autorité. **Déclencheur** : retour terrain « trop de saisie manuelle » **ET** preuve
+  sandbox que les Parties sont fiablement peuplées. **NON une dette d'isolation.**
+
+- [ ] **ENTITY-WRITE-SCOPE1 (P1) — borner l'ÉCRITURE (catégorisation) au périmètre entité du membre** —
+  Effort S, gardien Backend. Ouvert 2026-06-22. La catégorisation (splits) est ouverte
+  à tous les membres (décision PO 2026-06-17). La policy `entity_scope` masque déjà en
+  LECTURE les transactions hors périmètre (par jointure sur `bank_accounts`) → un membre
+  Vision Entité ne **voit** pas les transactions d'une autre entité. Reste à durcir
+  l'ÉCRITURE (refus serveur même si l'ID est forgé) dans `categorisation.ts`. **Déclencheur** :
+  socle Entités mergé **ET** confirmation PO (PLAN §3.2). Raccroché au chantier « rôles
+  Vision Entité » (ROADMAP §3).
+
+- [ ] **ENTITY-INGEST1 (P2) — pré-assignation automatique `compte → entité` à l'ingestion** —
+  Effort S, gardien Backend. Ouvert 2026-06-22. Au MVP, un compte neuf naît `entity_id =
+  NULL` (« non assigné », à trier dans le sas) — comportement voulu (l'humain tranche
+  l'affectation). Cette dette = appliquer une règle de pré-assignation à la découverte
+  (dépend des Parties, ENTITY-PARTY1, pour la source du mapping). L'upsert d'ingestion
+  ne réécrase JAMAIS un `entity_id` déjà posé (invariant du socle, à préserver).
+  **Déclencheur** : ENTITY-PARTY1 livrée. **NON une dette d'isolation.**
+
 ### Outillage migrations DB — db:migrate câblé + drift résolu (2026-06-19)
 
 `/investigate` : `/transactions` plantait au runtime sur « relation "categories"
@@ -252,25 +287,46 @@ asymétrique conforme, typo réelle (Instrument Sans/Geist), ZÉRO pattern slop.
 mineurs, AUCUN bloquant, NON corrigés (décision PO 2026-06-19 : tracer, le dashboard est
 suffisant) :
 
+> **PROGRAMMÉS (2026-06-22)** : DR-F1/F2/F3 sont raccrochés au chantier
+> **`PLAN-audit-ergonomie-soldes.md`** (audit ergonomique soldes/totaux, plan validé
+> humain le 2026-06-22, arbitrages §7 tranchés). Ils ne sont plus « un jour » mais
+> assignés à un lot d'implémentation nommé (règle 9). Statut au feu vert : planifiés,
+> implémentation lot par lot à venir (fil séparé, branches `feat/lot*`).
+
 - [ ] **DR-F1 (P2, medium) — catégories de transactions en ANGLAIS dans l'UI française** —
-  Effort S, gardien Front (avec appui Backend si mapping côté data). `transactions-table.tsx:54`
-  (et la table dashboard) affiche `t.primaryCategory` BRUT → « Income », « Utilities »,
-  « Rent » dans une interface 100 % française (catégories OBIE anglaises côté Omni-FI). C'est
-  le finding le PLUS visible. Piste : table de correspondance FR (`Income`→« Revenus »,
-  `Utilities`→« Charges », `Rent`→« Loyer », `Bank Charges`→« Frais bancaires »…) appliquée à
-  l'affichage, ou exposer une catégorie déjà localisée. **Déclencheur** : 1re relecture FR
-  sérieuse / démo client francophone.
+  Effort S, gardien Front. `transactions-table.tsx:54` (dashboard + `/transactions`) affiche
+  `t.primaryCategory` BRUT → « Income », « Utilities », « Rent » dans une interface 100 %
+  française (catégories OBIE anglaises côté Omni-FI). Finding le PLUS visible. **DÉCISION
+  ACTÉE (2026-06-22)** : table de correspondance FR **côté affichage** (`Income`→« Revenus »,
+  `Utilities`→« Charges », `Rent`→« Loyer », `Bank Charges`→« Frais bancaires »…), fallback
+  « Non catégorisé ». Catégorie localisée côté service REPORTÉE. **Déclencheur** : chantier
+  `PLAN-audit-ergonomie-soldes.md` **Lot 3**.
 - [ ] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   Effort S, gardien Front. `connected-accounts-card.tsx:68` met banque + compte sur UNE ligne
   `truncate` (300px) → « The Mauritius Commercial Bank · MCB — … », le nom de compte est mangé
-  (le `title`/tooltip sauve l'info au survol seulement). Piste : 2 lignes (banque en label
-  `text-muted` au-dessus, nom de compte dessous) plutôt qu'une ligne tronquée. **Déclencheur** :
-  chantier polish side-panel.
-- [ ] **DR-F3 (P3, polish) — méta « au JJ/MM » sous un solde COURANT** —
-  Effort S, gardien Front. La carte SOLDE affiche « au 12/06 » (`dateSolde` = dernier point de
-  courbe / dernière synchro) alors que le montant est le solde COURANT (`current_balance`), pas
-  l'EOD de cette date → léger décalage sémantique. Piste : « à l'instant » / libellé de dernière
-  synchro explicite, ou retirer la méta pour le solde courant. **Déclencheur** : chantier polish.
+  (le `title`/tooltip sauve l'info au survol seulement). **DÉCISION ACTÉE (2026-06-22)** :
+  2 lignes (banque en label `text-muted` au-dessus, nom de compte dessous, chacun `truncate`
+  indépendamment ; le montant JAMAIS tronqué). **Déclencheur** : chantier
+  `PLAN-audit-ergonomie-soldes.md` **Lot 4**.
+- [ ] **DR-F3 (P3 → réévalué medium, polish/correction) — méta « au JJ/MM » TROMPEUSE sous un
+  solde COURANT** — Effort S, gardien Front. `side-panel-kpi.tsx:55` affiche « au 12/06 »
+  (`dateSolde` = **dernier point de courbe**, EOD) alors que le montant est le solde COURANT
+  (`current_balance`) → décalage sémantique qui peut induire un FM en erreur. **DÉCISION ACTÉE
+  (2026-06-22)** : remplacer la méta par la **pastille fraîcheur §3.7** (success<6h /
+  warning<24h / danger≥24h + CTA « Reconnecter ») branchée sur `lastSyncedAt` — pattern DÉJÀ
+  spécifié dans `UI_GUIDELINES.md §3.7` mais jamais implémenté. La date du dernier point de
+  courbe reste sur la COURBE. **Déclencheur** : chantier `PLAN-audit-ergonomie-soldes.md`
+  **Lot 2**.
+- [ ] **C8 (P2, medium, maintenabilité) — 3 formateurs de DATE en parallèle alors que
+  `format-date.ts` existe** — Effort S, gardien Front. Relevé à l'audit ergonomie 2026-06-22.
+  `dashboard-content.tsx:121` (`jourMoisCourt`), `transactions-table.tsx:78-86` (`jourMois`
+  AVEC ses propres noms de mois redéfinis EN DUR), `side-panel-kpi.tsx:129` (`moisLisible`) —
+  trois découpes ad-hoc de `YYYY-MM-DD` au lieu d'une source unique. Risque de divergence FR
+  (abréviations de mois incohérentes entre composants). **DÉCISION ACTÉE (2026-06-22)** :
+  router TOUT formatage de date d'affichage vers `src/lib/format-date.ts` (source unique),
+  supprimer les 3 implémentations locales. **Déclencheur** : chantier
+  `PLAN-audit-ergonomie-soldes.md` **Lot 6** (fusionnable au Lot 1). Critère de clôture :
+  `grep` de noms de mois / `split("-")` ad-hoc dans `src/components` = 0.
 
 ### Robustesse UX panne DB + savoir tribal Next 16 (2026-06-17)
 

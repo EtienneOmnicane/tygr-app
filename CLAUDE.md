@@ -101,6 +101,52 @@ Corollaire de gouvernance : ces deux invariants relèvent de l'isolation tenant 
 append-only → **dette INTERDITE** (règle 9). Toute nouvelle table financière
 append-only DOIT poser son trigger `BEFORE DELETE` et rester hors liste blanche.
 
+## Entités multi-tenant (Option B — entités sous le Workspace, 2026-06-22)
+
+> Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Cette section
+> décrit l'invariant cible ; l'implémentation suit (lots L1→L5 du plan).
+
+Le Workspace = un GROUPE (« Omnicane »), pas une entité. Les ENTITÉS (BU) sont un
+niveau SOUS le workspace (`entities` + `bank_accounts.entity_id`), JAMAIS une frontière
+de tenant. Raison métier non négociable : **1 credential bancaire = comptes de N
+entités** (une connexion remonte d'un coup les comptes de plusieurs BU). L'Option A
+(entité = workspace isolé) polluerait un workspace avec les comptes d'autres entités à
+l'ingestion.
+
+DEUX étages d'isolation, à ne JAMAIS confondre ni inverser :
+- **Étage 1 — TENANT (dur)** : RLS `workspace_id` (POLITIQUE_TENANT). Anti-IDOR
+  cross-client. INCHANGÉ par le multi-entités. Fuite ici = cross-client (critique).
+- **Étage 2 — ENTITÉ (scopé)** : policy RLS `entity_scope` sur `bank_accounts` via le
+  GUC `app.current_entity_scope` (posé par `withWorkspace` depuis `member_entity_scopes`,
+  JAMAIS un paramètre client). « Vision Entité » = GUC = CSV d'entités ; « Vision
+  Globale » = GUC vide = tout le tenant. Transactions/soldes héritent du scope par
+  JOINTURE sur bank_accounts (pas de duplication d'entity_id sur l'append-only). Fuite
+  ici = intra-groupe (grave, pas cross-client) — mais traitée comme un gate bloquant.
+
+Invariants :
+- `entity_id` vit UNIQUEMENT sur `bank_accounts` (NULLABLE = « non assigné »). Ne JAMAIS
+  dénormaliser entity_id dans transactions_cache/balance_history (append-only/partitionné
+  + réassignation ne doit pas réécrire l'historique).
+- FK composites scopées workspace OBLIGATOIRES (pattern `categories`) :
+  `bank_accounts(entity_id, workspace_id) → entities(id, workspace_id)` et
+  `member_entity_scopes(entity_id, workspace_id) → entities`. Cible : `entities
+  UNIQUE(id, workspace_id)`. ON DELETE RESTRICT vers les entités (jamais cascade) ;
+  l'app archive (is_active=false). Cascade légitime uniquement
+  `member_entity_scopes(user_id, ws) → workspace_members` (purge des droits).
+- Un compte `entity_id IS NULL` est INVISIBLE en Vision Entité (fail-closed) ; seul
+  l'ADMIN (Vision Globale) le voit, dans le sas. L'ingestion ne pose jamais entity_id
+  automatiquement ; l'upsert de re-sync ne réécrase JAMAIS un entity_id déjà assigné.
+- Vision Entité / Globale : `member_entity_scopes` (N:N user↔entity). AUCUNE ligne =
+  Vision Globale. Le scope se résout depuis le CONTEXTE, jamais d'un paramètre client.
+- Pas de nouveau rôle au MVP : Vision Entité = membre scopé (pas un rôle). Gestion
+  entités/scopes/assignation = ADMIN-only.
+- Omni-FI « Parties » volontairement IGNORÉES au MVP : assignation MANUELLE côté TYGR
+  (sas). Pré-remplissage via PartyId = dette P2 (ENTITY-PARTY1), PAS une dette d'isolation.
+- Provisioning : `entities` et `member_entity_scopes` dans la liste blanche DELETE de
+  `tygr_app.sql` (éditables, NON append-only). Ne JAMAIS y ajouter une table append-only.
+- Le filtre de périmètre vit dans la RLS (fail-closed), JAMAIS dans le .tsx : un oubli de
+  WHERE entity_id ne doit pas pouvoir créer une fuite intra-groupe.
+
 ## Tribal Knowledge & Quality Gates
 
 Règles non négociables pour tout agent (humain ou IA). Une règle violée = la tâche
@@ -198,6 +244,47 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Driver DB : connexion via Pool/WebSocket ou TCP en mode transaction UNIQUEMENT
   (`SET LOCAL` exige des transactions multi-statements) — le mode HTTP de
   `@neondatabase/serverless` est interdit pour les requêtes applicatives (E16).
+
+#### Formatage des données financières (figé 2026-06-22, audit ergonomie soldes)
+- **Source UNIQUE de formatage** : `src/lib/format-montant.ts` (montants) et
+  `src/lib/format-date.ts` (dates). **INTERDIT** de redéfinir un formateur local
+  (noms de mois en dur, découpe ad-hoc de `YYYY-MM-DD`, groupement de milliers maison)
+  dans un composant — toute date/montant d'affichage passe par ces deux modules. Dette
+  C8 (3 formateurs de date parallèles) tuée par cette règle ; toute réintroduction est
+  un défaut de revue (règle 6).
+- **Devise = PRÉFIXE symbolique** : `Rs` (MUR), `$` (USD), `€` (EUR), séparé du montant
+  par une **espace fine insécable** (U+202F). Devise inconnue → **repli** code ISO en
+  suffixe. Le symbole/code ne se coupe JAMAIS du chiffre (insécable).
+- **Jamais de float** (rappel règle 8) : formatage sur la **chaîne** décimale, y compris
+  à l'affichage (`decomposer`/`grouperMilliers`) — `parseFloat` perd des centimes.
+- **Séparateurs FR** : milliers = espace fine insécable ; décimale = virgule ; signe
+  négatif = U+2212 `−` (pas le trait d'union) ; `+` explicite optionnel pour les KPI
+  entrées/variation ; zéro = `Rs 0,00` (sans signe).
+- **Un montant ne se `truncate` JAMAIS** : sa colonne est dimensionnée (`tabular-nums`,
+  `whitespace-nowrap`, largeur calibrée au plus grand montant plausible). Seuls les
+  **libellés** (nom de compte, catégorie) peuvent tronquer — jamais les chiffres clés.
+- **Multi-devises** : une ligne par devise, **jamais d'addition cross-devise** ; mono →
+  gros montant 28px/700 ; multi → pile égalitaire, **virgules décimales alignées**. Pas
+  de conversion FX d'affichage sans taux annoté (cf. Localisation).
+- **Fraîcheur du solde courant** : pastille `success` <6h / `warning` <24h / `danger`
+  ≥24h (UI_GUIDELINES §3.7) sur `lastSyncedAt`. **JAMAIS** « au JJ/MM » dérivé d'un EOD
+  de courbe pour un solde COURANT (anti-pattern DR-F3 : confond solde instantané et
+  clôture journalière). La date du dernier point de courbe reste sur la courbe.
+
+#### Intégration UI (Tailwind + tokens — « gstack » n'est PAS un design system)
+- **Le design system = `docs/UI_GUIDELINES.md` + tokens `src/app/globals.css`** (Tailwind
+  custom). **`gstack` est l'outillage CLI** (skills `/browse`, `/qa`, `/design-review`,
+  navigateur headless) — il sert au **Visual QA (Gate 4)**, à la capture d'états et au
+  dogfooding, **jamais au rendu**. Ne pas planifier ni coder contre des « primitives
+  gstack » : elles n'existent pas. Le rendu = classes Tailwind + tokens sémantiques.
+- **Aucune couleur en dur** : toujours un token sémantique (`ink`, `primary`, `accent`,
+  `inflow`/`outflow`, `surface-*`, `text-*`, `danger`/`success`/`warning`). Vert/rouge
+  réservés à la **donnée** ; les erreurs système portent fond + icône + message (≠ sortie).
+- **Composants d'affichage purs** : zéro fetch, zéro état interne, handlers en props
+  optionnelles inertes ; le conteneur (RSC/feature) décide quel état monter. Réutiliser
+  les primitives existantes (`StateCard`, `states/primitives.tsx`) — pas de carte ad-hoc.
+- **Responsive header** : **condenser** sous le breakpoint (menu/icône), **JAMAIS
+  `flex-wrap`** sur le header (cause des sauts de ligne disgracieux).
 
 ### 9. CI/CD & dette technique
 - Pipeline canonique (à créer, ordre non négociable) : lint → typecheck
