@@ -1,26 +1,29 @@
 "use client";
 
 /**
- * Interface d'assignation des entités (BU) aux membres — MAQUETTE réactive.
+ * Interface d'assignation des entités (BU) aux membres — CÂBLÉE (L3/L4).
  *
- * ⚠️ MOCK ABSOLU : aucune Server Action, aucun appel base de données. Les listes
- * `MOCK_ENTITES` / `MOCK_MEMBRES` sont en dur ; tout l'état d'assignation vit en
- * mémoire (useState). Le bouton « Enregistrer » n'envoie rien : il affiche un
- * toast inline « (démo) ». Quand les requêtes L3 seront livrées côté serveur,
- * ce composant sera recâblé sur une Server Action (props `membres` + action),
- * sans changer la présentation.
+ * Données reçues en props depuis la page RSC (listerEntites + listerScopesMembre,
+ * lus sous withWorkspace). L'enregistrement passe par la vraie Server Action
+ * `definirScopesAction` (./actions.ts), PAR membre, via <form> + useActionState.
  *
- * Modèle métier (PLAN-entites-multi-tenant.md) : le workspace = le GROUPE
- * (« Omnicane ») ; les ENTITÉS sont des BU sous le workspace. Un membre a soit
- * une Vision Globale (tout le groupe), soit une Vision Entité (sous-ensemble
- * explicite d'entités — Omni-FI ne connaît pas les entités, l'assignation est
- * manuelle).
+ * Convention de périmètre — ALIGNÉE SUR LE SERVEUR (repositories/entites.ts) :
+ *   • `entityIds = []`  → Vision Globale (le membre voit TOUT le groupe : aucune
+ *                          ligne member_entity_scopes).
+ *   • `entityIds = [..]`→ Vision Entité restreinte à ces entités.
+ * Pour l'UX on distingue un `mode` explicite (GLOBALE | ENTITE) afin de gérer
+ * proprement l'état transitoire « je veux restreindre mais je n'ai encore rien
+ * coché » : enregistrer en mode ENTITE avec 0 case est BLOQUÉ côté UI, car envoyer
+ * `[]` rouvrirait tout (contre l'intention). Garde-fou produit, pas une règle
+ * serveur (le serveur, lui, traite [] comme Globale par conception).
  *
  * Tokens & conventions UI_GUIDELINES (§1.1/§2.2/§2.3). Pas de dépendance externe
- * (clsx/cva/lucide non installés — règle 9) : micro-helper `cn` local + SVG
- * inline.
+ * (clsx/cva/lucide — règle 9) : micro-helper `cn` local + SVG inline.
  */
 import { useMemo, useState } from "react";
+import { useActionState } from "react";
+
+import { definirScopesAction, type EtatAction } from "./actions";
 
 /** Concatène des classes en ignorant les valeurs falsy. Pas de clsx (règle 9). */
 function cn(...classes: Array<string | false | null | undefined>): string {
@@ -29,73 +32,22 @@ function cn(...classes: Array<string | false | null | undefined>): string {
 
 type RoleMembre = "ADMIN" | "MANAGER" | "VIEWER";
 
-interface EntiteMock {
+/** Entité telle que présentée (projection de EntiteLue côté page). */
+export interface EntiteVue {
   id: string;
   nom: string;
-  /** Code interne Omnicane optionnel (mapping futur), cf. plan tableau `code`. */
-  code: string;
+  code: string | null;
 }
 
-interface MembreMock {
-  id: string;
+/** Membre + son périmètre initial (scopeInitial = sortie de listerScopesMembre). */
+export interface MembreVue {
+  userId: string;
   nomComplet: string;
   email: string;
   role: RoleMembre;
-  /**
-   * `null` = Vision Globale (tout le groupe). Un tableau (même vide) = Vision
-   * Entité restreinte à ces `entiteId`. Un tableau vide ⇒ aucun accès (cas
-   * limite mis en avant par le plan, à signaler visuellement).
-   */
-  entitesAssignees: string[] | null;
+  /** [] = Vision Globale (convention serveur) ; sinon entityIds du périmètre. */
+  scopeInitial: string[];
 }
-
-// ── Données mockées ────────────────────────────────────────────────────────
-// Vocabulaire issu du PLAN-entites-multi-tenant.md (« Sucrière BU », « Énergie
-// BU ») et du briefing (« Omnicane Hôtellerie »).
-const MOCK_ENTITES: EntiteMock[] = [
-  { id: "ent-sucriere", nom: "Omnicane Sucrière", code: "SUC" },
-  { id: "ent-energie", nom: "Omnicane Énergie", code: "ENE" },
-  { id: "ent-hotellerie", nom: "Omnicane Hôtellerie", code: "HOT" },
-  { id: "ent-immobilier", nom: "Omnicane Immobilier", code: "IMM" },
-];
-
-const MOCK_MEMBRES: MembreMock[] = [
-  {
-    id: "usr-1",
-    nomComplet: "Aïsha Ramnauth",
-    email: "aisha.ramnauth@omnicane.mu",
-    role: "ADMIN",
-    entitesAssignees: null, // Vision Globale
-  },
-  {
-    id: "usr-2",
-    nomComplet: "Jean-Claude Bissoondoyal",
-    email: "jc.bissoondoyal@omnicane.mu",
-    role: "MANAGER",
-    entitesAssignees: ["ent-sucriere", "ent-energie"],
-  },
-  {
-    id: "usr-3",
-    nomComplet: "Priya Goorah",
-    email: "priya.goorah@omnicane.mu",
-    role: "VIEWER",
-    entitesAssignees: ["ent-hotellerie"],
-  },
-  {
-    id: "usr-4",
-    nomComplet: "Marc Lebrun",
-    email: "marc.lebrun@omnicane.mu",
-    role: "MANAGER",
-    entitesAssignees: null, // Vision Globale
-  },
-  {
-    id: "usr-5",
-    nomComplet: "Sundeep Callychurn",
-    email: "sundeep.callychurn@omnicane.mu",
-    role: "VIEWER",
-    entitesAssignees: [], // cas limite : aucun accès
-  },
-];
 
 // ── Helpers présentationnels ─────────────────────────────────────────────────
 const ROLE_LABEL: Record<RoleMembre, string> = {
@@ -104,13 +56,14 @@ const ROLE_LABEL: Record<RoleMembre, string> = {
   VIEWER: "Lecteur",
 };
 
-// Tokens existants uniquement (cf. globals.css : pas de `info`). primary-50 /
-// warning-bg / surface-inset sont définis dans le design system.
+// Tokens existants uniquement (cf. globals.css : pas de `info`).
 const ROLE_BADGE: Record<RoleMembre, string> = {
   ADMIN: "bg-primary-50 text-primary",
   MANAGER: "bg-warning-bg text-warning",
   VIEWER: "bg-surface-inset text-text-muted",
 };
+
+const ETAT_INITIAL: EtatAction = { erreur: null, succes: null };
 
 function initiales(nom: string): string {
   return nom
@@ -121,94 +74,36 @@ function initiales(nom: string): string {
     .toUpperCase();
 }
 
-/** Type d'égalité « assignation identique » pour piloter l'état « modifié ». */
-function memeAssignation(a: string[] | null, b: string[] | null): boolean {
-  if (a === null || b === null) return a === b;
+/** Égalité d'ensembles d'entityIds (ordre indifférent) pour le dirty state. */
+function memeJeu(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const triA = [...a].sort();
   const triB = [...b].sort();
   return triA.every((v, i) => v === triB[i]);
 }
 
-export function AssignationEntites() {
-  // État d'assignation courant, indexé par membre. Initialisé depuis le mock.
-  const [assignations, setAssignations] = useState<Record<string, string[] | null>>(
-    () =>
-      Object.fromEntries(
-        MOCK_MEMBRES.map((m) => [m.id, m.entitesAssignees]),
-      ),
-  );
+export function AssignationEntites({
+  entites,
+  membres,
+}: {
+  entites: EntiteVue[];
+  membres: MembreVue[];
+}) {
   const [recherche, setRecherche] = useState("");
-  const [toast, setToast] = useState<string | null>(null);
-
-  // Référentiel initial pour détecter les modifications (dirty state).
-  const initial = useMemo(
-    () =>
-      Object.fromEntries(
-        MOCK_MEMBRES.map((m) => [m.id, m.entitesAssignees]),
-      ) as Record<string, string[] | null>,
-    [],
-  );
 
   const membresFiltres = useMemo(() => {
     const q = recherche.trim().toLowerCase();
-    if (q === "") return MOCK_MEMBRES;
-    return MOCK_MEMBRES.filter(
+    if (q === "") return membres;
+    return membres.filter(
       (m) =>
         m.nomComplet.toLowerCase().includes(q) ||
         m.email.toLowerCase().includes(q),
     );
-  }, [recherche]);
-
-  const nbModifies = useMemo(
-    () =>
-      MOCK_MEMBRES.filter(
-        (m) => !memeAssignation(assignations[m.id], initial[m.id]),
-      ).length,
-    [assignations, initial],
-  );
-
-  // ── Mutations d'état (purement locales) ───────────────────────────────────
-  function basculerVisionGlobale(membreId: string, globale: boolean) {
-    setToast(null);
-    setAssignations((prev) => ({
-      ...prev,
-      // Globale = null ; repli en Vision Entité = tableau vide (à compléter).
-      [membreId]: globale ? null : [],
-    }));
-  }
-
-  function basculerEntite(membreId: string, entiteId: string) {
-    setToast(null);
-    setAssignations((prev) => {
-      const courant = prev[membreId];
-      // Cocher une entité depuis une Vision Globale fait basculer en Vision
-      // Entité avec cette seule entité.
-      const base = courant === null ? [] : courant;
-      const present = base.includes(entiteId);
-      const suivant = present
-        ? base.filter((id) => id !== entiteId)
-        : [...base, entiteId];
-      return { ...prev, [membreId]: suivant };
-    });
-  }
-
-  function reinitialiser() {
-    setToast(null);
-    setAssignations({ ...initial });
-  }
-
-  function enregistrer() {
-    // MOCK : aucune Server Action. On simule un retour de succès inline.
-    setToast(
-      `Maquette — ${nbModifies} membre${nbModifies > 1 ? "s" : ""} ` +
-        `serai${nbModifies > 1 ? "ent" : "t"} mis à jour une fois le back-end branché.`,
-    );
-  }
+  }, [recherche, membres]);
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Barre d'outils : recherche + compteur de modifications */}
+      {/* Barre d'outils : recherche */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative flex-1 sm:max-w-xs">
           <span className="sr-only">Rechercher un membre</span>
@@ -235,151 +130,16 @@ export function AssignationEntites() {
               focus:ring-2 focus:ring-primary/30"
           />
         </label>
-        <p className="text-sm text-text-muted" role="status">
-          {nbModifies === 0
-            ? "Aucune modification"
-            : `${nbModifies} modification${nbModifies > 1 ? "s" : ""} non enregistrée${nbModifies > 1 ? "s" : ""}`}
+        <p className="text-sm text-text-muted">
+          {membres.length} membre{membres.length > 1 ? "s" : ""}
         </p>
       </div>
 
-      {/* Liste des membres */}
+      {/* Liste des membres — chaque carte gère son propre enregistrement */}
       <ul className="flex flex-col gap-3">
-        {membresFiltres.map((membre) => {
-          const assignation = assignations[membre.id];
-          const estGlobale = assignation === null;
-          const nbEntites = estGlobale ? MOCK_ENTITES.length : assignation.length;
-          const aucunAcces = !estGlobale && assignation.length === 0;
-
-          return (
-            <li
-              key={membre.id}
-              className="rounded-card bg-surface-card p-5 shadow-card"
-            >
-              {/* En-tête membre */}
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span
-                    aria-hidden
-                    className="flex size-9 shrink-0 items-center justify-center rounded-full
-                      bg-surface-inset text-xs font-semibold text-text-muted"
-                  >
-                    {initiales(membre.nomComplet)}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">
-                      {membre.nomComplet}
-                    </p>
-                    <p className="truncate text-xs text-text-muted">
-                      {membre.email}
-                    </p>
-                  </div>
-                  <span
-                    className={cn(
-                      "ml-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
-                      ROLE_BADGE[membre.role],
-                    )}
-                  >
-                    {ROLE_LABEL[membre.role]}
-                  </span>
-                </div>
-
-                {/* Bascule Vision Globale / Vision Entité */}
-                <div
-                  role="radiogroup"
-                  aria-label={`Périmètre de ${membre.nomComplet}`}
-                  className="flex rounded-control border border-line p-0.5 text-xs"
-                >
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={estGlobale}
-                    onClick={() => basculerVisionGlobale(membre.id, true)}
-                    className={cn(
-                      "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
-                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-                      estGlobale
-                        ? "bg-primary text-white"
-                        : "text-text-muted hover:text-text",
-                    )}
-                  >
-                    Vision Globale
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={!estGlobale}
-                    onClick={() => basculerVisionGlobale(membre.id, false)}
-                    className={cn(
-                      "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
-                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-                      !estGlobale
-                        ? "bg-primary text-white"
-                        : "text-text-muted hover:text-text",
-                    )}
-                  >
-                    Vision Entité
-                  </button>
-                </div>
-              </div>
-
-              {/* Récap périmètre */}
-              <p
-                className={cn(
-                  "mt-3 text-xs",
-                  aucunAcces ? "text-danger" : "text-text-muted",
-                )}
-              >
-                {estGlobale
-                  ? `Accès à l’ensemble du groupe (${MOCK_ENTITES.length} entités)`
-                  : aucunAcces
-                    ? "Aucune entité assignée — ce membre ne verra aucune donnée."
-                    : `Vision restreinte à ${nbEntites} entité${nbEntites > 1 ? "s" : ""}`}
-              </p>
-
-              {/* Grille de cases par entité */}
-              <fieldset
-                className="mt-3 border-t border-line pt-3"
-                disabled={estGlobale}
-              >
-                <legend className="sr-only">
-                  Entités assignées à {membre.nomComplet}
-                </legend>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {MOCK_ENTITES.map((entite) => {
-                    const cochee = estGlobale || assignation.includes(entite.id);
-                    return (
-                      <label
-                        key={entite.id}
-                        className={cn(
-                          "flex cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-sm transition-colors",
-                          estGlobale
-                            ? "cursor-not-allowed border-line bg-surface-inset opacity-60"
-                            : cochee
-                              ? "border-primary bg-primary/5"
-                              : "border-line hover:border-primary/50",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={cochee}
-                          disabled={estGlobale}
-                          onChange={() => basculerEntite(membre.id, entite.id)}
-                          className="size-4 shrink-0 accent-primary"
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          {entite.nom}
-                        </span>
-                        <span className="shrink-0 text-[11px] font-medium text-text-faint">
-                          {entite.code}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
-            </li>
-          );
-        })}
+        {membresFiltres.map((membre) => (
+          <CarteMembre key={membre.userId} membre={membre} entites={entites} />
+        ))}
 
         {membresFiltres.length === 0 && (
           <li className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
@@ -387,44 +147,240 @@ export function AssignationEntites() {
           </li>
         )}
       </ul>
+    </div>
+  );
+}
 
-      {/* Barre d'action collante */}
-      <div className="sticky bottom-0 -mx-1 mt-2 flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface-card/95 px-4 py-3 shadow-card backdrop-blur">
-        <div aria-live="polite" className="min-h-[1rem] text-xs">
-          {toast !== null ? (
-            <span role="status" className="text-success">
-              {toast}
-            </span>
-          ) : (
-            <span className="text-text-faint">
-              Maquette — l’enregistrement sera branché sur le back-end.
-            </span>
-          )}
+/* ------------------------------------------------------------------ */
+/* Carte d'un membre : périmètre éditable + enregistrement (par membre) */
+/* ------------------------------------------------------------------ */
+
+function CarteMembre({
+  membre,
+  entites,
+}: {
+  membre: MembreVue;
+  entites: EntiteVue[];
+}) {
+  // Mode initial dérivé de la convention serveur : [] = Globale.
+  const [mode, setMode] = useState<"GLOBALE" | "ENTITE">(
+    membre.scopeInitial.length === 0 ? "GLOBALE" : "ENTITE",
+  );
+  // Entités cochées en mode ENTITE (mémorisées même si on repasse en Globale).
+  const [selection, setSelection] = useState<string[]>(membre.scopeInitial);
+
+  const [etat, action, enCours] = useActionState(
+    definirScopesAction,
+    ETAT_INITIAL,
+  );
+
+  // entityIds qui seront ENVOYÉS (convention serveur : Globale ⇒ []).
+  const entityIdsAEnvoyer = mode === "GLOBALE" ? [] : selection;
+
+  // Dirty : l'ensemble à envoyer diffère-t-il du périmètre initial ?
+  const modifie = !memeJeu(entityIdsAEnvoyer, membre.scopeInitial);
+
+  // Garde-fou produit : mode ENTITE sans aucune case → envoyer [] rouvrirait tout.
+  const entiteSansCase = mode === "ENTITE" && selection.length === 0;
+
+  function toggleEntite(entiteId: string) {
+    setSelection((prev) =>
+      prev.includes(entiteId)
+        ? prev.filter((id) => id !== entiteId)
+        : [...prev, entiteId],
+    );
+  }
+
+  function reinitialiser() {
+    setMode(membre.scopeInitial.length === 0 ? "GLOBALE" : "ENTITE");
+    setSelection(membre.scopeInitial);
+  }
+
+  const estGlobale = mode === "GLOBALE";
+  const nbEntites = estGlobale ? entites.length : selection.length;
+
+  return (
+    <li className="rounded-card bg-surface-card p-5 shadow-card">
+      {/* En-tête membre */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden
+            className="flex size-9 shrink-0 items-center justify-center rounded-full
+              bg-surface-inset text-xs font-semibold text-text-muted"
+          >
+            {initiales(membre.nomComplet)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{membre.nomComplet}</p>
+            <p className="truncate text-xs text-text-muted">{membre.email}</p>
+          </div>
+          <span
+            className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+              ROLE_BADGE[membre.role],
+            )}
+          >
+            {ROLE_LABEL[membre.role]}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Bascule Vision Globale / Vision Entité */}
+        <div
+          role="radiogroup"
+          aria-label={`Périmètre de ${membre.nomComplet}`}
+          className="flex rounded-control border border-line p-0.5 text-xs"
+        >
           <button
             type="button"
-            onClick={reinitialiser}
-            disabled={nbModifies === 0}
-            className="h-9 rounded-control px-3 text-sm font-medium text-text-muted
-              transition-colors hover:text-text focus:outline-none focus-visible:ring-2
-              focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-48"
+            role="radio"
+            aria-checked={estGlobale}
+            disabled={enCours}
+            onClick={() => setMode("GLOBALE")}
+            className={cn(
+              "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+              estGlobale
+                ? "bg-primary text-white"
+                : "text-text-muted hover:text-text",
+            )}
           >
-            Réinitialiser
+            Vision Globale
           </button>
           <button
             type="button"
-            onClick={enregistrer}
-            disabled={nbModifies === 0}
-            className="flex h-9 items-center justify-center gap-2 rounded-control bg-primary
-              px-4 text-sm font-semibold text-white transition-colors hover:bg-primary-600
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-              focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-48"
+            role="radio"
+            aria-checked={!estGlobale}
+            disabled={enCours}
+            onClick={() => setMode("ENTITE")}
+            className={cn(
+              "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+              !estGlobale
+                ? "bg-primary text-white"
+                : "text-text-muted hover:text-text",
+            )}
           >
-            Enregistrer
+            Vision Entité
           </button>
         </div>
       </div>
-    </div>
+
+      {/* Récap périmètre */}
+      <p
+        className={cn(
+          "mt-3 text-xs",
+          entiteSansCase ? "text-danger" : "text-text-muted",
+        )}
+      >
+        {estGlobale
+          ? `Accès à l’ensemble du groupe (${entites.length} entité${entites.length > 1 ? "s" : ""})`
+          : entiteSansCase
+            ? "Sélectionnez au moins une entité, ou repassez en Vision Globale."
+            : `Vision restreinte à ${nbEntites} entité${nbEntites > 1 ? "s" : ""}`}
+      </p>
+
+      {/* Formulaire : cases + champs cachés + bouton, le tout posté à l'action */}
+      <form action={action}>
+        <input type="hidden" name="userId" value={membre.userId} />
+        {/* Un input caché par entité réellement envoyée → getAll("entityIds"). */}
+        {entityIdsAEnvoyer.map((id) => (
+          <input key={id} type="hidden" name="entityIds" value={id} />
+        ))}
+
+        <fieldset
+          className="mt-3 border-t border-line pt-3"
+          disabled={estGlobale || enCours}
+        >
+          <legend className="sr-only">
+            Entités assignées à {membre.nomComplet}
+          </legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {entites.map((entite) => {
+              const cochee = estGlobale || selection.includes(entite.id);
+              return (
+                <label
+                  key={entite.id}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-sm transition-colors",
+                    estGlobale
+                      ? "cursor-not-allowed border-line bg-surface-inset opacity-60"
+                      : cochee
+                        ? "border-primary bg-primary/5"
+                        : "border-line hover:border-primary/50",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cochee}
+                    disabled={estGlobale || enCours}
+                    onChange={() => toggleEntite(entite.id)}
+                    className="size-4 shrink-0 accent-primary"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{entite.nom}</span>
+                  {entite.code && (
+                    <span className="shrink-0 text-[11px] font-medium text-text-faint">
+                      {entite.code}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+            {entites.length === 0 && (
+              <p className="col-span-full text-xs text-text-muted">
+                Aucune entité n’a encore été créée pour ce groupe.
+              </p>
+            )}
+          </div>
+        </fieldset>
+
+        {/* Pied de carte : retour action + boutons */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div aria-live="polite" className="min-h-[1rem] text-xs">
+            {etat.erreur !== null && (
+              <span role="alert" className="text-danger">
+                {etat.erreur}
+              </span>
+            )}
+            {etat.succes !== null && (
+              <span role="status" className="text-success">
+                {etat.succes}
+              </span>
+            )}
+            {etat.erreur === null && etat.succes === null && modifie && (
+              <span className="text-text-faint">Modification non enregistrée.</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={reinitialiser}
+              disabled={!modifie || enCours}
+              className="h-9 rounded-control px-3 text-sm font-medium text-text-muted
+                transition-colors hover:text-text focus:outline-none focus-visible:ring-2
+                focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-48"
+            >
+              Réinitialiser
+            </button>
+            <button
+              type="submit"
+              disabled={!modifie || entiteSansCase || enCours}
+              className="flex h-9 items-center justify-center gap-2 rounded-control bg-primary
+                px-4 text-sm font-semibold text-white transition-colors hover:bg-primary-600
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+                focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-48"
+            >
+              {enCours && (
+                <span
+                  aria-hidden
+                  className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                />
+              )}
+              {enCours ? "Enregistrement…" : "Enregistrer"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </li>
   );
 }

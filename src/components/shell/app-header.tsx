@@ -58,13 +58,22 @@ export function AppHeader({
             fois les états vides disparus (cf. bank-cta.tsx). Gating role à l'intérieur. */}
         <BankCtaLink role={role} />
         {peutAdministrer(role) && (
-          <Link
-            href="/admin/membres"
-            className="text-sm text-text-onink/64 transition-colors hover:text-text-onink
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            Membres
-          </Link>
+          <>
+            <Link
+              href="/admin/membres"
+              className="text-sm text-text-onink/64 transition-colors hover:text-text-onink
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Membres
+            </Link>
+            <Link
+              href="/admin/entites"
+              className="text-sm text-text-onink/64 transition-colors hover:text-text-onink
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              Entités
+            </Link>
+          </>
         )}
         <form action={onDeconnexion}>
           <button
