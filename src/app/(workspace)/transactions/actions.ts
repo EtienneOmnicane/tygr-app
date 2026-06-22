@@ -12,10 +12,16 @@
  *
  * Exit-criteria (CLAUDE.md règle 3) :
  * - Authz : exigerSessionWorkspace + withWorkspace (membership re-validée à
- *   chaque requête). Gating : la catégorisation ET le CRUD du référentiel sont
- *   OUVERTS à tous les membres du workspace, VIEWER inclus (décision PO
- *   2026-06-17, cohérente entre splits et référentiel) — la RLS WITH CHECK sur
- *   workspace_id suffit, aucun filtre de rôle.
+ *   chaque requête). Gating à DEUX niveaux (décision PO 2026-06-22, RÉVISION de
+ *   2026-06-17) :
+ *     • SAISIE de ventilation (splits : ajouter/remplacer/lister) — OUVERTE à
+ *       tous les membres, VIEWER inclus. La RLS WITH CHECK workspace_id suffit.
+ *     • CRUD du RÉFÉRENTIEL de catégories (créer/renommer/archiver) — RÉSERVÉ
+ *       ADMIN (peutAdministrer(ctx.role), garde posée DANS la transaction où le
+ *       rôle est re-résolu → fail-closed). Administrer la taxonomie est une
+ *       opération de gouvernance, distincte de la saisie quotidienne.
+ *   La garde de rôle s'AJOUTE à la RLS (défense en profondeur), elle ne la
+ *   remplace pas : la RLS borne le tenant, la garde borne le rôle.
  * - Validation Zod stricte des entrées (montants décimaux, uuid, bornes).
  * - workspace_id JAMAIS un paramètre client (vient de ctx).
  * - Logs corrélés (workspace_id + code machine, sans PII/montant brut).
@@ -26,6 +32,7 @@ import {
 } from "@/server/auth/session";
 import {
   CategorieIntrouvableError,
+  CategorieNonAutoriseeError,
   CurseurInvalideError,
   type PageTransactions,
   type RefTransaction,
@@ -90,6 +97,9 @@ function echec(
   } else if (erreur instanceof CurseurInvalideError) {
     code = erreur.code; // INVALID_CURSOR
     message = "Page demandée invalide.";
+  } else if (erreur instanceof CategorieNonAutoriseeError) {
+    code = erreur.code; // CATEGORY_NOT_AUTHORIZED
+    message = "Action réservée aux administrateurs.";
   } else if (erreur instanceof ServiceIndisponibleError) {
     code = "SERVICE_UNAVAILABLE";
     message = "Service momentanément indisponible.";
@@ -212,7 +222,7 @@ export async function remplacerSplitsAction(
   }
 }
 
-/** Crée une catégorie (Nature si parentId nul, sinon Sous-nature). */
+/** Crée une catégorie (Nature si parentId nul, sinon Sous-nature). ADMIN uniquement. */
 export async function creerCategorieAction(input: {
   name: string;
   parentId: string | null;
@@ -232,7 +242,7 @@ export async function creerCategorieAction(input: {
   }
 }
 
-/** Renomme une catégorie du workspace courant. */
+/** Renomme une catégorie du workspace courant. ADMIN uniquement. */
 export async function renommerCategorieAction(input: {
   categoryId: string;
   name: string;
@@ -252,7 +262,7 @@ export async function renommerCategorieAction(input: {
   }
 }
 
-/** Archive une catégorie (is_active=false) — jamais de suppression physique. */
+/** Archive une catégorie (is_active=false) — jamais de suppression physique. ADMIN uniquement. */
 export async function archiverCategorieAction(
   categoryId: string,
 ): Promise<ResultatAction> {
