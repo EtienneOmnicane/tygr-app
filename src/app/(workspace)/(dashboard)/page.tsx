@@ -21,9 +21,11 @@ import { redirect } from "next/navigation";
 
 import {
   courbeTresorerie,
+  grilleMois,
   listerComptes,
   soldesCourantsParDevise,
   syntheseMois,
+  syntheseParMois,
   transactionsRecentes,
   withWorkspace,
 } from "@/server/db";
@@ -69,22 +71,33 @@ export default async function PageDashboard() {
   const to = aujourdhuiMaurice();
   const from = ilYaNJours(90);
   const mois = to.slice(0, 7); // "YYYY-MM" courant
+  const NB_MOIS_HISTORIQUE = 6; // fenêtre de tendance (littéral serveur, jamais client)
 
-  // UN SEUL withWorkspace : les 5 lectures + la devise de base partagent le tx.
+  // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx.
   const { donnees, devise } = await withWorkspace(session, async (tx) => {
-    const [comptes, soldesParDevise, courbe, synthese, transactions, ligneWs] =
-      await Promise.all([
-        listerComptes(tx),
-        // Solde Total = soldes COURANTS par devise (indépendant de balance_history,
-        // vide tant qu'Omni-FI n'expose pas /balances/history). DASH-SOLDE2.
-        soldesCourantsParDevise(tx),
-        courbeTresorerie(tx, { from, to }),
-        syntheseMois(tx, mois),
-        transactionsRecentes(tx),
-        tx.execute(
-          sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
-        ),
-      ]);
+    const [
+      comptes,
+      soldesParDevise,
+      courbe,
+      synthese,
+      serie,
+      transactions,
+      ligneWs,
+    ] = await Promise.all([
+      listerComptes(tx),
+      // Solde Total = soldes COURANTS par devise (indépendant de balance_history,
+      // vide tant qu'Omni-FI n'expose pas /balances/history). DASH-SOLDE2.
+      soldesCourantsParDevise(tx),
+      courbeTresorerie(tx, { from, to }),
+      syntheseMois(tx, mois),
+      // Tendance N derniers mois jusqu'au mois courant Maurice. Une seule requête
+      // GROUP BY (mois, devise) ; les mois vides sont comblés par grilleMois côté UI.
+      syntheseParMois(tx, { moisFin: mois, nbMois: NB_MOIS_HISTORIQUE }),
+      transactionsRecentes(tx),
+      tx.execute(
+        sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
+      ),
+    ]);
 
     const rows = ligneWs as unknown as Array<{ base_currency: string }>;
     return {
@@ -94,6 +107,9 @@ export default async function PageDashboard() {
         soldesParDevise,
         courbe,
         syntheseMois: synthese,
+        serieMensuelle: serie,
+        // Axe continu des N mois (calcul pur, partagé avec l'UI).
+        grilleMensuelle: grilleMois(NB_MOIS_HISTORIQUE, mois),
         transactionsRecentes: transactions,
       },
     };

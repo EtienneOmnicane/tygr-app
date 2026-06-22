@@ -59,6 +59,19 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
     sorties: "4474000.00",
     variation: "726000.00",
   },
+  // Tendance 6 mois (MUR) ; mars porte aussi de l'USD pour illustrer le drapeau
+  // « + autres devises » (jamais additionné à la devise de base). Série à plat
+  // (mois × devise), comme la sortie de `syntheseParMois`.
+  serieMensuelle: [
+    { mois: "2026-01", currency: "MUR", entrees: "3800000.00", sorties: "3450000.00", variation: "350000.00" },
+    { mois: "2026-02", currency: "MUR", entrees: "4120000.00", sorties: "3980000.00", variation: "140000.00" },
+    { mois: "2026-03", currency: "MUR", entrees: "4560000.00", sorties: "4210000.00", variation: "350000.00" },
+    { mois: "2026-03", currency: "USD", entrees: "42000.00", sorties: "18000.00", variation: "24000.00" },
+    { mois: "2026-04", currency: "MUR", entrees: "5010000.00", sorties: "4880000.00", variation: "130000.00" },
+    { mois: "2026-05", currency: "MUR", entrees: "4790000.00", sorties: "5120000.00", variation: "-330000.00" },
+    { mois: "2026-06", currency: "MUR", entrees: "5200000.00", sorties: "4474000.00", variation: "726000.00" },
+  ],
+  grilleMensuelle: ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"],
   transactionsRecentes: [
     {
       omnifiTxnId: "demo-tx-0008",
@@ -117,6 +130,8 @@ export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
   soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
   courbe: [],
   syntheseMois: DEMO_DASHBOARD.syntheseMois,
+  serieMensuelle: [],
+  grilleMensuelle: [],
   transactionsRecentes: [],
 };
 
@@ -126,5 +141,7 @@ export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
   soldesParDevise: [],
   courbe: [],
   syntheseMois: { libelleMois: "2026-06", entrees: "0", sorties: "0", variation: "0" },
+  serieMensuelle: [],
+  grilleMensuelle: [],
   transactionsRecentes: [],
 };

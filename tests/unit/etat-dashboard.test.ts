@@ -22,6 +22,8 @@ function donnees(over: Partial<DonneesDashboard>): DonneesDashboard {
     soldesParDevise: [],
     courbe: [],
     syntheseMois: SYNTHESE,
+    serieMensuelle: [],
+    grilleMensuelle: [],
     transactionsRecentes: [],
     ...over,
   };
