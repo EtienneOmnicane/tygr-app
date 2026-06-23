@@ -1235,6 +1235,26 @@ matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
   trancher l'option insights d'abord. **Déclencheur** : ouverture Epic 8.3 OU demande
   produit « graphiques comme FYGR ». **Raccroché à GAP-INSIGHTS1 + FEAT-3.2.**
 
+### Dette UI + tests relevée en cross-review PROD-MERCHANT1 (2026-06-23)
+
+> Issue de la revue QA/cross-review indépendante du commit `4da3411` (branche
+> `feat/prod-merchant-1`, ticket PROD-MERCHANT1). Constats C1 et C2 NON bloquants ;
+> divergence et absence de test ASSUMÉES temporairement par le PO pour ne pas retarder
+> une release à forte valeur métier (affichage marchand + repli élégant). Aucune de ces
+> dettes ne touche l'isolation tenant / l'append-only / les montants (sinon INTERDITE,
+> règle 9) : ce sont du polissage d'affichage et de la couverture de test.
+
+- [ ] **TECH-MERCHANT-POLISH1 (P2) — unifier l'affichage de la catégorie OBIE par défaut + tester `traduireCategorieBanque`** —
+  Effort S, gardien Front. Ouvert 2026-06-23. Regroupe deux constats de cross-review :
+  **(C1)** le Dashboard (`transactions-table.tsx:60`) affiche `categorieFr(t.primaryCategory)`
+  qui retombe TOUJOURS sur « Non catégorisé » par défaut, alors que la table /transactions
+  (`adapter.ts:93` → `traduireCategorieBanque`) renvoie `null` (sous-texte masqué) quand la
+  catégorie est absente/non cartographiée — même donnée OBIE, deux rendus. **(C2)** la
+  fonction `traduireCategorieBanque` (`adapter.ts:130`) porte une logique conditionnelle
+  non triviale (rejet du défaut vers `null`) sans aucun test unitaire (exit-criteria règle 3 :
+  chemin heureux + cartographié + absent/non-cartographié). **Déclencheur** : lors du chantier
+  de refonte globale UX/UI ou lors du prochain grand refactor des tableaux de données.
+
 ## P3 — plus tard
 
 - [ ] **FEAT-3.3 Console mur de la dette** — endpoints `/debt/*` disponibles côté API.
