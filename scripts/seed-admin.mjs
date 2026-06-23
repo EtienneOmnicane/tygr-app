@@ -21,7 +21,13 @@ import { neonConfig, Pool } from "@neondatabase/serverless";
 const EMAIL_ADMIN = "enardou@omni-fi.co";
 const NOM_ADMIN = "Administrateur TYGR";
 const WORKSPACE_NOM = "Omni-FI HQ";
-const WORKSPACE_CLIENT_USER_ID = "seed-omnifi-hq";
+// Utilise l'end-user sandbox réel s'il est fourni dans l'environnement
+// (OMNIFI_DEMO_CLIENT_USER_ID, déjà enrôlé côté Omni-FI → POST /connections/link-token
+// renvoie 201). Le placeholder en dur reste un repli : il n'est PAS enrôlé côté
+// Omni-FI (404 END_USER_NOT_FOUND), donc toute connexion bancaire échouerait tant
+// que le workspace n'est pas ré-enrôlé. Sert aussi de clé d'idempotence du workspace.
+const WORKSPACE_CLIENT_USER_ID =
+  process.env.OMNIFI_DEMO_CLIENT_USER_ID || "seed-omnifi-hq";
 
 if (typeof WebSocket !== "undefined") {
   neonConfig.webSocketConstructor = WebSocket;
