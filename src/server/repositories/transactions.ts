@@ -63,6 +63,14 @@ export interface TransactionLigne {
   currency: string;
   creditDebit: "Credit" | "Debit";
   cleanLabel: string | null;
+  /**
+   * Libellé brut bancaire (OBIE TransactionInformation), null si absent. Sert de
+   * REPLI d'affichage quand `cleanLabel` (marchand enrichi) est vide — décision
+   * produit assumée 2026-06-23 : on préfère montrer le narratif brut (« DBIT / POS
+   * / … ») plutôt qu'un « Opération bancaire » générique. Narratif de relevé, pas
+   * de PII nominative ; la recherche (ILIKE) reste sur cleanLabel uniquement.
+   */
+  bankLabelRaw: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
   /** Nombre de splits de catégorisation rattachés. */
@@ -247,6 +255,7 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       currency: transactionsCache.currency,
       creditDebit: transactionsCache.creditDebit,
       cleanLabel: transactionsCache.cleanLabel,
+      bankLabelRaw: transactionsCache.bankLabelRaw,
       primaryCategory: transactionsCache.primaryCategory,
       subCategory: transactionsCache.subCategory,
       nbSplits: nbSplitsExpr,

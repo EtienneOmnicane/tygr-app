@@ -52,8 +52,13 @@ export function TransactionsTable({
               <span className="text-xs tabular-nums text-text-muted">
                 {formaterDateComptable(t.transactionDate)}
               </span>
+              {/* cascade={false} : le dashboard garde le rendu HISTORIQUE marchand →
+                  repli (sa colonne Catégorie est dédiée et fixe → l'anti-doublon de
+                  /transactions n'y est pas transposable ; et son DTO ne porte pas
+                  encore le brut). Alignement futur = dette TECH-DASHBOARD-CASCADE. */}
               <LibelleTransaction
                 cleanLabel={t.cleanLabel}
+                cascade={false}
                 className="truncate text-sm"
               />
               <span className="truncate text-xs text-text-muted">

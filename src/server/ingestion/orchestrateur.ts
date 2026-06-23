@@ -81,9 +81,11 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     amount: normaliserMontant(t.Amount.Amount),
     currency: t.Amount.Currency,
     creditDebit: validerCreditDebit(t.CreditDebitIndicator),
-    // L'API ne fournit pas toujours Description (sandbox 2026-06-19) → null propre
-    // plutôt qu'undefined (la colonne est nullable, jamais lue côté UI car PII).
-    bankLabelRaw: t.Description ?? null,
+    // Libellé brut = `TransactionInformation` (nom OBIE officiel du narratif). Le code
+    // lisait `t.Description`, champ INEXISTANT dans le contrat HTTP public → bank_label_raw
+    // était NULL sur 100 % des transactions (bug confirmé runtime + audit serializer
+    // Omni-FI). `chaineOuNull` normalise une chaîne vide en null propre.
+    bankLabelRaw: chaineOuNull(t.TransactionInformation),
     cleanLabel: chaineOuNull(e?.CleanMerchantName),
     // PrimaryCategory : on laisse passer le défaut serializer "Uncategorized" tel quel
     // (string non vide ⇒ survit à chaineOuNull). C'est une étiquette amont assumée, pas

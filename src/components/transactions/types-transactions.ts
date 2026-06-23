@@ -39,18 +39,25 @@ export interface TransactionListItem {
   /** Date comptable Maurice YYYY-MM-DD (E20). */
   transactionDate: string;
   /**
-   * Libellé d'affichage résolu (`cleanLabel` sinon repli non-PII). Sert notamment
-   * à l'`aria-label` de la ligne, qui ne doit jamais être vide. JAMAIS en
-   * log/télémétrie (PII). Le RENDU visuel du libellé passe par `cleanLabel`
-   * (pour distinguer le repli typographié) — `label` reste la forme « plate ».
+   * Libellé d'affichage résolu (`cleanLabel`, sinon `bankLabelRaw`, sinon repli
+   * générique). Sert notamment à l'`aria-label` de la ligne, qui ne doit jamais
+   * être vide. JAMAIS en log/télémétrie. Le RENDU visuel passe par `cleanLabel` +
+   * `bankLabelRaw` (pour distinguer marchand / brut / repli) — `label` reste plat.
    */
   label: string;
   /**
-   * Marchand normalisé Omni-FI BRUT (`null` si la banque ne l'a pas communiqué).
-   * Pilote le rendu du libellé : non-null ⇒ marchand en `text-text` ; null ⇒ repli
-   * discret « Opération bancaire » (`text-muted` italique). JAMAIS loggé (PII).
+   * Marchand normalisé Omni-FI BRUT (`null` si l'enrichissement ne l'a pas résolu).
+   * Pilote le rendu : non-null ⇒ marchand en `text-text` ; null ⇒ on tente le repli
+   * `bankLabelRaw` avant le générique. JAMAIS loggé.
    */
   cleanLabel: string | null;
+  /**
+   * Libellé brut bancaire (OBIE TransactionInformation), `null` si absent. REPLI
+   * d'affichage quand `cleanLabel` est null (décision produit 2026-06-23 : montrer
+   * le narratif brut plutôt qu'un « Opération bancaire » générique). Rendu atténué
+   * pour le distinguer d'un marchand propre. JAMAIS loggé.
+   */
+  bankLabelRaw: string | null;
   /**
    * Catégorie OBIE de la banque (`primaryCategory`), DÉJÀ traduite en français par
    * l'adaptateur (`categorieFr`). Affichée en sous-texte du libellé. `null` si la
