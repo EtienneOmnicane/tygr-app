@@ -234,6 +234,24 @@ Dettes ouvertes héritées du câblage :
       retour UX « je veux voir la catégorie sans cliquer ». Backend enrichit la ligne
       du `categoryId`/`categoryName` quand il n'y a qu'un split ; l'UI peuple alors
       `TransactionListItem.categorie` (déjà prévu au type) → `CategoryBadge` nommé.
+- [ ] **TECH-DASHBOARD-CASCADE (P2) — aligner la table du DASHBOARD sur la cascade de
+      libellé de `/transactions`** — Effort M (gardien Backend + Front). Date 2026-06-23.
+      La cascade intelligente (marchand → catégorie FR → brut bancaire → repli) +
+      l'anti-doublon + l'infobulle `title` (libellé bancaire d'origine au survol) ont
+      été livrés UNIQUEMENT sur `/transactions` (`feat/prod-merchant-cascade`). Le
+      dashboard (`components/dashboard/transactions-table.tsx`) reste volontairement en
+      mode HISTORIQUE `cascade={false}` (marchand → repli) parce que (1) son DTO
+      `TransactionRecente` (`server/repositories/dashboard.ts`) ne porte PAS encore
+      `bankLabelRaw` — l'ajouter touche le repository dashboard (gardien Backend, à
+      re-scoper côté sécu/perf de la requête) ; (2) sa colonne **Catégorie est fixe**
+      (grille `grid-cols`), donc l'anti-doublon de `/transactions` (sous-texte
+      optionnel masquable) n'y est pas transposable tel quel — il faut repenser la
+      colonne. **Déclencheur** : prochaine itération UX du dashboard, ou retour « le
+      dashboard et la page transactions n'affichent pas le même libellé pour la même
+      opération ». Travail : étendre `TransactionRecente` (+ SELECT) avec `bankLabelRaw`,
+      passer `cascade` (défaut) + `categorieFr` + `bankLabelRaw` au `LibelleTransaction`
+      du dashboard, et arbitrer le sort de la colonne Catégorie (la masquer par ligne
+      quand elle devient le libellé, ou la conserver et accepter le rappel).
 
 Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants.
 Plan de référence : `PLAN-transactions-page.md`.

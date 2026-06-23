@@ -8,9 +8,12 @@
  *  - alignement `tabular-nums` des montants à droite,
  *  - couleur sémantique des montants (Credit vert / Debit rouge) UNIQUEMENT,
  *  - badges de catégorie SANS vert/rouge ; « partiel » en ambre,
- *  - libellé : marchand `cleanLabel` plein VS repli discret « Opération bancaire »
- *    (`text-muted` italique) quand la banque ne l'a pas communiqué (PROD-MERCHANT1),
- *  - catégorie OBIE de la banque en sous-texte (DISTINCTE du statut de ventilation),
+ *  - libellé : CASCADE marchand → catégorie FR → brut bancaire (italique atténué) →
+ *    repli « Opération bancaire » (arbitrage produit 2026-06-23). t1/t5 = marchand ;
+ *    t3 = catégorie (niveau 2, sous-texte catégorie MASQUÉ par anti-doublon) ; t6 =
+ *    brut bancaire (niveau 3) ; le brut alimente TOUJOURS l'infobulle `title` au survol,
+ *  - catégorie OBIE de la banque en sous-texte (DISTINCTE du statut de ventilation ;
+ *    masquée quand elle EST déjà le libellé principal — anti-doublon),
  *  - clic d'une ligne → SplitAllocationModal,
  *  - les 4 états (liste / loading / vide / erreur).
  */
@@ -50,10 +53,12 @@ const COMPTES = [
 // Lignes fictives couvrant tous les cas d'affichage.
 const LIGNES: TransactionListItem[] = [
   {
+    // Niveau 1 : marchand enrichi. Le brut bancaire reste accessible au survol (title).
     transactionId: "t1",
     transactionDate: "2026-06-11",
     label: "Beachcomber Resorts",
     cleanLabel: "Beachcomber Resorts",
+    bankLabelRaw: "CRDT / TRF / BEACHCOMBER RESORTS LTD INV-4471",
     categorieBanque: "Revenus",
     compteNom: "Compte courant MUR",
     montantAbs: "10000.00",
@@ -69,6 +74,7 @@ const LIGNES: TransactionListItem[] = [
     transactionDate: "2026-06-10",
     label: "Central Electricity Board",
     cleanLabel: "Central Electricity Board",
+    bankLabelRaw: null,
     categorieBanque: "Charges",
     compteNom: "Compte courant MUR",
     montantAbs: "8750.50",
@@ -80,11 +86,14 @@ const LIGNES: TransactionListItem[] = [
     nbCategories: 1,
   },
   {
-    // Cas REPLI : la banque n'a pas communiqué de marchand → libellé discret.
+    // Niveau 2 : PAS de marchand, mais catégorie banque présente → le libellé principal
+    // EST la catégorie (« Charges »), et son sous-texte catégorie est MASQUÉ (anti-
+    // doublon). Le brut reste lisible au survol (title).
     transactionId: "t3",
     transactionDate: "2026-06-09",
-    label: "Opération bancaire",
+    label: "Charges",
     cleanLabel: null,
+    bankLabelRaw: "DBIT / POS / BLUEMARBLE SUPERMARKET QBNS",
     categorieBanque: "Charges",
     compteNom: "Compte courant MUR",
     montantAbs: "152340.00",
@@ -101,6 +110,7 @@ const LIGNES: TransactionListItem[] = [
     transactionDate: "2026-06-08",
     label: "Stripe payout",
     cleanLabel: "Stripe payout",
+    bankLabelRaw: null,
     categorieBanque: null,
     compteNom: "Compte USD",
     montantAbs: "4200.00",
@@ -116,6 +126,7 @@ const LIGNES: TransactionListItem[] = [
     transactionDate: "2026-06-07",
     label: "Loyer bureaux Ebène",
     cleanLabel: "Loyer bureaux Ebène",
+    bankLabelRaw: "DBIT / SO / RENT EBENE OFFICE 06-2026",
     categorieBanque: "Loyer",
     compteNom: "Compte courant MUR",
     montantAbs: "65000.00",
@@ -125,6 +136,25 @@ const LIGNES: TransactionListItem[] = [
     statutCategorisation: "complet",
     categorie: { id: "cat-charges-loyer", name: "Loyer" },
     nbCategories: 1,
+  },
+  {
+    // Niveau 3 : NI marchand NI catégorie cartographiée → ultime filet = libellé brut
+    // bancaire, en `text-muted` italique (se lit comme un repli). Sous-texte : compte
+    // seul (pas de catégorie). Le title reprend ce même brut.
+    transactionId: "t6",
+    transactionDate: "2026-06-06",
+    label: "DBIT / ATM / WDL PORT LOUIS WATERFRONT",
+    cleanLabel: null,
+    bankLabelRaw: "DBIT / ATM / WDL PORT LOUIS WATERFRONT",
+    categorieBanque: null,
+    compteNom: "Compte courant MUR",
+    montantAbs: "3000.00",
+    devise: "MUR",
+    sens: "Debit",
+    bankAccountId: "acc-mur",
+    statutCategorisation: "non_categorise",
+    categorie: null,
+    nbCategories: 0,
   },
 ];
 

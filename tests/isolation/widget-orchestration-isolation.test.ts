@@ -472,7 +472,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
         {
           TransactionId: "tx-sync-1",
           AccountId: "oa-tx",
-          Description: "PAIEMENT CLIENT",
+          TransactionInformation: "PAIEMENT CLIENT",
           Amount: { Amount: "1500.00", Currency: "MUR" },
           CreditDebitIndicator: "Credit",
           Status: "Booked",

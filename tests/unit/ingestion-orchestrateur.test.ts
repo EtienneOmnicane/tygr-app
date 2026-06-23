@@ -19,7 +19,7 @@ function txOBIE(over: Partial<OmniFiTransaction> = {}): OmniFiTransaction {
   return {
     TransactionId: "tx-1",
     AccountId: "acc-1",
-    Description: "LOYER",
+    TransactionInformation: "LOYER",
     Amount: { Amount: "1500.00", Currency: "MUR" },
     CreditDebitIndicator: "Debit",
     Status: "Booked",
@@ -99,12 +99,19 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.isRemoved).toBe(false);
   });
 
-  // Regression: DASH-AUTOSYNC1 — l'API sandbox renvoie Description absent +
-  // montants à 4 décimales nulles ; sans fix la synchro plantait (NOT NULL puis
-  // regex montant) → 0 transaction. Found by /investigate 2026-06-19.
-  it("Description absente → bankLabelRaw null (l'API ne fournit pas toujours de libellé)", () => {
-    const l = versLignePersistee(txOBIE({ Description: undefined }));
-    expect(l.bankLabelRaw).toBeNull();
+  // Le libellé brut vient de TransactionInformation (nom OBIE officiel), PAS de
+  // Description (champ inexistant dans le contrat HTTP public — bug confirmé runtime
+  // + audit serializer Omni-FI : lire t.Description mettait bank_label_raw NULL partout).
+  it("TransactionInformation présent → bankLabelRaw mappé (libellé brut OBIE)", () => {
+    const l = versLignePersistee(
+      txOBIE({ TransactionInformation: "DBIT / POS / BLUEMARBLE SUPERMARKET QBNS" }),
+    );
+    expect(l.bankLabelRaw).toBe("DBIT / POS / BLUEMARBLE SUPERMARKET QBNS");
+  });
+
+  it("TransactionInformation absent/vide → bankLabelRaw null (normalisé, pas de chaîne vide)", () => {
+    expect(versLignePersistee(txOBIE({ TransactionInformation: undefined })).bankLabelRaw).toBeNull();
+    expect(versLignePersistee(txOBIE({ TransactionInformation: "   " })).bankLabelRaw).toBeNull();
   });
 
   it("montant à 4 décimales NULLES (format API) → numeric(15,2) sans perte", () => {

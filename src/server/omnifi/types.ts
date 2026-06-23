@@ -105,8 +105,19 @@ export interface OmniFiTransaction {
   AccountId: string;
   PartyId?: string;
   TransactionReference?: string;
-  Description: string;
+  /**
+   * Libellé narratif BRUT de la transaction — nom OBIE officiel du champ
+   * (`OBReadTransaction6.TransactionInformation`, texte non structuré, max 500).
+   * C'est CE champ que l'API publique Omni-FI expose (conforme OBIE, vérifié
+   * runtime + audit serializer). Les noms `Description`/`raw`/`raw_description`
+   * NE SONT PAS dans le contrat HTTP public (`raw*` = couche scraping interne).
+   * Source unique du `bank_label_raw` quand l'enrichissement marchand est absent.
+   */
+  TransactionInformation?: string;
   NormalizedDescription?: string;
+  /** Solde courant après l'opération (OBIE). L'API sandbox le renvoie souvent
+   *  `null` → l'historique de soldes reste alors vide (cf. courbe de trésorerie). */
+  RunningBalance?: OmniFiAmount | null;
   Amount: OmniFiAmount;
   CreditDebitIndicator: OmniFiCreditDebit;
   Status: string;

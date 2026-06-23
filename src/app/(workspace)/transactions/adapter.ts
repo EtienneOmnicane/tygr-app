@@ -12,8 +12,10 @@
  *  - `categorie {id,name}` : Backend ne renvoie pas LA catégorie unique, juste
  *    `nbSplits` → on n'affiche un badge nommé que si on le sait ; sinon le badge de
  *    comptage générique (« 1 catégorie » / « N catégories ») via `nbCategories` ;
- *  - libellé : `cleanLabel` peut être null (bank_label_raw = PII, jamais exposé) →
- *    fallback neutre non-PII ;
+ *  - libellé : cascade marchand → catégorie FR → brut bancaire → repli générique
+ *    (`resoudreLibelle`, source unique). Le brut (`bankLabelRaw`) n'est plus masqué
+ *    (arbitrage produit 2026-06-23 : utilisabilité > interdiction PII stricte) ; il
+ *    sert d'ultime filet visuel ET d'infobulle `title` (cf. `transaction-row.tsx`) ;
  *  - filtre `sens` : NON supporté par le schéma Backend (.strict, pas de champ) →
  *    non transmis (cf. toolbar v1 sans Sens, tracé TODOS TX-FILTRE1).
  *
@@ -37,6 +39,7 @@ import type {
 } from "@/components/transactions/types-transactions";
 
 import { categorieFr, CATEGORIE_FR_PAR_DEFAUT } from "@/lib/categories-fr";
+import { resoudreLibelle } from "@/components/transactions/libelle-transaction";
 
 /** Map statut serveur (MAJ) → statut UI (minuscules). */
 const STATUT_UI: Record<StatutVentilation, StatutCategorisation> = {
@@ -78,19 +81,28 @@ export function versLigneUI(
   nomParCompte: Map<string, string>,
 ): TransactionListItem {
   const statut = STATUT_UI[ligne.statut];
+  const categorieBanque = traduireCategorieBanque(ligne.primaryCategory);
   return {
     transactionId: ligne.id,
     transactionDate: ligne.transactionDate,
-    // `label` (plat, pour l'aria) : cleanLabel privilégié, repli non-PII si null.
-    // `cleanLabel` (brut) est propagé séparément pour piloter le rendu du repli
-    // typographié côté composant (LibelleTransaction). bank_label_raw (PII) exclu.
-    label: ligne.cleanLabel ?? "Opération bancaire",
+    // `label` (plat, pour l'aria) = MÊME cascade que le rendu visuel (marchand →
+    // catégorie FR → brut bancaire → repli générique), via `resoudreLibelle` : l'aria
+    // annonce EXACTEMENT le texte vu à l'écran (pas le brut quand un marchand/catégorie
+    // l'a remplacé). Le rendu typographié (plein vs atténué) est, lui, dans le composant.
+    label: resoudreLibelle({
+      cleanLabel: ligne.cleanLabel,
+      categorieFr: categorieBanque,
+      bankLabelRaw: ligne.bankLabelRaw,
+    }).texte,
     cleanLabel: ligne.cleanLabel,
-    // Catégorie OBIE traduite en FR pour l'affichage en sous-texte. On garde `null`
-    // (= pas de sous-texte) quand la catégorie est absente OU non cartographiée :
-    // `categorieFr` retombe sur « Non catégorisé » dans ces deux cas, mais l'afficher
-    // ici se confondrait avec le statut de VENTILATION manuelle (concept distinct).
-    categorieBanque: traduireCategorieBanque(ligne.primaryCategory),
+    bankLabelRaw: ligne.bankLabelRaw,
+    // Catégorie OBIE traduite en FR (résolue plus haut, réutilisée pour le `label`).
+    // `null` (= pas de sous-texte, et niveau 2 de cascade inactif) quand la catégorie
+    // est absente OU non cartographiée : `categorieFr` retombe sur « Non catégorisé »
+    // dans ces deux cas, mais l'afficher ici se confondrait avec le statut de
+    // VENTILATION manuelle (concept distinct) — et le remonter en libellé principal
+    // serait un faux « marchand ».
+    categorieBanque,
     compteNom: nomParCompte.get(ligne.bankAccountId) ?? "Compte",
     montantAbs: depouillerSigne(ligne.amount),
     devise: ligne.currency,

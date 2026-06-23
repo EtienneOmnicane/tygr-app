@@ -15,7 +15,7 @@ import { formaterDateComptable } from "@/lib/format-date";
 
 import { CategorisationStatusBadge } from "./categorisation-status-badge";
 import { FlowTag } from "./flow-tag";
-import { LibelleTransaction } from "./libelle-transaction";
+import { LibelleTransaction, resoudreLibelle } from "./libelle-transaction";
 import type { TransactionListItem } from "./types-transactions";
 
 /** Retire un éventuel signe « - » de tête (on reconstruit le signe via `sens`). */
@@ -44,6 +44,16 @@ export function TransactionRow({
     transaction.devise,
   )} ${sensLabel}, ${formaterDateComptable(transaction.transactionDate)} — ouvrir la ventilation`;
 
+  // Niveau de cascade retenu pour le libellé (cf. LibelleTransaction). Sert l'anti-
+  // doublon : si le libellé PRINCIPAL est déjà la catégorie (niveau 2), on masque le
+  // sous-texte « catégorie » sous le libellé pour ne pas l'afficher deux fois.
+  const { niveau: niveauLibelle } = resoudreLibelle({
+    cleanLabel: transaction.cleanLabel,
+    categorieFr: transaction.categorieBanque,
+    bankLabelRaw: transaction.bankLabelRaw,
+  });
+  const libelleEstCategorie = niveauLibelle === "categorie";
+
   function declencher() {
     onOpen(transaction);
   }
@@ -53,6 +63,12 @@ export function TransactionRow({
       role="button"
       tabIndex={0}
       aria-label={ariaLabel}
+      // Accessibilité de la donnée brute (règle produit 2026-06-23) : le libellé
+      // bancaire d'ORIGINE (TransactionInformation) est TOUJOURS lisible au survol,
+      // même quand un marchand/catégorie l'a remplacé à l'affichage. `undefined` (pas
+      // chaîne vide) quand le brut est absent ⇒ React omet l'attribut (pas d'infobulle
+      // vide). Le brut reste hors aria-label/log (non imposé, consultable à la demande).
+      title={transaction.bankLabelRaw ?? undefined}
       onClick={declencher}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -68,18 +84,23 @@ export function TransactionRow({
       </td>
 
       {/* Libellé (marchand) + sous-texte « compte · catégorie banque ». Le libellé
-          passe par LibelleTransaction → repli discret si cleanLabel null (PII : on
-          n'affiche jamais bank_label_raw). La catégorie OBIE (sous-texte) est
-          DISTINCTE du statut de ventilation manuelle (colonne dédiée à droite).
-          En mobile (colonne Catégorie masquée), le badge de statut se replie ICI. */}
+          passe par LibelleTransaction → cascade marchand → catégorie FR → libellé brut
+          bancaire (OBIE TransactionInformation) → repli générique. La catégorie OBIE
+          (sous-texte) est DISTINCTE du statut de ventilation manuelle (colonne dédiée
+          à droite). ANTI-DOUBLON : si le libellé principal EST déjà la catégorie
+          (niveau 2 de la cascade), on n'affiche PAS la catégorie en sous-texte (sinon
+          deux fois la même). En mobile (colonne Catégorie masquée), le badge de statut
+          se replie ICI. */}
       <td className="px-3 py-[14px] sm:px-4">
         <LibelleTransaction
           cleanLabel={transaction.cleanLabel}
+          categorieFr={transaction.categorieBanque}
+          bankLabelRaw={transaction.bankLabelRaw}
           className="block truncate text-sm"
         />
         <span className="block truncate text-xs text-text-muted">
           {transaction.compteNom}
-          {transaction.categorieBanque && (
+          {transaction.categorieBanque && !libelleEstCategorie && (
             <>
               {" · "}
               {transaction.categorieBanque}
