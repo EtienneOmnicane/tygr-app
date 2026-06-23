@@ -82,6 +82,24 @@ export interface OmniFiBalanceHistoryData {
 
 export type OmniFiCreditDebit = "Credit" | "Debit";
 
+/**
+ * Bloc d'enrichissement IMBRIQUÉ (serializer Django `get_Enrichment`, faisant foi —
+ * omni-fi-core/apps/transactions/serializers.py). Le serializer pose TOUJOURS ces 6
+ * clés, avec un DÉFAUT en CHAÎNE VIDE ("") — pas `null` — quand la donnée manque
+ * (sauf PrimaryCategory → "Uncategorized", ConfidenceLevel → "Low"). PIÈGE : ne
+ * jamais persister "" tel quel (cf. `versLignePersistee` / orchestrateur.ts qui
+ * normalise "" → null). Champs optionnels par prudence défensive (un payload plus
+ * ancien pourrait omettre l'objet), mais le contrat actuel les pose tous.
+ */
+export interface OmniFiEnrichment {
+  CleanMerchantName?: string;
+  PrimaryCategory?: string;
+  SubCategory?: string;
+  ConfidenceLevel?: string;
+  ClassificationSource?: string;
+  RuleIdMatch?: string;
+}
+
 export interface OmniFiTransaction {
   TransactionId: string;
   AccountId: string;
@@ -94,9 +112,10 @@ export interface OmniFiTransaction {
   Status: string;
   BookingDateTime: string;
   ValueDateTime?: string;
-  PrimaryCategory?: string;
-  SubCategory?: string;
-  CleanMerchantName?: string;
+  /** Enrichissement IMBRIQUÉ — voir OmniFiEnrichment. Remplace les anciens champs
+   *  à plat PrimaryCategory/SubCategory/CleanMerchantName (jamais émis par l'API ;
+   *  cause du fallback « Opération bancaire », PROD-MERCHANT1). */
+  Enrichment?: OmniFiEnrichment;
   IsDuplicate?: boolean;
   ManuallyOverridden?: boolean;
   IsActive?: boolean;
