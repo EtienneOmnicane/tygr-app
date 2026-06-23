@@ -66,6 +66,7 @@ export function SplitAllocationModal({
   initialSplits,
   onReplace,
   onSaved,
+  onCreateCategorie,
 }: {
   open: boolean;
   onClose: () => void;
@@ -90,6 +91,14 @@ export function SplitAllocationModal({
   ) => Promise<ResultatAction>;
   /** Appelé après un remplacement réussi (le conteneur recharge). */
   onSaved?: () => void;
+  /**
+   * Crée une catégorie (Nature racine) depuis le picker (→ creerCategorieAction).
+   * Optionnel : absent → pas de bouton « Ajouter une catégorie ». La catégorie
+   * créée est ajoutée localement (affichage immédiat) puis sélectionnée.
+   */
+  onCreateCategorie?: (
+    name: string,
+  ) => Promise<ResultatAction<{ categoryId: string }>>;
 }) {
   // État LOCAL des lignes (édition optimiste). Initialisé depuis les splits existants.
   const [lignes, setLignes] = useState<LigneAllocation[]>(() =>
@@ -105,6 +114,14 @@ export function SplitAllocationModal({
   const [focusCle, setFocusCle] = useState<string | null>(null);
   const [enCours, setEnCours] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
+  // Catégories créées localement (depuis le picker), pas encore dans les props
+  // (le conteneur recharge le référentiel au prochain rendu). On les CONCATÈNE aux
+  // props plutôt que de dupliquer tout l'état (évite un setState/effect de synchro).
+  const [categoriesCreees, setCategoriesCreees] = useState<CategorieUI[]>([]);
+  const categoriesLocales = useMemo(
+    () => [...categories, ...categoriesCreees],
+    [categories, categoriesCreees],
+  );
 
   const resteLabelId = useId();
 
@@ -160,7 +177,7 @@ export function SplitAllocationModal({
   }
 
   const categorieDe = (id: string | null) =>
-    id ? categories.find((c) => c.id === id) ?? null : null;
+    id ? categoriesLocales.find((c) => c.id === id) ?? null : null;
 
   // Affichage du montant dans le champ : brut si focus, formaté (nu) sinon.
   function affichageMontant(ligne: LigneAllocation): string {
@@ -301,12 +318,34 @@ export function SplitAllocationModal({
                   {pickerOuvert === ligne.cle && (
                     <div className="absolute left-0 top-11 z-20">
                       <CategoryPicker
-                        categories={categories}
+                        categories={categoriesLocales}
                         selectedId={ligne.categoryId}
                         onSelect={(categoryId) => {
                           majLigne(ligne.cle, { categoryId });
                           setPickerOuvert(null);
                         }}
+                        onClose={() => setPickerOuvert(null)}
+                        onCreate={
+                          onCreateCategorie
+                            ? async (name) => {
+                                const res = await onCreateCategorie(name);
+                                // Ajout local (affichage immédiat du badge) ; le
+                                // picker sélectionne ensuite la nouvelle catégorie.
+                                if (res.ok) {
+                                  setCategoriesCreees((prev) => [
+                                    ...prev,
+                                    {
+                                      id: res.data.categoryId,
+                                      name: name.trim(),
+                                      parentId: null,
+                                      isActive: true,
+                                    },
+                                  ]);
+                                }
+                                return res;
+                              }
+                            : undefined
+                        }
                       />
                     </div>
                   )}
