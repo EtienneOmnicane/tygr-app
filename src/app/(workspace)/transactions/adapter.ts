@@ -36,6 +36,8 @@ import type {
   TransactionListItem,
 } from "@/components/transactions/types-transactions";
 
+import { categorieFr, CATEGORIE_FR_PAR_DEFAUT } from "@/lib/categories-fr";
+
 /** Map statut serveur (MAJ) → statut UI (minuscules). */
 const STATUT_UI: Record<StatutVentilation, StatutCategorisation> = {
   NON_CATEGORISE: "non_categorise",
@@ -79,8 +81,16 @@ export function versLigneUI(
   return {
     transactionId: ligne.id,
     transactionDate: ligne.transactionDate,
-    // cleanLabel privilégié ; fallback neutre non-PII si null (bank_label_raw exclu).
+    // `label` (plat, pour l'aria) : cleanLabel privilégié, repli non-PII si null.
+    // `cleanLabel` (brut) est propagé séparément pour piloter le rendu du repli
+    // typographié côté composant (LibelleTransaction). bank_label_raw (PII) exclu.
     label: ligne.cleanLabel ?? "Opération bancaire",
+    cleanLabel: ligne.cleanLabel,
+    // Catégorie OBIE traduite en FR pour l'affichage en sous-texte. On garde `null`
+    // (= pas de sous-texte) quand la catégorie est absente OU non cartographiée :
+    // `categorieFr` retombe sur « Non catégorisé » dans ces deux cas, mais l'afficher
+    // ici se confondrait avec le statut de VENTILATION manuelle (concept distinct).
+    categorieBanque: traduireCategorieBanque(ligne.primaryCategory),
     compteNom: nomParCompte.get(ligne.bankAccountId) ?? "Compte",
     montantAbs: depouillerSigne(ligne.amount),
     devise: ligne.currency,
@@ -109,4 +119,16 @@ export function versPageUI(
 function depouillerSigne(montant: string): string {
   const t = montant.trim();
   return t.startsWith("-") ? t.slice(1) : t;
+}
+
+/**
+ * Traduit la catégorie OBIE pour l'affichage, ou `null` si rien d'utile à montrer.
+ * `categorieFr` renvoie toujours une chaîne (« Non catégorisé » par défaut) ; ici on
+ * REJETTE ce défaut vers `null` pour ne pas afficher un sous-texte trompeur quand la
+ * catégorie est absente ou non cartographiée (cf. `versLigneUI`).
+ */
+function traduireCategorieBanque(primaryCategory: string | null): string | null {
+  if (!primaryCategory?.trim()) return null;
+  const fr = categorieFr(primaryCategory);
+  return fr === CATEGORIE_FR_PAR_DEFAUT ? null : fr;
 }

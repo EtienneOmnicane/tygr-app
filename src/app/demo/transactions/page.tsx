@@ -8,6 +8,9 @@
  *  - alignement `tabular-nums` des montants à droite,
  *  - couleur sémantique des montants (Credit vert / Debit rouge) UNIQUEMENT,
  *  - badges de catégorie SANS vert/rouge ; « partiel » en ambre,
+ *  - libellé : marchand `cleanLabel` plein VS repli discret « Opération bancaire »
+ *    (`text-muted` italique) quand la banque ne l'a pas communiqué (PROD-MERCHANT1),
+ *  - catégorie OBIE de la banque en sous-texte (DISTINCTE du statut de ventilation),
  *  - clic d'une ligne → SplitAllocationModal,
  *  - les 4 états (liste / loading / vide / erreur).
  */
@@ -50,6 +53,8 @@ const LIGNES: TransactionListItem[] = [
     transactionId: "t1",
     transactionDate: "2026-06-11",
     label: "Beachcomber Resorts",
+    cleanLabel: "Beachcomber Resorts",
+    categorieBanque: "Revenus",
     compteNom: "Compte courant MUR",
     montantAbs: "10000.00",
     devise: "MUR",
@@ -63,6 +68,8 @@ const LIGNES: TransactionListItem[] = [
     transactionId: "t2",
     transactionDate: "2026-06-10",
     label: "Central Electricity Board",
+    cleanLabel: "Central Electricity Board",
+    categorieBanque: "Charges",
     compteNom: "Compte courant MUR",
     montantAbs: "8750.50",
     devise: "MUR",
@@ -73,9 +80,12 @@ const LIGNES: TransactionListItem[] = [
     nbCategories: 1,
   },
   {
+    // Cas REPLI : la banque n'a pas communiqué de marchand → libellé discret.
     transactionId: "t3",
     transactionDate: "2026-06-09",
-    label: "Cim Finance — virement fournisseurs",
+    label: "Opération bancaire",
+    cleanLabel: null,
+    categorieBanque: "Charges",
     compteNom: "Compte courant MUR",
     montantAbs: "152340.00",
     devise: "MUR",
@@ -86,9 +96,12 @@ const LIGNES: TransactionListItem[] = [
     nbCategories: 3,
   },
   {
+    // Marchand présent MAIS catégorie banque absente → pas de sous-texte catégorie.
     transactionId: "t4",
     transactionDate: "2026-06-08",
     label: "Stripe payout",
+    cleanLabel: "Stripe payout",
+    categorieBanque: null,
     compteNom: "Compte USD",
     montantAbs: "4200.00",
     devise: "USD",
@@ -102,6 +115,8 @@ const LIGNES: TransactionListItem[] = [
     transactionId: "t5",
     transactionDate: "2026-06-07",
     label: "Loyer bureaux Ebène",
+    cleanLabel: "Loyer bureaux Ebène",
+    categorieBanque: "Loyer",
     compteNom: "Compte courant MUR",
     montantAbs: "65000.00",
     devise: "MUR",

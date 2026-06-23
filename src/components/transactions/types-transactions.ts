@@ -38,8 +38,27 @@ export interface TransactionListItem {
   transactionId: string;
   /** Date comptable Maurice YYYY-MM-DD (E20). */
   transactionDate: string;
-  /** Libellé d'affichage : `cleanLabel ?? bankLabelRaw`. JAMAIS en log/télémétrie (PII). */
+  /**
+   * Libellé d'affichage résolu (`cleanLabel` sinon repli non-PII). Sert notamment
+   * à l'`aria-label` de la ligne, qui ne doit jamais être vide. JAMAIS en
+   * log/télémétrie (PII). Le RENDU visuel du libellé passe par `cleanLabel`
+   * (pour distinguer le repli typographié) — `label` reste la forme « plate ».
+   */
   label: string;
+  /**
+   * Marchand normalisé Omni-FI BRUT (`null` si la banque ne l'a pas communiqué).
+   * Pilote le rendu du libellé : non-null ⇒ marchand en `text-text` ; null ⇒ repli
+   * discret « Opération bancaire » (`text-muted` italique). JAMAIS loggé (PII).
+   */
+  cleanLabel: string | null;
+  /**
+   * Catégorie OBIE de la banque (`primaryCategory`), DÉJÀ traduite en français par
+   * l'adaptateur (`categorieFr`). Affichée en sous-texte du libellé. `null` si la
+   * catégorie est absente ou non cartographiée (l'adaptateur n'affiche alors rien —
+   * il ne fabrique pas un « Non catégorisé » qui se confondrait avec le statut de
+   * ventilation). NB : distinct de `statutCategorisation` (ventilation MANUELLE).
+   */
+  categorieBanque: string | null;
   /** Nom du compte porteur (sous-texte de la ligne). */
   compteNom: string;
   /** Montant ABSOLU, chaîne décimale > 0 (le signe est porté par `sens`). */
