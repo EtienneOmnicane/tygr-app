@@ -440,6 +440,12 @@ export interface ResultatConnexionMulti {
   echecs: number;
   /** Total des comptes rattachés sur l'ensemble des connexions réussies. */
   comptesRattaches: number;
+  /**
+   * Transactions importées juste après la connexion (toutes pages, tous comptes
+   * nouvellement rattachés). Sans cet import, le dashboard (Transactions, Détails)
+   * resterait vide jusqu'au clic « Synchroniser mes comptes » (DASH-AUTOSYNC1).
+   */
+  transactionsImportees: number;
 }
 
 /**
@@ -483,9 +489,62 @@ export async function finaliserConnexionsDropin(
     throw premiereErreur ?? new Error("Aucune connexion à finaliser");
   }
 
+  // Ingestion des TRANSACTIONS des comptes rattachés, DANS LA FOULÉE de la
+  // connexion (DASH-AUTOSYNC1) : sans ça, l'utilisateur connecte une banque, voit
+  // ses comptes + soldes mais AUCUNE transaction tant qu'il n'a pas cliqué
+  // « Synchroniser mes comptes ». Même pattern que synchroniserConnexionsDepuisOmnifi :
+  // on relit les comptes sélectionnés du workspace (couple bankAccountId/omnifiAccountId)
+  // dans le tx scopé (RLS), puis on synchronise chacun.
+  //
+  // Fail-SOFT par compte (cohérent avec le fail-soft par connexion ci-dessus) : un
+  // échec d'ingestion (timeout, IngestionBoucleError, erreur API) ne doit PAS faire
+  // échouer une connexion dont les comptes sont DÉJÀ persistés — la connexion reste
+  // acquise, l'utilisateur pourra relancer « Synchroniser mes comptes ». On logue le
+  // code sans PII (jamais de token ni de message OBIE — règle 8/A1).
+  const clientUserId = await executer(async (tx, ctx) =>
+    clientUserIdDuWorkspace(tx, ctx.workspaceId),
+  );
+  const comptesAIngerer = await executer(async (tx) =>
+    tx
+      .select({
+        bankAccountId: bankAccounts.id,
+        omnifiAccountId: bankAccounts.omnifiAccountId,
+      })
+      .from(bankAccounts)
+      .where(eq(bankAccounts.isSelected, true)),
+  );
+
+  let transactionsImportees = 0;
+  for (const cpt of comptesAIngerer) {
+    try {
+      const r = await synchroniserCompte(client, executer, {
+        omnifiAccountId: cpt.omnifiAccountId,
+        bankAccountId: cpt.bankAccountId,
+        clientUserId,
+      });
+      transactionsImportees += r.transactionsTraitees;
+    } catch (erreur) {
+      const code =
+        erreur instanceof Error && "code" in erreur && typeof erreur.code === "string"
+          ? erreur.code
+          : erreur instanceof Error
+            ? erreur.name
+            : "UNKNOWN";
+      console.warn(
+        JSON.stringify({
+          evt: "ingestion_post_connexion_echec",
+          action: "finaliser-dropin",
+          bankAccountId: cpt.bankAccountId,
+          code,
+        }),
+      );
+    }
+  }
+
   return {
     reussies,
     echecs,
     comptesRattaches: reussies.reduce((n, r) => n + r.comptesRattaches, 0),
+    transactionsImportees,
   };
 }

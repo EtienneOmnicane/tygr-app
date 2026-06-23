@@ -168,8 +168,16 @@ export async function finaliserConnexionDropinAction(
     // Succès partiel possible : on rattache ce qui a réussi et on signale le reste
     // sans énumérer (registre S2) — le détail des échecs est tracé côté serveur.
     const base = `Connexion établie — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.reussies.length} banque(s).`;
+    // Les transactions sont désormais importées dans la foulée (DASH-AUTOSYNC1) : on
+    // le signale quand il y en a, comme le fait « Synchroniser mes comptes ».
+    const avecTx =
+      r.transactionsImportees > 0
+        ? `${base} ${r.transactionsImportees} transaction(s) importée(s).`
+        : base;
     const succes =
-      r.echecs > 0 ? `${base} ${r.echecs} connexion(s) n'ont pas pu être finalisées.` : base;
+      r.echecs > 0
+        ? `${avecTx} ${r.echecs} connexion(s) n'ont pas pu être finalisées.`
+        : avecTx;
     // WIDGET-RD1 : drapeau de succès TOTAL. `echecs` est le nb de publicTokens
     // reçus n'ayant pas pu être finalisés (cf. ResultatConnexionMulti). Zéro échec
     // = succès complet → le Front peut rediriger ; sinon partiel → il reste sur place.
