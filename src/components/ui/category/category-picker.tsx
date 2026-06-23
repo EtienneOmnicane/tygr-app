@@ -144,7 +144,7 @@ export function CategoryPicker({
         aria-label="Rechercher une catégorie"
       />
 
-      <div role="listbox" className="max-h-72 overflow-y-auto" aria-label="Catégories">
+      <div role="listbox" className="max-h-72 overflow-y-auto pb-1" aria-label="Catégories">
         {aucunResultat ? (
           <p className="px-2 py-6 text-center text-sm text-text-muted">
             Aucune catégorie ne correspond.
@@ -278,7 +278,7 @@ function CreationCategorie({
 
   if (!deplie) {
     return (
-      <div className="mt-1 border-t border-line pt-2">
+      <div className="mt-2 border-t border-line pt-2">
         <button
           type="button"
           onClick={ouvrir}
@@ -294,7 +294,7 @@ function CreationCategorie({
   }
 
   return (
-    <div className="mt-1 border-t border-line pt-2">
+    <div className="mt-2 border-t border-line pt-2">
       <div className="flex items-center gap-2">
         <input
           ref={champRef}
