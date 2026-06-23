@@ -19,6 +19,23 @@ describe("categorieFr — correspondance OBIE → français", () => {
     expect(categorieFr("Banking & Finance")).toBe("Frais bancaires");
   });
 
+  it("traduit les catégories OBIE réellement émises par l'API (sonde 2026-06-23, OBIE-CATALOG1)", () => {
+    expect(categorieFr("Business Expenses")).toBe("Charges d'exploitation");
+    expect(categorieFr("Professional Fees")).toBe("Honoraires");
+    expect(categorieFr("Administrative Costs")).toBe("Frais administratifs");
+    expect(categorieFr("Personnel")).toBe("Personnel");
+    expect(categorieFr("Food & Drink")).toBe("Restauration");
+    expect(categorieFr("Travel & Transport")).toBe("Déplacements");
+    expect(categorieFr("Housing")).toBe("Logement");
+    expect(categorieFr("Healthcare")).toBe("Santé");
+    expect(categorieFr("Other")).toBe("Autres");
+  });
+
+  it("fusionne Revenue et Income sous « Revenus » (arbitrage validé 2026-06-23)", () => {
+    expect(categorieFr("Revenue")).toBe("Revenus");
+    expect(categorieFr("Income")).toBe("Revenus");
+  });
+
   it("résout aussi une sous-catégorie fréquente (robustesse)", () => {
     expect(categorieFr("Bank Charges")).toBe("Frais bancaires");
   });

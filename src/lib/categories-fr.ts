@@ -14,10 +14,18 @@
  * La catégorie de VENTILATION MANUELLE (saisie par l'utilisateur, déjà en français,
  * cf. `CategoryManager`) ne passe PAS par cette table — elle est localisée à la source.
  *
- * Correspondance fondée sur les catégories réellement émises (seed de démo
- * `scripts/seed-dashboard-demo.ts` + exemples `docs/documentation_api.md`). Une clé
- * INCONNUE (catégorie OBIE non encore cartographiée, ou `null`) retombe sur
- * « Non catégorisé » — JAMAIS d'anglais résiduel à l'écran, et pas de crash.
+ * Correspondance fondée sur les catégories OBIE RÉELLEMENT émises par l'API (sonde
+ * runtime 2026-06-23 sur compte réel : `business expenses`, `professional fees`,
+ * `revenue`, `administrative costs`, `personnel`, `food & drink`, `travel &
+ * transport`, `housing`, `healthcare`, `other`, `income`). Une clé INCONNUE
+ * (catégorie OBIE non encore cartographiée, ou `null`) retombe sur « Non
+ * catégorisé » — JAMAIS d'anglais résiduel à l'écran, et pas de crash.
+ *
+ * ⚠️ Catalogue FIGÉ = fragile : l'amont émet librement, ce mapping est une liste
+ * fermée maintenue à la main. Toute catégorie OBIE hors liste s'affiche « Non
+ * catégorisé » silencieusement (avant la sonde, 96 % des transactions étaient dans
+ * ce cas). Dette OBIE-CATALOG1 (TODOS.md) : à reconsidérer si l'amont ajoute des
+ * catégories ou si une localisation côté service est livrée.
  */
 
 /** Libellé affiché quand la catégorie est absente ou non cartographiée. */
@@ -32,7 +40,21 @@ export const CATEGORIE_FR_PAR_DEFAUT = "Non catégorisé";
  * passerait une sous-catégorie : la résolution reste correcte sans élargir le contrat.
  */
 const CORRESPONDANCE_FR: Record<string, string> = {
+  // Catégories OBIE observées en runtime (sonde 2026-06-23). `income` et `revenue`
+  // fusionnés sous « Revenus » (deux clés OBIE → même libellé FR, arbitrage validé).
   income: "Revenus",
+  revenue: "Revenus",
+  "business expenses": "Charges d'exploitation",
+  "professional fees": "Honoraires",
+  "administrative costs": "Frais administratifs",
+  personnel: "Personnel",
+  "food & drink": "Restauration",
+  "travel & transport": "Déplacements",
+  housing: "Logement",
+  healthcare: "Santé",
+  other: "Autres",
+  // Catégories historiques (seed de démo / doc API) — conservées : sans coût et
+  // robustes si l'amont les ré-émet.
   rent: "Loyer",
   utilities: "Charges",
   insurance: "Assurances",
