@@ -1083,6 +1083,91 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   modèle de permission read-only cross-tenant à concevoir AVANT tout build.
   Ne contredit pas l'isolation : la démontre (membership explicite).
 
+### Gap Analysis — capacités Omni-FI inexploitées (état des lieux 2026-06-23)
+
+> Issue de l'audit « état des lieux » (Staff Engineer, 2026-06-23) — voir
+> `docs/CARTOGRAPHIE-EXISTANT.md` §6. **Trous dans la raquette** pour le persona
+> Financial Manager multi-BU : des capacités que l'API Omni-FI FOURNIT
+> (`docs/documentation_api.md`) mais que TYGR ne consomme pas encore. Les écarts déjà
+> tracés ailleurs ne sont PAS re-dupliqués ici — ils sont **raccrochés** en fin de
+> section. Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les
+> montants (sinon INTERDITE, règle 9) : ce sont des fonctionnalités absentes.
+
+- [ ] **GAP-WEBHOOK1 (P1, FRONTIÈRE BACKEND) — ingestion pilotée par webhook Omni-FI absente** —
+  Effort L, gardien Backend. Ouvert 2026-06-23. Le cahier des charges v2.1 (§1, §2.4,
+  FEAT-1.2) fait du **webhook HMAC SHA-256** le cœur de l'architecture d'ingestion
+  (résolution `connection → workspace_id` via `tygr_service`, dédup `omnifi_event_id`,
+  quarantaine `webhook_events_pending`, enqueue Inngest). Or **aucune route
+  `/api/webhooks/omnifi` n'existe** (`src/app/api/` ne contient que `auth/`), et l'API
+  expose pourtant toute la surface nécessaire (`PUT /dev/webhooks/config` →
+  `WebhookSecret`, `POST /dev/webhooks/rotate-secret`, `POST /dev/webhooks/test`, 13+
+  `EventType` dont `sync.completed`/`sync.failed`/`sync.mfa_required`). Conséquence
+  métier : la synchro ne se déclenche JAMAIS d'elle-même (cf. `DASH-AUTOSYNC1`). **À
+  concevoir dans un chantier dédié** (réception HMAC constant-time + dédup +
+  quarantaine + worker) — PAS dans une PR de feature ; surface sécurité (HMAC,
+  `tygr_service`) → cross-review obligatoire. **Déclencheur** : DÛ pour un MVP
+  production avec fraîcheur de données (sinon données figées entre clics manuels) ;
+  pré-requis du runbook de déploiement (config webhook = secret distinct sandbox/prod).
+  Complète `DASH-AUTOSYNC1` (piste b) côté push ; le cron (piste a) reste l'alternative
+  pull si le push amont n'est pas fiable en sandbox.
+
+- [ ] **GAP-INSIGHTS1 (P2) — exploiter Financial Insights (`/dashboard/insights`, `/insights/*`)** —
+  Effort M, gardien Backend. Ouvert 2026-06-23. L'API livre clé en main
+  `CashflowRibbon`, `TopVendors`, `CategorySummary`, **`CategoryAnomalies`**,
+  `RecurringPayments`, `IncomeInsights`, `Alerts` — qui couvrent **directement
+  FEAT-8.3** (alertes : liquidités dormantes, frais bancaires anormaux) et enrichissent
+  FEAT-3.1, **sans moteur d'analyse interne à écrire**. TYGR ne consomme aujourd'hui
+  aucun endpoint `insights`. Décision d'architecture à poser (le pushback de la règle
+  10) : **consommer l'amont** (rapide, mais couple TYGR à la qualité analytique
+  Omni-FI et au `clientUserId`) **vs. recalculer en interne** (maîtrise, mais réécrit ce
+  qui existe). **Déclencheur** : ouverture du chantier Epic 8.3 (alertes) OU demande
+  produit « anomalies de frais ». **Raccroché à FEAT-8.3** (ne pas livrer 8.3 sans
+  trancher cette option d'abord).
+
+- [ ] **GAP-DEBT1 (P2) — exploiter Debt Profiling (`/dashboard/debt`, `/debt/instruments`, `/debt/exposure/*`)** —
+  Effort M, gardien Backend. Ouvert 2026-06-23. **FEAT-3.3 (mur de la dette)** et une
+  partie de **FEAT-8.2 (échéanciers)** sont disponibles amont sans saisie manuelle :
+  `TotalDebt`/`UtilizationRate`, instruments (taux, `NextPaymentDate`/`NextPaymentAmount`,
+  `IsOverdue`, `MinimumPaymentAmount`), exposition par institution/devise, et
+  **prédiction de remboursement** (`/debt/accounts/{id}/repayment`) qui alimenterait la
+  courbe prévisionnelle. Le cahier des charges prévoyait la dette en **saisie manuelle**
+  au MVP (FEAT-8.2) — cette dette ouvre l'**alternative API** (moins de saisie, dépend de
+  `PartyId` et de la fiabilité sandbox des endpoints debt). **Déclencheur** : ouverture du
+  chantier FEAT-3.3/8.2 OU preuve sandbox que `/debt/*` est peuplé. **Raccroché à
+  FEAT-3.3 (P3) et FEAT-8.2 (P2)** — re-prioriser ces deux entrées si l'API debt est
+  retenue comme source.
+
+- [ ] **GAP-CATEG-NATIVE1 (P2) — catégorisation native Omni-FI + score de confiance (socle FEAT-8.1)** —
+  Effort M, gardien Backend. Ouvert 2026-06-23. Le moteur de **règles déterministe**
+  (motif→catégorie) est livré (PR #95, `regles-categorisation.ts`) — utile, mais ce
+  n'est PAS FEAT-8.1. Manquent : (1) l'exploitation des champs enrichis amont
+  `primary_category`/`sub_category` (colonnes présentes en base, peu/pas exposées en
+  lecture catégorisée) ; (2) la chaîne de priorité `USER_RULE > SYSTEM_RULE >
+  ML_FALLBACK` (doc API §Priorité de classification) ; (3) le **score de confiance**
+  pilotant l'application silencieuse vs une **file de revue manuelle**. **Déclencheur** :
+  ouverture du chantier FEAT-8.1 (Epic 8). **Raccroché à FEAT-8.1** — cette dette en
+  précise le périmètre « consommer l'enrichissement amont avant tout ML interne ».
+
+- [ ] **GAP-OVERRIDE1 (P2) — propager la surcharge de catégorisation à l'amont (`/transactions/override`)** —
+  Effort S, gardien Backend. Ouvert 2026-06-23. FEAT-2.2 exige que la correction
+  manuelle « transmette la directive via `POST /accounts/{AccountId}/transactions/override` ».
+  Aujourd'hui la ventilation manuelle (`remplacerSplits`, audit append-only) est
+  **purement locale** : l'amont Omni-FI ne ré-apprend jamais des corrections, et une
+  re-synchro peut ré-imposer une catégorisation auto divergente. À câbler : appel
+  best-effort à l'override amont après un split manuel validé (idempotent, sans PII en
+  log, fail-soft — l'échec amont ne casse pas la ventilation locale qui fait foi).
+  **Déclencheur** : retour utilisateur « mes corrections ne tiennent pas après synchro »
+  OU industrialisation de la catégorisation (GAP-CATEG-NATIVE1). **NON une dette
+  d'isolation** (la vérité locale reste la ventilation manuelle ; l'override est un
+  signal sortant).
+
+**Écarts déjà tracés ailleurs (rappel, NON re-dupliqués)** : synchro auto →
+`DASH-AUTOSYNC1` (P1) ; UI multi-entités → `ENTITY-UI1` (P2) ; pré-remplissage sas via
+Parties → `ENTITY-PARTY1` (P2) ; courbe/soldes EOD sans source amont → constat « Solde
+Total dérivé des soldes courants » + dépendance `/balances/history` (404 sandbox) ;
+matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
+`docs/CARTOGRAPHIE-EXISTANT.md` §5 pour la correspondance Épiques → état réel complète.
+
 ## P3 — plus tard
 
 - [ ] **FEAT-3.3 Console mur de la dette** — endpoints `/debt/*` disponibles côté API.
