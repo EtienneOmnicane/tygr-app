@@ -1050,6 +1050,47 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   setup du déploiement : étape build, migrations expand-contract, deploy preview
   (règle 9) — dépend du choix d'hébergeur (Vercel + Neon).
 
+### Chantiers produit prioritaires (revue PM/Architecture, 2026-06-23)
+
+- [ ] **PROD-MERCHANT1 (P1) — afficher le marchand réel + la catégorie amont (tuer « Opération bancaire »)** —
+  Effort M, gardien Front + Backend (contrat). Ouvert 2026-06-23. Le fallback
+  `"Opération bancaire"` (`transactions/adapter.ts:83`, `transactions-table.tsx:54`)
+  s'affiche quand `clean_label` est null. L'enrichissement amont est DÉJÀ ingéré et
+  stocké (`orchestrateur.ts:70-72` mappe `CleanMerchantName`/`PrimaryCategory`/
+  `SubCategory` ; colonnes `schema.ts:372-373`) — donc le travail est d'EXPOSER en
+  lecture, pas de brancher une intégration absente. **PRÉ-REQUIS BLOQUANT (règle 6) :
+  vérifier en runtime le niveau du contrat** — le serializer Django réel niche sous
+  `Enrichment{}` (`omni-fi-core/.../serializers.py:92-101`) alors que `types.ts:97-99`
+  lit les champs À PLAT. Si le sandbox respecte le serializer, `t.CleanMerchantName`
+  est toujours `undefined` → 100% des lignes tombent sur le fallback (cause racine
+  probable). Logger 1 payload sans PII avant tout code. **Recoupe `GAP-CATEG-NATIVE1`
+  (exploitation `primary_category`/`sub_category`)** — PROD-MERCHANT1 en est la tranche
+  AFFICHAGE due immédiatement ; GAP-CATEG-NATIVE1 garde le volet score de confiance/
+  file de revue (Epic 8.1). **Déclencheur** : ce ticket (irritant visible en démo).
+
+- [ ] **PROD-TRESO-EOD1 (P1) — courbe de trésorerie journalière depuis `RunningBalance`** —
+  Effort M, gardien Backend. Ouvert 2026-06-23. PRÉMISSE CORRIGÉE : le « Solde Total »
+  n'est PAS déduit des historiques — il vient déjà du `current_balance` instantané ITAV
+  (`orchestration.ts:151-153`, `dashboard.ts:179-193`). Le vrai trou = la COURBE 90j
+  (`balance_history`) est vide tant qu'Omni-FI ne sert pas `/balances/history` (404
+  sandbox). Le serializer transaction expose `RunningBalance` par ligne
+  (`omni-fi-core/.../models.py:94-100`) : reconstruire l'EOD réel par compte/devise à
+  partir du dernier `RunningBalance` de chaque jour comptable (AT TIME ZONE
+  'Indian/Mauritius', E20), sans attendre l'endpoint amont. APPEND-ONLY : `balance_history`
+  reste immuable (pas de DELETE). **Lève la décision DR-F3** (solde courant vs EOD) et
+  alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
+  pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
+
+- [ ] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
+  Effort L (CC: ~½j par passe), gardien Front + Design. Ouvert 2026-06-23. Passe
+  /design-review sur les écrans clés (dashboard, /transactions, /regles, sas entités)
+  contre `docs/UI_GUIDELINES.md` : hiérarchie, densités, `tabular-nums`, états
+  loading/vide/erreur/partiel, focus visibles, alignement des virgules décimales
+  multi-devises. Sortie = findings priorisés, écarts OBJECTIFS (tokens) traités comme
+  bloquants (Gate 4), écarts de goût renvoyés en backlog. PAS une refonte from scratch :
+  itération sur l'existant. **Déclencheur** : avant le premier déploiement production
+  (P1). Raccrocher les findings tokens/sémantique à des sous-tickets datés.
+
 ## P2 — après le MVP
 
 ### Epic 8 — Intelligence Métier (interview Accountant Omnicane/OL, 2026-06-11)
@@ -1167,6 +1208,32 @@ Parties → `ENTITY-PARTY1` (P2) ; courbe/soldes EOD sans source amont → const
 Total dérivé des soldes courants » + dépendance `/balances/history` (404 sandbox) ;
 matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
 `docs/CARTOGRAPHIE-EXISTANT.md` §5 pour la correspondance Épiques → état réel complète.
+
+### Chantiers produit P2 (revue PM/Architecture, 2026-06-23)
+
+- [ ] **PROD-I18N-EN1 (P2) — internationalisation anglaise de l'application** —
+  Effort L (transverse), gardien Front. Ouvert 2026-06-23. Vital pour la phase finale
+  (démo/sales hors francophones). Aujourd'hui 100% des chaînes UI sont en FR en dur
+  (interface FR actée, CLAUDE.md). Périmètre : extraction des chaînes, lib i18n (next-intl
+  pressenti, Layer 1 — à valider), bascule FR↔EN, et surtout NE PAS internationaliser le
+  FORMATAGE financier qui reste piloté par `format-montant.ts`/`format-date.ts` (devise =
+  préfixe symbolique, séparateurs ; un changement de locale ne doit pas casser l'espace
+  fine insécable ni la virgule décimale). FYGR a un switch de langue (drapeau, captures) —
+  parité attendue. **Déclencheur** : préparation de la démo finale / premier prospect
+  anglophone. **Raccroché à la phase de polissage pré-démo** (jamais « un jour »).
+
+- [ ] **PROD-GRAPHS-FYGR1 (P2) — aligner/challenger les graphiques sur FYGR (donut + barres + analyse catégorie)** —
+  Effort M, gardien Front + Backend. Ouvert 2026-06-23. FYGR expose un donut « analyse
+  par catégorie » + des barres mensuelles par catégorie + un moteur de formules cash-flow
+  (captures `docs/benchmarks/FYGR/2_graphics/`). L'API Omni-FI fournit CLÉ EN MAIN
+  `CategorySummary`, `TopVendors`, `CashflowRibbon`, `CategoryAnomalies` (endpoint
+  `/insights`) — qu'on ne consomme pas. **Décision d'architecture à poser AVANT build
+  (règle 10) : consommer l'amont (rapide, couple TYGR à la qualité analytique Omni-FI +
+  `clientUserId`) vs recalculer en interne (maîtrise, réécrit l'existant).** Le moteur de
+  formules custom FYGR est hors MVP (raccrocher à FEAT-3.2 pivot). **Recoupe directement
+  `GAP-INSIGHTS1`** — PROD-GRAPHS-FYGR1 en est le volet VISUALISATION ; ne pas livrer sans
+  trancher l'option insights d'abord. **Déclencheur** : ouverture Epic 8.3 OU demande
+  produit « graphiques comme FYGR ». **Raccroché à GAP-INSIGHTS1 + FEAT-3.2.**
 
 ## P3 — plus tard
 
