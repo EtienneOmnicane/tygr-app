@@ -330,6 +330,16 @@ export const bankAccounts = pgTable(
 ).enableRLS();
 
 /**
+ * Sources d'une catégorie AUTOMATIQUE de transaction (provenance, marqueur sur
+ * transactions_cache — à ne pas confondre avec CATEGORIZATION_SOURCES qui qualifie
+ * un SPLIT de transaction_categorizations). Liste fermée et extensible : seul
+ * 'OMNIFI' aujourd'hui (pré-catégorisation OBIE du bloc Enrichment). De futures
+ * sources auto (ex. un classifieur interne) s'ajoutent ici + au CHECK SQL.
+ */
+export const CATEGORY_SOURCES = ["OMNIFI"] as const;
+export type CategorySource = (typeof CATEGORY_SOURCES)[number];
+
+/**
  * Cache des transactions Omni-FI (OBIE v4.0.1), partitionné par RANGE sur
  * transaction_date (clause posée à la main dans la migration — drizzle-kit ne
  * sait pas l'émettre ; le snapshot reste correct, colonnes identiques).
@@ -372,6 +382,16 @@ export const transactionsCache = pgTable(
     cleanLabel: varchar("clean_label", { length: 255 }),
     primaryCategory: varchar("primary_category", { length: 120 }),
     subCategory: varchar("sub_category", { length: 120 }),
+    /**
+     * Provenance AUTOMATIQUE de la catégorie OBIE : true ⇔ primary_category vient
+     * d'une source auto (Omni-FI, bloc Enrichment) et non d'une absence. Permet de
+     * distinguer « auto » de « manuelle » (la catégorisation manuelle TYGR vit dans
+     * les splits transaction_categorizations, table à part). MANUAL prime à
+     * l'affichage/agrégation, mais ce marqueur est CONSERVÉ comme trace d'origine.
+     */
+    isAutoCategorized: boolean("is_auto_categorized").notNull().default(false),
+    /** Source de la catégorie auto (NULL = aucune). Cf. CATEGORY_SOURCES. */
+    categorySource: varchar("category_source", { length: 10 }).$type<CategorySource>(),
     /** Tombstone pour Removed[] du sync — jamais de DELETE physique. */
     isRemoved: boolean("is_removed").notNull().default(false),
   },
@@ -385,6 +405,17 @@ export const transactionsCache = pgTable(
     check(
       "transactions_cache_credit_debit_check",
       sql`${t.creditDebit} IN ('Credit','Debit')`,
+    ),
+    // Source auto bornée à la liste fermée (NULL autorisé = pas de provenance auto).
+    check(
+      "transactions_cache_category_source_check",
+      sql`${t.categorySource} IS NULL OR ${t.categorySource} IN ('OMNIFI')`,
+    ),
+    // Cohérence marqueur/source : true ⟺ source présente ; false ⟺ source NULL.
+    // Interdit les états incohérents quel que soit le chemin d'écriture.
+    check(
+      "transactions_cache_auto_source_coherence",
+      sql`(${t.isAutoCategorized} = true AND ${t.categorySource} IS NOT NULL) OR (${t.isAutoCategorized} = false AND ${t.categorySource} IS NULL)`,
     ),
     // Couvre la liste du dashboard (plan, décision #603).
     index("transactions_cache_workspace_date_idx").on(

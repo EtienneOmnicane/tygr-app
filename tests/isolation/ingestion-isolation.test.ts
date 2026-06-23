@@ -15,7 +15,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -79,6 +79,8 @@ function txLot(omnifiTxnId: string, date: string, amount = "1500.00") {
       cleanLabel: "Ebène",
       primaryCategory: "Rent",
       subCategory: "Office Rent",
+      isAutoCategorized: true,
+      categorySource: "OMNIFI" as const,
       isRemoved: false,
     },
   ];
@@ -272,5 +274,189 @@ describe("invariant Entités : ingestion crée entity_id NULL et ne l'écrase pa
     expect(compte[0].entityId).toBe(ENT_A); // ⬅️ préservé
     expect(compte[0].accountName).toBe("Compte courant (re-sync)"); // ⬅️ mis à jour
     expect(compte[0].currentBalance).toBe("9999.00"); // ⬅️ mis à jour
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Provenance auto (Omni-FI) — marqueur is_auto_categorized /         */
+/* category_source : cohérence en base (CHECK 0011) + logique de       */
+/* backfill idempotente sur la donnée déjà présente.                   */
+/* ------------------------------------------------------------------ */
+
+// Réplique EXACTE de l'UPDATE de scripts/backfill-auto-categorized.mjs (même prédicat
+// « catégorie exploitable », mêmes 3 colonnes au SET, mêmes 3 disjonctions au WHERE —
+// périmètre primary_category UNIQUEMENT, sub_category non touchée, aligné sur
+// l'ingestion). On la teste ici sur PGlite réel pour prouver convergence + idempotence
+// sans lancer le script (pas de connexion réseau en test). Si le script change, CETTE
+// constante DOIT suivre — sinon le test ne prouve plus le chemin réel.
+const EXPLOITABLE = `primary_category IS NOT NULL AND btrim(primary_category) <> '' AND lower(btrim(primary_category)) <> 'uncategorized'`;
+const BACKFILL_SQL = `
+  UPDATE transactions_cache
+  SET
+    is_auto_categorized = CASE WHEN ${EXPLOITABLE} THEN true ELSE false END,
+    category_source     = CASE WHEN ${EXPLOITABLE} THEN 'OMNIFI' ELSE NULL END,
+    primary_category    = CASE WHEN ${EXPLOITABLE} THEN primary_category ELSE NULL END
+  WHERE
+    is_auto_categorized <> (CASE WHEN ${EXPLOITABLE} THEN true ELSE false END)
+    OR category_source IS DISTINCT FROM (CASE WHEN ${EXPLOITABLE} THEN 'OMNIFI' ELSE NULL END)
+    OR (NOT (${EXPLOITABLE}) AND primary_category IS NOT NULL)
+`;
+
+describe("provenance auto Omni-FI : marqueur + backfill", () => {
+  it("upsertTransactions pose le marqueur OMNIFI quand la catégorie est exploitable", async () => {
+    const baA = await prerequisCompte(sessionA, "conn-auto-1", "acc-auto-1");
+    await withWorkspace(sessionA, (tx, ctx) =>
+      upsertTransactions(tx, ctx, baA, [
+        {
+          omnifiTxnId: "tx-auto-ok",
+          transactionDate: "2026-06-12",
+          bookingDateTime: new Date("2026-06-12T05:30:00Z"),
+          amount: "1500.00",
+          currency: "MUR",
+          creditDebit: "Debit" as const,
+          bankLabelRaw: "CEB",
+          cleanLabel: "CEB",
+          primaryCategory: "Utilities",
+          subCategory: "Electricity",
+          isAutoCategorized: true,
+          categorySource: "OMNIFI" as const,
+          isRemoved: false,
+        },
+      ]),
+    );
+    const [ligne] = await withWorkspace(sessionA, (tx) =>
+      tx
+        .select({
+          isAuto: transactionsCache.isAutoCategorized,
+          source: transactionsCache.categorySource,
+        })
+        .from(transactionsCache)
+        .where(eq(transactionsCache.omnifiTxnId, "tx-auto-ok")),
+    );
+    expect(ligne.isAuto).toBe(true);
+    expect(ligne.source).toBe("OMNIFI");
+  });
+
+  it("le CHECK de cohérence rejette un état incohérent (auto=true sans source)", async () => {
+    const baA = await prerequisCompte(sessionA, "conn-auto-2", "acc-auto-2");
+    // Insertion brute DANS le contexte RLS (withWorkspace pose app.current_workspace_id,
+    // donc le WITH CHECK tenant passe) pour isoler le CHECK de cohérence :
+    // is_auto_categorized=true MAIS category_source=NULL → doit lever check_violation.
+    // On contourne volontairement le DTO TS (qui garantit déjà la cohérence) pour
+    // prouver que la base est la dernière ligne de défense.
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        tx.execute(sql`
+          insert into transactions_cache
+            (id, workspace_id, bank_account_id, omnifi_txn_id, transaction_date,
+             booking_date_time, amount, currency, credit_debit,
+             is_auto_categorized, category_source, is_removed)
+          values
+            (gen_random_uuid(), ${ctx.workspaceId}, ${baA}, 'tx-incoherent', '2026-06-13',
+             '2026-06-13T05:30:00Z', '10.00', 'MUR', 'Debit',
+             true, null, false)
+        `),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("backfill : convergence (catégorie exploitable → OMNIFI ; 'Uncategorized'/vide → nettoyé) + idempotence", async () => {
+    const baA = await prerequisCompte(sessionA, "conn-bf", "acc-bf");
+    // On simule des lignes ingérées AVANT la feature : marqueur à false partout, avec
+    // des primary_category « polluées » (Uncategorized, vide) à nettoyer. On passe par
+    // upsertTransactions (RLS OK) en forçant l'état legacy via les champs du DTO
+    // (false/null = cohérent avec le CHECK ; c'est exactement l'état d'avant 0011).
+    const lignesLegacy = [
+      { txn: "bf-income", cat: "Income", sous: null }, // exploitable → doit devenir OMNIFI
+      { txn: "bf-uncat", cat: "Uncategorized", sous: null }, // → nettoyé (NULL, pas de marqueur)
+      { txn: "bf-vide", cat: "", sous: null }, // → nettoyé
+      { txn: "bf-casse", cat: "  UNCATEGORIZED ", sous: null }, // casse/espaces → nettoyé
+      // Catégorie valide MAIS sous-catégorie "Uncategorized" : le backfill NE doit PAS
+      // toucher sub_category (hors périmètre, aligné sur l'ingestion). Garde-fou de
+      // non-régression du constat QA 2026-06-23.
+      { txn: "bf-sous-uncat", cat: "Income", sous: "Uncategorized" },
+    ];
+    let jour = 14;
+    for (const l of lignesLegacy) {
+      const date = `2026-06-${jour}`;
+      await withWorkspace(sessionA, (tx, ctx) =>
+        upsertTransactions(tx, ctx, baA, [
+          {
+            omnifiTxnId: l.txn,
+            transactionDate: date,
+            bookingDateTime: new Date(`${date}T05:30:00Z`),
+            amount: "10.00",
+            currency: "MUR",
+            creditDebit: "Debit" as const,
+            bankLabelRaw: null,
+            cleanLabel: null,
+            // État LEGACY simulé : catégorie polluée présente, AUCUN marqueur (comme
+            // avant la feature). Cohérent avec le CHECK (false ⟺ source null).
+            primaryCategory: l.cat,
+            subCategory: l.sous,
+            isAutoCategorized: false,
+            categorySource: null,
+            isRemoved: false,
+          },
+        ]),
+      );
+      jour += 1;
+    }
+
+    // Le backfill RÉEL tourne sous le rôle OWNER (DATABASE_URL_ADMIN, RLS non
+    // filtrée — c'est une migration de données one-shot, cf. en-tête du script).
+    // On reproduit fidèlement ce contexte : `reset role` repasse au superuser PGlite
+    // (BYPASSRLS, équivalent owner ; PGlite n'a pas de rôle "tygr_owner" nommé). On
+    // restaure `tygr_app` juste après pour que les lectures de vérification repassent
+    // sous RLS, comme l'app. (Même pattern que dashboard-cas-limites.test.ts.)
+    await client.exec(`reset role;`);
+    // 1re passe du backfill.
+    const passe1 = await client.query(BACKFILL_SQL);
+    await client.exec(`set role tygr_app;`);
+    expect(passe1.affectedRows).toBeGreaterThan(0);
+
+    // Vérifie l'état cible.
+    const apres = await withWorkspace(sessionA, (tx) =>
+      tx
+        .select({
+          txn: transactionsCache.omnifiTxnId,
+          cat: transactionsCache.primaryCategory,
+          sous: transactionsCache.subCategory,
+          isAuto: transactionsCache.isAutoCategorized,
+          source: transactionsCache.categorySource,
+        })
+        .from(transactionsCache),
+    );
+    const parTxn = Object.fromEntries(apres.map((r) => [r.txn, r]));
+
+    // Exploitable → marqueur OMNIFI, catégorie conservée.
+    expect(parTxn["bf-income"]).toMatchObject({
+      cat: "Income",
+      isAuto: true,
+      source: "OMNIFI",
+    });
+    // Polluées → primary_category nettoyée à NULL, aucun marqueur.
+    for (const txn of ["bf-uncat", "bf-vide", "bf-casse"]) {
+      expect(parTxn[txn]).toMatchObject({
+        cat: null,
+        isAuto: false,
+        source: null,
+      });
+    }
+    // Catégorie valide + sous-catégorie "Uncategorized" : marqueur OMNIFI posé, mais
+    // sub_category INTACTE (le backfill ne la touche pas — périmètre primary_category).
+    expect(parTxn["bf-sous-uncat"]).toMatchObject({
+      cat: "Income",
+      sous: "Uncategorized",
+      isAuto: true,
+      source: "OMNIFI",
+    });
+
+    // IDEMPOTENCE : 2e passe (toujours sous le rôle owner) ne doit toucher AUCUNE
+    // ligne (état déjà convergé → le WHERE du backfill ne matche plus rien).
+    await client.exec(`reset role;`);
+    const passe2 = await client.query(BACKFILL_SQL);
+    await client.exec(`set role tygr_app;`);
+    expect(passe2.affectedRows).toBe(0);
   });
 });

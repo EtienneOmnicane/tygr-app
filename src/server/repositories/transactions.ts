@@ -36,6 +36,7 @@ import {
   bankConnections,
   transactionsCache,
 } from "@/server/db/schema";
+import type { CategorySource } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import {
   estDateComptableValide,
@@ -73,6 +74,10 @@ export interface TransactionLigne {
   bankLabelRaw: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Provenance auto de la catégorie OBIE (true = pré-catégorisée par Omni-FI). */
+  isAutoCategorized: boolean;
+  /** Source de la catégorie auto (NULL si non auto). */
+  categorySource: CategorySource | null;
   /** Nombre de splits de catégorisation rattachés. */
   nbSplits: number;
   /** Somme des montants de splits (chaîne numeric ; "0" si aucun). */
@@ -258,6 +263,8 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       bankLabelRaw: transactionsCache.bankLabelRaw,
       primaryCategory: transactionsCache.primaryCategory,
       subCategory: transactionsCache.subCategory,
+      isAutoCategorized: transactionsCache.isAutoCategorized,
+      categorySource: transactionsCache.categorySource,
       nbSplits: nbSplitsExpr,
       montantVentile: montantVentileExpr,
       statut: statutExpr,

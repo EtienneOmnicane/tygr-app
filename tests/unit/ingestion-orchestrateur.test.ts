@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OmniFiClient, OmniFiTransaction } from "@/server/omnifi";
 import {
   bornerPageSize,
+  categorieAutoValide,
   IngestionBoucleError,
   MAX_PAGES,
   PAGE_SIZE_MAX,
@@ -139,6 +140,9 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.cleanLabel).toBe("Shell");
     expect(l.primaryCategory).toBe("Transport");
     expect(l.subCategory).toBe("Fuel");
+    // Catégorie OBIE exploitable → marqueur de provenance posé, paire cohérente.
+    expect(l.isAutoCategorized).toBe(true);
+    expect(l.categorySource).toBe("OMNIFI");
   });
 
   it("PIÈGE : CleanMerchantName \"\" (défaut serializer) → cleanLabel null, pas chaîne vide", () => {
@@ -157,24 +161,68 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.cleanLabel).toBeNull();
     expect(l.primaryCategory).toBeNull();
     expect(l.subCategory).toBeNull();
+    // Catégorie vide → AUCUNE provenance auto (marqueur false / source null).
+    expect(l.isAutoCategorized).toBe(false);
+    expect(l.categorySource).toBeNull();
   });
 
-  it("Enrichment absent (payload ancien) → cleanLabel / primaryCategory / subCategory null, sans crash", () => {
+  it("Enrichment absent (payload ancien) → cleanLabel / primaryCategory / subCategory null + pas de marqueur, sans crash", () => {
     const l = versLignePersistee(txOBIE({ Enrichment: undefined }));
     expect(l.cleanLabel).toBeNull();
     expect(l.primaryCategory).toBeNull();
     expect(l.subCategory).toBeNull();
+    expect(l.isAutoCategorized).toBe(false);
+    expect(l.categorySource).toBeNull();
   });
 
-  // Choix documenté : le défaut serializer "Uncategorized" est une étiquette amont
-  // assumée (string non vide) → on la laisse passer telle quelle ; seules les VRAIES
-  // absences ("") deviennent null.
-  it("PrimaryCategory \"Uncategorized\" (défaut serializer) → conservé tel quel", () => {
+  // DÉCISION ACTÉE (PO 2026-06-23, ce chantier) : le défaut serializer "Uncategorized"
+  // est traité comme une ABSENCE de catégorie — primary_category nullifiée (base
+  // rigoureuse, pas de chaîne polluée dans les rapports) et AUCUN marqueur de
+  // provenance. Remplace l'ancien comportement « conservé tel quel ».
+  it("PrimaryCategory \"Uncategorized\" → nullifiée + aucune provenance auto", () => {
     const l = versLignePersistee(
       txOBIE({ Enrichment: { PrimaryCategory: "Uncategorized" } }),
     );
-    expect(l.primaryCategory).toBe("Uncategorized");
-    expect(l.cleanLabel).toBeNull(); // CleanMerchantName absent du bloc → null
+    expect(l.primaryCategory).toBeNull();
+    expect(l.isAutoCategorized).toBe(false);
+    expect(l.categorySource).toBeNull();
+  });
+
+  it("PrimaryCategory \"uncategorized\" (casse différente) → traitée comme absence", () => {
+    const l = versLignePersistee(
+      txOBIE({ Enrichment: { PrimaryCategory: "  UNCATEGORIZED  " } }),
+    );
+    expect(l.primaryCategory).toBeNull();
+    expect(l.isAutoCategorized).toBe(false);
+    expect(l.categorySource).toBeNull();
+  });
+
+  it("PrimaryCategory valide → marqueur OMNIFI même si CleanMerchantName absent", () => {
+    const l = versLignePersistee(
+      txOBIE({ Enrichment: { PrimaryCategory: "Income" } }),
+    );
+    expect(l.primaryCategory).toBe("Income");
+    expect(l.isAutoCategorized).toBe(true);
+    expect(l.categorySource).toBe("OMNIFI");
+  });
+});
+
+// Fonction pure pilotant la provenance auto ET la nullification de primary_category.
+describe("categorieAutoValide", () => {
+  it("catégorie exploitable → true", () => {
+    expect(categorieAutoValide("Income")).toBe(true);
+    expect(categorieAutoValide("business expenses")).toBe(true);
+    expect(categorieAutoValide("  Transport  ")).toBe(true);
+  });
+
+  it("absence / vide / Uncategorized (toutes casses) → false", () => {
+    expect(categorieAutoValide(null)).toBe(false);
+    expect(categorieAutoValide(undefined)).toBe(false);
+    expect(categorieAutoValide("")).toBe(false);
+    expect(categorieAutoValide("   ")).toBe(false);
+    expect(categorieAutoValide("Uncategorized")).toBe(false);
+    expect(categorieAutoValide("uncategorized")).toBe(false);
+    expect(categorieAutoValide("  UNCATEGORIZED ")).toBe(false);
   });
 });
 

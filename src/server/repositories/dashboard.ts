@@ -28,6 +28,7 @@ import {
   balanceHistory,
   transactionsCache,
 } from "@/server/db/schema";
+import type { CategorySource } from "@/server/db/schema";
 import type { WorkspaceTx } from "@/server/db/tenancy";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -110,6 +111,10 @@ export interface TransactionRecente {
   cleanLabel: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Provenance auto de la catégorie OBIE (true = pré-catégorisée par Omni-FI). */
+  isAutoCategorized: boolean;
+  /** Source de la catégorie auto (NULL si non auto). */
+  categorySource: CategorySource | null;
   bankAccountId: string;
 }
 
@@ -428,6 +433,8 @@ export async function transactionsRecentes(
       cleanLabel: transactionsCache.cleanLabel,
       primaryCategory: transactionsCache.primaryCategory,
       subCategory: transactionsCache.subCategory,
+      isAutoCategorized: transactionsCache.isAutoCategorized,
+      categorySource: transactionsCache.categorySource,
       bankAccountId: transactionsCache.bankAccountId,
     })
     .from(transactionsCache)

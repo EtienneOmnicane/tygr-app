@@ -68,12 +68,38 @@ function chaineOuNull(s: string | undefined | null): string | null {
   return v ? v : null;
 }
 
+/**
+ * Étiquette OBIE traitée comme « pas de catégorie » : le serializer amont pose
+ * "Uncategorized" par DÉFAUT quand la banque n'a rien classé (cf. OmniFiEnrichment).
+ * On la traite comme une absence — JAMAIS comme une vraie catégorie. Liste fermée,
+ * comparaison insensible à la casse/aux espaces.
+ */
+const CATEGORIES_OBIE_VIDES = new Set(["uncategorized"]);
+
+/**
+ * Une catégorie OBIE est-elle EXPLOITABLE (≠ vide, ≠ "Uncategorized") ? Fonction
+ * pure (testée en isolation). Sert à la fois à décider du marqueur de provenance
+ * et à nullifier `primary_category` quand la catégorie n'apporte rien — pour ne pas
+ * polluer la base avec "Uncategorized" (décision PO : base rigoureuse).
+ */
+export function categorieAutoValide(primaryCategory: string | undefined | null): boolean {
+  const clef = primaryCategory?.trim().toLowerCase();
+  if (!clef) return false;
+  return !CATEGORIES_OBIE_VIDES.has(clef);
+}
+
 /** Mappe une transaction OBIE → ligne à persister (conversions règle 8 / E20). */
 export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
   // L'enrichissement est IMBRIQUÉ sous `Enrichment{}` (serializer Django faisant foi),
   // PAS à plat — lire à plat valait `undefined` → fallback partout (PROD-MERCHANT1).
   // `t.Enrichment?.` couvre aussi le cas où l'objet entier manque (payload ancien).
   const e = t.Enrichment;
+  // Provenance auto : la pré-catégorisation OBIE n'est retenue QUE si elle est
+  // exploitable. Sinon on retombe sur le comportement actuel (catégorie nulle, pas
+  // de marqueur) — « ne corrompt pas la donnée ». Calculé une fois : pilote à la
+  // fois primary_category, is_auto_categorized et category_source (cohérence
+  // garantie aussi par le CHECK transactions_cache_auto_source_coherence).
+  const categorieValide = categorieAutoValide(e?.PrimaryCategory);
   return {
     omnifiTxnId: t.TransactionId,
     transactionDate: deriverDateComptableMaurice(t.BookingDateTime),
@@ -87,12 +113,17 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     // Omni-FI). `chaineOuNull` normalise une chaîne vide en null propre.
     bankLabelRaw: chaineOuNull(t.TransactionInformation),
     cleanLabel: chaineOuNull(e?.CleanMerchantName),
-    // PrimaryCategory : on laisse passer le défaut serializer "Uncategorized" tel quel
-    // (string non vide ⇒ survit à chaineOuNull). C'est une étiquette amont assumée, pas
-    // une vraie catégorie TYGR ; la catégorisation réelle reste portée par les splits /
-    // le moteur de règles. Seules les VRAIES absences ("") deviennent null.
-    primaryCategory: chaineOuNull(e?.PrimaryCategory),
+    // PrimaryCategory : persistée UNIQUEMENT si exploitable. "Uncategorized" et les
+    // chaînes vides deviennent NULL (auparavant "Uncategorized" survivait tel quel et
+    // polluait la base — 96 % des tx ; cf. categories-fr.ts). Reste une étiquette OBIE
+    // brute (anglais, langue pivot), pas une vraie catégorie TYGR : la catégorisation
+    // réelle est portée par les splits / le moteur de règles.
+    primaryCategory: categorieValide ? chaineOuNull(e?.PrimaryCategory) : null,
     subCategory: chaineOuNull(e?.SubCategory),
+    // Marqueur de provenance : posé SSI la catégorie OBIE est exploitable. La paire
+    // (is_auto_categorized, category_source) est toujours cohérente (cf. CHECK).
+    isAutoCategorized: categorieValide,
+    categorySource: categorieValide ? "OMNIFI" : null,
     isRemoved: false,
   };
 }

@@ -82,6 +82,8 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       cleanLabel: "Beachcomber Resorts",
       primaryCategory: "Income",
       subCategory: "Client Payments",
+      isAutoCategorized: true,
+      categorySource: "OMNIFI",
       bankAccountId: "demo-acc-sbm-0937",
     },
     {
@@ -93,6 +95,8 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       cleanLabel: "Ciel Textile",
       primaryCategory: "Income",
       subCategory: "Client Payments",
+      isAutoCategorized: true,
+      categorySource: "OMNIFI",
       bankAccountId: "demo-acc-sbm-0937",
     },
     {
@@ -104,6 +108,8 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       cleanLabel: "CEB",
       primaryCategory: "Utilities",
       subCategory: "Electricity",
+      isAutoCategorized: true,
+      categorySource: "OMNIFI",
       bankAccountId: "demo-acc-mcb-4521",
     },
     {
@@ -115,6 +121,8 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       cleanLabel: "Ebène Cybercity",
       primaryCategory: "Rent",
       subCategory: "Office Rent",
+      isAutoCategorized: true,
+      categorySource: "OMNIFI",
       bankAccountId: "demo-acc-mcb-4521",
     },
   ],

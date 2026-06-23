@@ -14,6 +14,7 @@
     "db:provision": "node scripts/provision.mjs",
     "db:baseline": "node scripts/baseline-migrations.mjs",
     "db:migrate": "node scripts/migrate.mjs",
+    "db:backfill-auto-categorized": "node scripts/backfill-auto-categorized.mjs",
     "seed:admin": "node scripts/seed-admin.mjs",
     "seed:categories": "node scripts/seed-categories.mjs"
   },
