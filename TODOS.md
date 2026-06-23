@@ -494,6 +494,22 @@ suffisant) :
   (`categorie.name` via `CategorisationStatusBadge`), saisie par l'utilisateur et DÉJÀ en français
   (cf. `types-transactions.ts` : « indépendant de primaryCategory »). La traduire eût été incorrect.
   DR-F1 ne concernait donc que la catégorie OBIE auto, affichée uniquement sur le dashboard.
+- [ ] **OBIE-CATALOG1 (P2, medium, robustesse données) — catalogue OBIE→FR FIGÉ, désynchronisé
+  de l'amont réel** — Effort S, ouvert 2026-06-23 (sonde runtime, branche `fix/categories-fr-catalogue-obie`).
+  DR-F1 avait peuplé `CORRESPONDANCE_FR` (`src/lib/categories-fr.ts`) depuis le **seed de démo**
+  (8 clés : income/rent/utilities/…). Or la sonde du compte RÉEL montre que l'API émet **11
+  catégories distinctes**, dont **10 absentes du mapping** (`Business Expenses` 96 tx,
+  `Professional Fees`, `Revenue`, `Administrative Costs`, `Personnel`, `Food & Drink`, `Travel &
+  Transport`, `Housing`, `Healthcare`, `Other`) → **96 % des transactions** retombaient sur « Non
+  catégorisé » à l'affichage alors que `primary_category` est correctement peuplée en base
+  (l'ingestion fait son travail — bug d'AFFICHAGE pur, pas d'ingestion). **Correctif immédiat
+  (cette branche)** : les 11 clés observées ajoutées au mapping (`revenue`+`income`→« Revenus »).
+  **Fragilité RÉSIDUELLE** : le mapping reste une liste FERMÉE maintenue à la main, alors que
+  l'amont émet librement — toute NOUVELLE catégorie OBIE s'affichera silencieusement « Non
+  catégorisé » sans alerte. **Déclencheur de résolution** : (a) une localisation côté SERVICE
+  (table de mapping en base, langue pivot anglaise conservée) si le volume de catégories grandit ;
+  OU (b) ajout d'une catégorie OBIE non cartographiée détecté en prod. Piste low-cost intermédiaire :
+  log structuré (sans PII) quand `categorieFr` retombe sur le défaut, pour détecter les trous.
 - [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
   refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`
