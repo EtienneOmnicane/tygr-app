@@ -473,9 +473,33 @@ docker run -d --name tygr_postgres --network tygr_validation \
   -e POSTGRES_USER=tygr_owner -e POSTGRES_PASSWORD=… -e POSTGRES_DB=tygr postgres:16-alpine
 docker run -d --name tygr_wsproxy --network tygr_validation -p 127.0.0.1:5433:80 \
   -e ALLOW_ADDR_REGEX='^tygr_postgres:5432$' ghcr.io/neondatabase/wsproxy:latest
-# migrations : psql dans le conteneur (sed 's/--> statement-breakpoint//g' …)
-# rôle applicatif : CREATE ROLE tygr_app LOGIN + GRANT (hors migrations à ce jour — voir TODOS)
 ```
+
+### Séquence d'initialisation (ordre NON négociable — garanties RLS)
+
+Une fois les conteneurs en ligne, provisionner la base en 3 étapes. Toujours
+charger le `.env` avec `--env-file=.env` : les scripts `npm run db:*` nus NE
+chargent PAS le `.env` et plantent sur `DATABASE_URL_ADMIN`.
+
+```bash
+# 1. crée le rôle applicatif tygr_app (idempotent)
+node --env-file=.env scripts/provision.mjs
+# 2. applique les schémas Drizzle (tables fraîches)
+node --env-file=.env scripts/migrate.mjs
+# 3. RE-provision : applique la liste blanche des GRANT (dont DELETE) sur les tables fraîchement créées
+node --env-file=.env scripts/provision.mjs
+```
+
+> ⚠️ **Règle C4 — `provision.mjs` crée le rôle SANS mot de passe.** À ce stade
+> `tygr_app` existe mais a `rolcanlogin=false` : tout accès applicatif (qui passe
+> par `DATABASE_URL` = `tygr_app`) échoue à l'authentification, alors même que
+> provision et migrations « passent » (eux tournent en `tygr_owner` via
+> `DATABASE_URL_ADMIN`). Étape OBLIGATOIRE pour débloquer l'accès, hors script et
+> jamais commitée :
+>
+> ```bash
+> ALTER ROLE tygr_app LOGIN PASSWORD '<mot de passe de DATABASE_URL>';
+> ```
 
 `.env` local : `NEON_WSPROXY_LOCAL="localhost:5433"` (active le câblage wsproxy
 dev-only de `src/db/index.ts` et `scripts/seed-admin.mjs` — variable INTERDITE en
