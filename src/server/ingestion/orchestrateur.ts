@@ -55,8 +55,25 @@ export function bornerPageSize(pageSize: number | undefined): number {
   return Math.min(pageSize, PAGE_SIZE_MAX);
 }
 
+/**
+ * Normalise une chaîne d'enrichissement vers `string | null`. Le serializer amont
+ * (`get_Enrichment`) renvoie une CHAÎNE VIDE ("") — pas `null` — quand la donnée
+ * manque. Sans cette normalisation, `"" ?? null` vaut `""` : on persisterait un
+ * `clean_label` vide, le fallback Front (« Opération bancaire ») ne se déclencherait
+ * PAS et on afficherait un libellé blanc — pire que le bug initial (PROD-MERCHANT1).
+ * Les espaces seuls sont aussi traités comme vides.
+ */
+function chaineOuNull(s: string | undefined | null): string | null {
+  const v = s?.trim();
+  return v ? v : null;
+}
+
 /** Mappe une transaction OBIE → ligne à persister (conversions règle 8 / E20). */
 export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
+  // L'enrichissement est IMBRIQUÉ sous `Enrichment{}` (serializer Django faisant foi),
+  // PAS à plat — lire à plat valait `undefined` → fallback partout (PROD-MERCHANT1).
+  // `t.Enrichment?.` couvre aussi le cas où l'objet entier manque (payload ancien).
+  const e = t.Enrichment;
   return {
     omnifiTxnId: t.TransactionId,
     transactionDate: deriverDateComptableMaurice(t.BookingDateTime),
@@ -67,9 +84,13 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     // L'API ne fournit pas toujours Description (sandbox 2026-06-19) → null propre
     // plutôt qu'undefined (la colonne est nullable, jamais lue côté UI car PII).
     bankLabelRaw: t.Description ?? null,
-    cleanLabel: t.CleanMerchantName ?? null,
-    primaryCategory: t.PrimaryCategory ?? null,
-    subCategory: t.SubCategory ?? null,
+    cleanLabel: chaineOuNull(e?.CleanMerchantName),
+    // PrimaryCategory : on laisse passer le défaut serializer "Uncategorized" tel quel
+    // (string non vide ⇒ survit à chaineOuNull). C'est une étiquette amont assumée, pas
+    // une vraie catégorie TYGR ; la catégorisation réelle reste portée par les splits /
+    // le moteur de règles. Seules les VRAIES absences ("") deviennent null.
+    primaryCategory: chaineOuNull(e?.PrimaryCategory),
+    subCategory: chaineOuNull(e?.SubCategory),
     isRemoved: false,
   };
 }

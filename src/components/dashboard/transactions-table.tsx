@@ -5,7 +5,8 @@
  *
  * Sémantique (§3.1) : Credit → `inflow` (vert, +), Debit → `outflow` (rouge, −).
  * La couleur ne porte QUE sur la donnée. `cleanLabel` peut être null (PII jamais
- * affichée, bank_label_raw exclu côté service) → fallback neutre.
+ * affichée, bank_label_raw exclu côté service) → repli typographié discret via
+ * `LibelleTransaction` (partagé avec la page /transactions).
  *
  * Liste vide gérée par le parent (empty state) ; ici on suppose ≥ 1 ligne.
  */
@@ -16,6 +17,7 @@ import { formaterDateComptable } from "@/lib/format-date";
 import { categorieFr } from "@/lib/categories-fr";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { FlowTag } from "@/components/transactions/flow-tag";
+import { LibelleTransaction } from "@/components/transactions/libelle-transaction";
 
 export function TransactionsTable({
   transactions,
@@ -50,9 +52,10 @@ export function TransactionsTable({
               <span className="text-xs tabular-nums text-text-muted">
                 {formaterDateComptable(t.transactionDate)}
               </span>
-              <span className="truncate text-sm text-text">
-                {t.cleanLabel ?? "Opération bancaire"}
-              </span>
+              <LibelleTransaction
+                cleanLabel={t.cleanLabel}
+                className="truncate text-sm"
+              />
               <span className="truncate text-xs text-text-muted">
                 {categorieFr(t.primaryCategory)}
               </span>

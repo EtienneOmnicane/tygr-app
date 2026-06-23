@@ -111,6 +111,64 @@ describe("versLignePersistee — mapping + conversions", () => {
     const l = versLignePersistee(txOBIE({ Amount: { Amount: "750.0000", Currency: "MUR" } }));
     expect(l.amount).toBe("750.00");
   });
+
+  // PROD-MERCHANT1 — l'enrichissement est IMBRIQUÉ sous Enrichment{} (serializer
+  // Django faisant foi), PAS à plat. Le mapping doit hydrater depuis t.Enrichment,
+  // et NORMALISER la chaîne vide "" (défaut serializer) vers null — sinon clean_label
+  // vide → libellé blanc à l'écran (pire que le fallback).
+  it("Enrichment plein → cleanLabel / primaryCategory / subCategory hydratés", () => {
+    const l = versLignePersistee(
+      txOBIE({
+        Enrichment: {
+          CleanMerchantName: "Shell",
+          PrimaryCategory: "Transport",
+          SubCategory: "Fuel",
+          ConfidenceLevel: "Very High",
+          ClassificationSource: "USER_RULE",
+          RuleIdMatch: "rule_77382",
+        },
+      }),
+    );
+    expect(l.cleanLabel).toBe("Shell");
+    expect(l.primaryCategory).toBe("Transport");
+    expect(l.subCategory).toBe("Fuel");
+  });
+
+  it("PIÈGE : CleanMerchantName \"\" (défaut serializer) → cleanLabel null, pas chaîne vide", () => {
+    const l = versLignePersistee(
+      txOBIE({
+        Enrichment: {
+          CleanMerchantName: "",
+          PrimaryCategory: "",
+          SubCategory: "   ", // espaces seuls = vide aussi
+          ConfidenceLevel: "Low",
+          ClassificationSource: "",
+          RuleIdMatch: "",
+        },
+      }),
+    );
+    expect(l.cleanLabel).toBeNull();
+    expect(l.primaryCategory).toBeNull();
+    expect(l.subCategory).toBeNull();
+  });
+
+  it("Enrichment absent (payload ancien) → cleanLabel / primaryCategory / subCategory null, sans crash", () => {
+    const l = versLignePersistee(txOBIE({ Enrichment: undefined }));
+    expect(l.cleanLabel).toBeNull();
+    expect(l.primaryCategory).toBeNull();
+    expect(l.subCategory).toBeNull();
+  });
+
+  // Choix documenté : le défaut serializer "Uncategorized" est une étiquette amont
+  // assumée (string non vide) → on la laisse passer telle quelle ; seules les VRAIES
+  // absences ("") deviennent null.
+  it("PrimaryCategory \"Uncategorized\" (défaut serializer) → conservé tel quel", () => {
+    const l = versLignePersistee(
+      txOBIE({ Enrichment: { PrimaryCategory: "Uncategorized" } }),
+    );
+    expect(l.primaryCategory).toBe("Uncategorized");
+    expect(l.cleanLabel).toBeNull(); // CleanMerchantName absent du bloc → null
+  });
 });
 
 describe("synchroniserCompte — pagination par page", () => {

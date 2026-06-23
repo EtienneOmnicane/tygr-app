@@ -15,6 +15,7 @@ import { formaterDateComptable } from "@/lib/format-date";
 
 import { CategorisationStatusBadge } from "./categorisation-status-badge";
 import { FlowTag } from "./flow-tag";
+import { LibelleTransaction } from "./libelle-transaction";
 import type { TransactionListItem } from "./types-transactions";
 
 /** Retire un éventuel signe « - » de tête (on reconstruit le signe via `sens`). */
@@ -66,13 +67,24 @@ export function TransactionRow({
         {formaterDateComptable(transaction.transactionDate)}
       </td>
 
-      {/* Libellé + compte porteur en sous-texte. cleanLabel privilégié (PII).
-          En mobile (où la colonne Catégorie est masquée), le badge de statut se
-          replie ICI sous le libellé pour ne pas perdre l'info. */}
+      {/* Libellé (marchand) + sous-texte « compte · catégorie banque ». Le libellé
+          passe par LibelleTransaction → repli discret si cleanLabel null (PII : on
+          n'affiche jamais bank_label_raw). La catégorie OBIE (sous-texte) est
+          DISTINCTE du statut de ventilation manuelle (colonne dédiée à droite).
+          En mobile (colonne Catégorie masquée), le badge de statut se replie ICI. */}
       <td className="px-3 py-[14px] sm:px-4">
-        <span className="block truncate text-sm text-text">{transaction.label}</span>
+        <LibelleTransaction
+          cleanLabel={transaction.cleanLabel}
+          className="block truncate text-sm"
+        />
         <span className="block truncate text-xs text-text-muted">
           {transaction.compteNom}
+          {transaction.categorieBanque && (
+            <>
+              {" · "}
+              {transaction.categorieBanque}
+            </>
+          )}
         </span>
         <span className="mt-1 flex sm:hidden">
           <CategorisationStatusBadge
