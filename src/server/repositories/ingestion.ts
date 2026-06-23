@@ -18,6 +18,7 @@ import {
   balanceHistory,
   transactionsCache,
 } from "@/server/db/schema";
+import type { CategorySource } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -50,6 +51,10 @@ export interface TransactionAUpserter {
   cleanLabel: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Provenance auto de la catégorie OBIE (cf. orchestrateur.versLignePersistee). */
+  isAutoCategorized: boolean;
+  /** Source auto (NULL si non auto). Toujours cohérent avec isAutoCategorized. */
+  categorySource: CategorySource | null;
   isRemoved: boolean;
 }
 
@@ -181,6 +186,8 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
         cleanLabel: t.cleanLabel,
         primaryCategory: t.primaryCategory,
         subCategory: t.subCategory,
+        isAutoCategorized: t.isAutoCategorized,
+        categorySource: t.categorySource,
         isRemoved: t.isRemoved,
       })
       .onConflictDoUpdate({
@@ -193,6 +200,12 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
           cleanLabel: t.cleanLabel,
           primaryCategory: t.primaryCategory,
           subCategory: t.subCategory,
+          // On reflète toujours l'état Omni-FI courant : un re-sync remet le marqueur
+          // en cohérence avec la catégorie reçue (déterministe, idempotent). Le
+          // marqueur est orthogonal aux splits — ne touche jamais la catégorisation
+          // manuelle/règles (table transaction_categorizations, intacte).
+          isAutoCategorized: t.isAutoCategorized,
+          categorySource: t.categorySource,
           isRemoved: t.isRemoved,
         },
       });
