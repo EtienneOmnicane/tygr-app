@@ -30,6 +30,30 @@ import type { ResultatAction, SplitUI } from "@/components/ui/category";
 export type StatutCategorisation = "non_categorise" | "partiel" | "complet";
 
 /**
+ * Fiabilité AMONT de la classification automatique d'Omni-FI (concept B — DISTINCT de
+ * la ventilation manuelle TYGR, concept A porté par `statutCategorisation`). Libellé
+ * ordinal NORMALISÉ par l'adaptateur depuis la chaîne brute persistée (toute valeur
+ * inattendue → `null`, l'UI ne voit jamais de chaîne libre). `null` = fiabilité non
+ * remontée (ligne pré-migration 0012 ou API muette) ⇒ aucun indice affiché.
+ *
+ * ⚠️ `"Low"` est le DÉFAUT du serializer Omni-FI : présent sur les lignes NON enrichies.
+ * Il ne déclenche PAS à lui seul le badge « À vérifier » — la règle d'affichage (module
+ * `regle-fiabilite`) le croise avec la présence d'une catégorie pour éviter le bruit.
+ */
+export type NiveauFiabilite = "High" | "Medium" | "Low";
+
+/**
+ * Sous-source amont de la classification (concept C — doc API « Priorité de
+ * classification » : `USER_RULE > SYSTEM_RULE > ML_FALLBACK`). NORMALISÉE par
+ * l'adaptateur, `null` si inconnue/non remontée.
+ *
+ * ⚠️ `USER_RULE` = règle définie DANS Omni-FI, JAMAIS la saisie/ventilation manuelle
+ * d'un utilisateur TYGR (qui est le concept A). Le libellé d'infobulle dit « règle
+ * Omni-FI », jamais « par l'utilisateur » tout court (qui prêterait à confusion).
+ */
+export type SourceClassification = "USER_RULE" | "SYSTEM_RULE" | "ML_FALLBACK";
+
+/**
  * Une ligne de la liste des transactions (DTO d'affichage). Miroir enrichi de
  * `TransactionRecente` (dashboard) + le résumé de ventilation (B2).
  */
@@ -85,6 +109,17 @@ export interface TransactionListItem {
   categorie: { id: string; name: string } | null;
   /** Nombre de catégories distinctes ventilées (0, 1, ou N). Décide le rendu du badge. */
   nbCategories: number;
+  /**
+   * Fiabilité AMONT de la classification Omni-FI (concept B). `null` si non remontée.
+   * Sert le badge « À vérifier » (via `regle-fiabilite`), JAMAIS le statut de
+   * ventilation manuelle (concept A, ci-dessus). Cf. {@link NiveauFiabilite}.
+   */
+  niveauFiabilite: NiveauFiabilite | null;
+  /**
+   * Sous-source amont de la classification (concept C). `null` si inconnue. Pilote
+   * l'icône de source (⚙ règle / 🤖 ML) + son infobulle. Cf. {@link SourceClassification}.
+   */
+  sourceClassification: SourceClassification | null;
 }
 
 /**

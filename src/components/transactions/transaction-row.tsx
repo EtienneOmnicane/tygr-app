@@ -14,8 +14,11 @@ import { formatMontant } from "@/lib/format-montant";
 import { formaterDateComptable } from "@/lib/format-date";
 
 import { CategorisationStatusBadge } from "./categorisation-status-badge";
+import { FiabiliteBadge } from "./fiabilite-badge";
 import { FlowTag } from "./flow-tag";
 import { LibelleTransaction, resoudreLibelle } from "./libelle-transaction";
+import { afficherAVerifier } from "./regle-fiabilite";
+import { SourceClassificationIcon } from "./source-classification-icon";
 import type { TransactionListItem } from "./types-transactions";
 
 /** Retire un éventuel signe « - » de tête (on reconstruit le signe via `sens`). */
@@ -53,6 +56,14 @@ export function TransactionRow({
     bankLabelRaw: transaction.bankLabelRaw,
   });
   const libelleEstCategorie = niveauLibelle === "categorie";
+
+  // Indice de fiabilité AMONT (concept B) : badge « À vérifier » SI la classification
+  // Omni-FI est peu fiable ET une catégorie est posée (cf. regle-fiabilite : on évite
+  // le bruit du défaut « Low » des lignes non enrichies). Verdict calculé hors JSX.
+  const aVerifier = afficherAVerifier({
+    niveauFiabilite: transaction.niveauFiabilite,
+    categorieBanque: transaction.categorieBanque,
+  });
 
   function declencher() {
     onOpen(transaction);
@@ -98,32 +109,51 @@ export function TransactionRow({
           bankLabelRaw={transaction.bankLabelRaw}
           className="block truncate text-sm"
         />
-        <span className="block truncate text-xs text-text-muted">
-          {transaction.compteNom}
-          {transaction.categorieBanque && !libelleEstCategorie && (
-            <>
-              {" · "}
-              {transaction.categorieBanque}
-            </>
-          )}
+        {/* Sous-texte « compte · catégorie » + icône de SOURCE de classification
+            (concept C) en fin de ligne. Conteneur `flex` : le texte (tronquable) vit
+            dans un span `truncate` interne, l'icône `shrink-0` reste à droite et n'est
+            JAMAIS rognée par la troncature (anti-chevauchement R3). `min-w-0` autorise
+            l'enfant flex à rétrécir pour que le truncate opère. */}
+        <span className="flex min-w-0 items-center gap-1 text-xs text-text-muted">
+          <span className="truncate">
+            {transaction.compteNom}
+            {transaction.categorieBanque && !libelleEstCategorie && (
+              <>
+                {" · "}
+                {transaction.categorieBanque}
+              </>
+            )}
+          </span>
+          <SourceClassificationIcon source={transaction.sourceClassification} />
         </span>
-        <span className="mt-1 flex sm:hidden">
+        {/* Repli MOBILE (colonne Statut masquée) : badge de ventilation + badge
+            « À vérifier » côte à côte. `flex-wrap` LOCAL autorisé ici (ce n'est pas le
+            header — la règle anti-flex-wrap vise le header) : sur un petit écran, deux
+            badges passent à la ligne proprement plutôt que de déborder (anti-chevauchement R2). */}
+        <span className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
           <CategorisationStatusBadge
             statut={transaction.statutCategorisation}
             categorie={transaction.categorie}
             nbCategories={transaction.nbCategories}
           />
+          <FiabiliteBadge afficher={aVerifier} />
         </span>
       </td>
 
-      {/* Statut de ventilation (manuelle) — jamais de vert/rouge. Masqué en mobile
-          (replié sous le libellé ci-dessus) pour garder Date · Libellé · Montant. */}
-      <td className="hidden px-4 py-[14px] sm:table-cell">
-        <CategorisationStatusBadge
-          statut={transaction.statutCategorisation}
-          categorie={transaction.categorie}
-          nbCategories={transaction.nbCategories}
-        />
+      {/* Statut de ventilation (manuelle, concept A) — jamais de vert/rouge. Masqué en
+          mobile (replié sous le libellé ci-dessus) pour garder Date · Libellé · Montant.
+          Le badge « À vérifier » (concept B, fiabilité amont) se PILE dessous : les deux
+          coexistent (ils ne se remplacent pas). `items-start` garde les badges calés à
+          gauche, `gap-1` les sépare sans alourdir la densité de ligne. */}
+      <td className="hidden px-4 py-[14px] align-top sm:table-cell">
+        <span className="flex flex-col items-start gap-1">
+          <CategorisationStatusBadge
+            statut={transaction.statutCategorisation}
+            categorie={transaction.categorie}
+            nbCategories={transaction.nbCategories}
+          />
+          <FiabiliteBadge afficher={aVerifier} />
+        </span>
       </td>
 
       {/* Montant — aligné droite, tabular-nums, couleur sémantique. Toujours visible
