@@ -9,19 +9,23 @@ import { describe, expect, it } from "vitest";
 import { choisirEtatDashboard, type EtatDashboard } from "@/lib/etat-dashboard";
 import type { DonneesDashboard } from "@/components/dashboard/dashboard-content";
 
-const SYNTHESE = {
-  libelleMois: "2026-06",
-  entrees: "0",
-  sorties: "0",
-  variation: "0",
+/** Un point de flux minimal (la valeur importe peu : on teste la PRÉSENCE). */
+const POINT_FLUX = {
+  bucket: "2026-06",
+  currency: "MUR",
+  entrees: "1000.00",
+  sorties: "0.00",
+  net: "1000.00",
+  nbTransactions: 1,
 };
 
 function donnees(over: Partial<DonneesDashboard>): DonneesDashboard {
   return {
     comptes: [],
     soldesParDevise: [],
-    courbe: [],
-    syntheseMois: SYNTHESE,
+    flux: [],
+    synthesesMois: [],
+    topVendors: { direction: "outflow", lignes: [] },
     serieMensuelle: [],
     grilleMensuelle: [],
     transactionsRecentes: [],
@@ -46,31 +50,25 @@ describe("choisirEtatDashboard", () => {
     expect(e).toBe("vide");
   });
 
-  it("PARTIEL : comptes présents mais courbe vide (post-onboarding)", () => {
+  it("PARTIEL : comptes présents mais aucun flux (post-onboarding)", () => {
     const e = choisirEtatDashboard(
-      donnees({ comptes: UN_COMPTE, courbe: [] }),
+      donnees({ comptes: UN_COMPTE, flux: [] }),
     );
     expect(e).toBe("partiel");
   });
 
-  it("COMPLET : comptes + au moins un point de courbe", () => {
+  it("COMPLET : comptes + au moins un point de flux", () => {
     const e = choisirEtatDashboard(
-      donnees({
-        comptes: UN_COMPTE,
-        courbe: [{ date: "2026-06-12", soldeConsolide: "1000.00" }],
-      }),
+      donnees({ comptes: UN_COMPTE, flux: [POINT_FLUX] }),
     );
     expect(e).toBe("complet");
   });
 
-  it("VIDE prime sur la courbe : pas de compte → vide même si la courbe a des points", () => {
+  it("VIDE prime sur le flux : pas de compte → vide même si le flux a des points", () => {
     // Cas dégénéré (ne devrait pas arriver), mais la règle « pas de compte =
     // vide » doit être stricte : on ne montre pas une courbe orpheline.
     const e = choisirEtatDashboard(
-      donnees({
-        comptes: [],
-        courbe: [{ date: "2026-06-12", soldeConsolide: "1000.00" }],
-      }),
+      donnees({ comptes: [], flux: [POINT_FLUX] }),
     );
     expect(e).toBe("vide");
   });

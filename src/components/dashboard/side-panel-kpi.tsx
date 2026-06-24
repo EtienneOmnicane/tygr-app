@@ -23,10 +23,11 @@
  */
 import type {
   SoldeParDevise,
-  SyntheseMois,
+  SyntheseMoisDevise,
 } from "@/server/repositories/dashboard";
 import type { Fraicheur } from "@/lib/format-date";
 
+import { replierSynthesesMois } from "@/lib/synthese-mois";
 import { formatMontant, symbolePrefixe } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
@@ -34,15 +35,18 @@ import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-p
 
 export function SidePanelKpi({
   soldesParDevise,
-  syntheseMois,
+  synthesesMois,
+  mois,
   devise,
   fraicheur,
   compteLabel,
 }: {
   /** Soldes consolidés courants, une entrée par devise (chaînes décimales). */
   soldesParDevise: SoldeParDevise[];
-  /** Synthèse du mois (entrées/sorties/variation), chaînes décimales. */
-  syntheseMois: SyntheseMois;
+  /** Synthèse du mois PAR DEVISE (entrées/sorties/variation), chaînes décimales. */
+  synthesesMois: SyntheseMoisDevise[];
+  /** Mois courant "YYYY-MM" (libellé de la carte Détails). */
+  mois: string;
   /** Devise de base du workspace (sert de repli quand aucun compte/solde). */
   devise: string;
   /**
@@ -60,6 +64,10 @@ export function SidePanelKpi({
       ? soldesParDevise
       : [{ currency: devise, total: "0" }];
   const monoDevise = lignesSolde.length === 1;
+
+  // Détails par devise (repli 0 dans la devise de base si aucune transaction).
+  const lignesSynthese = replierSynthesesMois(synthesesMois, devise);
+  const multiSynthese = lignesSynthese.length > 1;
 
   return (
     <>
@@ -87,37 +95,54 @@ export function SidePanelKpi({
         )}
       </StateCard>
 
-      {/* Carte DÉTAILS (§1.3) : rangées KPI entrées/sorties/variation. */}
+      {/* Carte DÉTAILS (§1.3) : rangées KPI entrées/sorties/variation, par devise. */}
       <StateCard>
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
             Détails
           </span>
           <span className="text-xs text-text-muted">
-            {formaterMoisAnnee(syntheseMois.libelleMois)}
+            {formaterMoisAnnee(mois)}
           </span>
         </div>
-        <dl className="mt-4 flex flex-col gap-5">
-          <KpiRow
-            label="Entrées"
-            valeur={formatMontant(syntheseMois.entrees, devise, {
-              signeExplicite: true,
-            })}
-            couleur="text-inflow-700"
-          />
-          <KpiRow
-            label="Sorties"
-            valeur={formatMontant(syntheseMois.sorties, devise)}
-            couleur="text-outflow-700"
-          />
-          <KpiRow
-            label="Variation"
-            valeur={formatMontant(syntheseMois.variation, devise, {
-              signeExplicite: true,
-            })}
-            couleur="text-text"
-          />
-        </dl>
+        <div className="mt-4 flex flex-col gap-5">
+          {lignesSynthese.map((s, i) => (
+            <div
+              key={s.currency}
+              className={
+                i > 0 ? "border-t border-line pt-5" : undefined
+              }
+            >
+              {/* En multi-devise, on étiquette chaque groupe par sa devise. */}
+              {multiSynthese && (
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+                  {s.currency}
+                </p>
+              )}
+              <dl className="flex flex-col gap-5">
+                <KpiRow
+                  label="Entrées"
+                  valeur={formatMontant(s.entrees, s.currency, {
+                    signeExplicite: true,
+                  })}
+                  couleur="text-inflow-700"
+                />
+                <KpiRow
+                  label="Sorties"
+                  valeur={formatMontant(s.sorties, s.currency)}
+                  couleur="text-outflow-700"
+                />
+                <KpiRow
+                  label="Variation"
+                  valeur={formatMontant(s.variation, s.currency, {
+                    signeExplicite: true,
+                  })}
+                  couleur="text-text"
+                />
+              </dl>
+            </div>
+          ))}
+        </div>
       </StateCard>
     </>
   );

@@ -145,6 +145,16 @@ export type {
   TransactionRecente,
 } from "@/server/repositories/dashboard";
 
+// Insights dérivés (TECH-API-INSIGHTS, Voie A) : cashflow & vendors dérivés de
+// transactions_cache. Même frontière que le dashboard — ré-exportés ici pour que
+// la page RSC les appelle DANS withWorkspace(tx) sans importer
+// @/server/repositories/* directement (no-restricted-imports, règle 2).
+export {
+  cashflowParDevise,
+  vendorsParConcentration,
+  InsightsParamsInvalidesError,
+} from "@/server/repositories/insights";
+
 // Catégorisation manuelle + ventilation (Pilier 1). Ré-exporté pour que les
 // Server Actions (à venir) l'appellent DANS withWorkspace(tx) sans importer
 // @/server/repositories/* directement.

@@ -20,15 +20,17 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import {
-  courbeTresorerie,
+  cashflowParDevise,
   grilleMois,
   listerComptes,
   soldesCourantsParDevise,
-  syntheseMois,
+  syntheseMoisParDevise,
   syntheseParMois,
   transactionsRecentes,
+  vendorsParConcentration,
   withWorkspace,
 } from "@/server/db";
+import { VENDORS_TOP_N_DEFAUT } from "@/lib/insights-schema";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
@@ -45,13 +47,17 @@ function aujourdhuiMaurice(): string {
   return maurice.toISOString().slice(0, 10);
 }
 
-/** Date à J-N (Maurice), format YYYY-MM-DD. */
-function ilYaNJours(n: number): string {
-  const maintenant = new Date();
-  const maurice = new Date(
-    maintenant.getTime() + 4 * 60 * 60 * 1000 - n * 24 * 60 * 60 * 1000,
-  );
-  return maurice.toISOString().slice(0, 10);
+/**
+ * Premier jour (YYYY-MM-DD) du mois obtenu en reculant de `recul` mois depuis
+ * `mois` ("YYYY-MM"). Calcul pur sur les composantes (pas de fuseau : on raisonne
+ * en mois calendaires Maurice, déjà portés par `mois`). Ex. ("2026-06", 5) →
+ * "2026-01-01".
+ */
+function premierJourMoisRecul(mois: string, recul: number): string {
+  const [a, m] = mois.split("-").map(Number);
+  // Index 0-based du mois, reculé ; Date normalise les débordements d'année.
+  const d = new Date(Date.UTC(a, m - 1 - recul, 1));
+  return d.toISOString().slice(0, 10);
 }
 
 export default async function PageDashboard() {
@@ -69,17 +75,20 @@ export default async function PageDashboard() {
   }
 
   const to = aujourdhuiMaurice();
-  const from = ilYaNJours(90);
   const mois = to.slice(0, 7); // "YYYY-MM" courant
   const NB_MOIS_HISTORIQUE = 6; // fenêtre de tendance (littéral serveur, jamais client)
+  // Fenêtre de la courbe de FLUX (granularité mois) : 1er jour du mois il y a
+  // (NB_MOIS_HISTORIQUE − 1) mois → couvre les mêmes N mois que la tendance.
+  const fromFlux = premierJourMoisRecul(mois, NB_MOIS_HISTORIQUE - 1);
 
   // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx.
   const { donnees, devise } = await withWorkspace(session, async (tx) => {
     const [
       comptes,
       soldesParDevise,
-      courbe,
-      synthese,
+      flux,
+      synthesesMois,
+      vendors,
       serie,
       transactions,
       ligneWs,
@@ -88,8 +97,17 @@ export default async function PageDashboard() {
       // Solde Total = soldes COURANTS par devise (indépendant de balance_history,
       // vide tant qu'Omni-FI n'expose pas /balances/history). DASH-SOLDE2.
       soldesCourantsParDevise(tx),
-      courbeTresorerie(tx, { from, to }),
-      syntheseMois(tx, mois),
+      // Courbe = FLUX net mensuel dérivé des transactions (cashflowParDevise) :
+      // balance_history est vide en Staging → la courbe de solde restait muette.
+      cashflowParDevise(tx, { granularite: "mois", from: fromFlux, to }),
+      // Synthèse du mois courant VENTILÉE PAR DEVISE (remplace syntheseMois mono,
+      // @deprecated : additionnait MUR + USD). Une ligne par devise.
+      syntheseMoisParDevise(tx, mois),
+      // Concentration des contreparties (par défaut dépenses) — donnée neuve Voie A.
+      vendorsParConcentration(tx, {
+        direction: "outflow",
+        topN: VENDORS_TOP_N_DEFAUT,
+      }),
       // Tendance N derniers mois jusqu'au mois courant Maurice. Une seule requête
       // GROUP BY (mois, devise) ; les mois vides sont comblés par grilleMois côté UI.
       syntheseParMois(tx, { moisFin: mois, nbMois: NB_MOIS_HISTORIQUE }),
@@ -100,13 +118,18 @@ export default async function PageDashboard() {
     ]);
 
     const rows = ligneWs as unknown as Array<{ base_currency: string }>;
+    const deviseBase = rows[0]?.base_currency ?? "MUR";
     return {
-      devise: rows[0]?.base_currency ?? "MUR",
+      devise: deviseBase,
       donnees: {
         comptes,
         soldesParDevise,
-        courbe,
-        syntheseMois: synthese,
+        // MVP mono-série : on n'affiche que la base_currency dans la courbe
+        // (cashflowParDevise renvoie multi-devise ; le multi-série est la dette
+        // DASH-CASHFLOW-MULTISERIE). Filtre PUR, hors transaction.
+        flux: flux.points.filter((p) => p.currency === deviseBase),
+        synthesesMois,
+        topVendors: vendors,
         serieMensuelle: serie,
         // Axe continu des N mois (calcul pur, partagé avec l'UI).
         grilleMensuelle: grilleMois(NB_MOIS_HISTORIQUE, mois),
@@ -115,5 +138,5 @@ export default async function PageDashboard() {
     };
   });
 
-  return <DashboardContent donnees={donnees} devise={devise} />;
+  return <DashboardContent donnees={donnees} devise={devise} mois={mois} />;
 }

@@ -17,6 +17,7 @@ import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
   DEMO_DASHBOARD_VIDE,
+  DEMO_MOIS,
 } from "@/lib/dashboard-demo-fixtures";
 import {
   DashboardContent,
@@ -138,7 +139,7 @@ export default function DashboardPreviewPage() {
         </div>
       </div>
 
-      <DashboardContent donnees={donnees} devise="MUR" />
+      <DashboardContent donnees={donnees} devise="MUR" mois={DEMO_MOIS} />
     </div>
   );
 }

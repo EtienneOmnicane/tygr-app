@@ -1,29 +1,41 @@
 "use client";
 
 /**
- * Courbe de trésorerie — ANCRE du dashboard (UI_GUIDELINES §4.2). SVG « maison »
- * (décision revue : Tremor incompatible React 19 ; cohérent avec le zéro-
- * dépendance des états). Aire + ligne de position `primary` + axes + tooltip au
- * survol. Hauteur min 380px (§4.2).
+ * Courbe de FLUX de trésorerie — ANCRE du dashboard (UI_GUIDELINES §4.2). SVG
+ * « maison » (décision revue : Tremor incompatible React 19 ; cohérent avec le
+ * zéro-dépendance des états). Ligne + aire `primary` + ligne de zéro + axes +
+ * tooltip au survol. Hauteur min 380px (§4.2).
  *
- * Présentationnel : reçoit `PointCourbe[]` (chaînes décimales) en props.
+ * CHANGEMENT DE GRANDEUR (2026-06-24) : on trace désormais le FLUX NET mensuel
+ * (entrées − sorties par mois, dérivé de `transactions_cache` via
+ * `cashflowParDevise`), PAS le solde consolidé EOD. Raison : `balance_history`
+ * est vide en Staging (Omni-FI n'expose pas `/balances/history`, DASH-SOLDE2),
+ * donc la courbe de solde restait perpétuellement « en cours de synchronisation »,
+ * alors que les flux, eux, existent. Le titre dit « Flux de trésorerie » pour
+ * rester honnête sur la grandeur affichée (un net, pas un niveau).
  *
- * ⚠️ Frontière float (règle 8) : les montants restent des CHAÎNES pour
- * l'affichage (tooltip, axe Y → `formatMontant`). Le `Number()` interne sert
- * UNIQUEMENT à la GÉOMÉTRIE (position en pixels d'un point) — un cul-de-sac qui
- * ne réinjecte jamais dans un montant affiché. Aucune somme financière ici.
+ * Présentationnel : reçoit `PointCashflow[]` (UNE devise — la base_currency, filtrée
+ * en amont par la page ; le multi-série est une dette explicite DASH-CASHFLOW-MULTISERIE).
  *
- * État PARTIEL (décision revue) : `points` vide alors que le reste du dashboard
- * a des données (workspace fraîchement connecté, soldes pas encore synchronisés)
- * → message « historique en cours de synchronisation » DANS la carte, pas un
+ * ⚠️ Le net peut être NÉGATIF (un mois où les sorties dépassent les entrées) — la
+ * courbe de solde ne l'était jamais. On trace donc une LIGNE DE ZÉRO visible et le
+ * domaine Y inclut toujours 0. Tooltip = entrées (vert) / sorties (rouge) / net.
+ *
+ * ⚠️ Frontière float (règle 8) : les montants restent des CHAÎNES pour l'affichage
+ * (tooltip, axe Y → `formatMontant`). Le `Number()` interne sert UNIQUEMENT à la
+ * GÉOMÉTRIE (position en pixels) — un cul-de-sac qui ne réinjecte jamais dans un
+ * montant affiché. Aucune somme financière ici.
+ *
+ * État PARTIEL (décision revue) : `points` vide alors que le reste du dashboard a
+ * des données → message « aucun flux sur la période » DANS la carte, pas un
  * dashboard vide. La carte garde sa place (pas de saut de layout).
  */
 import { useId, useState } from "react";
 
-import type { PointCourbe } from "@/server/repositories/dashboard";
+import type { PointCashflow } from "@/server/insights/types";
 
-import { formatMontant } from "@/lib/format-montant";
-import { formaterDateComptable } from "@/lib/format-date";
+import { formatMontant, estNegatif } from "@/lib/format-montant";
+import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard, StateIllustration } from "@/components/dashboard/states/primitives";
 
 // Géométrie du viewBox (unités SVG, mises à l'échelle en %).
@@ -32,7 +44,7 @@ const VB_H = 280;
 const PAD_L = 56; // marge axe Y (montants tabular)
 const PAD_R = 16;
 const PAD_T = 16;
-const PAD_B = 28; // marge axe X (dates)
+const PAD_B = 28; // marge axe X (mois)
 
 /** Convertit une chaîne décimale en number POUR LA GÉOMÉTRIE uniquement. */
 function valeurGeo(montant: string): number {
@@ -43,7 +55,7 @@ export function CashflowMainChart({
   points,
   devise,
 }: {
-  points: PointCourbe[];
+  points: PointCashflow[];
   devise: string;
 }) {
   const gradId = useId();
@@ -55,15 +67,15 @@ export function CashflowMainChart({
       <div className="mb-4 flex items-start justify-between">
         <div>
           <h2 className="text-sm font-semibold text-text">
-            Position de trésorerie
+            Flux de trésorerie
           </h2>
           <p className="mt-0.5 text-xs text-text-muted">
-            Solde consolidé, 90 derniers jours
+            Entrées − sorties par mois
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <span aria-hidden className="h-2 w-2 rounded-full bg-primary" />
-          Solde consolidé
+          Flux net
         </div>
       </div>
 
@@ -83,8 +95,8 @@ export function CashflowMainChart({
 }
 
 /**
- * État PARTIEL : pas d'historique, mais la carte tient sa place. Message
- * neutre (pas une erreur, pas un vide « sec ») : la synchro arrive.
+ * État PARTIEL : pas encore de flux sur la période, mais la carte tient sa place.
+ * Message neutre (pas une erreur, pas un vide « sec ») : les données arrivent.
  */
 function CourbeVide() {
   return (
@@ -94,11 +106,11 @@ function CourbeVide() {
         className="mb-4 h-14 w-14 text-text-faint"
       />
       <p className="text-sm font-medium text-text">
-        Historique en cours de synchronisation
+        Aucun flux sur la période
       </p>
       <p className="mt-1 max-w-sm text-xs text-text-muted">
-        Vos comptes sont connectés. La courbe de trésorerie s’affichera dès que
-        les premiers soldes quotidiens seront récupérés.
+        Vos comptes sont connectés. La courbe des flux s’affichera dès que les
+        premières transactions seront récupérées.
       </p>
     </div>
   );
@@ -111,17 +123,18 @@ function Trace({
   survol,
   setSurvol,
 }: {
-  points: PointCourbe[];
+  points: PointCashflow[];
   devise: string;
   gradId: string;
   survol: number | null;
   setSurvol: (i: number | null) => void;
 }) {
-  // Bornes Y (géométrie). On élargit légèrement pour ne pas coller aux bords.
-  const valeurs = points.map((p) => valeurGeo(p.soldeConsolide));
-  const min = Math.min(...valeurs);
-  const max = Math.max(...valeurs);
-  const etendue = max - min || 1; // évite la division par zéro (courbe plate)
+  // Bornes Y (géométrie). Le domaine inclut TOUJOURS 0 (le net traverse zéro) et
+  // s'élargit légèrement pour ne pas coller aux bords.
+  const valeurs = points.map((p) => valeurGeo(p.net));
+  const min = Math.min(0, ...valeurs);
+  const max = Math.max(0, ...valeurs);
+  const etendue = max - min || 1; // évite la division par zéro (série plate à 0)
   const yMin = min - etendue * 0.1;
   const yMax = max + etendue * 0.1;
 
@@ -131,17 +144,22 @@ function Trace({
   const y = (v: number) =>
     PAD_T + (1 - (v - yMin) / (yMax - yMin)) * (VB_H - PAD_T - PAD_B);
 
-  const ligne = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${x(i)} ${y(valeurGeo(p.soldeConsolide))}`)
-    .join(" ");
-  const aire =
-    `M ${x(0)} ${VB_H - PAD_B} ` +
-    points
-      .map((p, i) => `L ${x(i)} ${y(valeurGeo(p.soldeConsolide))}`)
-      .join(" ") +
-    ` L ${x(points.length - 1)} ${VB_H - PAD_B} Z`;
+  // Ligne de référence à 0 (le flux net y est centré).
+  const yZero = y(0);
 
-  // 4 graduations Y réparties (affichées via formatMontant, chaînes).
+  const ligne = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${x(i)} ${y(valeurGeo(p.net))}`)
+    .join(" ");
+  // Aire fermée sur la LIGNE DE ZÉRO (pas le bas du graphe) : une aire au-dessus
+  // pour les mois excédentaires, en-dessous pour les déficitaires.
+  const aire =
+    `M ${x(0)} ${yZero} ` +
+    points
+      .map((p, i) => `L ${x(i)} ${y(valeurGeo(p.net))}`)
+      .join(" ") +
+    ` L ${x(points.length - 1)} ${yZero} Z`;
+
+  // 4 graduations Y réparties (affichées via compact, géométrie déjà calculée).
   const graduations = [0, 1, 2, 3].map((k) => {
     const v = yMin + (k / 3) * (yMax - yMin);
     return { v, py: y(v) };
@@ -155,7 +173,7 @@ function Trace({
         viewBox={`0 0 ${VB_W} ${VB_H}`}
         className="h-[300px] w-full"
         role="img"
-        aria-label="Courbe du solde consolidé sur 90 jours"
+        aria-label="Courbe du flux net de trésorerie par mois"
         preserveAspectRatio="none"
       >
         <defs>
@@ -187,7 +205,18 @@ function Trace({
           </g>
         ))}
 
-        {/* Aire + ligne de position. */}
+        {/* Ligne de ZÉRO appuyée (référence du flux net, §3.1 neutre). */}
+        <line
+          x1={PAD_L}
+          y1={yZero}
+          x2={VB_W - PAD_R}
+          y2={yZero}
+          stroke="var(--color-line-strong)"
+          strokeWidth={1}
+          strokeDasharray="3 3"
+        />
+
+        {/* Aire + ligne de flux net. */}
         <path d={aire} fill={`url(#${gradId})`} />
         <path
           d={ligne}
@@ -201,7 +230,7 @@ function Trace({
 
         {/* Points + zones de survol (toute la colonne, pour un hover facile). */}
         {points.map((p, i) => (
-          <g key={p.date}>
+          <g key={p.bucket}>
             <rect
               x={x(i) - (VB_W - PAD_L - PAD_R) / points.length / 2}
               y={PAD_T}
@@ -223,7 +252,7 @@ function Trace({
                 />
                 <circle
                   cx={x(i)}
-                  cy={y(valeurGeo(p.soldeConsolide))}
+                  cy={y(valeurGeo(p.net))}
                   r={4}
                   fill="var(--color-primary)"
                   stroke="var(--color-surface-card)"
@@ -234,9 +263,9 @@ function Trace({
           </g>
         ))}
 
-        {/* Axe X : première / dernière date (évite l'encombrement). */}
+        {/* Axe X : premier / dernier mois (évite l'encombrement). */}
         <text x={PAD_L} y={VB_H - 8} className="fill-text-faint text-[10px]">
-          {formaterDateComptable(points[0].date)}
+          {formaterMoisAnnee(points[0].bucket)}
         </text>
         <text
           x={VB_W - PAD_R}
@@ -244,29 +273,62 @@ function Trace({
           textAnchor="end"
           className="fill-text-faint text-[10px]"
         >
-          {formaterDateComptable(points[points.length - 1].date)}
+          {formaterMoisAnnee(points[points.length - 1].bucket)}
         </text>
       </svg>
 
-      {/* Tooltip (§4.2) : carte blanche, date + montant tabular. */}
+      {/* Tooltip (§4.2) : carte blanche, mois + entrées/sorties/net tabular. */}
       {pActif && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
           <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {formaterDateComptable(pActif.date)}
+            {formaterMoisAnnee(pActif.bucket)}
           </p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-text">
-            {formatMontant(pActif.soldeConsolide, devise)}
-          </p>
+          <dl className="mt-1 flex flex-col gap-0.5">
+            <LigneTooltip
+              label="Entrées"
+              valeur={formatMontant(pActif.entrees, devise, { signeExplicite: true })}
+              couleur="text-inflow-700"
+            />
+            <LigneTooltip
+              label="Sorties"
+              valeur={formatMontant(pActif.sorties, devise)}
+              couleur="text-outflow-700"
+            />
+            <LigneTooltip
+              label="Net"
+              valeur={formatMontant(pActif.net, devise, { signeExplicite: true })}
+              couleur={estNegatif(pActif.net) ? "text-outflow-700" : "text-text"}
+            />
+          </dl>
         </div>
       )}
     </div>
   );
 }
 
-/** Format compact pour l'axe Y (géométrie déjà calculée) : 7,7 M / 512 k. */
+/** Une rangée du tooltip : libellé discret + montant tabular coloré. */
+function LigneTooltip({
+  label,
+  valeur,
+  couleur,
+}: {
+  label: string;
+  valeur: string;
+  couleur: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <dt className="text-[11px] text-text-muted">{label}</dt>
+      <dd className={`text-sm font-semibold tabular-nums ${couleur}`}>{valeur}</dd>
+    </div>
+  );
+}
+
+/** Format compact pour l'axe Y (géométrie déjà calculée) : 7,7 M / 512 k / −1,2 M. */
 function compact(v: number): string {
   const abs = Math.abs(v);
-  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} M`;
-  if (abs >= 1_000) return `${Math.round(v / 1_000)} k`;
-  return `${Math.round(v)}`;
+  const signe = v < 0 ? "−" : ""; // U+2212 (vrai signe moins, règle formatage)
+  if (abs >= 1_000_000) return `${signe}${(abs / 1_000_000).toFixed(1)} M`;
+  if (abs >= 1_000) return `${signe}${Math.round(abs / 1_000)} k`;
+  return `${signe}${Math.round(abs)}`;
 }

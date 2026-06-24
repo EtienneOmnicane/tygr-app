@@ -14,12 +14,15 @@
  */
 import type {
   CompteConnecte,
-  PointCourbe,
   SoldeParDevise,
   SyntheseMensuelle,
-  SyntheseMois,
+  SyntheseMoisDevise,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
+import type {
+  ConcentrationVendors,
+  PointCashflow,
+} from "@/server/insights/types";
 
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
 import { formaterFraicheurRelative } from "@/lib/format-date";
@@ -30,6 +33,7 @@ import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
+import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
 import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
@@ -37,8 +41,12 @@ export interface DonneesDashboard {
   comptes: CompteConnecte[];
   /** Solde Total = soldes courants par devise (une ligne par devise, jamais d'addition cross-devise). */
   soldesParDevise: SoldeParDevise[];
-  courbe: PointCourbe[];
-  syntheseMois: SyntheseMois;
+  /** Flux net mensuel (entrées − sorties), UNE devise (base_currency), dérivé des transactions. */
+  flux: PointCashflow[];
+  /** Synthèse du mois courant VENTILÉE PAR DEVISE (jamais d'addition cross-devise). */
+  synthesesMois: SyntheseMoisDevise[];
+  /** Concentration des contreparties (top postes, par défaut dépenses). */
+  topVendors: ConcentrationVendors;
   /** Série entrées/sorties des N derniers mois (tendance), à plat par (mois, devise). */
   serieMensuelle: SyntheseMensuelle[];
   /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
@@ -49,16 +57,20 @@ export interface DonneesDashboard {
 export function DashboardContent({
   donnees,
   devise = "MUR",
+  mois,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
+  /** Mois courant "YYYY-MM" (Maurice) — libellé des cartes de synthèse. */
+  mois: string;
 }) {
   const {
     comptes,
     soldesParDevise,
-    courbe,
-    syntheseMois,
+    flux,
+    synthesesMois,
+    topVendors,
     serieMensuelle,
     grilleMensuelle,
     transactionsRecentes,
@@ -90,7 +102,8 @@ export function DashboardContent({
         <>
           <SidePanelKpi
             soldesParDevise={soldesParDevise}
-            syntheseMois={syntheseMois}
+            synthesesMois={synthesesMois}
+            mois={mois}
             devise={devise}
             fraicheur={fraicheur}
             compteLabel={synchro?.compteLabel}
@@ -101,12 +114,19 @@ export function DashboardContent({
       }
     >
       <div className="flex flex-col gap-6">
-        {/* Ancre : courbe (gère son propre état partiel si courbe vide). */}
-        <CashflowMainChart points={courbe} devise={devise} />
+        {/* Ancre : courbe de FLUX net mensuel (gère son propre état partiel si vide). */}
+        <CashflowMainChart points={flux} devise={devise} />
 
-        {/* Vision Entrées / Sorties du mois (demande métier) — au-dessus de la
-            table, dans la devise de base (cf. note multidevise du composant). */}
-        <CashFlowSummary syntheseMois={syntheseMois} devise={devise} />
+        {/* Vision Entrées / Sorties du mois (demande métier), VENTILÉE PAR DEVISE —
+            au-dessus de la table. */}
+        <CashFlowSummary
+          synthesesMois={synthesesMois}
+          mois={mois}
+          devise={devise}
+        />
+
+        {/* Top contreparties (concentration des postes, dérivé de la Voie A). */}
+        <TopVendorsCard concentration={topVendors} />
 
         {/* Tendance : entrées/sorties des N derniers mois (barres + tableau). */}
         <MonthlyCashflow
