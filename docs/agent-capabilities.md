@@ -112,12 +112,35 @@ Omni-FI **n'initie pas de paiements** (pas de PIS/VRP aujourd'hui).
 
 ### 5. Insights financiers
 
-| Méthode | Endpoint | Renvoie | Accès |
+> ⚠️ **RÉALITÉ AMONT (audit Staging, 2026-06-24) — module NON LIVRÉ.** Tous les
+> endpoints `/insights/*` (et `/dashboard/insights`) renvoient **`501 NOT_IMPLEMENTED`**
+> en Staging (`api-stage.omni-fi.co`), corps
+> `{"Error":{"Code":"NOT_IMPLEMENTED","Message":"Insights module is not yet implemented."}}`.
+> Le 501 tombe **même sans authentification** (ce n'est pas un problème de droits : le
+> module n'existe pas côté serveur). La route EST déclarée (`OPTIONS → 200`,
+> `Allow: GET, HEAD, OPTIONS`, `POST → 405`) mais le handler n'est pas branché.
+>
+> Pièges de la doc OpenAPI **confirmés** sur ce module (la doc N'EST PAS la source de
+> vérité — toujours vérifier en runtime) :
+> - **Préfixe `/v1` FAUX** : `/v1/insights/cashflow` → **404** (HTML, le routeur ignore
+>   `/v1`). Routes à la **RACINE** (`/insights/cashflow`). Aligné avec `omnifi/config.ts`.
+> - **Paramètre `client_user_id` en snake_case** : `clientUserId` (camelCase, comme dans
+>   la doc) → **403 FORBIDDEN** ; `client_user_id` → **200**. Confirmé sur `/connections`.
+> - **Enveloppe d'erreur divergente** : `{"Error":{"Code","Message"}}` (objet `Error`
+>   **singulier**), ≠ l'enveloppe OBIE documentée `{"Id","Code","Message","Errors":[…]}`.
+>   Tout mapper d'erreurs doit tolérer **les deux** formes.
+>
+> **Conséquence produit** : TYGR **DÉRIVE** cashflow & vendors de sa propre
+> `transactions_cache` (Voie A, livrée — `src/server/repositories/insights.ts`), au lieu
+> de consommer ces endpoints. Bascule vers l'amont = dette **INSIGHTS-AMONT1** (TODOS.md),
+> déclencheur : passage 501→200 (re-run de l'audit).
+
+| Méthode | Endpoint | Renvoie (doc) | Réalité Staging 2026-06-24 |
 |---|---|---|---|
-| GET | `/dashboard/insights` | Dashboard insights consolidé | public |
-| GET | `/insights/cashflow` | Analyse de trésorerie | public |
-| GET | `/insights/vendors` | Fournisseurs / bénéficiaires récurrents | public |
-| GET | `/insights/alerts` | Alertes (anomalies, seuils) | public |
+| GET | `/dashboard/insights` | Dashboard insights consolidé | **501 NOT_IMPLEMENTED** |
+| GET | `/insights/cashflow` | Analyse de trésorerie | **501 NOT_IMPLEMENTED** (→ dérivé en interne) |
+| GET | `/insights/vendors` | Fournisseurs / bénéficiaires récurrents | **501 NOT_IMPLEMENTED** (→ dérivé en interne) |
+| GET | `/insights/alerts` | Alertes (anomalies, seuils) | **501 NOT_IMPLEMENTED** |
 
 ### 6. Institutions & connexions bancaires
 
