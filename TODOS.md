@@ -317,6 +317,41 @@ Plan de référence : `PLAN-transactions-page.md`.
   hamburger < md, ou CTA réduit à une icône `+` seule sur petit écran). Hors périmètre
   de la tâche CTA (refonte responsive = surface nav/switcher large). Signalé à l'humain
   dans la note de PR.
+- [ ] **Tableaux dashboard (`MonthlyCashflow` + `TransactionsTable`) débordent < ~430px (P2, UI)** —
+  relevé au Visual QA de la PR « dashboard insights » (2026-06-24). Effort S. Mesuré au
+  DOM à 390px : `table.w-full` (Évolution mensuelle, en-têtes Mois/Entrées/Sorties/Variation,
+  right=475) et l'en-tête « Montant » de `TransactionsTable` (right=508) dépassent le
+  viewport → scroll horizontal de page. **PRÉEXISTANT** : ces deux composants ne sont PAS
+  modifiés par la PR insights (diff DOM le confirme — mes composants `CashflowMainChart`,
+  `CashFlowSummary`, `TopVendorsCard` ne débordent pas, leurs grilles passent en 1 colonne
+  sous `sm:`). Même famille et même déclencheur que la dette `AppHeader` ci-dessus : desktop
+  ≥1280px sain (parcours FM réel), mobile non prioritaire. **Déclencheur** : premier chantier
+  responsive du shell (les tableaux denses passeront en scroll-x encapsulé `overflow-x-auto`
+  ou en cartes empilées sous `md`). Signalé à l'humain dans la note de PR.
+- [ ] **DASH-CASHFLOW-MULTISERIE — la courbe de flux n'affiche qu'UNE devise (P2, UI/data)** —
+  ouvert 2026-06-24 (PR « dashboard insights »). Effort M. `cashflowParDevise` renvoie le
+  flux net par (mois, devise) ; la page (`(dashboard)/page.tsx`) filtre sur `base_currency`
+  pour rester mono-série (`flux.points.filter(p => p.currency === deviseBase)`). Conséquence :
+  un workspace dont les flux sont MAJORITAIREMENT dans une devise ≠ base_currency verra une
+  courbe vide (état « partiel ») alors que des transactions existent — les SOLDES et la
+  SYNTHÈSE (ventilée, non filtrée) restent affichés, donc pas de perte de donnée, juste la
+  courbe muette. **Déclencheur** : premier workspace réellement multi-devise actif en démo.
+  Résolution : courbe multi-série (une ligne/devise) ou sélecteur de devise au-dessus de la
+  carte. Aucune addition cross-devise (DASH-FX1 reste interdit).
+- [ ] **DASH-COURBE-SOLDE-EOD — réintroduire la vue « solde » quand l'API livrera l'historique (P2, data)** —
+  ouvert 2026-06-24. Effort M. La courbe consommait `courbeTresorerie` (`balance_history`),
+  remplacée par le flux net (`cashflowParDevise`) car `balance_history` est VIDE en Staging
+  (Omni-FI n'expose pas `/balances/history`, cf. DASH-SOLDE2 / INSIGHTS-AMONT1). `courbeTresorerie`
+  + `PointCourbe` sont CONSERVÉS dans `dashboard.ts` (non supprimés) mais ne sont plus appelés.
+  **Déclencheur** : passage 501→200 de `/balances/history` côté Omni-FI. Résolution : décider
+  d'une vue « solde EOD » à côté de la vue « flux » (onglet/toggle), ou retirer définitivement
+  `courbeTresorerie` si le solde reste hors périmètre.
+- [ ] **DASH-VENDORS-DIRECTION — figer/déverrouiller le sens du panneau Top contreparties (P2, UI)** —
+  ouvert 2026-06-24. Effort S. `TopVendorsCard` est câblé en dur sur `direction: "outflow"`
+  (dépenses) ; `vendorsParConcentration` supporte aussi `inflow` et `both` (le composant gère
+  déjà les 3 libellés). **Déclencheur** : retour utilisateur demandant à voir les recettes.
+  Résolution : toggle inflow/outflow/both au-dessus du panneau (state client + re-fetch via
+  Server Action dédiée, ou pré-charger les 3 sens côté RSC).
 
 ### Refonte lisibilité Dashboard (UI, 2026-06-19)
 
