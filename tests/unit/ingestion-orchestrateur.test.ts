@@ -143,6 +143,10 @@ describe("versLignePersistee — mapping + conversions", () => {
     // Catégorie OBIE exploitable → marqueur de provenance posé, paire cohérente.
     expect(l.isAutoCategorized).toBe(true);
     expect(l.categorySource).toBe("OMNIFI");
+    // TECH-API-TRACE : les 3 métadonnées de classification amont sont TRACÉES fidèlement.
+    expect(l.confidenceLevel).toBe("Very High");
+    expect(l.classificationSource).toBe("USER_RULE");
+    expect(l.ruleIdMatch).toBe("rule_77382");
   });
 
   it("PIÈGE : CleanMerchantName \"\" (défaut serializer) → cleanLabel null, pas chaîne vide", () => {
@@ -164,6 +168,14 @@ describe("versLignePersistee — mapping + conversions", () => {
     // Catégorie vide → AUCUNE provenance auto (marqueur false / source null).
     expect(l.isAutoCategorized).toBe(false);
     expect(l.categorySource).toBeNull();
+    // TECH-API-TRACE : ClassificationSource/RuleIdMatch "" → null (chaineOuNull).
+    expect(l.classificationSource).toBeNull();
+    expect(l.ruleIdMatch).toBeNull();
+    // DÉCISION §3.2 : ConfidenceLevel "Low" (défaut serializer) est CONSERVÉ tel quel —
+    // la trace est fidèle à la source, neutraliser un score bas relève de la couche UI
+    // (GAP-CATEG-NATIVE1), pas de l'ingestion. Et il est tracé même quand la catégo est
+    // vide (les métadonnées sont INDÉPENDANTES de categorieValide).
+    expect(l.confidenceLevel).toBe("Low");
   });
 
   it("Enrichment absent (payload ancien) → cleanLabel / primaryCategory / subCategory null + pas de marqueur, sans crash", () => {
@@ -173,6 +185,10 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.subCategory).toBeNull();
     expect(l.isAutoCategorized).toBe(false);
     expect(l.categorySource).toBeNull();
+    // TECH-API-TRACE : objet Enrichment absent → les 3 métadonnées null (via e?.), sans crash.
+    expect(l.confidenceLevel).toBeNull();
+    expect(l.classificationSource).toBeNull();
+    expect(l.ruleIdMatch).toBeNull();
   });
 
   // DÉCISION ACTÉE (PO 2026-06-23, ce chantier) : le défaut serializer "Uncategorized"
@@ -204,6 +220,32 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.primaryCategory).toBe("Income");
     expect(l.isAutoCategorized).toBe(true);
     expect(l.categorySource).toBe("OMNIFI");
+  });
+
+  // TECH-API-TRACE §3.3 — les métadonnées de classification sont INDÉPENDANTES de la
+  // validité de la catégorie : une classification amont peut avoir abouti à
+  // "Uncategorized" (donc catégo nullifiée, AUCUN marqueur) tout en portant un score /
+  // une source significatifs — info précieuse pour la future file de revue. On NE doit
+  // donc PAS conditionner la trace à categorieValide.
+  it("Uncategorized mais métadonnées présentes → catégo nullifiée SANS marqueur, métadonnées TRACÉES", () => {
+    const l = versLignePersistee(
+      txOBIE({
+        Enrichment: {
+          PrimaryCategory: "Uncategorized",
+          ConfidenceLevel: "Medium",
+          ClassificationSource: "ML",
+          RuleIdMatch: "",
+        },
+      }),
+    );
+    // Catégorie absente → pas de provenance auto (comportement 0011 inchangé).
+    expect(l.primaryCategory).toBeNull();
+    expect(l.isAutoCategorized).toBe(false);
+    expect(l.categorySource).toBeNull();
+    // Métadonnées tracées malgré tout (indépendance prouvée).
+    expect(l.confidenceLevel).toBe("Medium");
+    expect(l.classificationSource).toBe("ML");
+    expect(l.ruleIdMatch).toBeNull(); // "" → null
   });
 });
 

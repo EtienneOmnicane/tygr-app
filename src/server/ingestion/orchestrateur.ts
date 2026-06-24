@@ -120,6 +120,14 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     // réelle est portée par les splits / le moteur de règles.
     primaryCategory: categorieValide ? chaineOuNull(e?.PrimaryCategory) : null,
     subCategory: chaineOuNull(e?.SubCategory),
+    // Métadonnées de classification AMONT (TECH-API-TRACE) — on TRACE fidèlement la valeur
+    // reçue, INDÉPENDAMMENT de categorieValide : ces champs peuvent décrire une classification
+    // amont ayant abouti à "Uncategorized" (utile pour la future file de revue). `Low`
+    // (défaut serializer de ConfidenceLevel) est CONSERVÉ — neutraliser un score bas est une
+    // décision de couche UI (GAP-CATEG-NATIVE1), pas de la trace. `chaineOuNull` : "" → null.
+    confidenceLevel: chaineOuNull(e?.ConfidenceLevel),
+    classificationSource: chaineOuNull(e?.ClassificationSource),
+    ruleIdMatch: chaineOuNull(e?.RuleIdMatch),
     // Marqueur de provenance : posé SSI la catégorie OBIE est exploitable. La paire
     // (is_auto_categorized, category_source) est toujours cohérente (cf. CHECK).
     isAutoCategorized: categorieValide,

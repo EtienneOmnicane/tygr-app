@@ -78,6 +78,13 @@
       "when": 1782300000000,
       "tag": "0011_auto-categorized-flag",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1782400000000,
+      "tag": "0012_classification-metadata",
+      "breakpoints": true
     }
   ]
 }

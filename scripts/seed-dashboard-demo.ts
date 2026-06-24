@@ -136,6 +136,10 @@ function genererFlux(): {
     cleanLabel: f.label,
     primaryCategory: f.cat,
     subCategory: f.sous,
+    // Métadonnées de classification amont (TECH-API-TRACE) : démo = catégo auto fiable.
+    confidenceLevel: "High",
+    classificationSource: "SYSTEM_RULE",
+    ruleIdMatch: null,
     // Démo : ces catégories sont toutes des pré-catégorisations OBIE valides →
     // marqueur de provenance cohérent (paire alignée sur le CHECK de cohérence).
     isAutoCategorized: true,
