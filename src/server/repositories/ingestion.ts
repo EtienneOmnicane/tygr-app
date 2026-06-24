@@ -51,6 +51,11 @@ export interface TransactionAUpserter {
   cleanLabel: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Métadonnées de classification amont (TECH-API-TRACE) — descriptives, normalisées
+   *  via chaineOuNull, jamais bornées par un CHECK (cf. schema.ts). */
+  confidenceLevel: string | null;
+  classificationSource: string | null;
+  ruleIdMatch: string | null;
   /** Provenance auto de la catégorie OBIE (cf. orchestrateur.versLignePersistee). */
   isAutoCategorized: boolean;
   /** Source auto (NULL si non auto). Toujours cohérent avec isAutoCategorized. */
@@ -186,6 +191,9 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
         cleanLabel: t.cleanLabel,
         primaryCategory: t.primaryCategory,
         subCategory: t.subCategory,
+        confidenceLevel: t.confidenceLevel,
+        classificationSource: t.classificationSource,
+        ruleIdMatch: t.ruleIdMatch,
         isAutoCategorized: t.isAutoCategorized,
         categorySource: t.categorySource,
         isRemoved: t.isRemoved,
@@ -200,6 +208,11 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
           cleanLabel: t.cleanLabel,
           primaryCategory: t.primaryCategory,
           subCategory: t.subCategory,
+          // Métadonnées de classification amont : un re-sync reflète toujours l'état
+          // Omni-FI courant (déterministe/idempotent, comme les autres champs).
+          confidenceLevel: t.confidenceLevel,
+          classificationSource: t.classificationSource,
+          ruleIdMatch: t.ruleIdMatch,
           // On reflète toujours l'état Omni-FI courant : un re-sync remet le marqueur
           // en cohérence avec la catégorie reçue (déterministe, idempotent). Le
           // marqueur est orthogonal aux splits — ne touche jamais la catégorisation

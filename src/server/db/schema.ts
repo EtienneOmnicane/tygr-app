@@ -383,6 +383,26 @@ export const transactionsCache = pgTable(
     primaryCategory: varchar("primary_category", { length: 120 }),
     subCategory: varchar("sub_category", { length: 120 }),
     /**
+     * Métadonnées de classification AMONT (bloc Enrichment, TECH-API-TRACE) — purement
+     * DESCRIPTIVES : on TRACE fidèlement la valeur reçue d'Omni-FI, aucune décision
+     * dérivée ici (l'exploitation — seuils, file de revue — relève de GAP-CATEG-NATIVE1).
+     * À distinguer de `category_source` (ci-dessous) : celui-ci dit quel SYSTÈME TYGR a
+     * posé la catégorie ('OMNIFI'), `classification_source` dit quelle SOUS-SOURCE amont
+     * (USER_RULE/SYSTEM_RULE/ML) — granularités différentes, non redondantes.
+     *
+     * VOLONTAIREMENT sans CHECK de liste fermée ni cohérence avec is_auto_categorized :
+     * (1) les valeurs amont ne sont pas sous notre contrôle — un CHECK strict ferait
+     * échouer une ingestion sur une valeur API nouvelle (résilience > rigidité pour de
+     * la donnée descriptive) ; (2) ces champs peuvent décrire une classification amont
+     * ayant abouti à "Uncategorized" (info utile), donc indépendants du marqueur auto.
+     * `confidence_level` "Low" est CONSERVÉ tel quel (défaut serializer amont) : neutraliser
+     * un score bas est une décision de couche UI, pas de la trace. Toujours via `chaineOuNull`
+     * (un "" amont → NULL, jamais "" brut).
+     */
+    confidenceLevel: varchar("confidence_level", { length: 120 }),
+    classificationSource: varchar("classification_source", { length: 120 }),
+    ruleIdMatch: varchar("rule_id_match", { length: 120 }),
+    /**
      * Provenance AUTOMATIQUE de la catégorie OBIE : true ⇔ primary_category vient
      * d'une source auto (Omni-FI, bloc Enrichment) et non d'une absence. Permet de
      * distinguer « auto » de « manuelle » (la catégorisation manuelle TYGR vit dans
