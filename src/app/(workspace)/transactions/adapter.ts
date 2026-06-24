@@ -33,7 +33,9 @@ import type {
 
 import type {
   FiltresTransactions,
+  NiveauFiabilite,
   PageTransactions,
+  SourceClassification,
   StatutCategorisation,
   TransactionListItem,
 } from "@/components/transactions/types-transactions";
@@ -112,6 +114,11 @@ export function versLigneUI(
     // Backend ne renvoie pas la catégorie unique → badge de comptage générique.
     categorie: null,
     nbCategories: ligne.nbSplits,
+    // Métadonnées de fiabilité amont (TECH-API-TRACE) NORMALISÉES vers des unions :
+    // toute valeur brute inattendue (la colonne est sans CHECK côté DB) retombe sur
+    // `null` → l'UI ne voit jamais de chaîne libre et reste insensible aux nouveautés API.
+    niveauFiabilite: normaliserNiveauFiabilite(ligne.confidenceLevel),
+    sourceClassification: normaliserSourceClassification(ligne.classificationSource),
   };
 }
 
@@ -143,4 +150,45 @@ function traduireCategorieBanque(primaryCategory: string | null): string | null 
   if (!primaryCategory?.trim()) return null;
   const fr = categorieFr(primaryCategory);
   return fr === CATEGORIE_FR_PAR_DEFAUT ? null : fr;
+}
+
+/**
+ * Normalise le `confidence_level` BRUT amont (chaîne libre, colonne sans CHECK) vers
+ * l'union `NiveauFiabilite`, ou `null` si absent/non reconnu. Robuste à la casse et aux
+ * espaces (la trace amont est fidèle mais on ne suppose pas une casse fixe). Toute valeur
+ * hors des trois niveaux connus → `null` : l'UI ne décide rien sur une valeur qu'elle ne
+ * comprend pas (pas de badge erroné), et reste insensible à une nouveauté d'API.
+ */
+function normaliserNiveauFiabilite(brut: string | null): NiveauFiabilite | null {
+  switch (brut?.trim().toLowerCase()) {
+    case "high":
+      return "High";
+    case "medium":
+      return "Medium";
+    case "low":
+      return "Low";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Normalise la `classification_source` BRUTE amont vers l'union `SourceClassification`,
+ * ou `null` si absente/non reconnue. Même principe défensif que ci-dessus. NB :
+ * `USER_RULE` = règle Omni-FI (concept C), à ne pas confondre avec la ventilation
+ * manuelle TYGR (concept A) — la distinction est portée par les libellés d'infobulle UI.
+ */
+function normaliserSourceClassification(
+  brut: string | null,
+): SourceClassification | null {
+  switch (brut?.trim().toUpperCase()) {
+    case "USER_RULE":
+      return "USER_RULE";
+    case "SYSTEM_RULE":
+      return "SYSTEM_RULE";
+    case "ML_FALLBACK":
+      return "ML_FALLBACK";
+    default:
+      return null;
+  }
 }

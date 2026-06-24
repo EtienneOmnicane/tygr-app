@@ -78,6 +78,24 @@ export interface TransactionLigne {
   isAutoCategorized: boolean;
   /** Source de la catégorie auto (NULL si non auto). */
   categorySource: CategorySource | null;
+  /**
+   * Fiabilité AMONT de la classification Omni-FI (TECH-API-TRACE, bloc Enrichment).
+   * Libellé ordinal BRUT tel que persisté (`High`/`Medium`/`Low`, ou autre valeur
+   * future — la colonne est sans CHECK, résilience API). NULL si non remontée (ligne
+   * antérieure à la migration 0012, ou payload muet). ⚠️ `"Low"` est le DÉFAUT du
+   * serializer amont : il ne signifie pas « douteux » en soi — la décision d'affichage
+   * (badge « À vérifier ») croise ce niveau avec la présence d'une catégorie, côté UI.
+   * La NORMALISATION en union typée se fait dans l'adaptateur (frontière UI), pas ici :
+   * le repository reste fidèle à la source.
+   */
+  confidenceLevel: string | null;
+  /**
+   * Sous-source amont de la classification (`USER_RULE`/`SYSTEM_RULE`/`ML_FALLBACK`,
+   * doc API « Priorité de classification »). BRUT, NULL si non remontée. À DISTINGUER
+   * de `categorySource` ('OMNIFI', système TYGR) : granularité différente. ⚠️
+   * `USER_RULE` = règle définie DANS Omni-FI, JAMAIS la ventilation manuelle TYGR.
+   */
+  classificationSource: string | null;
   /** Nombre de splits de catégorisation rattachés. */
   nbSplits: number;
   /** Somme des montants de splits (chaîne numeric ; "0" si aucun). */
@@ -265,6 +283,11 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       subCategory: transactionsCache.subCategory,
       isAutoCategorized: transactionsCache.isAutoCategorized,
       categorySource: transactionsCache.categorySource,
+      // Métadonnées de fiabilité AMONT (TECH-API-TRACE) — brutes ; la normalisation
+      // en union + la règle d'affichage vivent côté UI. `rule_id_match` NON projeté :
+      // identifiant opaque sans usage d'affichage (décision plan §3, dette P2 si besoin).
+      confidenceLevel: transactionsCache.confidenceLevel,
+      classificationSource: transactionsCache.classificationSource,
       nbSplits: nbSplitsExpr,
       montantVentile: montantVentileExpr,
       statut: statutExpr,
