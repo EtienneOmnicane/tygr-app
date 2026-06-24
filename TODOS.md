@@ -510,6 +510,13 @@ suffisant) :
   (table de mapping en base, langue pivot anglaise conservée) si le volume de catégories grandit ;
   OU (b) ajout d'une catégorie OBIE non cartographiée détecté en prod. Piste low-cost intermédiaire :
   log structuré (sans PII) quand `categorieFr` retombe sur le défaut, pour détecter les trous.
+  **MAJ 2026-06-23 (feat auto-categorized)** : l'ingestion NULLifie désormais `primary_category`
+  quand la catégorie OBIE est vide ou `Uncategorized` (decision PO ; `versLignePersistee` +
+  `scripts/backfill-auto-categorized.mjs`). Conséquence pour CE point : le défaut de `categorieFr`
+  ne signale PLUS que de VRAIES catégories inconnues (le bruit `Uncategorized` ne remonte plus) →
+  la piste (b)/log devient un signal fiable de trou de catalogue. `primary_category` reste l'OBIE
+  brut (anglais) pour les catégories exploitables ; le marqueur de provenance vit dans la nouvelle
+  colonne `is_auto_categorized`/`category_source` (cf. migration 0011), distinct de ce mapping FR.
 - [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
   refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`
@@ -1186,8 +1193,8 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   Complète `DASH-AUTOSYNC1` (piste b) côté push ; le cron (piste a) reste l'alternative
   pull si le push amont n'est pas fiable en sandbox.
 
-- [ ] **GAP-INSIGHTS1 (P2) — exploiter Financial Insights (`/dashboard/insights`, `/insights/*`)** —
-  Effort M, gardien Backend. Ouvert 2026-06-23. L'API livre clé en main
+- [ ] **[P2] - [TECH-API-INSIGHTS] - Intégration `/insights/cashflow` et `/insights/vendors`** —
+  Effort M, gardien Backend. Ouvert 2026-06-23 (ex-`GAP-INSIGHTS1`, renommé 2026-06-23). L'API livre clé en main
   `CashflowRibbon`, `TopVendors`, `CategorySummary`, **`CategoryAnomalies`**,
   `RecurringPayments`, `IncomeInsights`, `Alerts` — qui couvrent **directement
   FEAT-8.3** (alertes : liquidités dormantes, frais bancaires anormaux) et enrichissent
@@ -1199,8 +1206,10 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   produit « anomalies de frais ». **Raccroché à FEAT-8.3** (ne pas livrer 8.3 sans
   trancher cette option d'abord).
 
-- [ ] **GAP-DEBT1 (P2) — exploiter Debt Profiling (`/dashboard/debt`, `/debt/instruments`, `/debt/exposure/*`)** —
-  Effort M, gardien Backend. Ouvert 2026-06-23. **FEAT-3.3 (mur de la dette)** et une
+- [ ] **[P3] - [TECH-API-DEBT] - Module Debt Profiling (`/dashboard/debt`, `/debt/exposure/*`, `/debt/.../repayment`)** —
+  Effort M-L, gardien Backend. Ouvert 2026-06-23 (ex-`GAP-DEBT1`, renommé + redescendu P2→P3
+  le 2026-06-23 pour s'aligner sur `FEAT-3.3` déjà en P3 ; aucun écran dette n'existe, c'est un
+  chantier neuf à cadrer en spec dédiée, pas une dette d'un existant). **FEAT-3.3 (mur de la dette)** et une
   partie de **FEAT-8.2 (échéanciers)** sont disponibles amont sans saisie manuelle :
   `TotalDebt`/`UtilizationRate`, instruments (taux, `NextPaymentDate`/`NextPaymentAmount`,
   `IsOverdue`, `MinimumPaymentAmount`), exposition par institution/devise, et
@@ -1212,29 +1221,65 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   FEAT-3.3 (P3) et FEAT-8.2 (P2)** — re-prioriser ces deux entrées si l'API debt est
   retenue comme source.
 
-- [ ] **GAP-CATEG-NATIVE1 (P2) — catégorisation native Omni-FI + score de confiance (socle FEAT-8.1)** —
-  Effort M, gardien Backend. Ouvert 2026-06-23. Le moteur de **règles déterministe**
-  (motif→catégorie) est livré (PR #95, `regles-categorisation.ts`) — utile, mais ce
-  n'est PAS FEAT-8.1. Manquent : (1) l'exploitation des champs enrichis amont
-  `primary_category`/`sub_category` (colonnes présentes en base, peu/pas exposées en
-  lecture catégorisée) ; (2) la chaîne de priorité `USER_RULE > SYSTEM_RULE >
-  ML_FALLBACK` (doc API §Priorité de classification) ; (3) le **score de confiance**
-  pilotant l'application silencieuse vs une **file de revue manuelle**. **Déclencheur** :
-  ouverture du chantier FEAT-8.1 (Epic 8). **Raccroché à FEAT-8.1** — cette dette en
-  précise le périmètre « consommer l'enrichissement amont avant tout ML interne ».
+- [x] **[P1] - [TECH-API-TRACE] - Capture des métadonnées de classification (`ConfidenceLevel`, `ClassificationSource`, `RuleIdMatch`)** —
+  ✅ **LIVRÉ & MERGÉ 2026-06-24 (PR #110)** : migration `0012_classification-metadata` (3 colonnes
+  varchar(120) nullable, expand-only, SANS CHECK — résilience aux nouveautés API ; écrite à la main +
+  journal idx 12 car DB-MIGRATE3 ; héritage partitions vérifié) + `TransactionAUpserter`/`upsertTransactions`
+  (INSERT + onConflict) + `versLignePersistee` (mapping via `chaineOuNull`, indépendant de `categorieValide`,
+  `"Low"` conservé). Pas de backfill (acté). Pré-requis de `GAP-CATEG-NATIVE1` désormais satisfait.
+  Effort S, **gardien Backend** (tâche ATOMIQUE assignable sans collision — touche uniquement la
+  couche ingestion + le schéma, zéro surface Front). Ouvert 2026-06-23 (scindé de
+  `GAP-CATEG-NATIVE1` le 2026-06-23 : c'en est la première brique, isolée pour être livrable seule).
+  **Le fait, prouvé** : le bloc `Enrichment{}` (`server/omnifi/types.ts:94`) porte 6 champs ; on en
+  mappe 3 (`CleanMerchantName`/`PrimaryCategory`/`SubCategory` via `versLignePersistee`,
+  `orchestrateur.ts:76-94`) et on **JETTE** `ConfidenceLevel`, `ClassificationSource`, `RuleIdMatch` —
+  reçus du payload mais aucune colonne en base (`transactions_cache` n'a que `clean_label`/
+  `primary_category`/`sub_category`, `schema.ts:372-374`). Même pathologie que le bug `Enrichment`
+  imbriqué (PR #101) : la donnée arrive et est perdue. **Valeur** : distinguer une auto-catégo
+  fiable d'une douteuse + tracer la source (`USER_RULE>SYSTEM_RULE>ML`), exigée par la roadmap
+  (traçabilité MANUAL/RULE) — prolongement direct du fix PR #101, ratio valeur/effort imbattable.
+  **À faire (Back uniquement)** : (1) migration expand `transactions_cache` (+ `confidence_level`,
+  `classification_source`, `rule_id_match`, varchar nullable, expand-safe — table partitionnée
+  append-only, donc colonnes ADD only, jamais de DROP) ; (2) étendre `TransactionAUpserter`
+  (`repositories/ingestion.ts:42`) + le SET du `onConflictDoUpdate` (`upsertTransactions`) ;
+  (3) mapper les 3 champs dans `versLignePersistee` via `chaineOuNull` (le serializer pose ""
+  par défaut — réutiliser la normalisation existante, ne JAMAIS persister "" brut). **NE PAS** y
+  inclure l'exposition en lecture/UI ni la file de revue : ça relève de `GAP-CATEG-NATIVE1` (P2,
+  ci-dessous). **Déclencheur** : DÛ — première brique de l'exploitation de l'enrichissement amont
+  (priorisé P1 le 2026-06-23, gain immédiat, donnée déjà dans le payload). **NON une dette
+  d'isolation** ; touche l'append-only en mode expand-only (colonnes additives, aucune suppression).
 
-- [ ] **GAP-OVERRIDE1 (P2) — propager la surcharge de catégorisation à l'amont (`/transactions/override`)** —
-  Effort S, gardien Backend. Ouvert 2026-06-23. FEAT-2.2 exige que la correction
-  manuelle « transmette la directive via `POST /accounts/{AccountId}/transactions/override` ».
-  Aujourd'hui la ventilation manuelle (`remplacerSplits`, audit append-only) est
-  **purement locale** : l'amont Omni-FI ne ré-apprend jamais des corrections, et une
-  re-synchro peut ré-imposer une catégorisation auto divergente. À câbler : appel
-  best-effort à l'override amont après un split manuel validé (idempotent, sans PII en
-  log, fail-soft — l'échec amont ne casse pas la ventilation locale qui fait foi).
-  **Déclencheur** : retour utilisateur « mes corrections ne tiennent pas après synchro »
-  OU industrialisation de la catégorisation (GAP-CATEG-NATIVE1). **NON une dette
-  d'isolation** (la vérité locale reste la ventilation manuelle ; l'override est un
-  signal sortant).
+- [ ] **GAP-CATEG-NATIVE1 (P2) — chaîne de priorité de classification + file de revue (socle FEAT-8.1)** —
+  Effort M, gardien Backend. Ouvert 2026-06-23 (**périmètre réduit le 2026-06-23** : la capture des
+  champs enrichis amont en est SORTIE → `TECH-API-TRACE` P1, ci-dessus, pré-requis de ce ticket).
+  Le moteur de **règles déterministe** (motif→catégorie) est livré (PR #95, `regles-categorisation.ts`)
+  — utile, mais ce n'est PAS FEAT-8.1. Une fois `TECH-API-TRACE` livré (les colonnes de confiance/source
+  peuplées), restent : (1) la chaîne de priorité `USER_RULE > SYSTEM_RULE > ML_FALLBACK` (doc API
+  §Priorité de classification) qui ARBITRE entre la catégo amont, les règles locales et la ventilation
+  manuelle ; (2) le **score de confiance** pilotant l'application silencieuse vs une **file de revue
+  manuelle** (exposer `confidence_level` en lecture catégorisée, seuil de bascule en file). **Dépend de
+  `TECH-API-TRACE`** (sans les colonnes peuplées, pas de score à exploiter). **Déclencheur** : ouverture
+  du chantier FEAT-8.1 (Epic 8). **Raccroché à FEAT-8.1** — précise le périmètre « consommer
+  l'enrichissement amont avant tout ML interne ».
+
+- [ ] **[P2] - [DECISION-PRODUIT-OVERRIDE] - Arbitrage : moteur de règles LOCAL vs propagation amont (`/transactions/override`)** —
+  Effort S (le dev) mais **bloqué sur une DÉCISION produit AVANT tout code** (règle 10),
+  gardien Backend (exécution) + PO (arbitrage). Ouvert 2026-06-23 (ex-`GAP-OVERRIDE1`,
+  requalifié de dette technique en décision produit le 2026-06-23 : ce n'est pas un correctif
+  à planifier mais un choix d'architecture à trancher). **Le fait** : FEAT-2.2 prévoit que la
+  correction manuelle « transmette la directive via `POST /accounts/{AccountId}/transactions/override` »,
+  or aujourd'hui la ventilation manuelle (`remplacerSplits`, audit append-only) est **purement
+  locale** — l'amont Omni-FI ne ré-apprend jamais des corrections, et une re-synchro peut
+  ré-imposer une catégorisation auto divergente. **Les deux options à arbitrer** : (A) **garder
+  le moteur local comme seule vérité** (maîtrise totale, zéro couplage, mais divergence assumée
+  avec la classification Omni-FI sur le même compte) ; (B) **propager** via un appel best-effort
+  à l'override amont après chaque split validé (idempotent, sans PII en log, fail-soft — l'échec
+  amont ne casse pas la vérité locale) → aligne les deux classifications, au prix d'un couplage
+  sortant. **À trancher par le PO** ; l'exécution (option B) est triviale une fois la décision
+  prise. **Déclencheur** : retour utilisateur « mes corrections ne tiennent pas après synchro »
+  OU industrialisation de la catégorisation (`TECH-API-TRACE` / chaîne de priorité). **NON une
+  dette d'isolation** (la vérité locale reste la ventilation manuelle ; l'override est un signal
+  sortant).
 
 **Écarts déjà tracés ailleurs (rappel, NON re-dupliqués)** : synchro auto →
 `DASH-AUTOSYNC1` (P1) ; UI multi-entités → `ENTITY-UI1` (P2) ; pré-remplissage sas via
@@ -1265,9 +1310,9 @@ matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
   (règle 10) : consommer l'amont (rapide, couple TYGR à la qualité analytique Omni-FI +
   `clientUserId`) vs recalculer en interne (maîtrise, réécrit l'existant).** Le moteur de
   formules custom FYGR est hors MVP (raccrocher à FEAT-3.2 pivot). **Recoupe directement
-  `GAP-INSIGHTS1`** — PROD-GRAPHS-FYGR1 en est le volet VISUALISATION ; ne pas livrer sans
+  `TECH-API-INSIGHTS`** — PROD-GRAPHS-FYGR1 en est le volet VISUALISATION ; ne pas livrer sans
   trancher l'option insights d'abord. **Déclencheur** : ouverture Epic 8.3 OU demande
-  produit « graphiques comme FYGR ». **Raccroché à GAP-INSIGHTS1 + FEAT-3.2.**
+  produit « graphiques comme FYGR ». **Raccroché à TECH-API-INSIGHTS + FEAT-3.2.**
 
 ### Dette UI + tests relevée en cross-review PROD-MERCHANT1 (2026-06-23)
 
