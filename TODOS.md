@@ -5,6 +5,37 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Insights financiers — module amont non livré, dérivation interne (2026-06-24)
+
+- [ ] **INSIGHTS-AMONT1 (P2) — basculer les Insights sur l'API Omni-FI quand le module
+  sera livré.** Audit de faisabilité Staging du 2026-06-24 (cf.
+  `PLAN-tech-api-insights.md`) : `/insights/cashflow`, `/insights/vendors`,
+  `/insights/alerts` et `/dashboard/insights` renvoient tous **`501 NOT_IMPLEMENTED`**
+  (« Insights module is not yet implemented »), 501 même **sans auth** → module non
+  branché côté serveur (la route existe : `OPTIONS → 200`, `POST → 405`). On a donc livré
+  la **Voie A** : cashflow & vendors **DÉRIVÉS** de `transactions_cache`
+  (`src/server/repositories/insights.ts` + DTO internes `src/server/insights/types.ts`),
+  zéro dépendance au 501. **Déclencheur de résolution** : passage **501 → 200** de
+  `GET /insights/cashflow` en Staging (re-jouer l'audit §1 du plan à chaque sprint tant
+  que ce ticket est ouvert). **Effort estimé** : ~1 j (client amont + mapper
+  `mapDepuisOmniFi` → MÊME DTO interne + flag `INSIGHTS_SOURCE` + réconciliation
+  dérivé↔amont). **Ne PAS coder le client amont avant** : un 501 ne révèle aucun payload
+  de succès → on figerait un parseur contre un contrat fantôme (piège `/v1` /
+  `Enrichment` déjà payé ×2). NON une dette d'isolation/append-only/montant (la Voie A
+  respecte déjà tous ces invariants : RLS tenant + JOIN scope entité + agrégat SQL en
+  chaînes décimales). Rappels de contrat amont gravés dans `docs/agent-capabilities.md`
+  (§5) : routes à la RACINE (pas `/v1`), param `client_user_id` snake_case (camelCase →
+  403), enveloppe d'erreur `{Error:{}}` ≠ OBIE.
+
+- [ ] **INSIGHTS-MATVIEW1 (P2, conditionnelle) — matérialiser le cashflow si la perf
+  l'exige.** Les insights sont aujourd'hui calculés À LA LECTURE (agrégat SQL sur
+  `transactions_cache`), choix KISS validé (pas de table spéculative, règle 9). Si un
+  cap de perf est **démontré** (pas supposé), introduire une vue matérialisée
+  `insights_cashflow_*` rafraîchie post-sync, **append-only au DELETE** (trigger +
+  liste blanche, comme toute table financière — cf. CLAUDE.md). **Déclencheur** : p95 de
+  l'agrégat cashflow > seuil sur jeu de données réel. **Effort** : ~0,5–1 j. **Pas
+  avant** une mesure réelle.
+
 ### Localisation — identifiant de fuseau Maurice erroné (2026-06-22, Lot 2)
 
 - [x] **TZ-DOC1 (P1, point de DÉPLOIEMENT/fuseau) — corriger « Asia/Port_Louis » →
