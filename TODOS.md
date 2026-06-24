@@ -5,6 +5,127 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Parcours utilisateur complet — bilan QA runtime (2026-06-24)
+
+Parcours connecté de bout en bout (navigateur headless, compte `enardou@omni-fi.co`,
+base locale 12 comptes / 260+ tx sandbox), branche `feature/regles-form-validation-ux`.
+Le cœur métier (consulter la trésorerie, ventiler, automatiser par règles, déconnexion)
+est **réel, persistant et correct sur desktop ≥1024px** ; les constats ci-dessous sont
+des **trous de complétude / onboarding / responsive**, pas des bugs de logique. **Aucun**
+ne touche l'isolation tenant, l'append-only ni les montants (sinon il serait corrigé
+immédiatement, pas consigné). Preuves runtime : POST de ventilation `200` → statut
+« Complet » ; règle créée `200` + « Ré-analyser » a recatégorisé 7 transactions ;
+logout → `/login` et accès direct post-logout re-redirigé.
+
+- [ ] **QA-ONBOARD-CATEG1 (P1, point d'ONBOARDING — premier utilisateur) — seeder les
+  catégories par défaut à la création d'un workspace.** Constaté : le picker de
+  ventilation affiche « Aucune catégorie ne correspond » sur un champ **vide** — le
+  workspace de démo n'a **aucune** catégorie (`scripts/seed-categories.mjs` jamais lancé
+  dessus). La fonction centrale (catégoriser / ventiler) est donc **inutilisable** tant
+  que l'utilisateur n'a pas créé une catégorie à la main via « + Ajouter une catégorie ».
+  Le référentiel existe (`scripts/categories-referentiel.mjs`, 28 catégories) et le seed
+  est idempotent, mais **rien ne le déclenche** à la création de workspace (vérifié :
+  aucun appel de seed dans `src/server/`). **À faire** : seeder le référentiel
+  automatiquement à la provision d'un nouveau workspace (ou exposer un CTA « Importer les
+  catégories standard » dans le picker vide). **Déclencheur** : tout onboarding d'un
+  workspace réel (démo Omnicane comprise). **Effort** : S (le seed et le référentiel
+  existent déjà ; reste à le câbler au cycle de vie workspace). Cf. mémoire
+  `seed-categories-commande-locale`.
+
+- [ ] **QA-RESPONSIVE-SHELL1 (P1, point de DÉPLOIEMENT si usage tablette/mobile attendu) —
+  condenser le header sous le breakpoint (débordement horizontal global).** Mesuré au
+  DOM : `scrollWidth` ≈ **950px** quelle que soit la page → débordement de **+575px en
+  mobile (375px)** et **+182px en tablette portrait (768px)** ; OK seulement à partir de
+  **1024px**. Identique sur toutes les routes (transactions, regles, graphiques,
+  admin/entites) → c'est **structurel**, pas une page. Cause exacte :
+  `src/components/shell/app-header.tsx:39` est un `flex h-16 items-center gap-6` avec 8+
+  items horizontaux (logo + `AppNav` + `WorkspaceSwitcher` + CTA banque + Membres +
+  Entités + déconnexion) **sans aucune classe responsive** (`md:`/`hidden`/menu mobile) ;
+  `AppNav` (`app-nav.tsx:36`) est lui aussi un `flex` non condensé. Viole la règle UI
+  CLAUDE.md « Responsive header : condenser sous le breakpoint (menu/icône), **JAMAIS
+  flex-wrap** ». **À faire** : passer le bloc de droite + la nav en menu/burger sous
+  `lg` (ou masquer/regrouper). **Déclencheur** : décision produit « l'app doit être
+  utilisable < 1024px » (un Financial Manager sur tablette/téléphone). Si desktop-only
+  assumé → tracer la décision et **fermer ce ticket explicitement** (ne pas laisser
+  pourrir). **Effort** : M. (NB : la mémoire `dashboard-insights-voie-a-livre` notait
+  déjà un « overflow mobile préexistant » — c'est lui, généralisé à tout le shell.)
+
+- [ ] **QA-UX-CATEG-COHERENCE1 (P2) — lever l'ambiguïté entre catégorie *prédite Omni-FI*
+  et statut de ventilation TYGR.** Sur `/transactions`, une même cellule juxtapose la
+  catégorie **prédite** par Omni-FI en sous-texte (« Charges d'exploitation »,
+  « Honoraires », « Logement ») ET le statut de ventilation TYGR « Non catégorisé » → une
+  ligne intitulée « Charges d'exploitation » est affichée « Non catégorisé », ce qui se
+  contredit à l'œil. Après ventilation, la colonne montre « 1 catégorie**s** » (pas
+  d'accord singulier/pluriel) **mais pas le nom** de la catégorie posée (il faut rouvrir
+  la modale pour la connaître). Cellule par ailleurs **dupliquée** dans le DOM (variantes
+  mobile+desktop superposées : « Non catégorisé Non catégorisé »). **À faire** : clarifier
+  le vocabulaire (prédiction ≠ ventilation validée), afficher la/les catégorie(s)
+  utilisateur dans la colonne, corriger l'accord pluriel, et masquer la variante non
+  pertinente au lieu de la dupliquer. **Déclencheur** : prochaine itération UX
+  `/transactions`. **Effort** : S–M. Cf. mémoires `cascade-libelle-transaction` +
+  `ui-fiabilite-classification-transactions`.
+
+- [ ] **QA-UX-VENTIL-RESTE1 (P2) — « Catégoriser le reste » ne doit pas créer une ligne
+  orpheline quand une catégorie est déjà sélectionnée.** Reproduction : ouvrir la modale,
+  choisir une catégorie (montant laissé vide), cliquer « + Catégoriser le reste » → au
+  lieu de remplir la **ligne courante**, l'action **ajoute une 2ᵉ ligne** pré-remplie au
+  montant restant mais **sans catégorie**. Résultat : « Reste Rs 0,00 » (barre pleine)
+  mais Valider reste désactivé car une ligne a une catégorie sans montant et l'autre un
+  montant sans catégorie — état confus pour l'utilisateur. Le garde-fou (Valider
+  désactivé sur état incohérent) est correct ; c'est l'ergonomie du raccourci qui piège.
+  **À faire** : « Catégoriser le reste » remplit la dernière ligne **catégorisée mais non
+  chiffrée** s'il y en a une, sinon crée la ligne. **Déclencheur** : prochaine itération
+  de la modale de ventilation. **Effort** : S. Cf. mémoire `split-allocation-modal-plan`.
+
+- [ ] **QA-ENTITES-CREATION-UI1 (P1, raccroché au chantier Entités multi-tenant) — exposer
+  la création d'entité dans l'UI `/admin/entites`.** La page n'offre que l'**assignation**
+  (Vision Globale / Vision Entité par membre) et affiche « Aucune entité n'a encore été
+  créée pour ce groupe » ; passer un membre en « Vision Entité » mène à un **cul-de-sac**
+  (« Sélectionnez au moins une entité » alors qu'aucune n'existe et qu'on ne peut pas en
+  créer). **Le backend est pourtant prêt** : `creerEntiteAction` +
+  `creerEntiteSchema` existent dans
+  `src/app/(workspace)/admin/entites/actions.ts:113`, mais **ne sont câblés nulle part
+  dans l'UI** (vérifié : ni `page.tsx` ni `assignation-entites.tsx` ne les importent).
+  C'est donc un **trou d'UI**, pas un trou complet. **À faire** : ajouter un formulaire
+  « Nouvelle entité » qui appelle `creerEntiteAction` (garde ADMIN déjà côté action).
+  **Déclencheur** : le multi-entités est la priorité démo n°1 (roadmap Omnicane) → dû
+  avant toute démo « Vision Entité ». **Effort** : S–M. Cf. mémoires
+  `ui-admin-entites-maquette`, `roadmap-omnicane-entites`.
+
+- [ ] **QA-LISTES-MANQUANTES1 (P2) — les pages « liste » n'affichent pas l'existant.**
+  Trois écrans nommés comme des listes ne montrent que des actions, jamais l'état :
+  (a) **`/banques`** (« Banques connectées ») n'affiche **aucune** des 12 banques
+  connectées (seulement « + Connecter une banque » / « Synchroniser ») → impossible de
+  voir ni déconnecter une connexion ; (b) **`/admin/membres`** (« Membres du workspace »)
+  n'affiche que le **formulaire de création**, pas la liste des membres (or
+  `listerMembresWorkspace` existe déjà, cf. mémoire `ui-admin-entites-maquette`) ;
+  (c) **`/admin/entites`** liste bien les membres mais pas les entités (cf.
+  QA-ENTITES-CREATION-UI1). **À faire** : rendre l'état à côté de l'action (liste des
+  connexions bancaires avec déconnexion ; liste des membres avec rôle). **Déclencheur** :
+  prochaine itération admin / gestion des connexions. **Effort** : M.
+
+- [ ] **QA-NAV-PLACEHOLDERS1 (P2) — Graphiques & Échéances : sections vides au message
+  trompeur + incohérence placeholder.** `/graphiques` et `/echeances` sont des
+  placeholders « Bientôt… **cette section s'activera dès que vos comptes seront
+  synchronisés** » — or les comptes **sont** synchronisés (12 comptes, 260+ tx) : le
+  message est **factuellement faux** dans ce contexte et promet une activation qui ne
+  viendra pas d'une synchro. De plus, `app-nav.tsx:42` prévoit un mode `placeholder`
+  (libellé inerte, non cliquable) **non utilisé** : ces deux items naviguent vers une
+  vraie page placeholder (200) au lieu d'être rendus inertes → deux conventions
+  « pas encore livré » coexistent. **À faire** : soit livrer ces écrans, soit aligner sur
+  UNE convention (item de nav inerte OU page « en construction » au message honnête, sans
+  référence à une synchro déjà faite). **Déclencheur** : développement de la section
+  Graphiques (90j) / Échéances. **Effort** : S (alignement) à L (livraison réelle).
+
+- Note QA (non bloquante, **données de démo**, pas l'app) : soldes strictement
+  identiques sur les 4 banques (fixture sandbox clonée → ressemble à des doublons) ;
+  transactions datées dans le futur relatif (22 août / 14 juil. au 24 juin) ; libellés
+  « Opération bancaire » résiduels (fallback enrichment, cf. mémoire
+  `contrat-enrichment-imbrique`). Limite de la **sandbox**, à garder en tête pour les
+  démos. **Parcours bancaire non testable en local HTTP** : le widget Omni-FI refuse
+  l'origine `http://localhost` (« Origine sécurisée non autorisée », garde-fou
+  `RedirectOrigin` attendu, erreur correctement affichée) — testable seulement en https.
+
 ### Insights financiers — module amont non livré, dérivation interne (2026-06-24)
 
 - [ ] **INSIGHTS-AMONT1 (P2) — basculer les Insights sur l'API Omni-FI quand le module
