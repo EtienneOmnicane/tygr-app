@@ -20,6 +20,44 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Démarrer en Sandbox vs Production (API Omni-FI)
+
+L'application bascule entre la **sandbox** (pré-prod de recette) et la **production**
+Omni-FI **par les variables d'environnement** `OMNIFI_ENV` + `OMNIFI_BASE_URL` — le
+code (`src/server/omnifi/config.ts`) ne contient aucun environnement en dur.
+
+Un **verrou de sécurité fail-closed**, **actif par défaut**, refuse de démarrer le
+client en production tant que `OMNIFI_AUTORISER_PRODUCTION` ne vaut pas exactement
+`"1"`. Un `.env` mal réglé ne peut donc pas taper la prod par accident.
+
+### Mode Sandbox (par défaut)
+
+Votre `.env` habituel cible déjà la sandbox (voir [`.env.example`](./.env.example),
+section Omni-FI : `OMNIFI_ENV="sandbox"`, hôte `api-stage.omni-fi.co`). Rien de
+spécial à faire :
+
+```bash
+npm run dev
+```
+
+### Mode Production
+
+1. Renseigner les variables de prod. Le gabarit [`.env.prod.example`](./.env.prod.example)
+   liste exactement les clés qui changent (hôte `api.omni-fi.co`,
+   `OMNIFI_ENV="production"`, identifiants de l'ApiClient de prod, et le drapeau de
+   déverrouillage `OMNIFI_AUTORISER_PRODUCTION="1"`). Copier ces lignes dans votre
+   `.env` actif (ou maintenir un `.env.prod` séparé, ignoré par git).
+2. Démarrer normalement :
+
+```bash
+npm run dev      # ou: npm run start  en build de prod
+```
+
+> Sans `OMNIFI_AUTORISER_PRODUCTION="1"`, le démarrage échoue volontairement
+> (`OmniFiConfigError: Verrou sandbox actif`) dès le premier appel Omni-FI. C'est le
+> garde-fou attendu, pas un bug. La garde de cohérence `OMNIFI_ENV`↔hôte reste active
+> dans les deux modes : `production` exige l'hôte `api.omni-fi.co`, et inversement.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

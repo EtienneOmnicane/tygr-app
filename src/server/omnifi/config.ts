@@ -58,19 +58,27 @@ const HOTES_AUTORISES = new Set([
 const HOTES_PRODUCTION = new Set(["api.omni-fi.co"]);
 
 /**
- * 🔒 VERROU SANDBOX (exigence tuteur, 2026-06-22) — fail-closed STRUCTUREL.
- * Tant que ce drapeau vaut `true`, l'application REFUSE de démarrer le client
- * Omni-FI en production : ni `OMNIFI_ENV=production`, ni un hôte de prod ne sont
- * tolérés, quel que soit le `.env`. C'est volontairement un garde-fou CODE (pas une
- * simple convention d'env) : un `.env` mal réglé ne peut pas taper la prod par
- * accident pendant la phase de recette.
+ * 🔒 VERROU SANDBOX (exigence tuteur, 2026-06-22 ; piloté par env 2026-06-24) —
+ * fail-closed STRUCTUREL, **verrouillé PAR DÉFAUT**. Tant que le verrou tient,
+ * l'application REFUSE de démarrer le client Omni-FI en production : ni
+ * `OMNIFI_ENV=production`, ni un hôte de prod ne sont tolérés, quel que soit le
+ * reste du `.env`. C'est volontairement un garde-fou CODE (pas une simple
+ * convention d'env) : un `.env` mal réglé ne peut pas taper la prod par accident.
  *
- * ➡️ PASSAGE EN PRODUCTION (plus tard) : basculer cette constante à `false` dans une
- * PR DÉDIÉE et REVUE (Human-in-the-Loop) — c'est un changement à une ligne, traçable,
- * jamais un retrait d'allow-list destructif. La garde de cohérence env↔hôte et la
- * validation anti-fuite de secret restent actives dans les deux cas.
+ * ➡️ DÉVERROUILLAGE (test de la prod) : poser **explicitement**
+ * `OMNIFI_AUTORISER_PRODUCTION="1"` dans le `.env` local (voir `.env.prod.example`).
+ * C'est un opt-in volontaire et local : le dépôt reste fail-closed pour quiconque
+ * ne pose pas ce drapeau (CI, autre dev, prod non préparée). On n'écrit JAMAIS le
+ * déverrouillage en dur dans le code — il vit dans l'env de celui qui assume la prod.
+ *
+ * La fonction (vs constante) garantit une relecture de `process.env` à chaque
+ * `lireConfig` : un test peut basculer le flag puis `_reinitialiserConfigOmniFi()`.
+ * La garde de cohérence env↔hôte et la validation anti-fuite de secret restent
+ * actives dans les DEUX cas (verrouillé comme déverrouillé).
  */
-const SANDBOX_UNIQUEMENT = true;
+function verrouSandboxActif(): boolean {
+  return process.env.OMNIFI_AUTORISER_PRODUCTION !== "1";
+}
 
 /**
  * Valide OMNIFI_BASE_URL contre une fuite de secret (constat sécurité S1) :
@@ -120,19 +128,22 @@ function lireConfig(): OmniFiConfig {
   const { baseUrl, hostname } = validerBaseUrl(exiger("OMNIFI_BASE_URL"));
   const hoteEstProd = HOTES_PRODUCTION.has(hostname);
 
-  // 🔒 VERROU SANDBOX (fail-closed) : pendant la phase de recette, AUCUN chemin de
-  // prod n'est toléré — ni l'env, ni l'hôte. Refus bruyant (erreur de déploiement).
-  if (SANDBOX_UNIQUEMENT) {
+  // 🔒 VERROU SANDBOX (fail-closed, verrouillé par défaut) : tant que
+  // OMNIFI_AUTORISER_PRODUCTION!="1", AUCUN chemin de prod n'est toléré — ni l'env,
+  // ni l'hôte. Refus bruyant (erreur de déploiement). Poser ce flag déverrouille.
+  if (verrouSandboxActif()) {
     if (environment === "production") {
       throw new OmniFiConfigError(
-        'Verrou sandbox actif : OMNIFI_ENV="production" interdit (recette sandbox ' +
-          "uniquement). Voir SANDBOX_UNIQUEMENT dans config.ts pour le passage en prod.",
+        'Verrou sandbox actif : OMNIFI_ENV="production" interdit tant que ' +
+          'OMNIFI_AUTORISER_PRODUCTION!="1". Poser ce drapeau (.env.prod.example) ' +
+          "pour autoriser la prod.",
       );
     }
     if (hoteEstProd) {
       throw new OmniFiConfigError(
-        `Verrou sandbox actif : l'hôte de production (${hostname}) est interdit. ` +
-          "Utiliser un hôte sandbox (api-stage.omni-fi.co / stage.omni-fi.co).",
+        `Verrou sandbox actif : l'hôte de production (${hostname}) est interdit tant ` +
+          'que OMNIFI_AUTORISER_PRODUCTION!="1". Utiliser un hôte sandbox ' +
+          "(api-stage.omni-fi.co / stage.omni-fi.co), ou poser le drapeau.",
       );
     }
   }
