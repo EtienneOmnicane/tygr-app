@@ -47,6 +47,21 @@ export interface EtatFinalisation {
    * (rejet de forme, erreur, ou synchro idempotente `GET /connections`).
    */
   complet?: boolean;
+  /**
+   * Connexions dont le re-sync exige une RÉPARATION MFA (le scraping a redemandé un
+   * OTP). Signal pour que l'UI rouvre le widget natif `@omni-fi/react-link` en mode
+   * REPAIR (link-token portant ConnectionId + JobId) — on ne pilote PAS la MFA côté
+   * serveur. Absent/omis quand aucune connexion n'est concernée. Non-énumérant : ne
+   * porte que des identifiants opaques Omni-FI (ni libellé bancaire ni token).
+   */
+  reparation?: Array<{ connectionId: string; jobId: string }>;
+  /**
+   * Connexions non re-synchronisées car en cooldown (« 1 sync / 15 min ») — PAS une
+   * erreur. `nextSyncAt` = ISO 8601 du prochain sync possible (ou null si inconnu) ;
+   * l'UI affiche le délai d'attente. Absent/omis quand aucune connexion n'est en
+   * cooldown.
+   */
+  rateLimited?: Array<{ connectionId: string; nextSyncAt: string | null }>;
 }
 
 const MESSAGE_REFUS = "Action non autorisée.";
@@ -202,13 +217,28 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       // fermer sans connecter). Message neutre.
       return { erreur: null, succes: null };
     }
-    const base = `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`;
+    // Phrase de base + suppléments (transactions, cooldown, réparation). Tous
+    // non-énumérants : on COMPTE les cas, on ne nomme ni banque ni token.
+    let base = `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`;
+    if (r.transactionsImportees > 0) {
+      base += ` ${r.transactionsImportees} transaction(s) importée(s).`;
+    }
+    // Cooldown : information, pas erreur. On indique le délai si on connaît la date la
+    // plus proche (sinon mention générique). L'UI peut afficher un compte à rebours.
+    if (r.rateLimited.length > 0) {
+      const delai = messageDelaiCooldown(r.rateLimited);
+      base += ` ${r.rateLimited.length} banque(s) déjà synchronisée(s) récemment${delai ? ` (nouveau rafraîchissement possible ${delai})` : ""} — dernier état affiché.`;
+    }
+    // Réparation MFA : on le DIT clairement et on remonte le signal structuré pour que
+    // l'UI rouvre le widget natif en mode REPAIR (jamais une MFA serveur).
+    if (r.aReparer.length > 0) {
+      base += ` ${r.aReparer.length} banque(s) demandent une nouvelle vérification de sécurité — reconnectez-les pour terminer.`;
+    }
     return {
       erreur: null,
-      succes:
-        r.transactionsImportees > 0
-          ? `${base} ${r.transactionsImportees} transaction(s) importée(s).`
-          : base,
+      succes: base,
+      ...(r.aReparer.length > 0 ? { reparation: r.aReparer } : {}),
+      ...(r.rateLimited.length > 0 ? { rateLimited: r.rateLimited } : {}),
     };
   } catch (erreur) {
     return {
@@ -216,6 +246,23 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       succes: null,
     };
   }
+}
+
+/**
+ * Formate le délai de cooldown le PLUS PROCHE en texte relatif court (« dans ~12
+ * min »). On prend le `nextSyncAt` minimal parmi les connexions rate-limitées.
+ * Renvoie "" si aucune date exploitable (l'amont ne l'a pas fournie). Non-énumérant :
+ * un délai n'identifie pas une banque.
+ */
+function messageDelaiCooldown(
+  rateLimited: Array<{ nextSyncAt: string | null }>,
+): string {
+  const instants = rateLimited
+    .map((r) => (r.nextSyncAt ? Date.parse(r.nextSyncAt) : NaN))
+    .filter((ms) => !Number.isNaN(ms) && ms > Date.now());
+  if (instants.length === 0) return "";
+  const minutes = Math.max(1, Math.round((Math.min(...instants) - Date.now()) / 60_000));
+  return `dans ~${minutes} min`;
 }
 
 /**

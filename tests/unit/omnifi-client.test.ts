@@ -394,3 +394,70 @@ describe("configuration (lecture d'env, règle 8)", () => {
     );
   });
 });
+
+describe("déclenchement de sync (POST /sync/{id}, GET .../latest-job)", () => {
+  it("declencherSync POST l'URL snake_case avec ApiKey et renvoie le SyncJob (Data)", async () => {
+    const data = { JobId: "job-1", Status: "PENDING", IsManual: true };
+    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }, { status: 201 }));
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const job = await client.declencherSync("conn/42", CLIENT_USER_ID);
+
+    expect(job).toEqual(data);
+    const [url, init] = fetchMock.mock.calls[0];
+    // ConnectionId encodé ; param en snake_case (camelCase ignoré → 403 amont).
+    expect(url).toContain("/sync/conn%2F42");
+    expect(url).toContain("client_user_id=user-123");
+    expect((init as RequestInit).method).toBe("POST");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
+  });
+
+  it("declencherSync 429 → OmniFiApiError.estRateLimit avec Retry-After (NE PAS avaler)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson(
+        { Code: "429 TooManyRequests", Message: "rate" },
+        { status: 429, headers: { "Retry-After": "900" } },
+      ),
+    );
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const erreur = await client.declencherSync("conn-1", CLIENT_USER_ID).catch((e) => e);
+
+    expect(erreur).toBeInstanceOf(OmniFiApiError);
+    expect(erreur.estRateLimit).toBe(true);
+    expect(erreur.retryAfterSeconds).toBe(900);
+  });
+
+  it("declencherSync 400 'sync already running' → OmniFiApiError status 400 (job déjà en cours)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson(
+        { Code: "BAD_REQUEST", Message: "sync already running" },
+        { status: 400 },
+      ),
+    );
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const erreur = await client.declencherSync("conn-1", CLIENT_USER_ID).catch((e) => e);
+
+    expect(erreur).toBeInstanceOf(OmniFiApiError);
+    expect(erreur.status).toBe(400);
+    expect(erreur.obieCode).toBe("BAD_REQUEST");
+  });
+
+  it("getLatestSyncJob GET l'URL latest-job snake_case et renvoie le SyncJob (Data)", async () => {
+    const data = { JobId: "job-9", Status: "COMPLETED", NextSyncAvailableAt: "2026-06-25T10:00:00Z" };
+    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }));
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const job = await client.getLatestSyncJob("conn-1", CLIENT_USER_ID);
+
+    expect(job).toEqual(data);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/sync/conn-1/latest-job");
+    expect(url).toContain("client_user_id=user-123");
+    expect((init as RequestInit).method ?? "GET").toBe("GET");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
+  });
+});

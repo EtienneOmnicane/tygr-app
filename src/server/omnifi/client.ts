@@ -328,6 +328,53 @@ export class OmniFiClient {
     return enveloppe.Data;
   }
 
+  /**
+   * [SERVEUR/ApiKey] POST /sync/{ConnectionId} — DÉCLENCHE un scraping/sync RÉEL
+   * d'une connexion (vs `GET /connections` qui ne fait que RELIRE le cache amont).
+   * Contrat confirmé empiriquement (scripts/diag-sync.ts, sandbox) : `HTTP 201`
+   * `{ JobId, Status: "PENDING", IsManual: true }` ; le job peut passer à COMPLETED
+   * quasi-instantanément (cf. attendreFinSync : 1er poll immédiat).
+   *
+   * `client_user_id` en SNAKE_CASE (frontière B2B) — la doc de cet endpoint écrit
+   * `clientUserId`, mais l'amont lit la query en snake_case partout (un camelCase
+   * est ignoré → 403) ; on aligne sur le reste de l'intégration.
+   *
+   * Mapping d'erreurs (erreurs.ts, non avalées) à interpréter par l'appelant :
+   *  - 429 → OmniFiApiError.estRateLimit (rate-limit « 1 sync / 15 min ») ; combiner
+   *    avec `NextSyncAvailableAt` d'une lecture amont pour NE PAS provoquer ce 429 ;
+   *  - 400 (obieCode « sync already running » / BAD_REQUEST) → un job tourne déjà :
+   *    l'appelant récupère le JobId courant via `getLatestSyncJob` plutôt que de
+   *    re-déclencher.
+   */
+  async declencherSync(
+    connectionId: string,
+    clientUserId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/${encodeURIComponent(connectionId)}`,
+      { method: "POST", auth: authApiKey(), query: { client_user_id: clientUserId } },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SERVEUR/ApiKey] GET /sync/{ConnectionId}/latest-job — état du DERNIER job de
+   * sync d'une connexion. Deux usages : récupérer le `JobId` d'un sync déjà en cours
+   * (après un 400 « sync already running » sur declencherSync), et lire
+   * `NextSyncAvailableAt` en amont pour décider s'il faut déclencher (garde
+   * anti-429). Renvoie le SyncJob complet (mêmes champs que getSyncJobServeur).
+   */
+  async getLatestSyncJob(
+    connectionId: string,
+    clientUserId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/${encodeURIComponent(connectionId)}/latest-job`,
+      { auth: authApiKey(), query: { client_user_id: clientUserId } },
+    );
+    return env.Data;
+  }
+
   /* ---------------------------------------------------------------- */
   /* Flux Link Widget (PR-W1) — docs § Link Widget / Sync Engine      */
   /* ---------------------------------------------------------------- */
