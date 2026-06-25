@@ -14,19 +14,27 @@ existante, au lieu de relire seulement le cache amont (branche
 (`scripts/diag-sync.ts` : 201 `{JobId,PENDING}`, COMPLETED parfois à t+0s).
 Dettes ouvertes par la revue contradictoire de ce chantier :
 
-- [ ] **SYNC-REPAIR-UI1 (P1, point de DÉPLOIEMENT du widget en prod) — brancher la
-  réouverture du widget natif en mode REPAIR quand une banque retombe en MFA.** Le
-  serveur remonte déjà le signal `EtatFinalisation.reparation = [{connectionId, jobId}]`
-  (re-sync repassé `OTP_REQUESTED`), mais le composant client
-  `src/components/widget/bank-connect-widget.tsx` ne le LIT PAS encore : `synchroniser()`
-  fait juste `setFinalisation(r)`, et `WidgetFeedback` n'affiche que `erreur`/`succes`.
-  Conséquence : l'utilisateur voit le message « N banque(s) demandent une nouvelle
-  vérification… reconnectez-les », mais aucun chemin UI ne rouvre le widget en REPAIR
-  (link-token portant ConnectionId + JobId) → la banque reste non re-synchronisable
-  depuis cet écran. **À faire** (côté Front, gouvernance UI) : consommer `r.reparation`
-  pour démarrer un link-token de REPAIR et rouvrir `OmniFiLinkLauncher`. **Déclencheur** :
-  première banque sandbox/prod qui exige une MFA au re-sync (toute banque à OTP).
-  **Effort** : M (le signal serveur + le launcher existent ; reste le câblage REPAIR).
+- [x] **SYNC-REPAIR-UI1 (P1, point de DÉPLOIEMENT du widget en prod) — LIVRÉ
+  (branche `feature/sync-repair-ui`, 2026-06-25) : réouverture du widget natif en mode
+  REPAIR quand une banque retombe en MFA.** Le composant
+  `src/components/widget/bank-connect-widget.tsx` consomme désormais `r.reparation` (de
+  `synchroniserConnexionsAction` / `finaliserConnexionDropinAction`) et affiche un bouton
+  « Reconnecter » par connexion (dans `WidgetFeedback`). Au clic :
+  `creerLinkTokenRepairAction(connectionId, jobId, redirectOrigin)` → LinkToken `Mode:
+  REPAIR` (champs `ConnectionId`/`JobId` ajoutés à `CreerLinkTokenParams`) → remontage du
+  MÊME `OmniFiLinkLauncher` (le widget gère l'OTP en interne, cf. vendor README §MFA
+  handling) → `onSuccess` relance `resynchroniserConnexionApresReparationAction`
+  (re-découverte + `synchroniserCompte`, ingestion INCHANGÉE) et retire la connexion de
+  l'état réparation. Sécurité : gating MANAGER/ADMIN + ClientUserId scopé + garde anti-IDOR
+  `ReparationContexteInvalideError` (la connexion doit appartenir au tenant) prouvée par
+  la suite isolation (`tests/isolation/widget-orchestration-isolation.test.ts`, +7 cas).
+  Cas couverts : widget fermé sans finir (état réparation conservé, bouton recliquable) ;
+  échec de re-lecture fail-soft ; re-sync re-OTP (re-signalé avec le NOUVEAU jobId).
+  **Reste (Human-in-the-Loop, NON une dette de code)** : valider le PARCOURS INTERACTIF
+  réel (clic → écran code du widget → re-lecture) sur le serveur HTTPS avec des clés
+  sandbox — le widget natif n'est pas capturable en headless (Visual QA des états statiques
+  fait via route démo `/demo/banque-connexion` blocs 5–6, cert HTTPS local rejeté par
+  Chromium → rendu CSS inliné, cf. [[visual-qa-serveur-https-voisin]]).
 
 - [ ] **SYNC-RATELIMIT-UI1 (P2) — exploiter `EtatFinalisation.rateLimited` côté UI.** Le
   serveur remonte `rateLimited = [{connectionId, nextSyncAt}]` (connexions en cooldown

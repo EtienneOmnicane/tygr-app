@@ -171,6 +171,17 @@ export interface CreerLinkTokenParams {
   AppLogoUrl?: string;
   AccountSelectionEnabled?: boolean;
   WebhookUrl?: string;
+  /**
+   * Champs du mode REPAIR (re-connexion d'une connexion en erreur, doc API
+   * § « mode Repair »). Passés ENSEMBLE : Omni-FI renvoie alors un LinkToken
+   * `Mode: REPAIR` verrouillé sur la banque défaillante, et le widget natif
+   * reprend au bon écran (saisie OTP). `ConnectionId` = UUID de la connexion ;
+   * `JobId` = UUID du SyncJob en échec. Omis pour un onboarding normal.
+   */
+  ConnectionId?: string;
+  JobId?: string;
+  /** `CREDENTIALS` ou `MFA_CHALLENGE` — étape de reprise. Omis = dérivée par l'amont. */
+  ResumeStep?: "CREDENTIALS" | "MFA_CHALLENGE";
 }
 
 export interface OmniFiLinkTokenData {

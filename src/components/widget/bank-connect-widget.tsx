@@ -38,13 +38,19 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 
 import {
+  creerLinkTokenRepairAction,
   demarrerConnexionAction,
   finaliserConnexionDropinAction,
+  resynchroniserConnexionApresReparationAction,
   synchroniserConnexionsAction,
   type EtatDemarrage,
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
-import { ROUTE_DASHBOARD, WidgetFeedback } from "./widget-feedback";
+import {
+  ROUTE_DASHBOARD,
+  WidgetFeedback,
+  type ConnexionAReparer,
+} from "./widget-feedback";
 
 const ETAT_DEMARRAGE: EtatDemarrage = { erreur: null, linkToken: null };
 
@@ -61,6 +67,10 @@ const ETAT_DEMARRAGE: EtatDemarrage = { erreur: null, linkToken: null };
 type EtatFinalisationUI = EtatFinalisation & { complet?: boolean };
 
 const ETAT_FINALISATION_VIDE: EtatFinalisationUI = { erreur: null, succes: null };
+
+/** Repli si la création du LinkToken REPAIR échoue sans message serveur exploitable. */
+const MESSAGE_REPAIR_ECHEC =
+  "La reconnexion n’a pas pu démarrer. Réessayez dans un instant.";
 
 /** Icône « flèches circulaires » (↻) du bouton de synchronisation. Décorative. */
 function IconeSynchro() {
@@ -114,7 +124,19 @@ export function BankConnectWidget({
   // Verrou anti-double-déclenchement : une fois la redirection lancée, on neutralise
   // l'UI (le launcher peut, en théorie, ré-émettre). `router.push` est async.
   const [redirection, setRedirection] = useState(false);
-  const tokenActif = !ferme ? demarrage.linkToken : null;
+  // Connexions à RÉPARER (signal serveur). Les boutons « Reconnecter » s'affichent
+  // tant qu'une connexion y figure ; on la retire quand sa réparation a abouti.
+  const [reparation, setReparation] = useState<ConnexionAReparer[]>([]);
+  // Réparation EN COURS : token REPAIR obtenu + connexion ciblée → monte le launcher.
+  // `null` = aucune réparation ouverte. Mutuellement exclusif avec l'onboarding.
+  const [repair, setRepair] = useState<{ connectionId: string; token: string } | null>(
+    null,
+  );
+  // `true` entre le clic « Reconnecter » et l'obtention du token (anti-double-clic).
+  const [repairEnCours, setRepairEnCours] = useState(false);
+  // Onboarding et réparation partagent l'UNIQUE point de montage du launcher (on ne
+  // peut pas ouvrir deux widgets) : l'onboarding ne monte pas si une réparation est ouverte.
+  const tokenActif = !ferme && !repair ? demarrage.linkToken : null;
 
   function finaliser(publicTokens: string[]) {
     // Flux NOMINAL : à la fin du parcours (onSuccess), la finalisation serveur
@@ -124,6 +146,7 @@ export function BankConnectWidget({
       const r: EtatFinalisationUI =
         await finaliserConnexionDropinAction(publicTokens);
       setFinalisation(r);
+      setReparation(r.reparation ?? []);
       // Succès COMPLET → on emmène l'utilisateur voir ses comptes sur le Dashboard.
       // Garde stricte : SEULEMENT si le serveur confirme `complet === true`. En
       // succès partiel (ou flag pas encore exposé) on reste ici pour afficher
@@ -144,7 +167,56 @@ export function BankConnectWidget({
     startFinalisation(async () => {
       const r = await synchroniserConnexionsAction();
       setFinalisation(r);
+      // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
+      // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
+      setReparation(r.reparation ?? []);
     });
+  }
+
+  function lancerReparation(cx: ConnexionAReparer) {
+    // Clic « Reconnecter » : on demande un LinkToken REPAIR (Mode REPAIR, verrouillé
+    // sur la banque), puis on monte le MÊME launcher avec ce token. Le widget gère
+    // l'OTP en interne. On NE redirige pas et on NE touche pas l'onboarding.
+    setRepairEnCours(true);
+    startFinalisation(async () => {
+      const r = await creerLinkTokenRepairAction(
+        cx.connectionId,
+        cx.jobId,
+        redirectOrigin,
+      );
+      setRepairEnCours(false);
+      if (r.erreur !== null || !r.linkToken) {
+        // Échec de création du token : message d'erreur, l'état réparation RESTE
+        // (le bouton reste cliquable pour réessayer). Pas de launcher monté.
+        setFinalisation({ erreur: r.erreur ?? MESSAGE_REPAIR_ECHEC, succes: null });
+        return;
+      }
+      setFinalisation(ETAT_FINALISATION_VIDE);
+      setRepair({ connectionId: cx.connectionId, token: r.linkToken });
+    });
+  }
+
+  function apresReparation(connectionId: string) {
+    // onSuccess du widget REPAIR (l'OTP a été saisi dans le widget) : on démonte le
+    // launcher puis on RE-LIT cette connexion (mêmes comptes → ingestion existante).
+    setRepair(null);
+    startFinalisation(async () => {
+      const r = await resynchroniserConnexionApresReparationAction(connectionId);
+      setFinalisation(r);
+      // La connexion réparée sort de la liste ; si le serveur re-signale une réparation
+      // (rare : OTP redemandé), `r.reparation` la remet avec le NOUVEAU jobId.
+      setReparation((prev) =>
+        prev
+          .filter((c) => c.connectionId !== connectionId)
+          .concat(r.reparation ?? []),
+      );
+    });
+  }
+
+  function fermerReparation() {
+    // Widget REPAIR fermé/quitté/erreur SANS finir : on démonte le launcher, mais la
+    // connexion RESTE dans `reparation` (le bouton « Reconnecter » reste cliquable).
+    setRepair(null);
   }
 
   if (!peutConnecter) {
@@ -163,13 +235,25 @@ export function BankConnectWidget({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Launcher monté seulement quand un LinkToken est actif (ssr:false). */}
-      {tokenActif && (
+      {/* UNIQUE point de montage du launcher (ssr:false) : RÉPARATION prioritaire, sinon
+          onboarding. On ne peut pas ouvrir deux widgets — `tokenActif` est déjà null si
+          une réparation est ouverte. En REPAIR, le widget gère l'OTP en interne ; son
+          `onSuccess` ne sert pas à finaliser un publicToken (le job MFA existant se
+          termine) → on ignore les tokens et on RE-LIT la connexion par son id. */}
+      {repair ? (
         <OmniFiLinkLauncher
-          token={tokenActif}
-          onConnexions={finaliser}
-          onClose={() => setFerme(true)}
+          token={repair.token}
+          onConnexions={() => apresReparation(repair.connectionId)}
+          onClose={fermerReparation}
         />
+      ) : (
+        tokenActif && (
+          <OmniFiLinkLauncher
+            token={tokenActif}
+            onConnexions={finaliser}
+            onClose={() => setFerme(true)}
+          />
+        )
       )}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -190,7 +274,13 @@ export function BankConnectWidget({
           />
           <button
             type="submit"
-            disabled={demarrageEnCours || Boolean(tokenActif) || redirection}
+            disabled={
+              demarrageEnCours ||
+              Boolean(tokenActif) ||
+              redirection ||
+              Boolean(repair) ||
+              repairEnCours
+            }
             className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
               px-4 text-sm font-semibold text-text-onink transition-colors
               hover:bg-primary-600 focus:outline-none focus-visible:ring-2
@@ -209,7 +299,7 @@ export function BankConnectWidget({
         <button
           type="button"
           onClick={synchroniser}
-          disabled={Boolean(tokenActif) || redirection}
+          disabled={Boolean(tokenActif) || redirection || Boolean(repair) || repairEnCours}
           title="Relit vos connexions chez votre banque et met à jour vos comptes (y compris ceux qui n’apparaîtraient pas encore)."
           className="inline-flex h-10 items-center gap-1.5 rounded-control px-2 text-sm
             font-semibold text-primary transition-colors hover:text-primary-600
@@ -226,6 +316,9 @@ export function BankConnectWidget({
         erreurFinalisation={finalisation.erreur}
         succes={finalisation.succes}
         redirection={redirection}
+        reparation={reparation}
+        onReconnecter={lancerReparation}
+        reparationEnCours={repairEnCours || Boolean(repair)}
       />
     </div>
   );

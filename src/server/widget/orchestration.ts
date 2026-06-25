@@ -33,7 +33,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { peutModifier } from "@/lib/permissions";
 import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
-import { bankAccounts, workspaces } from "@/server/db/schema";
+import { bankAccounts, bankConnections, workspaces } from "@/server/db/schema";
 import {
   upsertCompte,
   upsertConnexion,
@@ -59,6 +59,21 @@ export class WorkspaceSansClientUserIdError extends Error {
   constructor() {
     super("Workspace non configuré pour Omni-FI");
     this.name = "WorkspaceSansClientUserIdError";
+  }
+}
+
+/**
+ * Le contexte de RÉPARATION (ConnectionId + JobId) ne correspond à AUCUNE connexion
+ * du workspace courant. Garde anti-IDOR : on refuse de fabriquer un LinkToken REPAIR
+ * pour une connexion qu'on ne possède pas (un autre tenant, ou un id forgé). Fail-closed
+ * — comme un accès cross-tenant, on ne révèle pas l'existence (mappé en message générique
+ * côté action, jamais un oracle). Le `connectionId` est un UUID opaque Omni-FI, pas de PII.
+ */
+export class ReparationContexteInvalideError extends Error {
+  readonly code = "REPAIR_CONTEXT_INVALID";
+  constructor() {
+    super("Contexte de réparation invalide pour ce workspace");
+    this.name = "ReparationContexteInvalideError";
   }
 }
 
@@ -128,6 +143,65 @@ export async function demarrerConnexion(
     InstitutionId: params.institutionId,
     // Scopes par défaut (ne PAS passer [] — 400). On omet pour les défauts.
     AccountSelectionEnabled: true,
+  });
+  return { linkToken: lt.LinkToken, expiration: lt.Expiration };
+}
+
+/* ------------------------------------------------------------------ */
+/* Étape 1bis — RÉPARATION : LinkToken Mode REPAIR pour rouvrir le widget */
+/* ------------------------------------------------------------------ */
+
+export interface DemarrerReparationParams {
+  /** Origine HTTPS autorisée à recevoir le PublicToken (postMessage), comme l'onboarding. */
+  redirectOrigin: string;
+  /** UUID Omni-FI de la connexion défaillante (signal `reparation` remonté par le re-sync). */
+  connectionId: string;
+  /** UUID Omni-FI du SyncJob en échec (OTP_REQUESTED) — couple le token au job à reprendre. */
+  jobId: string;
+}
+
+/**
+ * Crée un LinkToken de RÉPARATION (`Mode: REPAIR`) pour rouvrir le widget natif sur
+ * une connexion en erreur (re-sync repassé en OTP_REQUESTED). Le widget reprend au bon
+ * écran (saisie OTP, géré EN INTERNE par le widget — cf. vendor README §MFA handling) :
+ * on ne pilote JAMAIS la MFA côté serveur (endpoints Bearer/MFA morts).
+ *
+ * Sécurité (mêmes invariants que demarrerConnexion + garde de contexte) :
+ * - Gating MANAGER/ADMIN (peutModifier) ; VIEWER → ConnexionNonAutoriseeError.
+ * - `ClientUserId` = workspace courant (frontière tenant), jamais un paramètre client.
+ * - Anti-IDOR : on VÉRIFIE que `connectionId` est bien une connexion du workspace courant
+ *   (scopé RLS) AVANT d'appeler Omni-FI — un id d'un autre tenant ou forgé lève
+ *   ReparationContexteInvalideError (fail-closed, pas d'oracle d'existence).
+ */
+export async function demarrerReparation(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+  params: DemarrerReparationParams,
+): Promise<ResultatDemarrage> {
+  const clientUserId = await executer(async (tx, ctx) => {
+    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+    // Garde de contexte (anti-IDOR) : la connexion DOIT exister dans ce workspace.
+    // La RLS borne déjà la requête au tenant ; ce SELECT confirme l'appartenance avant
+    // de demander un token REPAIR pour elle (sinon on fabriquerait un contexte de
+    // réparation pour une connexion qu'on ne possède pas).
+    const lignes = await tx
+      .select({ id: bankConnections.id })
+      .from(bankConnections)
+      .where(eq(bankConnections.omnifiConnectionId, params.connectionId))
+      .limit(1);
+    if (lignes.length === 0) throw new ReparationContexteInvalideError();
+    return clientUserIdDuWorkspace(tx, ctx.workspaceId);
+  });
+
+  const lt = await client.creerLinkToken({
+    ClientUserId: clientUserId,
+    RedirectOrigin: params.redirectOrigin,
+    ConnectionId: params.connectionId,
+    JobId: params.jobId,
+    // ResumeStep omis : on laisse l'amont le dériver du JobId (l'OTP_REQUESTED implique
+    // MFA_CHALLENGE, mais ne pas le coder en dur évite un désalignement si l'amont décide
+    // de reprendre aux credentials). AccountSelectionEnabled inutile en REPAIR (comptes
+    // déjà découverts) — on n'impose rien.
   });
   return { linkToken: lt.LinkToken, expiration: lt.Expiration };
 }
@@ -782,4 +856,136 @@ export async function finaliserConnexionsDropin(
     echecs,
     comptesRattaches: reussies.reduce((n, r) => n + r.comptesRattaches, 0),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Étape 2quater — re-lire UNE connexion après réparation (onSuccess)   */
+/* ------------------------------------------------------------------ */
+
+export interface ResultatResynchronisationConnexion {
+  /** Comptes (re)découverts + persistés pour cette connexion. */
+  comptesRattaches: number;
+  /** Transactions importées (toutes pages, tous comptes de la connexion). */
+  transactionsImportees: number;
+  /**
+   * Présent (JobId du nouveau sync) si le re-sync a ENCORE demandé une vérification de
+   * sécurité (job reparti en OTP_REQUESTED). Rare juste après une réparation réussie, mais
+   * possible (la banque redemande un OTP) : l'UI peut laisser le bouton « Reconnecter » en
+   * place, ré-armé sur CE jobId. Absent = pas de réparation en attente.
+   */
+  reparationJobId?: string;
+}
+
+/**
+ * Re-lit UNE connexion après que le widget natif a terminé une RÉPARATION (saisie OTP
+ * dans le widget). Réutilise STRICTEMENT la même mécanique que
+ * `synchroniserConnexionsDepuisOmnifi`, mais ciblée sur une seule connexion : on
+ * (a) re-découvre + persiste ses comptes, (b) déclenche un sync gardé par le cooldown
+ * et on attend le job, (c) ingère les transactions via `synchroniserCompte` (couche
+ * d'ingestion INCHANGÉE). Idempotent.
+ *
+ * Sécurité : gating MANAGER/ADMIN + ClientUserId scopé (frontière tenant). Anti-IDOR :
+ * la connexion DOIT appartenir au workspace courant (scopé RLS), sinon
+ * ReparationContexteInvalideError. Fail-soft : un sync FAILED/timeout ne lève pas — on
+ * remonte ce qui a été lu (l'UI affiche un message neutre).
+ */
+export async function resynchroniserConnexion(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+  connectionIdOmnifi: string,
+): Promise<ResultatResynchronisationConnexion> {
+  // 1. Garde de rôle + appartenance au tenant + ClientUserId scopé.
+  const { clientUserId } = await executer(async (tx, ctx) => {
+    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+    const lignes = await tx
+      .select({ id: bankConnections.id })
+      .from(bankConnections)
+      .where(eq(bankConnections.omnifiConnectionId, connectionIdOmnifi))
+      .limit(1);
+    if (lignes.length === 0) throw new ReparationContexteInvalideError();
+    return { clientUserId: await clientUserIdDuWorkspace(tx, ctx.workspaceId) };
+  });
+
+  // 2. (a) Re-découverte + persistance des comptes de CETTE connexion (paginé).
+  const comptes: OmniFiAccount[] = [];
+  let pageA = 1;
+  let institutionId: string | null = null;
+  for (;;) {
+    const env = await client.listerComptesConnexion(connectionIdOmnifi, clientUserId, {
+      page: pageA,
+    });
+    const lot = env.Data.Account ?? [];
+    comptes.push(...lot);
+    // L'InstitutionId sert à l'alignement (fail-closed) ; on le prend du 1er compte vu.
+    institutionId ??= lot[0]?.InstitutionId ?? null;
+    const totalPages = env.Meta?.TotalPages ?? 1;
+    if (!env.Links?.Next || pageA >= totalPages) break;
+    pageA += 1;
+  }
+  // Alignement : on ne persiste pas des comptes dont l'institution diverge (cf.
+  // verifierAlignement). Sans institution résolue (0 compte), rien à vérifier/persister.
+  if (institutionId !== null) verifierAlignement(comptes, institutionId);
+  const comptesRattaches =
+    institutionId === null
+      ? 0
+      : await persisterConnexionEtComptes(
+          executer,
+          { ConnectionId: connectionIdOmnifi, InstitutionId: institutionId },
+          comptes,
+        );
+
+  // 2. (b) Déclenchement gardé (cooldown amont) + attente du job.
+  const issue = await declencherEtAttendre(
+    client,
+    connectionIdOmnifi,
+    clientUserId,
+    // On ne connaît pas NextSyncAvailableAt ici (pas de GET /connections) : on laisse
+    // declencherEtAttendre gérer un éventuel 429 (cooldown) en aval, fail-soft.
+    null,
+  );
+  if (issue.kind === "NEEDS_REPAIR") {
+    // Re-sync reparti en OTP : on n'ingère pas, on signale qu'une réparation reste due
+    // (avec le NOUVEAU jobId, pour ré-armer le bouton « Reconnecter »).
+    return { comptesRattaches, transactionsImportees: 0, reparationJobId: issue.jobId };
+  }
+  if (issue.kind === "SKIP_FAILED") {
+    // FAILED / timeout : fail-soft, on remonte ce qui a été persisté (comptes), 0 tx.
+    return { comptesRattaches, transactionsImportees: 0 };
+  }
+  // DECLENCHE (COMPLETED) ou RATE_LIMITED (lecture du cache) : on lit les transactions.
+
+  // 2. (c) Ingestion des transactions des comptes sélectionnés de cette connexion.
+  const omnifiIds = comptes
+    .filter((c) => c.Status == null || c.Status === "Enabled")
+    .map((c) => c.AccountId);
+  if (omnifiIds.length === 0) {
+    return { comptesRattaches, transactionsImportees: 0 };
+  }
+
+  const comptesAIngerer = await executer(async (tx) =>
+    tx
+      .select({
+        bankAccountId: bankAccounts.id,
+        omnifiAccountId: bankAccounts.omnifiAccountId,
+      })
+      .from(bankAccounts)
+      .where(
+        and(
+          eq(bankAccounts.isSelected, true),
+          inArray(bankAccounts.omnifiAccountId, omnifiIds),
+        ),
+      ),
+  );
+
+  let transactionsImportees = 0;
+  for (const cpt of comptesAIngerer) {
+    const r = await synchroniserCompte(client, executer, {
+      omnifiAccountId: cpt.omnifiAccountId,
+      bankAccountId: cpt.bankAccountId,
+      clientUserId,
+    });
+    transactionsImportees += r.transactionsTraitees;
+  }
+
+  return { comptesRattaches, transactionsImportees };
 }
