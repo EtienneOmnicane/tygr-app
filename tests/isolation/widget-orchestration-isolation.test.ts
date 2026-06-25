@@ -22,6 +22,7 @@ import * as schema from "@/server/db/schema";
 import { bankAccounts, bankConnections } from "@/server/db/schema";
 import { createWithWorkspace, type ExecuterWorkspace } from "@/server/db/tenancy";
 import type { OmniFiClient } from "@/server/omnifi";
+import { OmniFiApiError } from "@/server/omnifi";
 import {
   ConnexionDesalignmentError,
   ConnexionNonAutoriseeError,
@@ -51,8 +52,14 @@ const execWs =
 function clientFactice(over: {
   exchange?: Partial<{ ConnectionId: string; InstitutionId: string; CustomerType: "business" }>;
   accounts?: Array<{ AccountId: string; Status: string; Currency: string; PartyName?: string; Balances?: unknown[] }>;
-  connections?: Array<{ ConnectionId: string; InstitutionId: string; InstitutionName?: string; Status: string }>;
+  connections?: Array<{ ConnectionId: string; InstitutionId: string; InstitutionName?: string; Status: string; NextSyncAvailableAt?: string | null }>;
   transactions?: Array<Record<string, unknown>>;
+  /** Surcharge le SyncJob renvoyé par le polling (getSyncJobServeur). */
+  syncJob?: Record<string, unknown>;
+  /** Fait REJETER declencherSync (ex. OmniFiApiError 400/429) au lieu de réussir. */
+  declencherSyncErreur?: unknown;
+  /** Surcharge le SyncJob renvoyé par getLatestSyncJob (après un 400 concurrent). */
+  latestSyncJob?: Record<string, unknown>;
 } = {}): OmniFiClient {
   return {
     creerLinkToken: vi.fn().mockResolvedValue({ LinkToken: "lt_x", Expiration: "2026-06-15T00:15:00Z" }),
@@ -92,6 +99,38 @@ function clientFactice(over: {
       Links: { Next: null },
       Meta: { TotalPages: 1 },
     }),
+    // POST /sync/{connectionId} (déclenchement réel) : par défaut un job PENDING
+    // (l'attente le verra COMPLETED via getSyncJobServeur ci-dessous). Si
+    // declencherSyncErreur est fourni, on REJETTE (ex. 400/429).
+    declencherSync: over.declencherSyncErreur
+      ? vi.fn().mockRejectedValue(over.declencherSyncErreur)
+      : vi.fn().mockResolvedValue({
+          JobId: "job-sync-1",
+          Status: "PENDING",
+          IsManual: true,
+        }),
+    // GET /sync/job/{jobId} (polling ApiKey) : par défaut COMPLETED dès le 1er poll
+    // (cas sandbox t+0s), PersistenceStats à 0 (sandbox gelée). Surchargeable.
+    getSyncJobServeur: vi.fn().mockResolvedValue(
+      over.syncJob ?? {
+        JobId: "job-sync-1",
+        Status: "COMPLETED",
+        PersistenceStats: {
+          TransactionsCreated: 0,
+          TransactionsUpdated: 0,
+          TransactionsDuplicated: 0,
+          AccountsUpdated: 0,
+        },
+      },
+    ),
+    // GET /sync/{connectionId}/latest-job (récup JobId d'un sync en cours / cooldown).
+    getLatestSyncJob: vi.fn().mockResolvedValue(
+      over.latestSyncJob ?? {
+        JobId: "job-sync-1",
+        Status: "COMPLETED",
+        NextSyncAvailableAt: null,
+      },
+    ),
   } as unknown as OmniFiClient;
 }
 
@@ -493,5 +532,108 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     );
     expect(txns.length).toBe(1);
     expect(txns[0].creditDebit).toBe("Credit");
+  });
+
+  it("DÉCLENCHE un sync RÉEL (POST /sync) avant de lire, puis ingère (job COMPLETED)", async () => {
+    // Cœur du chantier : le bouton ne se contente plus de relire le cache amont, il
+    // POST /sync/{connectionId} puis attend le job avant la boucle de lecture existante.
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-trig", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-trig", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    // Le déclenchement a eu lieu pour cette connexion, AVANT la lecture des transactions.
+    expect(c.declencherSync).toHaveBeenCalledWith("conn-trig", "enduser-a");
+    expect(c.getSyncJobServeur).toHaveBeenCalled(); // attente du job
+    expect(r.aReparer).toEqual([]);
+    expect(r.rateLimited).toEqual([]);
+  });
+
+  it("re-sync repassé en OTP_REQUESTED → NEEDS_REPAIR (pas de lecture pour cette connexion)", async () => {
+    // Le scraping redemande un OTP : on ne pilote pas la MFA serveur → on remonte le
+    // signal de réparation (l'UI rouvrira le widget natif en REPAIR) et on STOPPE
+    // cette connexion sans ingérer.
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-otp", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-otp", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      syncJob: { JobId: "job-sync-1", Status: "OTP_REQUESTED" },
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    // Le JobId remonté est celui du sync DÉCLENCHÉ (declencherSync → job-sync-1),
+    // celui que l'UI passera au link-token de REPAIR.
+    expect(r.aReparer).toEqual([{ connectionId: "conn-otp", jobId: "job-sync-1" }]);
+    // Comptes rattachés (étape a), mais AUCUNE lecture de transactions pour conn-otp.
+    expect(c.listerTransactionsPage).not.toHaveBeenCalled();
+  });
+
+  it("cooldown amont (NextSyncAvailableAt futur) → RATE_LIMITED, NE déclenche PAS mais relit l'état", async () => {
+    // Garde anti-429 : si la connexion a un NextSyncAvailableAt dans le futur (vu dans
+    // GET /connections), on ne re-déclenche pas — mais on relit quand même les comptes
+    // et leurs transactions (le user voit le dernier état connu).
+    const futur = new Date(Date.now() + 10 * 60_000).toISOString();
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-cd", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active", NextSyncAvailableAt: futur }],
+      accounts: [{ AccountId: "oa-cd", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      transactions: [
+        {
+          TransactionId: "tx-cd-1",
+          AccountId: "oa-cd",
+          TransactionInformation: "ACHAT",
+          Amount: { Amount: "42.00", Currency: "MUR" },
+          CreditDebitIndicator: "Debit",
+          Status: "Booked",
+          BookingDateTime: "2026-06-12T05:30:00Z",
+        },
+      ],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    // Pas de déclenchement (cooldown), mais lecture effectuée.
+    expect(c.declencherSync).not.toHaveBeenCalled();
+    expect(r.rateLimited).toEqual([{ connectionId: "conn-cd", nextSyncAt: futur }]);
+    expect(c.listerTransactionsPage).toHaveBeenCalled();
+    const txns = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(schema.transactionsCache)).filter((t) => t.omnifiTxnId === "tx-cd-1"),
+    );
+    expect(txns.length).toBe(1);
+  });
+
+  it("400 'sync already running' → poll le job EN COURS (latest-job non terminal), pas de re-trigger", async () => {
+    // Un job tourne déjà côté Omni-FI : declencherSync renvoie 400 « already running ».
+    // On récupère le JobId courant et on poll dessus (latest-job STARTED → puis le
+    // polling le verra terminal), sans re-déclencher.
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-run", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-run", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      declencherSyncErreur: new OmniFiApiError(400, "400 sync already running", []),
+      latestSyncJob: { JobId: "job-running", Status: "STARTED", NextSyncAvailableAt: null },
+      // Le polling de job-running aboutit à COMPLETED.
+      syncJob: { JobId: "job-running", Status: "COMPLETED", PersistenceStats: { TransactionsCreated: 0 } },
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    expect(c.getLatestSyncJob).toHaveBeenCalledWith("conn-run", "enduser-a");
+    expect(c.getSyncJobServeur).toHaveBeenCalledWith("job-running", "enduser-a");
+    // Aucun cas de réparation/rate-limit : le job en cours a abouti normalement.
+    expect(r.aReparer).toEqual([]);
+    expect(r.rateLimited).toEqual([]);
+  });
+
+  it("400 AMBIGU (autre cause, pas 'running') → erreur dure remontée, PAS de faux 'sync effectué'", async () => {
+    // Régression visée par la revue : un 400 d'une autre cause ne doit pas partir
+    // poller un vieux latest-job et conclure « sync effectué ». Il remonte comme erreur.
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-bad", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-bad", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      declencherSyncErreur: new OmniFiApiError(400, "BAD_REQUEST", []),
+    });
+
+    await expect(
+      synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A)),
+    ).rejects.toBeInstanceOf(OmniFiApiError);
+    // On n'a PAS été chercher le dernier job sur ce 400 ambigu.
+    expect(c.getLatestSyncJob).not.toHaveBeenCalled();
   });
 });

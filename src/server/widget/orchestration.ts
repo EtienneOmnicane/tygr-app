@@ -25,8 +25,10 @@ import type {
   OmniFiClient,
   OmniFiAccount,
   OmniFiBalance,
+  OmniFiSyncJob,
 } from "@/server/omnifi";
-import { eq } from "drizzle-orm";
+import { OmniFiApiError } from "@/server/omnifi";
+import { and, eq, inArray } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { peutModifier } from "@/lib/permissions";
@@ -322,11 +324,251 @@ export async function finaliserConnexionDropin(
 /* Synchronisation depuis l'état Omni-FI (contournement postMessage)    */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Déclenchement de sync RÉEL (scraping) + attente de job              */
+/* ------------------------------------------------------------------ */
+
+/** Cadence de polling du job de sync (le job peut être COMPLETED dès t+0). */
+const POLL_SYNC_INTERVAL_MS = 3_000;
+/** Plafond d'attente d'un job (au-delà : on abandonne CE compte, fail-soft). */
+const POLL_SYNC_PLAFOND_MS = 120_000;
+
+/** États terminaux d'un SyncJob (cf. OmniFiSyncStatus). */
+const SYNC_STATUTS_TERMINAUX = new Set<OmniFiSyncJob["Status"]>(["COMPLETED", "FAILED"]);
+/** États MFA : le re-sync attend un OTP — non fournissable côté serveur (widget natif). */
+const SYNC_STATUTS_MFA = new Set<OmniFiSyncJob["Status"]>(["OTP_REQUESTED", "OTP_WAITING"]);
+
+/**
+ * Issue de l'attente d'un job de sync. `status` = état terminal observé, ou
+ * "TIMEOUT" si le plafond est atteint sans terminal. `persistenceStats` est posé à
+ * COMPLETED (signal d'observabilité), `errorType` à FAILED (Type seul, jamais le
+ * Message OBIE — règle 8).
+ */
+export interface ResultatAttenteSync {
+  status: "COMPLETED" | "FAILED" | "OTP_REQUESTED" | "TIMEOUT";
+  jobId: string;
+  persistenceStats?: OmniFiSyncJob["PersistenceStats"];
+  errorType?: string | null;
+}
+
+/** Sommeil non bloquant (injectable indirectement via le plafond pour les tests). */
+function dormir(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Attend la fin d'un job de sync, SANS supposer d'ordre de transitions (le diag a
+ * observé PENDING → COMPLETED à t+0s, sans état intermédiaire). Stratégie :
+ *  1. 1er poll IMMÉDIAT (pas de sleep) — le job peut déjà être terminal ;
+ *  2. sinon, boucle : sleep `POLL_SYNC_INTERVAL_MS` puis re-poll, jusqu'au plafond.
+ * On ne traite QUE les états terminaux (COMPLETED/FAILED) + le cas MFA (OTP_REQUESTED).
+ *
+ * À COMPLETED : on logue `PersistenceStats` en log structuré SANS PII — c'est la
+ * preuve différée pour trancher « auto-refresh vs à la demande » en prod (un
+ * Created>0 alors que la relecture seule ne bougeait pas = trigger indispensable).
+ *
+ * Le polling passe par `getSyncJobServeur` (ApiKey + client_user_id, déjà au client) :
+ * on ne touche jamais aux endpoints Bearer/MFA (morts, pilotés par le widget natif).
+ */
+export async function attendreFinSync(
+  client: OmniFiClient,
+  jobId: string,
+  clientUserId: string,
+  connectionId: string,
+): Promise<ResultatAttenteSync> {
+  const debut = Date.now();
+  let premier = true;
+
+  for (;;) {
+    // 1er tour sans sleep ; les suivants après une pause (le job peut déjà être fini).
+    if (!premier) await dormir(POLL_SYNC_INTERVAL_MS);
+    premier = false;
+
+    const job = await client.getSyncJobServeur(jobId, clientUserId);
+    const status = job.Status;
+
+    if (SYNC_STATUTS_MFA.has(status)) {
+      // Le re-sync exige un OTP : on ne peut pas y répondre côté serveur. L'UI
+      // rouvrira le widget natif en mode REPAIR. On NE logue PAS de PII.
+      return { status: "OTP_REQUESTED", jobId };
+    }
+
+    if (SYNC_STATUTS_TERMINAUX.has(status)) {
+      if (status === "COMPLETED") {
+        const ps = job.PersistenceStats ?? null;
+        // Log structuré d'observabilité (sans PII) : la PREUVE différée du besoin de
+        // trigger. `created/updated/duplicated` chiffrent ce que le scraping a ramené.
+        console.info(
+          JSON.stringify({
+            evt: "omnifi_sync_completed",
+            connectionId,
+            jobId,
+            created: ps?.TransactionsCreated ?? 0,
+            updated: ps?.TransactionsUpdated ?? 0,
+            duplicated: ps?.TransactionsDuplicated ?? 0,
+          }),
+        );
+        return { status: "COMPLETED", jobId, persistenceStats: ps };
+      }
+      // FAILED : on garde le Type (machine), jamais le Message (peut porter de la PII).
+      return { status: "FAILED", jobId, errorType: job.Error?.Type ?? null };
+    }
+
+    // État non terminal : on continue à poller jusqu'au plafond.
+    if (Date.now() - debut >= POLL_SYNC_PLAFOND_MS) {
+      return { status: "TIMEOUT", jobId };
+    }
+  }
+}
+
+/**
+ * Issue du déclenchement d'un sync pour UNE connexion, avant la lecture. Sert à
+ * remonter à l'UI les cas qui ne sont pas des échecs « durs » :
+ *  - DECLENCHE  : un job a tourné jusqu'à COMPLETED → la lecture peut suivre ;
+ *  - RATE_LIMITED : sync trop rapproché (garde NextSyncAvailableAt ou 429) → on
+ *    NE déclenche pas, on relit quand même l'état courant (l'utilisateur voit le
+ *    dernier état connu) ; `nextSyncAt` informe du délai ;
+ *  - NEEDS_REPAIR : le re-sync est repassé en OTP_REQUESTED → l'UI doit rouvrir le
+ *    widget natif en mode REPAIR (link-token avec ConnectionId + JobId) ;
+ *  - SKIP_FAILED : job FAILED ou timeout de polling → compté en échec (fail-soft).
+ */
+type IssueTrigger =
+  | { kind: "DECLENCHE" }
+  | { kind: "RATE_LIMITED"; nextSyncAt: string | null }
+  | { kind: "NEEDS_REPAIR"; jobId: string }
+  | { kind: "SKIP_FAILED"; errorType?: string | null };
+
+/**
+ * `NextSyncAvailableAt` est-il dans le FUTUR (sync encore en cooldown) ? Parse ISO
+ * 8601 ; une valeur absente/illisible/passée ⇒ pas de cooldown (on peut déclencher).
+ */
+function cooldownActif(nextSyncAvailableAt: string | null | undefined): boolean {
+  if (!nextSyncAvailableAt) return false;
+  const ms = Date.parse(nextSyncAvailableAt);
+  return !Number.isNaN(ms) && ms > Date.now();
+}
+
+/**
+ * Un 400 de declencherSync signale-t-il « un sync tourne DÉJÀ » (vs un 400 d'une
+ * autre cause) ? On reconnaît le motif sur l'obieCode/Message OBIE de façon tolérante
+ * (l'amont n'a pas de code machine stable documenté pour ce cas) : « already running »
+ * ou « in progress », insensible à la casse. Un obieCode absent ⇒ false (on ne part PAS
+ * poller le dernier job sur un 400 ambigu — fail-safe contre le faux « sync effectué »).
+ */
+function estSyncDejaEnCours(obieCode: string | null): boolean {
+  if (!obieCode) return false;
+  const c = obieCode.toLowerCase();
+  return c.includes("already running") || c.includes("in progress") || c.includes("running");
+}
+
+/**
+ * Déclenche (ou non) un sync pour une connexion, gardé EN AMONT par le cooldown,
+ * puis attend le job. Ne LIT PAS les transactions (la lecture existante suit selon
+ * l'issue). Centralise toute la gestion 429/400-concurrent/OTP/FAILED.
+ */
+async function declencherEtAttendre(
+  client: OmniFiClient,
+  connectionId: string,
+  clientUserId: string,
+  nextSyncAvailableAt: string | null,
+): Promise<IssueTrigger> {
+  // (a) GARDE rate-limit AMONT : un NextSyncAvailableAt futur (vu dans GET /connections)
+  // signifie qu'un sync a tourné récemment → NE PAS déclencher (évite un 429 inutile
+  // à chaque clic). On relira quand même l'état courant en aval.
+  if (cooldownActif(nextSyncAvailableAt)) {
+    return { kind: "RATE_LIMITED", nextSyncAt: nextSyncAvailableAt };
+  }
+
+  // (b) Déclenchement. On distingue 429 (course avec la garde) et 400 (job déjà en cours).
+  let job: OmniFiSyncJob;
+  try {
+    job = await client.declencherSync(connectionId, clientUserId);
+  } catch (erreur) {
+    if (erreur instanceof OmniFiApiError && erreur.estRateLimit) {
+      // 429 malgré la garde (course / cooldown non remonté par GET /connections) :
+      // on relit `latest-job` pour exposer le délai, sans re-déclencher.
+      const next = await nextSyncDepuisLatest(client, connectionId, clientUserId);
+      return { kind: "RATE_LIMITED", nextSyncAt: next };
+    }
+    // 400 « sync already running » UNIQUEMENT : un job tourne déjà → on récupère SON
+    // JobId et on poll dessus (idempotence côté user). On RESTREINT à ce motif (obieCode)
+    // : sans ce filtre, un 400 d'une AUTRE cause (param rejeté, connexion en mauvais
+    // état) partirait poller le dernier job — souvent un vieux COMPLETED — et conclurait
+    // à tort « sync effectué » (faux positif silencieux, constat de revue). Tout autre
+    // 400 remonte comme une erreur dure (cf. throw final).
+    if (
+      erreur instanceof OmniFiApiError &&
+      erreur.status === 400 &&
+      estSyncDejaEnCours(erreur.obieCode)
+    ) {
+      const latest = await client.getLatestSyncJob(connectionId, clientUserId);
+      if (!latest.JobId) return { kind: "SKIP_FAILED", errorType: "NO_JOB_ID" };
+      // Défense en profondeur : si le « dernier job » est déjà TERMINAL (vieux
+      // COMPLETED/FAILED), il ne s'agit pas d'un sync EN COURS → on ne conclut pas
+      // DECLENCHE à tort. On le compte en échec doux (rien de frais à lire).
+      if (SYNC_STATUTS_TERMINAUX.has(latest.Status)) {
+        return { kind: "SKIP_FAILED", errorType: "STALE_LATEST_JOB" };
+      }
+      return interpreterAttente(
+        await attendreFinSync(client, latest.JobId, clientUserId, connectionId),
+      );
+    }
+    throw erreur; // 400 autre / réseau / timeout / 5xx / 403… : remonte (générique côté action)
+  }
+
+  if (!job.JobId) return { kind: "SKIP_FAILED", errorType: "NO_JOB_ID" };
+
+  // (c) Attente du job déclenché.
+  return interpreterAttente(
+    await attendreFinSync(client, job.JobId, clientUserId, connectionId),
+  );
+}
+
+/** Traduit une issue d'attente de job en issue de trigger (pour la lecture en aval). */
+function interpreterAttente(r: ResultatAttenteSync): IssueTrigger {
+  switch (r.status) {
+    case "COMPLETED":
+      return { kind: "DECLENCHE" };
+    case "OTP_REQUESTED":
+      return { kind: "NEEDS_REPAIR", jobId: r.jobId };
+    case "FAILED":
+      return { kind: "SKIP_FAILED", errorType: r.errorType };
+    case "TIMEOUT":
+      return { kind: "SKIP_FAILED", errorType: "POLL_TIMEOUT" };
+  }
+}
+
+/** Lit `NextSyncAvailableAt` du dernier job (best-effort, jamais throw fatal). */
+async function nextSyncDepuisLatest(
+  client: OmniFiClient,
+  connectionId: string,
+  clientUserId: string,
+): Promise<string | null> {
+  try {
+    const latest = await client.getLatestSyncJob(connectionId, clientUserId);
+    return latest.NextSyncAvailableAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ResultatSynchronisation {
   connexions: number;
   comptesRattaches: number;
   /** Transactions importées (toutes pages, tous comptes) lors de cette synchro. */
   transactionsImportees: number;
+  /**
+   * Connexions dont le re-sync exige une réparation MFA (OTP_REQUESTED) — l'UI doit
+   * rouvrir le widget natif en mode REPAIR. Porte le ConnectionId + le JobId (pour
+   * un futur link-token de REPAIR). Vide = aucun cas.
+   */
+  aReparer: Array<{ connectionId: string; jobId: string }>;
+  /**
+   * Connexions non re-synchronisées car en cooldown (« 1 sync / 15 min ») — PAS une
+   * erreur : on a relu le dernier état connu. `nextSyncAt` = quand un nouveau sync
+   * sera possible (ISO 8601, ou null si inconnu). Vide = aucun cas.
+   */
+  rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }>;
 }
 
 /**
@@ -358,6 +600,8 @@ export async function synchroniserConnexionsDepuisOmnifi(
     ConnectionId: string;
     InstitutionId: string;
     InstitutionName: string | null;
+    /** Cooldown amont (« 1 sync / 15 min ») : garde anti-429 du déclenchement (étape 3). */
+    NextSyncAvailableAt: string | null;
   }> = [];
   let pageC = 1;
   for (;;) {
@@ -371,6 +615,8 @@ export async function synchroniserConnexionsDepuisOmnifi(
           ConnectionId: c.ConnectionId,
           InstitutionId: c.InstitutionId,
           InstitutionName: c.InstitutionName ?? null,
+          // Cooldown lu ICI (pas d'appel supplémentaire) → garde rate-limit en amont.
+          NextSyncAvailableAt: c.NextSyncAvailableAt ?? null,
         });
       }
     }
@@ -379,10 +625,18 @@ export async function synchroniserConnexionsDepuisOmnifi(
     pageC += 1;
   }
 
-  // 3. Pour chaque connexion : découvrir les comptes (filtré connectionId) et
-  //    persister. Même helper idempotent que le chemin dropin.
+  // 3. Pour CHAQUE connexion : (a) découvrir + persister les comptes, (b) DÉCLENCHER
+  //    un sync RÉEL gardé par le cooldown puis attendre le job, (c) selon l'issue,
+  //    ingérer les transactions de SES comptes (boucle de lecture INCHANGÉE). On
+  //    traite par connexion pour pouvoir stopper une connexion en réparation MFA
+  //    sans pénaliser les autres (fail-soft conservé).
   let comptesRattaches = 0;
+  let transactionsImportees = 0;
+  const aReparer: Array<{ connectionId: string; jobId: string }> = [];
+  const rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }> = [];
+
   for (const cx of connexions) {
+    // (a) Découverte + persistance des comptes (filtré connectionId, paginé).
     const comptes: OmniFiAccount[] = [];
     let pageA = 1;
     for (;;) {
@@ -396,36 +650,76 @@ export async function synchroniserConnexionsDepuisOmnifi(
     }
     verifierAlignement(comptes, cx.InstitutionId);
     comptesRattaches += await persisterConnexionEtComptes(executer, cx, comptes);
-  }
 
-  // 4. Ingestion des TRANSACTIONS de chaque compte rattaché (pagination par page,
-  //    cf. orchestrateur d'ingestion). Sans ça, le dashboard (Détails, Transactions
-  //    récentes) reste vide alors que l'API a des transactions. On relit les comptes
-  //    du workspace (couple bankAccountId/omnifiAccountId) DANS le tx scopé (RLS).
-  const comptesAIngerer = await executer(async (tx) =>
-    tx
-      .select({
-        bankAccountId: bankAccounts.id,
-        omnifiAccountId: bankAccounts.omnifiAccountId,
-      })
-      .from(bankAccounts)
-      .where(eq(bankAccounts.isSelected, true)),
-  );
-
-  let transactionsImportees = 0;
-  for (const cpt of comptesAIngerer) {
-    const r = await synchroniserCompte(client, executer, {
-      omnifiAccountId: cpt.omnifiAccountId,
-      bankAccountId: cpt.bankAccountId,
+    // (b) Déclenchement gardé (cooldown amont) + attente du job.
+    const issue = await declencherEtAttendre(
+      client,
+      cx.ConnectionId,
       clientUserId,
-    });
-    transactionsImportees += r.transactionsTraitees;
+      cx.NextSyncAvailableAt,
+    );
+
+    // (c) Réaction à l'issue AVANT la lecture des transactions.
+    if (issue.kind === "NEEDS_REPAIR") {
+      // Re-sync repassé en OTP_REQUESTED : on STOPPE cette connexion (pas de lecture)
+      // et on signale à l'UI de rouvrir le widget natif en mode REPAIR. Les endpoints
+      // MFA serveur restent morts (pilotés par le widget natif).
+      aReparer.push({ connectionId: cx.ConnectionId, jobId: issue.jobId });
+      continue;
+    }
+    if (issue.kind === "SKIP_FAILED") {
+      // FAILED / timeout de polling : on n'ingère pas cette connexion (fail-soft) ;
+      // le code machine est tracé par attendreFinSync, jamais de PII ici.
+      continue;
+    }
+    if (issue.kind === "RATE_LIMITED") {
+      // Cooldown actif : on N'a PAS déclenché, mais on relit quand même l'état COURANT
+      // (le user voit au moins le dernier état connu) → on NE `continue` pas.
+      rateLimited.push({ connectionId: cx.ConnectionId, nextSyncAt: issue.nextSyncAt });
+    }
+    // issue.kind === "DECLENCHE" (sync COMPLETED) OU "RATE_LIMITED" (lecture du cache) :
+    // dans les deux cas on lit les transactions des comptes de CETTE connexion.
+
+    // Ingestion des transactions des comptes DÉCOUVERTS pour cette connexion. On résout
+    // (omnifiAccountId → bankAccountId local) DANS le tx scopé (RLS), filtré aux comptes
+    // de cette connexion (par leur omnifi_account_id) — la boucle de lecture/upsert
+    // `synchroniserCompte` reste strictement identique (couche d'ingestion intacte).
+    const omnifiIds = comptes
+      .filter((c) => c.Status == null || c.Status === "Enabled")
+      .map((c) => c.AccountId);
+    if (omnifiIds.length === 0) continue;
+
+    const comptesAIngerer = await executer(async (tx) =>
+      tx
+        .select({
+          bankAccountId: bankAccounts.id,
+          omnifiAccountId: bankAccounts.omnifiAccountId,
+        })
+        .from(bankAccounts)
+        .where(
+          and(
+            eq(bankAccounts.isSelected, true),
+            inArray(bankAccounts.omnifiAccountId, omnifiIds),
+          ),
+        ),
+    );
+
+    for (const cpt of comptesAIngerer) {
+      const r = await synchroniserCompte(client, executer, {
+        omnifiAccountId: cpt.omnifiAccountId,
+        bankAccountId: cpt.bankAccountId,
+        clientUserId,
+      });
+      transactionsImportees += r.transactionsTraitees;
+    }
   }
 
   return {
     connexions: connexions.length,
     comptesRattaches,
     transactionsImportees,
+    aReparer,
+    rateLimited,
   };
 }
 

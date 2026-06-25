@@ -5,6 +5,51 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Sync réel Omni-FI — déclenchement de scraping (POST /sync) livré (2026-06-25)
+
+Le bouton « Synchroniser mes comptes » DÉCLENCHE désormais un sync réel
+(`POST /sync/{ConnectionId}` ApiKey → job → attente) AVANT la boucle de lecture
+existante, au lieu de relire seulement le cache amont (branche
+`feat/omnifi-sync-trigger`). Contrat confirmé empiriquement en sandbox
+(`scripts/diag-sync.ts` : 201 `{JobId,PENDING}`, COMPLETED parfois à t+0s).
+Dettes ouvertes par la revue contradictoire de ce chantier :
+
+- [ ] **SYNC-REPAIR-UI1 (P1, point de DÉPLOIEMENT du widget en prod) — brancher la
+  réouverture du widget natif en mode REPAIR quand une banque retombe en MFA.** Le
+  serveur remonte déjà le signal `EtatFinalisation.reparation = [{connectionId, jobId}]`
+  (re-sync repassé `OTP_REQUESTED`), mais le composant client
+  `src/components/widget/bank-connect-widget.tsx` ne le LIT PAS encore : `synchroniser()`
+  fait juste `setFinalisation(r)`, et `WidgetFeedback` n'affiche que `erreur`/`succes`.
+  Conséquence : l'utilisateur voit le message « N banque(s) demandent une nouvelle
+  vérification… reconnectez-les », mais aucun chemin UI ne rouvre le widget en REPAIR
+  (link-token portant ConnectionId + JobId) → la banque reste non re-synchronisable
+  depuis cet écran. **À faire** (côté Front, gouvernance UI) : consommer `r.reparation`
+  pour démarrer un link-token de REPAIR et rouvrir `OmniFiLinkLauncher`. **Déclencheur** :
+  première banque sandbox/prod qui exige une MFA au re-sync (toute banque à OTP).
+  **Effort** : M (le signal serveur + le launcher existent ; reste le câblage REPAIR).
+
+- [ ] **SYNC-RATELIMIT-UI1 (P2) — exploiter `EtatFinalisation.rateLimited` côté UI.** Le
+  serveur remonte `rateLimited = [{connectionId, nextSyncAt}]` (connexions en cooldown
+  « 1 sync / 15 min », non re-déclenchées) et un message texte avec délai relatif. Le
+  champ structuré est pour l'instant inerte côté client (seul le texte de `succes` est
+  affiché). **À faire** : afficher un compte à rebours / désactiver le bouton jusqu'à
+  `nextSyncAt`. **Déclencheur** : retour utilisateur « je clique et il ne se passe
+  rien » sur des clics rapprochés. **Effort** : S.
+
+- [ ] **SYNC-LONGRUN1 (P1, point de DÉPLOIEMENT — workspace multi-connexions Omnicane) —
+  déporter l'attente du job hors de la Server Action interactive.**
+  `synchroniserConnexionsDepuisOmnifi` poll chaque job jusqu'à `POLL_SYNC_PLAFOND_MS`
+  (120 s) **séquentiellement** par connexion : sur N connexions lentes, l'action peut
+  approcher `N × 120 s` et dépasser le plafond d'exécution de la plateforme (Next/Vercel),
+  l'utilisateur reçoit alors le message générique ET perd les imports des connexions
+  déjà traitées (le `return` final n'est pas atteint). Le cas métier explicite est
+  « 1 connexion = N entités » (CLAUDE.md Entités) → plusieurs connexions par workspace.
+  **À faire** : déporter le déclenchement+attente vers un job d'arrière-plan (Inngest est
+  au stack) et notifier l'UI à la complétion, ou borner agressivement le plafond +
+  paralléliser. **Déclencheur** : premier workspace réel à ≥3 connexions actives, OU
+  premier timeout plateforme observé sur ce bouton. **Effort** : M/L (intro d'un job
+  Inngest). Lien : la même infra servira un futur trigger automatique / webhooks.
+
 ### Parcours utilisateur complet — bilan QA runtime (2026-06-24)
 
 Parcours connecté de bout en bout (navigateur headless, compte `enardou@omni-fi.co`,
