@@ -78,6 +78,32 @@ export default function BanqueConnexionDemoPage() {
         >
           <WidgetFeedback erreurDemarrage="Paramètres invalides." />
         </Bloc>
+
+        <Bloc
+          titre="5. Réparation — bouton « Reconnecter »"
+          description="Le re-sync a redemandé une vérification de sécurité (OTP) pour une ou plusieurs banques. Sous le message de synchro, un bouton « Reconnecter » par connexion rouvre le widget natif en mode REPAIR. Action secondaire (lien d'action), jamais en rouge."
+        >
+          <WidgetFeedback
+            succes="Synchronisation effectuée — 4 compte(s) rattaché(s) sur 3 banque(s). 1 banque(s) demandent une nouvelle vérification de sécurité — reconnectez-les pour terminer."
+            reparation={[{ connectionId: "cx_demo_1", jobId: "job_demo_1" }]}
+            onReconnecter={() => {}}
+          />
+        </Bloc>
+
+        <Bloc
+          titre="6. Réparation — ouverture en cours (bouton désactivé)"
+          description="Entre le clic « Reconnecter » et l'obtention du token REPAIR : le bouton passe en « Ouverture… » et se désactive (anti-double-clic). Deux connexions à réparer."
+        >
+          <WidgetFeedback
+            succes="Synchronisation effectuée — 2 compte(s) rattaché(s) sur 2 banque(s). 2 banque(s) demandent une nouvelle vérification de sécurité — reconnectez-les pour terminer."
+            reparation={[
+              { connectionId: "cx_demo_1", jobId: "job_demo_1" },
+              { connectionId: "cx_demo_2", jobId: "job_demo_2" },
+            ]}
+            onReconnecter={() => {}}
+            reparationEnCours
+          />
+        </Bloc>
       </main>
     </div>
   );

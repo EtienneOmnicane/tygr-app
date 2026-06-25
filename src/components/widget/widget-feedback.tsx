@@ -22,11 +22,20 @@ import Link from "next/link";
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
 export const ROUTE_DASHBOARD = "/";
 
+/** Une connexion à réparer (signal `reparation` du serveur). Identifiants opaques. */
+export interface ConnexionAReparer {
+  connectionId: string;
+  jobId: string;
+}
+
 export function WidgetFeedback({
   erreurDemarrage,
   erreurFinalisation,
   succes,
   redirection,
+  reparation,
+  onReconnecter,
+  reparationEnCours,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
@@ -36,6 +45,16 @@ export function WidgetFeedback({
   succes?: string | null;
   /** `true` quand une redirection vers le Dashboard est en cours (succès complet). */
   redirection?: boolean;
+  /**
+   * Connexions demandant une réparation MFA (le re-sync a redemandé un OTP). Chaque
+   * entrée rend un bouton « Reconnecter » qui rouvre le widget natif en mode REPAIR.
+   * Vide/absent = aucun bouton. Inerte si `onReconnecter` n'est pas fourni (Visual QA).
+   */
+  reparation?: ConnexionAReparer[];
+  /** Clic sur « Reconnecter » d'une connexion → le parent ouvre le widget REPAIR. */
+  onReconnecter?: (connexion: ConnexionAReparer) => void;
+  /** `true` pendant l'ouverture d'une réparation : désactive les boutons (anti-double-clic). */
+  reparationEnCours?: boolean;
 }) {
   return (
     <>
@@ -76,6 +95,51 @@ export function WidgetFeedback({
           </Link>
         </div>
       )}
+
+      {/* Boutons de RÉPARATION : une connexion dont le re-sync a redemandé un OTP. Le
+          clic rouvre le widget natif en mode REPAIR (le widget gère l'OTP en interne).
+          Action secondaire (§2.3), cohérente avec « Synchroniser mes comptes ». Rendu
+          inerte sans `onReconnecter` (route de démo / Visual QA). */}
+      {reparation && reparation.length > 0 && (
+        <ul className="flex flex-col gap-1.5">
+          {reparation.map((cx) => (
+            <li key={`${cx.connectionId}:${cx.jobId}`}>
+              <button
+                type="button"
+                onClick={() => onReconnecter?.(cx)}
+                disabled={!onReconnecter || reparationEnCours}
+                className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
+                  text-sm font-semibold text-primary transition-colors
+                  hover:text-primary-600 hover:underline focus:outline-none
+                  focus-visible:ring-2 focus-visible:ring-primary
+                  focus-visible:ring-offset-2 disabled:opacity-48"
+              >
+                <IconeReconnecter />
+                {reparationEnCours ? "Ouverture…" : "Reconnecter"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
+  );
+}
+
+/** Icône « bouclier + flèche » (réparation/reconnexion sécurisée). Décorative. */
+function IconeReconnecter() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 1.5 2.5 3.5v3.2c0 3 2.2 5.6 5.5 6.8 3.3-1.2 5.5-3.8 5.5-6.8V3.5L8 1.5Z" />
+      <path d="M6 7.8 7.4 9.2 10.2 6" />
+    </svg>
   );
 }

@@ -22,9 +22,12 @@ import { WorkspaceAccessDeniedError } from "@/server/db/tenancy";
 import { creerClientOmniFi } from "@/server/omnifi";
 import {
   ConnexionNonAutoriseeError,
+  ReparationContexteInvalideError,
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
+  demarrerReparation,
   finaliserConnexionsDropin,
+  resynchroniserConnexion,
   synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
 import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
@@ -249,6 +252,127 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
 }
 
 /**
+ * Schéma de la demande de RÉPARATION. `connectionId`/`jobId` = identifiants opaques
+ * Omni-FI (UUID) issus du signal `reparation` remonté par `synchroniserConnexionsAction`
+ * (jamais saisis par l'utilisateur). `redirectOrigin` validé comme à l'onboarding (le
+ * widget exige https). Bornes larges mais finies pour ne pas accepter de payload non
+ * contrôlé. La FORME seulement ici ; l'autorisation d'origine est décidée à part.
+ */
+const reparationSchema = z
+  .object({
+    redirectOrigin: z.string().url().max(255),
+    connectionId: z.string().trim().min(1).max(64),
+    jobId: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
+/**
+ * Crée un LinkToken de RÉPARATION (`Mode: REPAIR`) pour rouvrir le widget natif sur une
+ * connexion en erreur (signal `reparation`). Le widget gère l'OTP EN INTERNE (cf. vendor
+ * README §MFA handling) — on ne pilote pas la MFA côté serveur. Mêmes gardes que
+ * `demarrerConnexionAction` : origine autorisée + gating MANAGER/ADMIN + ClientUserId
+ * scopé + anti-IDOR (la connexion doit appartenir au workspace). Retourne `EtatDemarrage`
+ * (la même forme que l'onboarding) pour que le front monte le MÊME launcher.
+ */
+export async function creerLinkTokenRepairAction(
+  connectionId: string,
+  jobId: string,
+  redirectOrigin: string,
+): Promise<EtatDemarrage> {
+  const session = await exigerSessionWorkspace();
+
+  const parsed = reparationSchema.safeParse({ redirectOrigin, connectionId, jobId });
+  if (!parsed.success) {
+    logRejetDemarrage(session.activeWorkspaceId, "forme");
+    return { erreur: "Paramètres invalides.", linkToken: null };
+  }
+
+  const motif = autoriserRedirectOrigin(parsed.data.redirectOrigin);
+  if (motif !== "ok") {
+    logRejetDemarrage(session.activeWorkspaceId, motif);
+    return { erreur: MESSAGE_ORIGINE, linkToken: null };
+  }
+
+  const client = creerClientOmniFi();
+  const executer = <T>(fn: Parameters<typeof withWorkspace<T>>[1]) =>
+    withWorkspace(session, fn);
+
+  try {
+    const r = await demarrerReparation(client, executer, {
+      redirectOrigin: parsed.data.redirectOrigin,
+      connectionId: parsed.data.connectionId,
+      jobId: parsed.data.jobId,
+    });
+    return { erreur: null, linkToken: r.linkToken };
+  } catch (erreur) {
+    return {
+      erreur: messageDepuis(erreur, session.activeWorkspaceId, "reparation"),
+      linkToken: null,
+    };
+  }
+}
+
+/** Schéma de la re-lecture post-réparation : un seul identifiant opaque de connexion. */
+const resyncConnexionSchema = z
+  .object({ connectionId: z.string().trim().min(1).max(64) })
+  .strict();
+
+/**
+ * Re-lit UNE connexion après que le widget natif a terminé la réparation (onSuccess).
+ * Réutilise la boucle d'ingestion existante (`synchroniserCompte`) via
+ * `resynchroniserConnexion`. Fail-soft : un sync FAILED/timeout ne lève pas — on remonte
+ * ce qui a été lu. Gating + anti-IDOR portés par l'orchestration.
+ */
+export async function resynchroniserConnexionApresReparationAction(
+  connectionId: string,
+): Promise<EtatFinalisation> {
+  const session = await exigerSessionWorkspace();
+
+  const parsed = resyncConnexionSchema.safeParse({ connectionId });
+  if (!parsed.success) {
+    console.warn(
+      JSON.stringify({
+        evt: "widget_resync_connexion_rejet",
+        action: "resync-connexion",
+        workspaceId: session.activeWorkspaceId,
+      }),
+    );
+    return { erreur: "Paramètres invalides.", succes: null };
+  }
+
+  const client = creerClientOmniFi();
+  const executer = <T>(fn: Parameters<typeof withWorkspace<T>>[1]) =>
+    withWorkspace(session, fn);
+
+  try {
+    const r = await resynchroniserConnexion(client, executer, parsed.data.connectionId);
+    let succes = `Connexion rétablie — ${r.comptesRattaches} compte(s) mis à jour.`;
+    if (r.transactionsImportees > 0) {
+      succes += ` ${r.transactionsImportees} transaction(s) importée(s).`;
+    }
+    if (r.reparationJobId) {
+      // Rare : la banque a redemandé une vérification → on re-signale la réparation
+      // (avec le NOUVEAU jobId) pour que l'UI laisse le bouton « Reconnecter » ré-armé.
+      // Non-énumérant : que des identifiants opaques.
+      succes += " Une nouvelle vérification de sécurité est encore demandée.";
+      return {
+        erreur: null,
+        succes,
+        reparation: [
+          { connectionId: parsed.data.connectionId, jobId: r.reparationJobId },
+        ],
+      };
+    }
+    return { erreur: null, succes };
+  } catch (erreur) {
+    return {
+      erreur: messageDepuis(erreur, session.activeWorkspaceId, "resync-connexion"),
+      succes: null,
+    };
+  }
+}
+
+/**
  * Formate le délai de cooldown le PLUS PROCHE en texte relatif court (« dans ~12
  * min »). On prend le `nextSyncAt` minimal parmi les connexions rate-limitées.
  * Renvoie "" si aucune date exploitable (l'amont ne l'a pas fournie). Non-énumérant :
@@ -288,7 +412,10 @@ function messageDepuis(erreur: unknown, workspaceId: string, action: string): st
 
   if (
     erreur instanceof ConnexionNonAutoriseeError ||
-    erreur instanceof WorkspaceAccessDeniedError
+    erreur instanceof WorkspaceAccessDeniedError ||
+    // Contexte de réparation hors tenant (anti-IDOR) : refus non-énumérant, comme un
+    // accès cross-workspace — on ne confirme pas l'existence de la connexion.
+    erreur instanceof ReparationContexteInvalideError
   ) {
     return MESSAGE_REFUS;
   }

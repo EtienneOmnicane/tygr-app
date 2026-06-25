@@ -26,10 +26,13 @@ import { OmniFiApiError } from "@/server/omnifi";
 import {
   ConnexionDesalignmentError,
   ConnexionNonAutoriseeError,
+  ReparationContexteInvalideError,
   demarrerConnexion,
+  demarrerReparation,
   finaliserConnexion,
   finaliserConnexionDropin,
   finaliserConnexionsDropin,
+  resynchroniserConnexion,
   synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
 
@@ -635,5 +638,161 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     ).rejects.toBeInstanceOf(OmniFiApiError);
     // On n'a PAS été chercher le dernier job sur ce 400 ambigu.
     expect(c.getLatestSyncJob).not.toHaveBeenCalled();
+  });
+});
+
+describe("demarrerReparation — LinkToken Mode REPAIR (SYNC-REPAIR-UI1)", () => {
+  /** Crée une connexion RÉELLE dans WS_A et renvoie son omnifi_connection_id. */
+  async function semerConnexionA(omnifiConnId: string, accountId: string) {
+    const c = clientFactice({
+      exchange: { ConnectionId: omnifiConnId, InstitutionId: "mcb" },
+      accounts: [
+        { AccountId: accountId, Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] },
+      ],
+    });
+    await finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: `pt-${omnifiConnId}` });
+  }
+
+  it("ADMIN : transmet ConnectionId + JobId + ClientUserId du workspace à creerLinkToken", async () => {
+    await semerConnexionA("conn-rep-A", "oa-rep-A");
+    const c = clientFactice();
+    const r = await demarrerReparation(c, execWs(ADMIN_A, WS_A), {
+      redirectOrigin: "https://app.mu",
+      connectionId: "conn-rep-A",
+      jobId: "job-rep-A",
+    });
+    expect(r.linkToken).toBe("lt_x");
+    // Mode REPAIR : le couple ConnectionId/JobId est passé, sous le ClientUserId du WS.
+    expect(c.creerLinkToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ClientUserId: "enduser-a",
+        ConnectionId: "conn-rep-A",
+        JobId: "job-rep-A",
+        RedirectOrigin: "https://app.mu",
+      }),
+    );
+  });
+
+  it("VIEWER ne peut PAS démarrer une réparation (rejet, aucun link-token)", async () => {
+    const c = clientFactice();
+    await expect(
+      demarrerReparation(c, execWs(VIEWER_A, WS_A), {
+        redirectOrigin: "https://app.mu",
+        connectionId: "conn-rep-A",
+        jobId: "job-rep-A",
+      }),
+    ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
+    expect(c.creerLinkToken).not.toHaveBeenCalled();
+  });
+
+  it("anti-IDOR : un ConnectionId INCONNU du tenant → ReparationContexteInvalideError (aucun link-token)", async () => {
+    const c = clientFactice();
+    await expect(
+      demarrerReparation(c, execWs(ADMIN_A, WS_A), {
+        redirectOrigin: "https://app.mu",
+        connectionId: "conn-inexistante",
+        jobId: "job-x",
+      }),
+    ).rejects.toBeInstanceOf(ReparationContexteInvalideError);
+    expect(c.creerLinkToken).not.toHaveBeenCalled();
+  });
+
+  it("anti-IDOR : la connexion d'un AUTRE tenant (B) est invisible de A → ReparationContexteInvalideError", async () => {
+    // Sème une connexion sous B, puis tente une réparation sous A avec son id Omni-FI :
+    // la RLS la rend invisible à A → refus (pas d'oracle d'existence cross-tenant).
+    const cB = clientFactice({
+      exchange: { ConnectionId: "conn-rep-B", InstitutionId: "mcb" },
+      accounts: [{ AccountId: "oa-rep-B", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "1.00", Currency: "MUR" } }] }],
+    });
+    await finaliserConnexionDropin(cB, execWs(ADMIN_B, WS_B), { publicToken: "pt-conn-rep-B" });
+
+    const c = clientFactice();
+    await expect(
+      demarrerReparation(c, execWs(ADMIN_A, WS_A), {
+        redirectOrigin: "https://app.mu",
+        connectionId: "conn-rep-B",
+        jobId: "job-b",
+      }),
+    ).rejects.toBeInstanceOf(ReparationContexteInvalideError);
+    expect(c.creerLinkToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("resynchroniserConnexion — re-lecture après réparation (SYNC-REPAIR-UI1)", () => {
+  async function semerConnexionA(omnifiConnId: string, accountId: string) {
+    const c = clientFactice({
+      exchange: { ConnectionId: omnifiConnId, InstitutionId: "mcb" },
+      accounts: [{ AccountId: accountId, Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] }],
+    });
+    await finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: `pt-${omnifiConnId}` });
+  }
+
+  it("re-lit la connexion : déclenche un sync, ingère les transactions du compte (job COMPLETED)", async () => {
+    await semerConnexionA("conn-resync", "oa-resync");
+    const c = clientFactice({
+      accounts: [{ AccountId: "oa-resync", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "200.00", Currency: "MUR" } }] }],
+      transactions: [
+        {
+          TransactionId: "tx-resync-1",
+          AccountId: "oa-resync",
+          TransactionInformation: "VIREMENT",
+          Amount: { Amount: "300.00", Currency: "MUR" },
+          CreditDebitIndicator: "Credit",
+          Status: "Booked",
+          BookingDateTime: "2026-06-11T05:30:00Z",
+        },
+      ],
+    });
+    const r = await resynchroniserConnexion(c, execWs(ADMIN_A, WS_A), "conn-resync");
+
+    // Sync déclenché sous le ClientUserId du workspace (frontière tenant), pas un param.
+    expect(c.declencherSync).toHaveBeenCalledWith("conn-resync", "enduser-a");
+    expect(c.listerComptesConnexion).toHaveBeenCalledWith("conn-resync", "enduser-a", expect.anything());
+    expect(r.transactionsImportees).toBeGreaterThanOrEqual(1);
+    expect(r.reparationJobId).toBeUndefined();
+
+    const txns = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(schema.transactionsCache)).filter((t) => t.omnifiTxnId === "tx-resync-1"),
+    );
+    expect(txns.length).toBe(1);
+  });
+
+  it("re-sync repassé en OTP → reparationJobId (NOUVEAU jobId), aucune lecture de transactions", async () => {
+    await semerConnexionA("conn-resync-otp", "oa-resync-otp");
+    const c = clientFactice({
+      accounts: [{ AccountId: "oa-resync-otp", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      syncJob: { JobId: "job-sync-1", Status: "OTP_REQUESTED" },
+    });
+    const r = await resynchroniserConnexion(c, execWs(ADMIN_A, WS_A), "conn-resync-otp");
+    expect(r.reparationJobId).toBe("job-sync-1");
+    expect(c.listerTransactionsPage).not.toHaveBeenCalled();
+  });
+
+  it("sync FAILED → fail-soft : pas de throw, 0 transaction (pas de reparationJobId)", async () => {
+    await semerConnexionA("conn-resync-fail", "oa-resync-fail");
+    const c = clientFactice({
+      accounts: [{ AccountId: "oa-resync-fail", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+      syncJob: { JobId: "job-sync-1", Status: "FAILED", Error: { Type: "LOGIN_FAILED" } },
+    });
+    const r = await resynchroniserConnexion(c, execWs(ADMIN_A, WS_A), "conn-resync-fail");
+    expect(r.transactionsImportees).toBe(0);
+    expect(r.reparationJobId).toBeUndefined();
+    expect(c.listerTransactionsPage).not.toHaveBeenCalled();
+  });
+
+  it("VIEWER ne peut pas re-synchroniser (rejet, aucune découverte)", async () => {
+    const c = clientFactice();
+    await expect(
+      resynchroniserConnexion(c, execWs(VIEWER_A, WS_A), "conn-resync"),
+    ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
+    expect(c.listerComptesConnexion).not.toHaveBeenCalled();
+  });
+
+  it("anti-IDOR : connexion inconnue du tenant → ReparationContexteInvalideError (aucun appel amont)", async () => {
+    const c = clientFactice();
+    await expect(
+      resynchroniserConnexion(c, execWs(ADMIN_A, WS_A), "conn-pas-a-moi"),
+    ).rejects.toBeInstanceOf(ReparationContexteInvalideError);
+    expect(c.listerComptesConnexion).not.toHaveBeenCalled();
   });
 });
