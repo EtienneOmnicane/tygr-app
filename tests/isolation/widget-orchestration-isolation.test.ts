@@ -20,7 +20,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as schema from "@/server/db/schema";
 import { bankAccounts, bankConnections } from "@/server/db/schema";
-import { createWithWorkspace, type ExecuterWorkspace } from "@/server/db/tenancy";
+import {
+  createWithWorkspace,
+  WorkspaceAccessDeniedError,
+  type ExecuterWorkspace,
+} from "@/server/db/tenancy";
 import type { OmniFiClient } from "@/server/omnifi";
 import { OmniFiApiError } from "@/server/omnifi";
 import {
@@ -624,19 +628,23 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     expect(r.rateLimited).toEqual([]);
   });
 
-  it("400 AMBIGU (autre cause, pas 'running') → erreur dure remontée, PAS de faux 'sync effectué'", async () => {
+  it("400 AMBIGU (autre cause, pas 'running') → FAIL-SOFT : compté en échec, PAS de throw, PAS de faux 'sync effectué'", async () => {
     // Régression visée par la revue : un 400 d'une autre cause ne doit pas partir
-    // poller un vieux latest-job et conclure « sync effectué ». Il remonte comme erreur.
+    // poller un vieux latest-job et conclure « sync effectué » (toujours vrai). MAIS,
+    // depuis le correctif fail-soft, il ne fait PLUS `throw` non plus : il est capturé,
+    // compté dans `echecs`, et la fonction atteint son `return`.
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-bad", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-bad", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
       declencherSyncErreur: new OmniFiApiError(400, "BAD_REQUEST", []),
     });
 
-    await expect(
-      synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A)),
-    ).rejects.toBeInstanceOf(OmniFiApiError);
-    // On n'a PAS été chercher le dernier job sur ce 400 ambigu.
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.echecs).toBe(1);
+    expect(r.echecsDetail).toEqual([
+      { connectionId: "conn-bad", code: "OMNIFI_API_ERROR", status: 400, obieCode: "BAD_REQUEST" },
+    ]);
+    // On n'a PAS été chercher le dernier job sur ce 400 ambigu (garde inchangée).
     expect(c.getLatestSyncJob).not.toHaveBeenCalled();
   });
 });
@@ -794,5 +802,120 @@ describe("resynchroniserConnexion — re-lecture après réparation (SYNC-REPAIR
       resynchroniserConnexion(c, execWs(ADMIN_A, WS_A), "conn-pas-a-moi"),
     ).rejects.toBeInstanceOf(ReparationContexteInvalideError);
     expect(c.listerComptesConnexion).not.toHaveBeenCalled();
+  });
+});
+
+describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agrégat honnête", () => {
+  /**
+   * Client dont UNE connexion (`koConnId`) échoue « dur » au 1er appel
+   * (`listerComptesConnexion` rejette), les autres réussissent (job COMPLETED).
+   * Sert à prouver qu'un échec au milieu de N connexions ne fait PAS tout tomber.
+   */
+  function clientSyncAvecUnEchec(
+    connIds: string[],
+    koConnId: string,
+    erreurKo: unknown,
+  ): OmniFiClient {
+    return {
+      listerConnexions: vi.fn().mockResolvedValue({
+        Data: {
+          Connections: connIds.map((id) => ({
+            ConnectionId: id,
+            InstitutionId: "mcb",
+            InstitutionName: "MCB",
+            Status: "active",
+          })),
+        },
+        Links: {},
+        Meta: { TotalPages: 1 },
+      }),
+      listerComptesConnexion: vi.fn(async (connectionId: string) => {
+        if (connectionId === koConnId) throw erreurKo;
+        return {
+          Data: {
+            Account: [
+              { AccountId: `oa-${connectionId}`, Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "10.00", Currency: "MUR" } }] },
+            ],
+          },
+          Links: {},
+          Meta: { TotalPages: 1 },
+        };
+      }),
+      declencherSync: vi.fn().mockResolvedValue({ JobId: "job-x", Status: "PENDING", IsManual: true }),
+      getSyncJobServeur: vi.fn().mockResolvedValue({
+        JobId: "job-x",
+        Status: "COMPLETED",
+        PersistenceStats: { TransactionsCreated: 0 },
+      }),
+      getLatestSyncJob: vi.fn().mockResolvedValue({ JobId: "job-x", Status: "COMPLETED", NextSyncAvailableAt: null }),
+      listerTransactionsPage: vi.fn().mockResolvedValue({
+        Data: { Transaction: [] },
+        Links: { Next: null },
+        Meta: { TotalPages: 1 },
+      }),
+    } as unknown as OmniFiClient;
+  }
+
+  it("1 connexion qui THROW au milieu de 3 → echecs=1, les 2 autres rattachées, return ATTEINT (pas de throw)", async () => {
+    const ids = ["fs-A", "fs-KO", "fs-C"];
+    const c = clientSyncAvecUnEchec(ids, "fs-KO", new OmniFiApiError(500, "INTERNAL", []));
+
+    // Ne throw PAS (le cœur du correctif) : on obtient bien un résultat.
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    expect(r.connexions).toBe(3);
+    expect(r.echecs).toBe(1);
+    expect(r.echecsDetail).toEqual([
+      { connectionId: "fs-KO", code: "OMNIFI_API_ERROR", status: 500, obieCode: "INTERNAL" },
+    ]);
+    // Les 2 connexions saines ont bien été rattachées (la KO échoue AVANT persistance).
+    expect(r.comptesRattaches).toBe(2);
+    // La connexion KO a bien été tentée (preuve qu'on n'a pas court-circuité la boucle).
+    expect(c.listerComptesConnexion).toHaveBeenCalledWith("fs-KO", "enduser-a", expect.anything());
+    // Les comptes des 2 connexions saines existent sous le tenant A.
+    const accs = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(bankAccounts)).filter((a) => ["oa-fs-A", "oa-fs-C"].includes(a.omnifiAccountId)),
+    );
+    expect(accs.length).toBe(2);
+  });
+
+  it("une erreur NON-OmniFiApiError (ex. panne DB) est aussi fail-soft (code machine, sans status)", async () => {
+    const ids = ["fs2-OK", "fs2-KO"];
+    const c = clientSyncAvecUnEchec(ids, "fs2-KO", new Error("boom DB"));
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.echecs).toBe(1);
+    // Pas une OmniFiApiError → pas de status/obieCode, juste le code machine (name).
+    expect(r.echecsDetail[0]).toEqual({ connectionId: "fs2-KO", code: "Error" });
+    expect(r.comptesRattaches).toBe(1); // la connexion saine est passée
+  });
+
+  it("TOUTES les connexions échouent → echecs===connexions, comptesRattaches=0 (agrégat « tout échoué » côté action)", async () => {
+    // 1 seule connexion, qui échoue : echecs===connexions ET 0 compte → l'action
+    // remontera MESSAGE_SYNC_TOUT_ECHOUE (testé via le contrat du résultat ici).
+    const c = clientSyncAvecUnEchec(["fs3-KO"], "fs3-KO", new OmniFiApiError(503, "UNAVAILABLE", []));
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(1);
+    expect(r.echecs).toBe(1);
+    expect(r.comptesRattaches).toBe(0);
+  });
+
+  it("SÉCURITÉ : une garde tenant (WorkspaceAccessDeniedError) n'est PAS avalée → propage (pas un échec fail-soft)", async () => {
+    // Cross-review : le fail-soft ne doit JAMAIS transformer un signal fail-closed de
+    // tenancy en simple « echec de connexion ». Si withWorkspace lève (rôle DB non sûr,
+    // membership révoquée…), l'opération entière doit s'interrompre bruyamment.
+    const c = clientSyncAvecUnEchec(["sec-KO"], "sec-KO", new WorkspaceAccessDeniedError());
+    await expect(
+      synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A)),
+    ).rejects.toBeInstanceOf(WorkspaceAccessDeniedError);
+  });
+
+  it("aucun échec → echecs=0, echecsDetail vide (contrat inchangé pour le cas nominal)", async () => {
+    const c = clientFactice({
+      connections: [{ ConnectionId: "fs4-ok", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
+      accounts: [{ AccountId: "oa-fs4-ok", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "5.00", Currency: "MUR" } }] }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.echecs).toBe(0);
+    expect(r.echecsDetail).toEqual([]);
   });
 });
