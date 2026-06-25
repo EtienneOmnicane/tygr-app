@@ -33,6 +33,13 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { peutModifier } from "@/lib/permissions";
 import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
+// Classes (valeurs) des gardes fail-closed : on les RÉ-LÈVE depuis le fail-soft
+// par connexion (cf. plus bas) — un signal de sécurité ne doit JAMAIS être avalé.
+import {
+  InvalidSessionError,
+  UnsafeDatabaseRoleError,
+  WorkspaceAccessDeniedError,
+} from "@/server/db/tenancy";
 import { bankAccounts, bankConnections, workspaces } from "@/server/db/schema";
 import {
   upsertCompte,
@@ -643,6 +650,23 @@ export interface ResultatSynchronisation {
    * sera possible (ISO 8601, ou null si inconnu). Vide = aucun cas.
    */
   rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }>;
+  /**
+   * Connexions qui ont ÉCHOUÉ « dur » pendant ce passage (erreur Omni-FI 4xx/5xx hors
+   * 429/already-running, désalignement, panne réseau, etc.) — traitées en FAIL-SOFT :
+   * la connexion est sautée, les AUTRES continuent, et la fonction atteint quand même
+   * son `return`. Avant ce correctif, une telle erreur faisait `throw` et masquait tous
+   * les succès derrière un faux « échec total » (bug). Détail non-énumérant : on ne
+   * porte que l'identifiant opaque + le code machine / status / obieCode (jamais de
+   * libellé bancaire ni de Message OBIE brut, règle 8). `code` = code machine de
+   * l'erreur (ex. OMNIFI_API_ERROR) ; `status`/`obieCode` présents si OmniFiApiError.
+   */
+  echecs: number;
+  echecsDetail: Array<{
+    connectionId: string;
+    code: string;
+    status?: number;
+    obieCode?: string | null;
+  }>;
 }
 
 /**
@@ -708,83 +732,125 @@ export async function synchroniserConnexionsDepuisOmnifi(
   let transactionsImportees = 0;
   const aReparer: Array<{ connectionId: string; jobId: string }> = [];
   const rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }> = [];
+  const echecsDetail: ResultatSynchronisation["echecsDetail"] = [];
 
   for (const cx of connexions) {
-    // (a) Découverte + persistance des comptes (filtré connectionId, paginé).
-    const comptes: OmniFiAccount[] = [];
-    let pageA = 1;
-    for (;;) {
-      const env = await client.listerComptesConnexion(cx.ConnectionId, clientUserId, {
-        page: pageA,
-      });
-      comptes.push(...(env.Data.Account ?? []));
-      const totalPages = env.Meta?.TotalPages ?? 1;
-      if (!env.Links?.Next || pageA >= totalPages) break;
-      pageA += 1;
-    }
-    verifierAlignement(comptes, cx.InstitutionId);
-    comptesRattaches += await persisterConnexionEtComptes(executer, cx, comptes);
+    // FAIL-SOFT PAR CONNEXION : tout le corps de traitement d'UNE connexion est
+    // enveloppé. Une erreur dure (OmniFiApiError 4xx/5xx hors 429/already-running gérés
+    // en amont, désalignement, panne réseau, échec DB…) est CAPTURÉE ici : on l'enregistre
+    // et on passe à la connexion suivante. Avant, ce throw remontait jusqu'à l'action et
+    // masquait TOUS les succès derrière un faux « échec total ». Les cas non-durs
+    // (RATE_LIMITED, NEEDS_REPAIR, SKIP_FAILED) restent gérés par `declencherEtAttendre`
+    // (qui ne throw pas pour eux) et NE comptent PAS comme des échecs.
+    try {
+      // (a) Découverte + persistance des comptes (filtré connectionId, paginé).
+      const comptes: OmniFiAccount[] = [];
+      let pageA = 1;
+      for (;;) {
+        const env = await client.listerComptesConnexion(cx.ConnectionId, clientUserId, {
+          page: pageA,
+        });
+        comptes.push(...(env.Data.Account ?? []));
+        const totalPages = env.Meta?.TotalPages ?? 1;
+        if (!env.Links?.Next || pageA >= totalPages) break;
+        pageA += 1;
+      }
+      verifierAlignement(comptes, cx.InstitutionId);
+      comptesRattaches += await persisterConnexionEtComptes(executer, cx, comptes);
 
-    // (b) Déclenchement gardé (cooldown amont) + attente du job.
-    const issue = await declencherEtAttendre(
-      client,
-      cx.ConnectionId,
-      clientUserId,
-      cx.NextSyncAvailableAt,
-    );
-
-    // (c) Réaction à l'issue AVANT la lecture des transactions.
-    if (issue.kind === "NEEDS_REPAIR") {
-      // Re-sync repassé en OTP_REQUESTED : on STOPPE cette connexion (pas de lecture)
-      // et on signale à l'UI de rouvrir le widget natif en mode REPAIR. Les endpoints
-      // MFA serveur restent morts (pilotés par le widget natif).
-      aReparer.push({ connectionId: cx.ConnectionId, jobId: issue.jobId });
-      continue;
-    }
-    if (issue.kind === "SKIP_FAILED") {
-      // FAILED / timeout de polling : on n'ingère pas cette connexion (fail-soft) ;
-      // le code machine est tracé par attendreFinSync, jamais de PII ici.
-      continue;
-    }
-    if (issue.kind === "RATE_LIMITED") {
-      // Cooldown actif : on N'a PAS déclenché, mais on relit quand même l'état COURANT
-      // (le user voit au moins le dernier état connu) → on NE `continue` pas.
-      rateLimited.push({ connectionId: cx.ConnectionId, nextSyncAt: issue.nextSyncAt });
-    }
-    // issue.kind === "DECLENCHE" (sync COMPLETED) OU "RATE_LIMITED" (lecture du cache) :
-    // dans les deux cas on lit les transactions des comptes de CETTE connexion.
-
-    // Ingestion des transactions des comptes DÉCOUVERTS pour cette connexion. On résout
-    // (omnifiAccountId → bankAccountId local) DANS le tx scopé (RLS), filtré aux comptes
-    // de cette connexion (par leur omnifi_account_id) — la boucle de lecture/upsert
-    // `synchroniserCompte` reste strictement identique (couche d'ingestion intacte).
-    const omnifiIds = comptes
-      .filter((c) => c.Status == null || c.Status === "Enabled")
-      .map((c) => c.AccountId);
-    if (omnifiIds.length === 0) continue;
-
-    const comptesAIngerer = await executer(async (tx) =>
-      tx
-        .select({
-          bankAccountId: bankAccounts.id,
-          omnifiAccountId: bankAccounts.omnifiAccountId,
-        })
-        .from(bankAccounts)
-        .where(
-          and(
-            eq(bankAccounts.isSelected, true),
-            inArray(bankAccounts.omnifiAccountId, omnifiIds),
-          ),
-        ),
-    );
-
-    for (const cpt of comptesAIngerer) {
-      const r = await synchroniserCompte(client, executer, {
-        omnifiAccountId: cpt.omnifiAccountId,
-        bankAccountId: cpt.bankAccountId,
+      // (b) Déclenchement gardé (cooldown amont) + attente du job.
+      const issue = await declencherEtAttendre(
+        client,
+        cx.ConnectionId,
         clientUserId,
-      });
-      transactionsImportees += r.transactionsTraitees;
+        cx.NextSyncAvailableAt,
+      );
+
+      // (c) Réaction à l'issue AVANT la lecture des transactions.
+      if (issue.kind === "NEEDS_REPAIR") {
+        // Re-sync repassé en OTP_REQUESTED : on STOPPE cette connexion (pas de lecture)
+        // et on signale à l'UI de rouvrir le widget natif en mode REPAIR. Les endpoints
+        // MFA serveur restent morts (pilotés par le widget natif).
+        aReparer.push({ connectionId: cx.ConnectionId, jobId: issue.jobId });
+        continue;
+      }
+      if (issue.kind === "SKIP_FAILED") {
+        // FAILED / timeout de polling : on n'ingère pas cette connexion (fail-soft) ;
+        // le code machine est tracé par attendreFinSync, jamais de PII ici.
+        continue;
+      }
+      if (issue.kind === "RATE_LIMITED") {
+        // Cooldown actif : on N'a PAS déclenché, mais on relit quand même l'état COURANT
+        // (le user voit au moins le dernier état connu) → on NE `continue` pas.
+        rateLimited.push({ connectionId: cx.ConnectionId, nextSyncAt: issue.nextSyncAt });
+      }
+      // issue.kind === "DECLENCHE" (sync COMPLETED) OU "RATE_LIMITED" (lecture du cache) :
+      // dans les deux cas on lit les transactions des comptes de CETTE connexion.
+
+      // Ingestion des transactions des comptes DÉCOUVERTS pour cette connexion. On résout
+      // (omnifiAccountId → bankAccountId local) DANS le tx scopé (RLS), filtré aux comptes
+      // de cette connexion (par leur omnifi_account_id) — la boucle de lecture/upsert
+      // `synchroniserCompte` reste strictement identique (couche d'ingestion intacte).
+      const omnifiIds = comptes
+        .filter((c) => c.Status == null || c.Status === "Enabled")
+        .map((c) => c.AccountId);
+      if (omnifiIds.length === 0) continue;
+
+      const comptesAIngerer = await executer(async (tx) =>
+        tx
+          .select({
+            bankAccountId: bankAccounts.id,
+            omnifiAccountId: bankAccounts.omnifiAccountId,
+          })
+          .from(bankAccounts)
+          .where(
+            and(
+              eq(bankAccounts.isSelected, true),
+              inArray(bankAccounts.omnifiAccountId, omnifiIds),
+            ),
+          ),
+      );
+
+      for (const cpt of comptesAIngerer) {
+        const r = await synchroniserCompte(client, executer, {
+          omnifiAccountId: cpt.omnifiAccountId,
+          bankAccountId: cpt.bankAccountId,
+          clientUserId,
+        });
+        transactionsImportees += r.transactionsTraitees;
+      }
+    } catch (erreur) {
+      // GARDE-FOU SÉCURITÉ (cross-review) : une erreur fail-closed de tenancy NE DOIT
+      // PAS être avalée en « échec de connexion ». `withWorkspace` re-valide la
+      // membership ET le rôle DB non-propriétaire à CHAQUE transaction (C6) ; si elle
+      // lève UnsafeDatabaseRoleError / WorkspaceAccessDeniedError / InvalidSessionError,
+      // c'est un signal SYSTÉMIQUE (RLS contournable, session invalide) qui doit
+      // interrompre TOUTE l'opération et remonter bruyamment (mappé 500 par l'action),
+      // pas devenir un message UI « tout échoué » discret. On RÉ-LÈVE. Seules les
+      // erreurs propres à une connexion (Omni-FI 4xx/5xx, désalignement, réseau) restent
+      // fail-soft. CLAUDE.md règle 9 : la dette d'isolation tenant est INTERDITE.
+      if (
+        erreur instanceof UnsafeDatabaseRoleError ||
+        erreur instanceof WorkspaceAccessDeniedError ||
+        erreur instanceof InvalidSessionError ||
+        erreur instanceof ConnexionNonAutoriseeError
+      ) {
+        throw erreur;
+      }
+      // Échec dur de CETTE connexion : compté une fois, jamais propagé (les autres
+      // connexions et le `return` final sont préservés). Détail SÛR uniquement.
+      const detail = detailErreurSure(erreur);
+      echecsDetail.push({ connectionId: cx.ConnectionId, ...detail });
+      // Observabilité : comme on ne `throw` plus, cet échec ne passe PLUS par
+      // `messageDepuis` côté action → on le journalise ICI (sinon il serait invisible).
+      // connectionId = identifiant opaque Omni-FI (pas de PII) ; status/obieCode sûrs.
+      console.warn(
+        JSON.stringify({
+          evt: "omnifi_sync_connexion_echec",
+          connectionId: cx.ConnectionId,
+          ...detail,
+        }),
+      );
     }
   }
 
@@ -794,7 +860,31 @@ export async function synchroniserConnexionsDepuisOmnifi(
     transactionsImportees,
     aReparer,
     rateLimited,
+    echecs: echecsDetail.length,
+    echecsDetail,
   };
+}
+
+/**
+ * Extrait d'une erreur QUE des champs sûrs à logger/remonter (règle 8 / A1) : code
+ * machine, et — si OmniFiApiError — `status` HTTP + `obieCode` (jamais le Message OBIE
+ * brut, qui peut porter de la PII). Utilisé par le fail-soft par connexion.
+ */
+function detailErreurSure(erreur: unknown): {
+  code: string;
+  status?: number;
+  obieCode?: string | null;
+} {
+  const code =
+    erreur instanceof Error && "code" in erreur && typeof erreur.code === "string"
+      ? erreur.code
+      : erreur instanceof Error
+        ? erreur.name
+        : "UNKNOWN";
+  if (erreur instanceof OmniFiApiError) {
+    return { code, status: erreur.status, obieCode: erreur.obieCode };
+  }
+  return { code };
 }
 
 /* ------------------------------------------------------------------ */

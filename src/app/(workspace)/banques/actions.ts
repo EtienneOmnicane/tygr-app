@@ -19,7 +19,7 @@ import { z } from "zod";
 import { exigerSessionWorkspace } from "@/server/auth/session";
 import { withWorkspace } from "@/server/db";
 import { WorkspaceAccessDeniedError } from "@/server/db/tenancy";
-import { creerClientOmniFi } from "@/server/omnifi";
+import { creerClientOmniFi, OmniFiApiError } from "@/server/omnifi";
 import {
   ConnexionNonAutoriseeError,
   ReparationContexteInvalideError,
@@ -69,6 +69,11 @@ export interface EtatFinalisation {
 
 const MESSAGE_REFUS = "Action non autorisée.";
 const MESSAGE_GENERIQUE = "La connexion bancaire a échoué. Réessayez.";
+// Échec de TOUTES les connexions lors d'une synchro (aucune n'a abouti). Distinct du
+// message d'exception générique : ici on a bien tenté chaque connexion, toutes ont
+// échoué (fail-soft). Non-énumérant (ne nomme ni banque ni cause).
+const MESSAGE_SYNC_TOUT_ECHOUE =
+  "La synchronisation a échoué pour toutes vos banques. Réessayez dans un instant.";
 const MESSAGE_CONFIG = "Workspace non configuré pour Omni-FI.";
 // Message DISTINCT du « paramètres invalides » générique (Volet B) : le rejet le
 // plus courant n'est pas une malformation mais une origine non sécurisée/non
@@ -220,11 +225,31 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       // fermer sans connecter). Message neutre.
       return { erreur: null, succes: null };
     }
-    // Phrase de base + suppléments (transactions, cooldown, réparation). Tous
-    // non-énumérants : on COMPTE les cas, on ne nomme ni banque ni token.
-    let base = `Synchronisation effectuée — ${r.comptesRattaches} compte(s) rattaché(s) sur ${r.connexions} banque(s).`;
+
+    // TOUT ÉCHOUÉ : toutes les connexions traitées ont échoué « dur » ET rien n'a été
+    // rattaché → message d'ÉCHEC clair (erreur, pas un faux succès). On ne tombe ici que
+    // si aucune connexion n'a réussi/cooldown/réparé. Les échecs par-connexion sont déjà
+    // journalisés (orchestration), avec leur status/obieCode.
+    if (r.echecs === r.connexions && r.comptesRattaches === 0) {
+      return { erreur: MESSAGE_SYNC_TOUT_ECHOUE, succes: null };
+    }
+
+    // Phrase de base + suppléments. Tous NON-énumérants : on COMPTE les cas, on ne nomme
+    // ni banque ni token. On exprime le succès en BANQUES (= connexions traitées sans
+    // échec dur), pas en comptes : ainsi la clause de succès et la clause d'échec partagent
+    // la MÊME unité (banque) et ne se contredisent jamais — éviter « 1 compte sur 1 banque »
+    // + « 1 banque a échoué » (constat cross-review : comptes ≠ banques). Le nombre de
+    // comptes/transactions reste un détail secondaire cohérent.
+    const banquesOk = r.connexions - r.echecs;
+    let base = `Synchronisation effectuée — ${banquesOk} banque(s) à jour, ${r.comptesRattaches} compte(s) mis à jour.`;
     if (r.transactionsImportees > 0) {
       base += ` ${r.transactionsImportees} transaction(s) importée(s).`;
+    }
+    // PARTIEL : au moins une connexion a échoué mais d'autres ont réussi. On le DIT
+    // (jamais « échoué » tout court, qui masquerait les succès ; jamais silencieux non
+    // plus). Distinct du cooldown (pas une erreur) et de la réparation (action requise).
+    if (r.echecs > 0) {
+      base += ` ${r.echecs} banque(s) n'ont pas pu être synchronisées — réessayez plus tard.`;
     }
     // Cooldown : information, pas erreur. On indique le délai si on connaît la date la
     // plus proche (sinon mention générique). L'UI peut afficher un compte à rebours.
@@ -405,9 +430,23 @@ function messageDepuis(erreur: unknown, workspaceId: string, action: string): st
       : erreur instanceof Error
         ? erreur.name
         : "UNKNOWN";
+  // Observabilité : pour une OmniFiApiError, le `code` générique ("OMNIFI_API_ERROR")
+  // ne distingue pas 429 / 4xx / 5xx. On logge AUSSI le `status` HTTP et l'`obieCode`,
+  // tous deux SÛRS (pas de PII — le Message OBIE, lui, reste exclu, règle 8 / A1). Sans
+  // ça on était aveugle sur la cause réelle (cooldown vs param rejeté vs panne amont).
+  const detailApi =
+    erreur instanceof OmniFiApiError
+      ? { status: erreur.status, obieCode: erreur.obieCode }
+      : {};
   // Log corrélé sûr (pas de PII/secret). Niveau warn : échec fonctionnel.
   console.warn(
-    JSON.stringify({ evt: "widget_connexion_echec", action, workspaceId, code }),
+    JSON.stringify({
+      evt: "widget_connexion_echec",
+      action,
+      workspaceId,
+      code,
+      ...detailApi,
+    }),
   );
 
   if (
