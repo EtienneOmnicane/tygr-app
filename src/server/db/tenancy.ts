@@ -225,6 +225,19 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
       // le moindre GUC d'étage 2 ne soit posé : la résolution voit l'état tenant
       // BRUT (non filtré par entity_scope), sans interaction parasite — la voie la
       // plus sûre (le DROIT ne doit pas dépendre de l'ordre de pose des policies).
+      //
+      // ⚠️ COEXISTENCE entity_scope × account_scope (corrige une formulation
+      // trompeuse, cross-review L4) : les DEUX policies RESTRICTIVE restent posées
+      // (voie i du plan) et se combinent en AND — account_scope ne « subsume » PAS
+      // entity_scope. Le résolveur UNIFIE bien les axes EN UNE LISTE côté
+      // account_scope (4b traduit l'entité en comptes), mais entity_scope demeure
+      // actif en parallèle. Pour un membre à DOUBLE AXE (≥1 member_entity_scopes ET
+      // ≥1 user_scopes), l'AND ⟹ l'INTERSECTION, pas l'union attendue : un compte
+      // légitimement octroyé par party mais dont l'entité est HORS du scope BU du
+      // membre devient INVISIBLE pour lui. C'est un déni d'accès FAIL-CLOSED
+      // (sous-ensemble du droit → AUCUNE fuite, jamais d'IDOR), mais une dette
+      // FONCTIONNELLE (TODOS ENTITY×ACCOUNT-DOUBLE-AXIS, P2). Elle se DISSOUT au
+      // retrait d'entity_scope en L9 (ou en interdisant le double octroi côté UI).
 
       // (1) Axe BU — member_entity_scopes (lu une seule fois ; réutilisé pour les
       //     deux GUC). Sémantique entity_scope (0008/0014) : 0 ligne = Vision

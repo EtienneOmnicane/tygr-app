@@ -48,10 +48,16 @@
 -- │ intersection serveur avec le DROIT (jamais depuis un paramètre client = IDOR). │
 -- └──────────────────────────────────────────────────────────────────────────────┘
 --
--- COEXISTENCE : entity_scope (0014) reste EN PLACE (non touchée). account_scope la
--- subsume (le résolveur traduit déjà les entités en comptes) ; les deux RESTRICTIVE
--- se combinent en AND (plus restrictif = sûr). Retrait d'entity_scope = L9 (différé),
--- une fois account_scope prouvé en prod.
+-- COEXISTENCE : entity_scope (0014) reste EN PLACE (non touchée). Les DEUX policies
+-- RESTRICTIVE se combinent en AND — account_scope ne SUBSUME PAS entity_scope (les
+-- deux GUC sont posés simultanément par le résolveur, l'AND n'est pas la subsomption).
+-- Le résolveur unifie bien les axes en UNE liste côté account_scope, mais entity_scope
+-- reste actif : pour un membre à DOUBLE AXE (member_entity_scopes ET user_scopes),
+-- l'AND ⟹ l'INTERSECTION, pas l'union — un compte octroyé par party mais hors du scope
+-- BU du membre devient INVISIBLE (déni d'accès FAIL-CLOSED, sous-ensemble du droit :
+-- AUCUNE fuite/IDOR, mais dette FONCTIONNELLE — TODOS ENTITY×ACCOUNT-DOUBLE-AXIS, P2).
+-- Retrait d'entity_scope = L9 (différé, une fois account_scope prouvé en prod) → dissout
+-- l'intersection ; alternative : interdire le double octroi côté UI.
 --
 -- ROLLBACK : DROP POLICY IF EXISTS "account_scope" ON "bank_accounts"; → retour à
 -- l'état L3 (entity_scope intacte, comportement inchangé).
