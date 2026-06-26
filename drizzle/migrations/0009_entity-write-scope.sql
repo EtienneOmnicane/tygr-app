@@ -1,3 +1,6 @@
+-- ⚠️ SUPERSEDED par 0014_entity-write-scope-foral — orphelin de _journal.json,
+-- jamais appliqué par le runner, conservé pour le schéma de test (lu par nom) et
+-- l'historique. NE PAS modifier le SQL exécutable ci-dessous (DROP/CREATE).
 -- ════════════════════════════════════════════════════════════════════════════
 -- ENTITY-WRITE-SCOPE1 (P1) — borne l'ÉCRITURE sur bank_accounts par scope entité.
 -- Plan PLAN-entity-write-scope1.md. Lève la 2ᵉ et dernière P1 du GATE d'activation
