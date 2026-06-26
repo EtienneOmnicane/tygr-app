@@ -92,6 +92,13 @@
       "when": 1782459502938,
       "tag": "0013_parties-account-party-role",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1782467432274,
+      "tag": "0014_entity-write-scope-foral",
+      "breakpoints": true
     }
   ]
 }
