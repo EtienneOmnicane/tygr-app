@@ -925,3 +925,104 @@ export const accountPartyRole = pgTable(
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Périmètre party/compte par membre (L2 — PLAN-architecture-multi-     */
+/* tenant-omnicane.md §1.1 / §5). Table de DROITS : QUELLE party ou     */
+/* QUEL compte un membre est autorisé à voir. N lignes par membre =     */
+/* « Vision restreinte » ; AUCUNE ligne = « Vision Globale » (tout le   */
+/* tenant), exactement comme member_entity_scopes côté axe BU.          */
+/*                                                                      */
+/* PÉRIMÈTRE STRICT DE CE LOT : table NEUVE + isolation TENANT (étage 1, */
+/* RLS workspace) + intégrité référentielle scopée (FK composites) +    */
+/* invariants d'idempotence/exclusivité. Le RÉSOLVEUR de périmètre et   */
+/* la policy `account_scope` (étage 2, GUC app.current_account_scope,   */
+/* Vision restreinte effective sur bank_accounts/parties) sont le lot   */
+/* L4 — VOLONTAIREMENT ABSENTS ici (aucune policy de scope, aucun       */
+/* chemin de lecture). Cohabite avec member_entity_scopes (axe BU),     */
+/* sans le remplacer.                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Octroi de périmètre fin (party OU compte) à un membre du workspace. Une ligne =
+ * « ce membre peut voir cette party » OU « ce membre peut voir ce compte »,
+ * EXCLUSIVEMENT l'un des deux (CHECK num_nonnulls = 1). Éditable / révocable
+ * (table de droits, NON append-only) : retirer un accès = DELETE physique légitime.
+ * Alimentée/purgée par l'ADMIN (gestion des droits, à venir, hors lot). N'introduit
+ * AUCUN nouveau rôle : un membre « scopé » reste un membre dont le périmètre se
+ * résout depuis ces lignes (L4), jamais d'un paramètre client.
+ */
+export const userScopes = pgTable(
+  "user_scopes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /** Membre ciblé (la FK composite ci-dessous le scope au workspace). */
+    userId: uuid("user_id").notNull(),
+    /** Cible PARTY — exclusif avec bankAccountId (CHECK num_nonnulls = 1). */
+    partyId: uuid("party_id"),
+    /**
+     * Cible COMPTE — exclusif avec partyId. Nom aligné sur account_party_role
+     * (bank_account_id), cible la même UNIQUE bank_accounts_id_workspace_unique.
+     */
+    bankAccountId: uuid("bank_account_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Exclusivité : EXACTEMENT une cible (party XOR compte). Un octroi vise une
+    // party OU un compte, jamais les deux, jamais aucun.
+    check(
+      "user_scopes_target_exclusive_check",
+      sql`num_nonnulls(${t.partyId}, ${t.bankAccountId}) = 1`,
+    ),
+    // Idempotence : pas deux fois le même grant (party) pour un membre. Partiel
+    // (WHERE party_id IS NOT NULL) car bank_account_id est NULL sur ces lignes —
+    // un UNIQUE plein laisserait passer plusieurs (ws, user, NULL) côté party.
+    uniqueIndex("user_scopes_user_party_unique")
+      .on(t.workspaceId, t.userId, t.partyId)
+      .where(sql`${t.partyId} is not null`),
+    // Idempotence : pas deux fois le même grant (compte) pour un membre.
+    uniqueIndex("user_scopes_user_account_unique")
+      .on(t.workspaceId, t.userId, t.bankAccountId)
+      .where(sql`${t.bankAccountId} is not null`),
+    // « Tous les scopes d'un membre » (lookup du résolveur de périmètre, L4).
+    index("user_scopes_workspace_user_idx").on(t.workspaceId, t.userId),
+    // FK COMPOSITE scopée workspace vers le MEMBRE (cible la PK composite
+    // workspace_members(user_id, workspace_id)). ON DELETE CASCADE : retirer un
+    // membre d'un workspace purge ses octrois de périmètre (droits orphelins
+    // impossibles) — table de DROITS, NON append-only.
+    foreignKey({
+      columns: [t.userId, t.workspaceId],
+      foreignColumns: [workspaceMembers.userId, workspaceMembers.workspaceId],
+      name: "user_scopes_member_fk",
+    }).onDelete("cascade"),
+    // FK COMPOSITE scopée workspace vers la PARTY (cible parties_id_workspace_unique).
+    // ON DELETE RESTRICT : une party référencée par un octroi ne peut être effacée
+    // (l'app archive is_active) — aligné sur le cycle de vie des parties (cf.
+    // account_party_role_party_fk). Asymétrie RESTRICT-party / CASCADE-compte VOULUE.
+    foreignKey({
+      columns: [t.partyId, t.workspaceId],
+      foreignColumns: [parties.id, parties.workspaceId],
+      name: "user_scopes_party_fk",
+    }).onDelete("restrict"),
+    // FK COMPOSITE scopée workspace vers le COMPTE (cible bank_accounts_id_workspace_unique).
+    // ON DELETE CASCADE : si le compte disparaît (cascade depuis une connexion
+    // supprimée), l'octroi qui le visait disparaît — aligné sur le cycle de vie des
+    // comptes (cf. account_party_role_account_fk). NE PAS harmoniser avec la party.
+    foreignKey({
+      columns: [t.bankAccountId, t.workspaceId],
+      foreignColumns: [bankAccounts.id, bankAccounts.workspaceId],
+      name: "user_scopes_account_fk",
+    }).onDelete("cascade"),
+    // Étage 1 — TENANT uniquement (réplique exacte du pattern fail-closed). AUCUNE
+    // policy account_scope ici (étage 2 = L4).
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();

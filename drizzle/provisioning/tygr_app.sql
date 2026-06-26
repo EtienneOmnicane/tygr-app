@@ -97,6 +97,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --                                     légitime ; reçoit aussi la cascade depuis
 --                                     bank_accounts (compte supprimé → rôle supprimé).
 --                                     NON append-only.
+--      - user_scopes                : table de DROITS (périmètre party/compte par
+--                                     membre, L2) — révoquer/réattribuer un octroi =
+--                                     DELETE légitime ; reçoit aussi les cascades depuis
+--                                     workspace_members (membre retiré → octrois purgés)
+--                                     et bank_accounts (compte supprimé → octroi purgé).
+--                                     NON append-only.
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
@@ -134,7 +140,8 @@ BEGIN
     'entities',
     'member_entity_scopes',
     'parties',
-    'account_party_role'
+    'account_party_role',
+    'user_scopes'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
