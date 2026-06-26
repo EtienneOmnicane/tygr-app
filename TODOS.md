@@ -369,6 +369,22 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   « écriture VIEWER scopé hors périmètre » (assertion du comportement ACTUEL, à inverser
   quand la dette est levée). Raccroché au chantier « rôles Vision Entité » (ROADMAP §3).
 
+- [ ] **ENTITY×ACCOUNT-DOUBLE-AXIS (P2 fonctionnel, PAS isolation) — l'AND des deux policies
+  RESTRICTIVE masque un octroi party hors scope BU** — Effort S, gardien Backend. Ouvert
+  2026-06-26, **repéré au cross-review L4** (PR #132, `feat/account-scope-l4`). Un membre cumulant
+  `member_entity_scopes` (axe BU) ET `user_scopes` (party/compte) subit l'**AND** des policies
+  `entity_scope` et `account_scope` (toutes deux RESTRICTIVE), **pas l'union** : un compte
+  légitimement octroyé par party mais dont l'entité est HORS du scope BU du membre devient
+  **invisible** pour lui. **Prouvé runtime** (cross-review) : `account_scope` résout bien l'union
+  `{S1,H}` mais `entity_scope={ENT_S}` masque `H` (entity NULL) → visible = `{S1}`. **FAIL-CLOSED**
+  (sous-ensemble du droit) → **AUCUNE fuite, aucun IDOR** ; c'est une dette FONCTIONNELLE (un
+  octroi légitime est silencieusement nié), pas d'isolation. Le commentaire « account_scope
+  subsume entity_scope » était trompeur (corrigé docs-only, même PR). **Résolution** : retrait
+  d'`entity_scope` en L9 (une fois `account_scope` prouvé en prod) → dissout l'intersection ; OU
+  interdire le double octroi côté UI (`entites.ts` : un membre est scopé BU **ou** party/compte,
+  pas les deux). **Déclencheur** : activation d'un chemin d'écriture qui permet le double octroi,
+  OU lot L9 (retrait `entity_scope`). Non bloquant pour le merge L4 (sûr).
+
 - [ ] **ENTITY-INGEST1 (P2) — pré-assignation automatique `compte → entité` à l'ingestion** —
   Effort S, gardien Backend. Ouvert 2026-06-22. Au MVP, un compte neuf naît `entity_id =
   NULL` (« non assigné », à trier dans le sas) — comportement voulu (l'humain tranche
