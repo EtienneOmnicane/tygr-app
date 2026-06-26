@@ -44,6 +44,8 @@ import { bankAccounts, bankConnections, workspaces } from "@/server/db/schema";
 import {
   upsertCompte,
   upsertConnexion,
+  upsertPartieEtRole,
+  versPartie,
 } from "@/server/repositories/ingestion";
 import { normaliserNomInstitution } from "@/server/ingestion/conversion";
 import { synchroniserCompte } from "@/server/ingestion/orchestrateur";
@@ -238,12 +240,68 @@ function soldeCourant(balances: OmniFiBalance[] | undefined): string | null {
 }
 
 /**
- * Persiste connexion + comptes (Enabled uniquement) dans le workspace courant,
- * dans UNE transaction scopée. Partagé par les deux chemins de finalisation
- * (widget custom PR-W2 via getSyncJobAccounts, et drop-in via GET /accounts).
- * Idempotent (upserts sur omnifi_*_id).
+ * Ingestion best-effort des PARTIES (détention compte↔party, L3) pour les comptes
+ * d'un tour de synchro. Appelée APRÈS le commit des comptes, dans une transaction
+ * SÉPARÉE — un échec ici ne doit JAMAIS toucher l'ingestion bancaire déjà commitée
+ * (décision actée : exécuteur séparé, pas de SAVEPOINT). On itère sur une COLLECTION
+ * de parties dérivée des comptes (`versPartie` → 0/1 party aujourd'hui ; le jour où
+ * l'amont expose un tableau, seul le mappeur change — la boucle est déjà N-N-ready).
+ *
+ * Fail-soft qui NE MASQUE PAS l'isolation : une erreur de DONNÉES (party malformée,
+ * contrainte) est journalisée (code OPAQUE, jamais de PII) puis on continue ; mais les
+ * erreurs SYSTÉMIQUES de tenancy sont RE-LEVÉES verbatim — exactement la même liste que
+ * la boucle de synchro (cf. plus bas), car un fail-soft ne doit jamais avaler un signal
+ * de sécurité (RLS contournable / session invalide). CLAUDE.md règle 9.
  */
-async function persisterConnexionEtComptes(
+async function ingererPartiesDesComptes(
+  executer: ExecuterWorkspace,
+  comptes: { compte: OmniFiAccount; bankAccountId: string }[],
+): Promise<void> {
+  for (const { compte, bankAccountId } of comptes) {
+    const partie = versPartie(compte);
+    if (partie === null) continue; // compte sans party → rien à lier (fail-closed)
+    try {
+      await executer((tx, ctx) =>
+        upsertPartieEtRole(tx, ctx, bankAccountId, partie),
+      );
+    } catch (erreur) {
+      // RE-THROW obligatoire des erreurs systémiques de tenancy (même liste que la
+      // boucle connexion) : un fail-soft de DONNÉES ne doit JAMAIS masquer une faille
+      // d'isolation (anti-IDOR). On ne lisse pas un UNSAFE_DB_ROLE en simple warning.
+      if (
+        erreur instanceof UnsafeDatabaseRoleError ||
+        erreur instanceof WorkspaceAccessDeniedError ||
+        erreur instanceof InvalidSessionError ||
+        erreur instanceof ConnexionNonAutoriseeError
+      ) {
+        throw erreur;
+      }
+      // Erreur de DONNÉES (party malformée, contrainte) : on logue le code SANS PII
+      // (identifiant Omni-FI opaque uniquement, jamais PartyName ni libellé) et on
+      // continue — les comptes/transactions déjà commités restent intacts.
+      const code =
+        erreur instanceof Error ? erreur.name : "ERREUR_INCONNUE";
+      console.warn(
+        JSON.stringify({
+          evt: "parties_ingestion_echec",
+          omnifiAccountId: compte.AccountId,
+          code,
+        }),
+      );
+    }
+  }
+}
+
+/**
+ * Persiste connexion + comptes (Enabled uniquement) dans le workspace courant,
+ * dans UNE transaction scopée, PUIS — dans une transaction SÉPARÉE (couche sacrée :
+ * cf. ingererPartiesDesComptes) — ingère les parties des comptes rattachés.
+ * Partagé par TOUS les chemins de finalisation (widget custom via getSyncJobAccounts,
+ * drop-in via GET /accounts, sync multi-connexions, réparation) : point d'écriture
+ * UNIQUE des comptes ET des parties, sans duplication. Idempotent (upserts sur
+ * omnifi_*_id). Exporté pour la suite d'isolation (exit-criterion règle 3).
+ */
+export async function persisterConnexionEtComptes(
   executer: ExecuterWorkspace,
   echange: {
     ConnectionId: string;
@@ -256,7 +314,10 @@ async function persisterConnexionEtComptes(
   },
   comptes: OmniFiAccount[],
 ): Promise<number> {
-  return executer(async (tx, ctx) => {
+  // 1. Connexion + comptes dans UNE transaction. On collecte les paires
+  //    (compte Omni-FI, bankAccountId local) des comptes RÉELLEMENT rattachés
+  //    pour pouvoir lier leurs parties juste après (sans relecture).
+  const rattaches = await executer(async (tx, ctx) => {
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: echange.ConnectionId,
       institutionId: echange.InstitutionId,
@@ -265,7 +326,7 @@ async function persisterConnexionEtComptes(
       nextSyncAvailableAt: null,
     });
 
-    let n = 0;
+    const paires: { compte: OmniFiAccount; bankAccountId: string }[] = [];
     for (const c of comptes) {
       // On rattache les comptes utilisables. `GET /accounts` ne renvoie déjà QUE les
       // comptes confirmés/actifs côté Omni-FI ; le champ Status précise l'état
@@ -275,17 +336,23 @@ async function persisterConnexionEtComptes(
       // par ailleurs valides (vérifié runtime 2026-06-18), et les rejeter vidait la
       // synchro (« 0 compte rattaché » malgré des comptes réels avec soldes).
       if (c.Status != null && c.Status !== "Enabled") continue;
-      await upsertCompte(tx, ctx, connectionId, {
+      const { bankAccountId } = await upsertCompte(tx, ctx, connectionId, {
         omnifiAccountId: c.AccountId,
         accountName: c.Nickname ?? c.PartyName ?? `Compte ${c.AccountId.slice(0, 8)}`,
         currency: c.Currency,
         currentBalance: soldeCourant(c.Balances),
         isSelected: true,
       });
-      n += 1;
+      paires.push({ compte: c, bankAccountId });
     }
-    return n;
+    return paires;
   });
+
+  // 2. Parties (L3) : transaction SÉPARÉE, après le COMMIT des comptes ci-dessus.
+  //    Best-effort fail-soft — protège la couche bancaire déjà commitée (DÉCISION 2).
+  await ingererPartiesDesComptes(executer, rattaches);
+
+  return rattaches.length;
 }
 
 /**
