@@ -13,12 +13,15 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
+  accountPartyRole,
   bankAccounts,
   bankConnections,
   balanceHistory,
+  parties,
   transactionsCache,
 } from "@/server/db/schema";
 import type { CategorySource } from "@/server/db/schema";
+import type { OmniFiAccount } from "@/server/omnifi";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -266,4 +269,111 @@ export async function marquerSynchronise<TDb extends AnyPgDatabase>(
     .update(bankAccounts)
     .set({ lastSyncedAt: maintenant })
     .where(eq(bankAccounts.id, bankAccountId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Ingestion des PARTIES (détention compte↔party) — L3               */
+/*                                                                    */
+/* Alimente `parties` + `account_party_role` depuis `OmniFiAccount`.  */
+/* Best-effort ADDITIF (INSERT/UPDATE, jamais de DELETE) ; aucune     */
+/* lecture branchée dessus à ce stade (le périmètre account_scope est */
+/* L4). L'écriture est appelée par l'orchestration APRÈS le commit    */
+/* des comptes, dans une transaction SÉPARÉE (la couche bancaire ne   */
+/* doit jamais être empoisonnée par un échec parties) — cf.           */
+/* persisterConnexionEtComptes (orchestration.ts).                    */
+/* ------------------------------------------------------------------ */
+
+/** Normalise une chaîne Omni-FI vers `string | null` (vide/espaces → null).
+ *  Réplique locale du helper d'ingestion (orchestrateur.ts) — dépendance pure
+ *  triviale, gardée ici pour que la couche repository reste autonome. */
+function chaineOuNull(s: string | undefined | null): string | null {
+  const v = s?.trim();
+  return v ? v : null;
+}
+
+/** Party à upserter, dérivée d'un `OmniFiAccount`. `name`/`ownershipType` sont
+ *  des hints amont (nullable, rafraîchis au re-sync). */
+export interface PartieAUpserter {
+  omnifiPartyId: string;
+  name: string | null;
+  ownershipType: string | null;
+}
+
+/**
+ * Mappe un `OmniFiAccount` vers la party à upserter, ou `null` quand le compte
+ * ne porte AUCUNE party exploitable (`PartyId` absent/vide). Fonction PURE,
+ * testable en isolation.
+ *
+ * DÉCISION 1 (L3) : le contrat HTTP ne porte qu'UN `PartyId` SCALAIRE par compte
+ * (pas de `Parties[]`). Ce mappeur produit donc au plus UNE party. Le jour où
+ * l'amont exposera un tableau, SEUL ce mappeur changera (renverra une liste) —
+ * la boucle d'écriture en aval itère déjà sur une collection (0/1 aujourd'hui),
+ * donc rien d'autre ne bouge.
+ */
+export function versPartie(c: OmniFiAccount): PartieAUpserter | null {
+  const omnifiPartyId = chaineOuNull(c.PartyId);
+  if (omnifiPartyId === null) return null;
+  return {
+    omnifiPartyId,
+    name: chaineOuNull(c.PartyName),
+    ownershipType: chaineOuNull(c.OwnershipType),
+  };
+}
+
+/**
+ * Upsert idempotent d'une party + de sa liaison de détention à un compte.
+ * Tout dans la transaction `withWorkspace` courante (RLS : workspace_id vient de
+ * `ctx`, JAMAIS de la donnée Omni-FI — CLAUDE.md règle 2).
+ *
+ * Invariant CRITIQUE (aligné sur `bank_accounts.entity_id`) : les champs HUMAINS
+ * ou immuables — `entityId`, `isActive`, `createdAt`, `id` — sont OMIS du
+ * `set` des deux upserts. Un re-sync rafraîchit les hints amont (`name`,
+ * `ownershipType`) mais ne réécrase JAMAIS un rattachement BU ou un archivage
+ * décidé par l'ADMIN.
+ */
+export async function upsertPartieEtRole<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  bankAccountId: string,
+  p: PartieAUpserter,
+): Promise<void> {
+  // a. Party : idempotente sur (workspace_id, omnifi_party_id). On NE touche que
+  //    les hints amont au conflit — entity_id / is_active / created_at restent
+  //    HUMAINS (mêmes invariant et raison que bank_accounts.entity_id).
+  const lignes = await tx
+    .insert(parties)
+    .values({
+      workspaceId: ctx.workspaceId,
+      omnifiPartyId: p.omnifiPartyId,
+      name: p.name,
+      ownershipType: p.ownershipType,
+    })
+    .onConflictDoUpdate({
+      target: [parties.workspaceId, parties.omnifiPartyId],
+      set: { name: p.name, ownershipType: p.ownershipType },
+    })
+    .returning({ id: parties.id });
+  const partyId = lignes[0].id;
+
+  // b. Liaison compte↔party : idempotente sur la PK composite. `ownership_type`
+  //    est NOT NULL côté schéma → repli "PRIMARY" si l'amont ne fournit rien
+  //    (un compte avec une party mais sans rôle est traité comme détenteur
+  //    principal). `is_primary` reflète l'unique party scalaire d'aujourd'hui.
+  await tx
+    .insert(accountPartyRole)
+    .values({
+      workspaceId: ctx.workspaceId,
+      bankAccountId,
+      partyId,
+      ownershipType: p.ownershipType ?? "PRIMARY",
+      isPrimary: true,
+    })
+    .onConflictDoUpdate({
+      target: [
+        accountPartyRole.workspaceId,
+        accountPartyRole.bankAccountId,
+        accountPartyRole.partyId,
+      ],
+      set: { ownershipType: p.ownershipType ?? "PRIMARY" },
+    });
 }
