@@ -99,6 +99,13 @@
       "when": 1782467432274,
       "tag": "0014_entity-write-scope-foral",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1782468729012,
+      "tag": "0015_user-scopes-l2",
+      "breakpoints": true
     }
   ]
 }
