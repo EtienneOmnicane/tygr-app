@@ -32,6 +32,21 @@ export const workspaceSessionSchema = z
   .object({
     userId: z.string().uuid(),
     activeWorkspaceId: z.string().uuid(),
+    /**
+     * Filtre d'AFFICHAGE optionnel (L5, plan §C) — sélecteur UI « afficher
+     * seulement ces comptes ». Liste d'UUID de comptes. C'est une INTENTION
+     * d'affichage NON FIABLE, jamais une autorité : le résolveur l'INTERSECTE
+     * avec le DROIT résolu (account_scope) avant de poser le GUC view_filter, si
+     * bien qu'il ne peut que RÉTRÉCIR la vue (jamais l'élargir). Validé en UUID
+     * pour qu'une valeur malformée échoue tôt (INVALID_SESSION), mais même une
+     * liste de comptes d'un autre tenant est INOFFENSIVE (l'intersection avec le
+     * DROIT la vide, et tenant_isolation borne déjà au tenant). Absent/vide ⇒ le
+     * GUC n'est PAS posé ⇒ la clause view_filter des policies court-circuite
+     * (voit tout le DROIT). NE confère JAMAIS d'accès — à distinguer
+     * d'`accountScope`, qui n'est volontairement PAS un champ de session (un
+     * scope forgé est rejeté : il ne vient QUE du contexte serveur).
+     */
+    viewFilter: z.array(z.string().uuid()).optional(),
   })
   .strict();
 
@@ -350,10 +365,58 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
         accountScope = { mode: "COMPTES", accountIds };
       }
 
-      // NOTE (DÉCISION 2) : app.current_view_filter n'est JAMAIS posé en L4. La
-      // clause view_filter de la policy account_scope (0016) reste donc inerte
-      // (GUC absent → court-circuit TRUE). Câblage = L5, après intersection serveur
-      // avec le DROIT — JAMAIS depuis un paramètre client (vecteur IDOR).
+      // ══ VIEW_FILTER (L5, plan §C / §D) — INTERSECTION SERVEUR, posée APRÈS le
+      // DROIT account_scope. `viewFilter` est l'INTENTION d'affichage du client
+      // (sélecteur UI) : on la fait passer par le GUC app.current_view_filter, que
+      // la 2e clause AND des policies account_scope (0016 + 0017) consomme. Comme
+      // c'est une 2e RESTRICTIVE conjuguée au DROIT (account_scope), le filtre ne
+      // peut QUE RÉTRÉCIR la vue — JAMAIS l'élargir. INVARIANT NON NÉGOCIABLE :
+      // on ne pose JAMAIS le filtre client seul, JAMAIS DROIT ∪ filtre.
+      //
+      // Logique (les 3 cas C.2) :
+      //   • viewFilter absent/vide  → on ne pose PAS le GUC (court-circuit
+      //     nullif(...) IS NULL = TRUE → la clause view_filter est neutre, on voit
+      //     tout le DROIT). Pas de filtrage demandé = pas de restriction ajoutée.
+      //   • mode GLOBALE + filtre   → le filtre TEL QUEL (le DROIT est « tout le
+      //     tenant », donc DROIT ∩ filtre = filtre). tenant_isolation borne déjà au
+      //     tenant : un compte d'un autre tenant dans le filtre ne matche aucune
+      //     ligne (inoffensif). C'est le seul cas où le filtre passe sans
+      //     intersection ensembliste explicite — mais il ne confère AUCUN accès
+      //     hors tenant.
+      //   • mode COMPTES (DROIT fini) → INTERSECTION STRICTE DROIT ∩ filtre. Si
+      //     elle est VIDE (le client demande des comptes hors de son droit) →
+      //     SENTINELLE UUID-nul (0 ligne), JAMAIS '' ni « tout ». Le filtre ne peut
+      //     pas faire apparaître un compte hors du DROIT.
+      // set_config PARAMÉTRÉ (zéro interpolation de chaîne, règle 2).
+      const viewFilter = parsed.data.viewFilter;
+      if (viewFilter && viewFilter.length > 0) {
+        if (accountScope.mode === "GLOBALE") {
+          // DROIT = tout le tenant → DROIT ∩ filtre = filtre (borné au tenant par
+          // tenant_isolation). On pose le filtre tel quel.
+          const csvFiltre = viewFilter.join(",");
+          await tx.execute(
+            sql`select set_config('app.current_view_filter', ${csvFiltre}, true)`,
+          );
+        } else {
+          // DROIT fini → intersection ensembliste stricte (jamais l'union).
+          const droit = new Set(accountScope.accountIds);
+          const intersection = viewFilter.filter((c) => droit.has(c));
+          if (intersection.length > 0) {
+            const csvInter = intersection.join(",");
+            await tx.execute(
+              sql`select set_config('app.current_view_filter', ${csvInter}, true)`,
+            );
+          } else {
+            // Intersection vide : le client a demandé des comptes hors de son
+            // DROIT → on rétrécit à RIEN (sentinelle UUID-nul). PAS « voir tout »,
+            // PAS d'erreur (un filtre hors droit n'est pas une faute, juste 0 ligne).
+            await tx.execute(
+              sql`select set_config('app.current_view_filter', ${SENTINELLE_PERIMETRE_VIDE}, true)`,
+            );
+          }
+        }
+      }
+      // (viewFilter absent/vide : GUC NON posé — clause view_filter neutre.)
 
       return fn(tx as WorkspaceTx<TDb>, {
         role: membership[0].role as WorkspaceRole,

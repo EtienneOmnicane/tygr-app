@@ -463,25 +463,21 @@ describe("#9 — Étage 1 préservé (account_scope n'affaiblit pas tenant_isola
   });
 });
 
-describe("#10 — view_filter INERTE en L4", () => {
-  it("withWorkspace ne pose JAMAIS app.current_view_filter (même en session scopée)", async () => {
+describe("#10 — view_filter inerte SANS filtre (rétro-compat L4 préservée en L5)", () => {
+  // En L5, view_filter devient ACTIF — mais UNIQUEMENT si la session porte un
+  // `viewFilter`. Sans filtre (toutes les sessions L4 existantes), le GUC reste
+  // NON posé → la clause view_filter des policies court-circuite (clause neutre).
+  // La couverture ACTIVE de view_filter (intersection, rétrécissement, jamais
+  // d'élargissement) est prouvée par la suite L5 account-scope-filles-isolation.
+  it("une session SANS viewFilter ne pose JAMAIS app.current_view_filter", async () => {
     const guc = await withWorkspace(sessParty, async (tx) => {
       const r = await tx.execute(
         sql`select current_setting('app.current_view_filter', true) as v`,
       );
       return (r as unknown as { rows: { v: string | null }[] }).rows[0].v;
     });
-    // Jamais posé → current_setting(..., true) renvoie '' ou null → clause neutre.
+    // Pas de filtre demandé → GUC absent → current_setting(..., true) = '' ou null.
     expect(guc === null || guc === "").toBe(true);
-  });
-
-  it("preuve statique : le code de tenancy.ts ne pose pas current_view_filter", () => {
-    const src = readFileSync(
-      path.join(process.cwd(), "src", "server", "db", "tenancy.ts"),
-      "utf8",
-    );
-    // Aucun set_config('app.current_view_filter', ...) dans le résolveur L4.
-    expect(src).not.toMatch(/set_config\(\s*'app\.current_view_filter'/);
   });
 });
 

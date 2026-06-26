@@ -384,6 +384,17 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   interdire le double octroi côté UI (`entites.ts` : un membre est scopé BU **ou** party/compte,
   pas les deux). **Déclencheur** : activation d'un chemin d'écriture qui permet le double octroi,
   OU lot L9 (retrait `entity_scope`). Non bloquant pour le merge L4 (sûr).
+  **Manifestation L5 — incohérence de maille FICHE ≠ FLUX** (repérée au cross-review L5, PR #133) :
+  depuis 0017 les tables filles (transactions_cache/balance_history/transaction_categorizations) ne
+  portent QUE `account_scope`, alors que la FICHE `bank_accounts` porte AUSSI `entity_scope`. Pour le
+  membre double-axe, un compte octroyé par party mais à entité hors scope BU (ex. ACC_S2) est donc
+  **masqué sur sa fiche** (intersection `account_scope ∩ entity_scope`) tout en laissant voir ses
+  **flux** (les filles, `account_scope` seul) → oracle d'inférence UX BÉNIN (« des flux sans fiche »),
+  toujours fail-closed, jamais d'IDOR (un compte hors des DEUX axes reste invisible partout). Couverte
+  par le test de non-régression `tests/isolation/account-scope-double-axe-maille.test.ts` (qui ACTE le
+  comportement actuel — fiche `{ACC_S1}`, flux `{ACC_S1,ACC_S2}`, ACC_H nulle part). **Résolution : L9**
+  (le retrait d'`entity_scope` réaligne la maille fiche↔flux ; le test devra alors être inversé pour
+  exiger ACC_S2 sur la fiche).
 
 - [ ] **ENTITY-INGEST1 (P2) — pré-assignation automatique `compte → entité` à l'ingestion** —
   Effort S, gardien Backend. Ouvert 2026-06-22. Au MVP, un compte neuf naît `entity_id =
