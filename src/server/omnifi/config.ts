@@ -58,6 +58,22 @@ const HOTES_AUTORISES = new Set([
 const HOTES_PRODUCTION = new Set(["api.omni-fi.co"]);
 
 /**
+ * Hôtes PARTAGÉS sandbox↔production (constat 2026-06-26, confirmé par le tuteur).
+ * Omni-FI n'a PAS d'hôte de prod distinct : `api-stage.omni-fi.co` sert pour le
+ * sandbox ET la production. Ce qui distingue « vraie donnée » de « bac à sable »,
+ * ce sont les CLÉS ApiClient (`prod_…` vs `sand_…`) et l'EndUser rattaché — PAS
+ * l'hôte. Sur un hôte partagé, l'hôte ne peut donc plus arbitrer l'environnement :
+ * c'est l'opt-in `OMNIFI_AUTORISER_PRODUCTION="1"` qui porte l'intention prod.
+ *
+ * Conséquences (vs un hôte « sandbox-only » ou « prod-only ») :
+ *  - la garde de cohérence env↔hôte NE refuse PAS un env=production sur ces hôtes ;
+ *  - mais le verrou (fail-closed par défaut) exige le drapeau pour autoriser la prod.
+ * Garder cet ensemble à jour si Omni-FI ouvre enfin un hôte de prod dédié (il sortira
+ * alors de HOTES_PARTAGES pour rejoindre HOTES_PRODUCTION seul).
+ */
+const HOTES_PARTAGES = new Set(["api-stage.omni-fi.co", "stage.omni-fi.co"]);
+
+/**
  * 🔒 VERROU SANDBOX (exigence tuteur, 2026-06-22 ; piloté par env 2026-06-24) —
  * fail-closed STRUCTUREL, **verrouillé PAR DÉFAUT**. Tant que le verrou tient,
  * l'application REFUSE de démarrer le client Omni-FI en production : ni
@@ -127,21 +143,24 @@ function lireConfig(): OmniFiConfig {
 
   const { baseUrl, hostname } = validerBaseUrl(exiger("OMNIFI_BASE_URL"));
   const hoteEstProd = HOTES_PRODUCTION.has(hostname);
+  const hoteEstPartage = HOTES_PARTAGES.has(hostname);
 
-  // 🔒 VERROU SANDBOX (fail-closed, verrouillé par défaut) : tant que
-  // OMNIFI_AUTORISER_PRODUCTION!="1", AUCUN chemin de prod n'est toléré — ni l'env,
-  // ni l'hôte. Refus bruyant (erreur de déploiement). Poser ce flag déverrouille.
+  // 🔒 VERROU PRODUCTION (fail-closed, verrouillé par défaut) : tant que
+  // OMNIFI_AUTORISER_PRODUCTION!="1", AUCUN chemin de prod n'est toléré — ni l'env
+  // "production" (sur N'IMPORTE quel hôte, partagé inclus : l'hôte ne distingue plus
+  // la prod), ni un hôte prod-only. Refus bruyant (erreur de déploiement). Le verrou
+  // mord AVANT la garde de cohérence pour donner le message « poser le drapeau ».
   if (verrouSandboxActif()) {
     if (environment === "production") {
       throw new OmniFiConfigError(
-        'Verrou sandbox actif : OMNIFI_ENV="production" interdit tant que ' +
+        'Verrou production actif : OMNIFI_ENV="production" interdit tant que ' +
           'OMNIFI_AUTORISER_PRODUCTION!="1". Poser ce drapeau (.env.prod.example) ' +
-          "pour autoriser la prod.",
+          "pour autoriser la vraie donnée (clés prod).",
       );
     }
     if (hoteEstProd) {
       throw new OmniFiConfigError(
-        `Verrou sandbox actif : l'hôte de production (${hostname}) est interdit tant ` +
+        `Verrou production actif : l'hôte de production (${hostname}) est interdit tant ` +
           'que OMNIFI_AUTORISER_PRODUCTION!="1". Utiliser un hôte sandbox ' +
           "(api-stage.omni-fi.co / stage.omni-fi.co), ou poser le drapeau.",
       );
@@ -149,18 +168,20 @@ function lireConfig(): OmniFiConfig {
   }
 
   // Garde de COHÉRENCE env↔hôte (active même hors verrou) : un env qui ment sur la
-  // cible est une mauvaise config → fail-closed (évite « je crois être en sandbox
-  // mais je tape la prod » et réciproquement).
+  // cible est une mauvaise config → fail-closed. Un hôte PARTAGÉ (api-stage/stage)
+  // accepte LÉGITIMEMENT les deux env (l'intention prod vient des clés + du drapeau,
+  // pas de l'hôte) → aucun refus de cohérence sur ces hôtes. Le refus ne vise que les
+  // hôtes NON partagés : prod-only avec env=sandbox, ou sandbox-only avec env=production.
   if (environment === "sandbox" && hoteEstProd) {
     throw new OmniFiConfigError(
       `Incohérence : OMNIFI_ENV="sandbox" mais l'hôte ${hostname} est un hôte de ` +
-        "production. Pointer un hôte sandbox, ou corriger OMNIFI_ENV.",
+        "production. Pointer un hôte sandbox/partagé, ou corriger OMNIFI_ENV.",
     );
   }
-  if (environment === "production" && !hoteEstProd) {
+  if (environment === "production" && !hoteEstProd && !hoteEstPartage) {
     throw new OmniFiConfigError(
-      `Incohérence : OMNIFI_ENV="production" mais l'hôte ${hostname} n'est pas un ` +
-        "hôte de production. Corriger OMNIFI_BASE_URL ou OMNIFI_ENV.",
+      `Incohérence : OMNIFI_ENV="production" mais l'hôte ${hostname} n'est ni un hôte ` +
+        "de production ni un hôte partagé. Corriger OMNIFI_BASE_URL ou OMNIFI_ENV.",
     );
   }
 
