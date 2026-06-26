@@ -75,7 +75,7 @@ describe("config Omni-FI — sandbox (chemin heureux)", () => {
   });
 });
 
-describe("verrou sandbox — fail-closed PAR DÉFAUT", () => {
+describe("verrou production — fail-closed PAR DÉFAUT", () => {
   it("refuse OMNIFI_ENV=production sans drapeau (cas limite : drapeau absent)", () => {
     poserEnv({
       ...BASE_SANDBOX,
@@ -83,14 +83,14 @@ describe("verrou sandbox — fail-closed PAR DÉFAUT", () => {
       OMNIFI_BASE_URL: HOTE_PROD,
     });
     expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
-    expect(() => obtenirConfigOmniFi()).toThrow(/Verrou sandbox actif/);
+    expect(() => obtenirConfigOmniFi()).toThrow(/Verrou production actif/);
   });
 
   it("refuse un hôte de prod même si OMNIFI_ENV=sandbox (deuxième voie du verrou)", () => {
     // L'incohérence env↔hôte serait aussi un motif, mais le verrou doit mordre
     // EN PREMIER sur l'hôte de prod tant que le drapeau n'est pas posé.
     poserEnv({ ...BASE_SANDBOX, OMNIFI_BASE_URL: HOTE_PROD });
-    expect(() => obtenirConfigOmniFi()).toThrow(/Verrou sandbox actif/);
+    expect(() => obtenirConfigOmniFi()).toThrow(/Verrou production actif/);
   });
 
   it("traite toute valeur ≠ \"1\" comme verrouillée (ex. \"true\", \"0\", vide)", () => {
@@ -101,12 +101,12 @@ describe("verrou sandbox — fail-closed PAR DÉFAUT", () => {
         OMNIFI_BASE_URL: HOTE_PROD,
         OMNIFI_AUTORISER_PRODUCTION: valeur,
       });
-      expect(() => obtenirConfigOmniFi()).toThrow(/Verrou sandbox actif/);
+      expect(() => obtenirConfigOmniFi()).toThrow(/Verrou production actif/);
     }
   });
 });
 
-describe("verrou sandbox — déverrouillage EXPLICITE", () => {
+describe("verrou production — déverrouillage EXPLICITE", () => {
   it("accepte une config PROD cohérente quand OMNIFI_AUTORISER_PRODUCTION=\"1\"", () => {
     poserEnv({
       ...BASE_SANDBOX,
@@ -125,20 +125,37 @@ describe("verrou sandbox — déverrouillage EXPLICITE", () => {
   });
 });
 
-describe("garde de cohérence env↔hôte (active DRAPEAU POSÉ)", () => {
-  it("refuse OMNIFI_ENV=production sur un hôte sandbox, même déverrouillé", () => {
+describe("hôte PARTAGÉ sandbox↔prod (api-stage) — l'env vient des clés+drapeau", () => {
+  // Fait 2026-06-26 (confirmé tuteur) : api-stage sert pour sandbox ET prod. L'hôte
+  // ne distingue plus l'environnement → la cohérence ne refuse PLUS prod sur cet hôte ;
+  // c'est le drapeau qui autorise (ou non) la prod. Cas central de cette feature.
+  it("accepte OMNIFI_ENV=production sur l'hôte partagé QUAND le drapeau est posé", () => {
     poserEnv({
       ...BASE_SANDBOX,
       OMNIFI_ENV: "production",
       OMNIFI_BASE_URL: HOTE_SANDBOX,
       OMNIFI_AUTORISER_PRODUCTION: "1",
     });
-    expect(() => obtenirConfigOmniFi()).toThrow(/Incohérence/);
+    const config = obtenirConfigOmniFi();
+    expect(config.environment).toBe("production");
+    expect(config.baseUrl).toBe(HOTE_SANDBOX);
   });
 
+  it("refuse OMNIFI_ENV=production sur l'hôte partagé SANS drapeau (le verrou mord avant la cohérence)", () => {
+    poserEnv({
+      ...BASE_SANDBOX,
+      OMNIFI_ENV: "production",
+      OMNIFI_BASE_URL: HOTE_SANDBOX,
+    });
+    // C'est le VERROU qui doit mordre (message « poser le drapeau »), pas l'incohérence.
+    expect(() => obtenirConfigOmniFi()).toThrow(/Verrou production actif/);
+  });
+});
+
+describe("garde de cohérence env↔hôte (active DRAPEAU POSÉ, hôtes NON partagés)", () => {
   it("refuse OMNIFI_ENV=sandbox sur un hôte de prod, drapeau posé", () => {
     // Drapeau posé → le verrou ne mord plus ; c'est la garde de cohérence qui
-    // attrape l'incohérence sandbox↔hôte-de-prod.
+    // attrape l'incohérence sandbox↔hôte-de-prod (hôte prod-only, PAS partagé).
     poserEnv({
       ...BASE_SANDBOX,
       OMNIFI_BASE_URL: HOTE_PROD,
@@ -170,5 +187,59 @@ describe("validation anti-fuite de secret (reste active dans les deux modes)", (
   it("refuse un OMNIFI_ENV inconnu", () => {
     poserEnv({ ...BASE_SANDBOX, OMNIFI_ENV: "staging" });
     expect(() => obtenirConfigOmniFi()).toThrow(/OMNIFI_ENV invalide/);
+  });
+});
+
+describe("invariants de classification des hôtes (filet anti-régression des Set)", () => {
+  // Cross-review 2026-06-26 : les ensembles HOTES_AUTORISES/PRODUCTION/PARTAGES sont
+  // édités à la main ; une faute de classification (ex. ajouter un hôte à PARTAGES en
+  // oubliant AUTORISES, ou marquer un hôte partagé comme prod-only) passerait silencieuse.
+  // On prouve les invariants par le COMPORTEMENT observable (pas en inspectant les Set,
+  // qui restent privés au module de sécurité).
+  const HOTE_STAGE = "https://stage.omni-fi.co"; // 2e hôte partagé (CDN/pré-prod)
+
+  it("chaque hôte partagé accepte sandbox ET production+drapeau (api-stage)", () => {
+    poserEnv({ ...BASE_SANDBOX, OMNIFI_BASE_URL: HOTE_SANDBOX });
+    expect(obtenirConfigOmniFi().environment).toBe("sandbox");
+    poserEnv({
+      ...BASE_SANDBOX,
+      OMNIFI_ENV: "production",
+      OMNIFI_BASE_URL: HOTE_SANDBOX,
+      OMNIFI_AUTORISER_PRODUCTION: "1",
+    });
+    expect(obtenirConfigOmniFi().environment).toBe("production");
+  });
+
+  it("chaque hôte partagé accepte sandbox ET production+drapeau (stage)", () => {
+    poserEnv({ ...BASE_SANDBOX, OMNIFI_BASE_URL: HOTE_STAGE });
+    expect(obtenirConfigOmniFi().environment).toBe("sandbox");
+    poserEnv({
+      ...BASE_SANDBOX,
+      OMNIFI_ENV: "production",
+      OMNIFI_BASE_URL: HOTE_STAGE,
+      OMNIFI_AUTORISER_PRODUCTION: "1",
+    });
+    expect(obtenirConfigOmniFi().environment).toBe("production");
+  });
+
+  it("un hôte de prod n'est PAS classé partagé (refuse sandbox) — prod ∩ partagés = ∅", () => {
+    // Si api.omni-fi.co était par erreur dans HOTES_PARTAGES, env=sandbox passerait.
+    // La cohérence doit le refuser → preuve que l'hôte prod n'est pas partagé.
+    poserEnv({
+      ...BASE_SANDBOX,
+      OMNIFI_BASE_URL: HOTE_PROD,
+      OMNIFI_AUTORISER_PRODUCTION: "1",
+    });
+    expect(() => obtenirConfigOmniFi()).toThrow(/Incohérence/);
+  });
+
+  it("tout hôte partagé est dans l'allow-list (sinon rejet anti-fuite en amont)", () => {
+    // Un hôte partagé absent de HOTES_AUTORISES tomberait sur /non autorisé/ AVANT les
+    // gardes. On prouve que ce n'est PAS le cas : les deux hôtes partagés passent la
+    // validation d'URL (ils atteignent bien les gardes env↔hôte).
+    for (const url of [HOTE_SANDBOX, HOTE_STAGE]) {
+      poserEnv({ ...BASE_SANDBOX, OMNIFI_BASE_URL: url });
+      expect(() => obtenirConfigOmniFi()).not.toThrow();
+    }
   });
 });

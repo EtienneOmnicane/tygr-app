@@ -5,6 +5,30 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Verrou production sur hôte partagé — livré (2026-06-26)
+
+`config.ts` autorise désormais `OMNIFI_ENV="production"` sur l'hôte PARTAGÉ
+`api-stage.omni-fi.co` via l'opt-in `OMNIFI_AUTORISER_PRODUCTION="1"` (l'env vient des
+clés, pas de l'hôte — confirmé tuteur). Branche `feat/verrou-prod-hote-partage`. Plan :
+`PLAN-verrou-prod-hote-partage.md`. Dettes/étapes ouvertes par ce chantier :
+
+- [ ] **PROD-DATA-LOCAL1 (P1, déclencheur : tout usage DURABLE de vraie donnée) —
+  vraie donnée bancaire stockée sur base Docker LOCALE.** Constat 2026-06-26 : les clés
+  prod pointent vers la stack Postgres conteneurisée du poste de dev → de la PII bancaire
+  réelle (soldes, libellés, relevés) vit en local, en clair via `.env`, sans chiffrement
+  au repos garanti ni backup ni contrôle d'accès. Viole CLAUDE.md règle 8 (« pas de dump
+  de prod en local »). TOLÉRABLE pour une démo/un test ponctuel ; INTERDIT comme usage
+  durable. Résolution : base Neon dédiée + pipeline `provision → migrate → deploy`, et ne
+  jamais conserver de vraie donnée sur un poste. Effort : ~0,5j (infra base) hors code app.
+
+- [ ] **PROD-ENDUSER1 (P1, déclencheur : avant le 1er parcours « connecter une banque »
+  en prod) — créer + inscrire l'EndUser de production.** L'annuaire des EndUsers Omni-FI
+  est rattaché aux CLÉS : l'EndUser sandbox actuel est inconnu des clés prod (`link-token`
+  échouerait). Étapes : `POST /clients/end-users` avec les clés prod → écrire la valeur
+  reçue dans `workspaces.omnifi_client_user_id` (UPDATE ; le code lit la colonne, pas
+  `.env` — `orchestration.ts:109`). Réversible (remettre l'EndUser sandbox). Hors code,
+  opérationnel. Cf. `docs/BASCULE-PRODUCTION-OMNIFI.md` § piège n°3.
+
 ### Sync réel Omni-FI — déclenchement de scraping (POST /sync) livré (2026-06-25)
 
 Le bouton « Synchroniser mes comptes » DÉCLENCHE désormais un sync réel

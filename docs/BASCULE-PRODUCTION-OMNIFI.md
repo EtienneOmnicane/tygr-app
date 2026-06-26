@@ -3,6 +3,25 @@
 > Note de bilan après une tentative réelle de démarrage en mode production. À lire
 > AVANT de retenter la bascule prod. Source de vérité du verrou : `src/server/omnifi/config.ts`.
 
+> ## ⚠️ MISE À JOUR 2026-06-26 — l'URL est PARTAGÉE sandbox↔prod (confirmé tuteur)
+>
+> **Le « il n'existe pas d'API de prod » ci-dessous n'est PAS un blocage** : Omni-FI
+> n'a pas d'hôte de prod *distinct*. `api-stage.omni-fi.co` sert pour le sandbox ET la
+> production. Ce qui fait la « vraie donnée », ce sont les **clés ApiClient** (`prod_…`)
+> + l'**EndUser** rattaché aux clés — **PAS l'hôte**. On reste donc sur `api-stage`.
+>
+> Conséquence code (livré, `feat/verrou-prod-hote-partage`) : `config.ts` connaît
+> désormais des **hôtes PARTAGÉS** (`HOTES_PARTAGES`). Sur un hôte partagé,
+> `OMNIFI_ENV="production"` est autorisé **dès que `OMNIFI_AUTORISER_PRODUCTION="1"`**
+> (l'env porte l'INTENTION ; la garde de cohérence n'arbitre plus par l'hôte). Le
+> fail-closed par défaut et l'anti-fuite de secret sont INCHANGÉS.
+>
+> **Pour traiter de la vraie donnée maintenant** : suivre `.env.prod.example`
+> (URL `api-stage`, `OMNIFI_ENV="production"`, drapeau `"1"`, clés prod,
+> `NEXT_PUBLIC_OMNIFI_ENV="staging"`) + créer/inscrire l'EndUser prod (piège n°3).
+> Les sections « API de prod absente » plus bas restent vraies pour le jour où Omni-FI
+> ouvrira un hôte de prod *dédié* (il rejoindra alors `HOTES_PRODUCTION`).
+
 ## TL;DR
 
 **Notre plomberie de bascule est correcte ET prouvée runtime (modale bancaire ouverte
