@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "start:sandbox": "bash scripts/dev-server.sh sandbox",
+    "start:prod": "bash scripts/dev-server.sh prod",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

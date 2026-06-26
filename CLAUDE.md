@@ -463,6 +463,12 @@ commit, le Human-in-the-Loop garde la PR et le déploiement.
 
 ## Dev local — stack de validation (2026-06-12)
 
+> 🚀 **Lancer l'app (sandbox OU vraie donnée prod)** : `npm run start:sandbox` /
+> `npm run start:prod` (script `scripts/dev-server.sh`, guide
+> `docs/DEMARRAGE-SANDBOX-PROD.md`). Le script rallume Docker, charge le bon `.env`/
+> `.env.prod`, force HTTPS + `OMNIFI_ENV` cohérent. La création initiale de la stack
+> (réseau + conteneurs) reste à faire une fois, ci-dessous.
+
 Le driver applicatif est Neon Serverless (WebSocket, E16) : un Postgres local nu ne
 suffit pas. Stack de validation reproductible (conteneurs dédiés, réseau isolé
 `tygr_validation`, AUCUN lien avec d'autres stacks Docker de la machine) :
