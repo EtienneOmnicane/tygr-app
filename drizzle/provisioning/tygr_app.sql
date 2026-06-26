@@ -86,6 +86,17 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --      - member_entity_scopes       : table de DROITS (Vision Entité, N:N) éditable —
 --                                     révoquer/réattribuer un périmètre = DELETE
 --                                     légitime ; NON append-only
+--      - parties                    : référentiel des entités légales Omni-FI
+--                                     (PartyId), éditable/archivable (is_active ;
+--                                     un DELETE physique reste possible pour une
+--                                     party JAMAIS référencée — FK composites en
+--                                     ON DELETE RESTRICT protègent celles qui le
+--                                     sont). NON append-only.
+--      - account_party_role         : table de LIAISON détention compte↔party (N-N) —
+--                                     ré-attribuer/retirer une détention = DELETE
+--                                     légitime ; reçoit aussi la cascade depuis
+--                                     bank_accounts (compte supprimé → rôle supprimé).
+--                                     NON append-only.
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
@@ -121,7 +132,9 @@ BEGIN
     'categorization_rules',
     'transaction_categorizations',
     'entities',
-    'member_entity_scopes'
+    'member_entity_scopes',
+    'parties',
+    'account_party_role'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN

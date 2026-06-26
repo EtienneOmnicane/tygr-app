@@ -85,6 +85,13 @@
       "when": 1782400000000,
       "tag": "0012_classification-metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1782459502938,
+      "tag": "0013_parties-account-party-role",
+      "breakpoints": true
     }
   ]
 }

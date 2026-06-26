@@ -312,6 +312,13 @@ export const bankAccounts = pgTable(
   (t) => [
     index("bank_accounts_workspace_id_idx").on(t.workspaceId),
     index("bank_accounts_connection_id_idx").on(t.connectionId),
+    // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées workspace qui
+    // pointent vers un compte (account_party_role, user_scopes type ACCOUNT —
+    // PLAN-architecture-multi-tenant-omnicane.md L0). Permet d'exiger en base qu'une
+    // ligne référençant un bank_account appartienne au MÊME workspace (anti
+    // cross-tenant), comme entities_id_workspace_unique le fait pour les entités.
+    // Additive (la PK reste id seul) → expand-safe, code N-1 inchangé.
+    unique("bank_accounts_id_workspace_unique").on(t.id, t.workspaceId),
     // FK COMPOSITE scopée workspace (cœur de l'isolation intra-groupe, §1.3) :
     // l'entité référencée DOIT appartenir au même workspace que le compte. Cible
     // entities(id, workspace_id) [UNIQUE]. ON DELETE RESTRICT : effacer une
@@ -764,6 +771,156 @@ export const memberEntityScopes = pgTable(
     index("member_entity_scopes_workspace_user_idx").on(
       t.workspaceId,
       t.userId,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Parties (entité légale Omni-FI PartyId) + détention compte↔party.   */
+/* Plan PLAN-architecture-multi-tenant-omnicane.md §1.1 (couche A) + L1.*/
+/*                                                                      */
+/* Trois niveaux à NE JAMAIS confondre (cf. CLAUDE.md à venir, L4) :    */
+/*   • workspace = le GROUPE (frontière de tenant, étage 1 RLS).        */
+/*   • party     = l'entité LÉGALE Omni-FI (société/individu) qui       */
+/*                 POSSÈDE des comptes — maille de droit la plus fine.  */
+/*   • entity     = la BU Omnicane (regroupement business OPTIONNEL      */
+/*                 au-dessus des parties ; parties.entity_id nullable). */
+/*                                                                      */
+/* La détention compte↔party est N-N (un compte joint a plusieurs       */
+/* parties) → table de liaison account_party_role calquée sur           */
+/* ACCOUNT_PARTY_ROLE Omni-FI, JAMAIS une colonne party_id directe sur   */
+/* bank_accounts. Ces tables sont alimentées à l'INGESTION (best-effort  */
+/* additif) ; le filtrage par périmètre (account_scope) viendra en L4 — */
+/* PAS dans ce lot (tables neuves, zéro chemin de lecture branché).      */
+/* Déclarée AVANT account_party_role : son UNIQUE(id, ws) est la cible   */
+/* de la FK composite scopée party_id.                                  */
+/* ------------------------------------------------------------------ */
+
+/** Hint de détention au niveau party (le rôle FIN par compte vit dans
+ * account_party_role.ownership_type). Reproduit l'énum OBIE OwnershipType de la
+ * doc API (OmniFiAccount). Stocké en varchar SANS CHECK (résilience API : un
+ * libellé amont inattendu n'empêche pas l'ingestion — même esprit que les
+ * colonnes de classification de 0012). */
+export const OWNERSHIP_TYPES = [
+  "PRIMARY",
+  "SECONDARY",
+  "JOINT_OWNER",
+  "TRUST",
+  "BUSINESS",
+  "POWER_OF_ATTORNEY",
+] as const;
+export type OwnershipType = (typeof OWNERSHIP_TYPES)[number];
+
+/**
+ * Entité légale (Omni-FI `PartyId`) propriété du GROUPE. Alimentée à l'ingestion
+ * par upsert sur (workspace_id, omnifi_party_id) — idempotent. `entity_id`
+ * (NULLABLE) rattache OPTIONNELLEMENT la party à une BU ; ce rattachement est
+ * HUMAIN (ADMIN) et ne doit JAMAIS être écrasé au re-sync (à exclure du
+ * onConflictDoUpdate.set de l'ingestion, comme bank_accounts.entity_id).
+ * Archivable (`is_active`), jamais de DELETE applicatif tant que référencée
+ * (FK composites en ON DELETE RESTRICT). `PartyId` Omni-FI peut être null à la
+ * source : un compte sans party reste « sans party » (pas de party fabriquée).
+ */
+export const parties = pgTable(
+  "parties",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /** BU (entity) optionnelle au-dessus de la party. NULL = non rattachée. */
+    entityId: uuid("entity_id"),
+    /** `PartyId` Omni-FI. Clé de dédup à l'ingestion (scopée workspace). */
+    omnifiPartyId: varchar("omnifi_party_id", { length: 64 }).notNull(),
+    /** `PartyName` (nullable côté API → nullable ici). Rafraîchi au re-sync. */
+    name: varchar("name", { length: 255 }),
+    /** Hint global de détention si fourni hors rôle (le rôle fin = role table). */
+    ownershipType: varchar("ownership_type", { length: 24 }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées (account_party_role,
+    // user_scopes type PARTY) — même pattern que entities_id_workspace_unique.
+    unique("parties_id_workspace_unique").on(t.id, t.workspaceId),
+    // Idempotence d'ingestion : une party Omni-FI n'est insérée qu'UNE fois par
+    // groupe. ⚠️ Scopé (workspace_id, …) et NON global : on ne refait pas le pari
+    // d'unicité globale d'omnifi_connection_id/omnifi_account_id (cf. schema.ts:233).
+    unique("parties_workspace_omnifi_party_unique").on(
+      t.workspaceId,
+      t.omnifiPartyId,
+    ),
+    index("parties_workspace_id_idx").on(t.workspaceId),
+    // Rattachement BU : retrouver les parties d'une entité (ou les non-rattachées).
+    index("parties_workspace_entity_idx").on(t.workspaceId, t.entityId),
+    // FK COMPOSITE scopée workspace vers la BU : une entity_id d'un autre tenant
+    // est impossible. ON DELETE RESTRICT (on archive une entité référencée).
+    foreignKey({
+      columns: [t.entityId, t.workspaceId],
+      foreignColumns: [entities.id, entities.workspaceId],
+      name: "parties_entity_workspace_fk",
+    }).onDelete("restrict"),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/**
+ * Détention compte↔party (calque OBIE `ACCOUNT_PARTY_ROLE`). N-N : un compte
+ * joint appartient à plusieurs parties (et une party détient N comptes). Alimentée
+ * à l'ingestion depuis `OmniFiAccount.PartyId` + `OwnershipType` (best-effort
+ * additif). Le scope de périmètre (account_scope, L4) s'hérite ICI par JOINTURE
+ * sur bank_accounts — jamais une policy séparée. Table de liaison NON append-only.
+ */
+export const accountPartyRole = pgTable(
+  "account_party_role",
+  {
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    bankAccountId: uuid("bank_account_id").notNull(),
+    partyId: uuid("party_id").notNull(),
+    /** Rôle de détention OBIE (énum OWNERSHIP_TYPES, SANS CHECK — résilience API). */
+    ownershipType: varchar("ownership_type", { length: 24 }).notNull(),
+    /** Rôle principal (1 par compte côté UI) — pour le libellé de détention. */
+    isPrimary: boolean("is_primary").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Idempotence : un couple (compte, party) n'a qu'une ligne ; le rôle se met à
+    // jour au re-sync (onConflictDoUpdate sur ownership_type/is_primary).
+    primaryKey({
+      columns: [t.workspaceId, t.bankAccountId, t.partyId],
+    }),
+    // FK COMPOSITE compte scopée workspace (cible bank_accounts_id_workspace_unique,
+    // L0). ON DELETE CASCADE LÉGITIME : si le compte disparaît (cascade depuis une
+    // connexion supprimée), son rôle de détention disparaît — table de liaison, NON
+    // append-only (l'historique transactionnel reste protégé par son trigger no-delete).
+    foreignKey({
+      columns: [t.bankAccountId, t.workspaceId],
+      foreignColumns: [bankAccounts.id, bankAccounts.workspaceId],
+      name: "account_party_role_account_fk",
+    }).onDelete("cascade"),
+    // FK COMPOSITE party scopée workspace. ON DELETE RESTRICT (on archive une party
+    // référencée, jamais d'effacement tant qu'un compte la cite).
+    foreignKey({
+      columns: [t.partyId, t.workspaceId],
+      foreignColumns: [parties.id, parties.workspaceId],
+      name: "account_party_role_party_fk",
+    }).onDelete("restrict"),
+    // « Comptes d'une party » (résolution périmètre party→comptes, L4).
+    index("account_party_role_workspace_party_idx").on(
+      t.workspaceId,
+      t.partyId,
+    ),
+    // « Parties d'un compte » (libellé de détention sur une ligne compte).
+    index("account_party_role_workspace_account_idx").on(
+      t.workspaceId,
+      t.bankAccountId,
     ),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
