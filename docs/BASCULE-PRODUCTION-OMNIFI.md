@@ -179,21 +179,24 @@ a déjà eu tort pour la sandbox (`sandbox.omni-fi.co` mort → `api-stage` four
 6. [ ] Migration `0012` + suivantes appliquées sur la base de prod **par le pipeline CI/CD**
        (`migrate` PUIS `deploy`), jamais à la main depuis un poste.
 
-## Comment lancer en local (rappels)
+## Comment lancer en local
 
-- **Staging (défaut)** : `npm run dev` (lit `.env` → `api-stage.omni-fi.co`, verrou actif).
-- **Prod / clés prod (test client, base locale) — AVEC le widget** : il faut du HTTPS
-  (piège n°1). Trio sourcé + override CDN staging + allow-list https + serveur TLS :
-  ```bash
-  set -a && . ./.env.prod && set +a && unset NODE_OPTIONS
-  export NEXT_PUBLIC_OMNIFI_ENV=staging          # CDN du widget = staging (API jointe)
-  export APP_ALLOWED_ORIGINS="https://localhost:3000"
-  node_modules/.bin/next dev --experimental-https -p 3000   # certificat auto-signé
-  ```
-  - Aligner d'abord le ClientUserId en base sur l'EndUser des clés (piège n°3).
-  - Ouvrir **https://**localhost:3000 dans un **vrai navigateur** (« Continuer ») : le
-    headless `browse` rejette le cert auto-signé (utiliser `mkcert` si besoin de headless).
-  - ⚠️ `--env-file` est INCOMPATIBLE avec `NODE_OPTIONS` sur Node 25 → **sourcer** (`set -a`),
-    jamais `--env-file`.
-- **Prod SANS toucher au widget** (juste naviguer l'app avec les clés/base prod) : même
-  chose en `next dev` http suffit, mais « Connecter une banque » échouera en `400` (http).
+> ✅ **Le plus simple — deux commandes** (script `scripts/dev-server.sh`, guide
+> `docs/DEMARRAGE-SANDBOX-PROD.md`) :
+> ```bash
+> npm run start:sandbox    # bac à sable (.env, verrou actif)
+> npm run start:prod       # VRAIE donnée (.env.prod, HTTPS, OMNIFI_ENV=production)
+> ```
+> Le script rallume Docker au besoin, charge le bon `.env`, force HTTPS + le CDN staging
+> + (en prod) `OMNIFI_ENV=production`/`OMNIFI_AUTORISER_PRODUCTION=1`. Puis Chrome sur
+> https://localhost:3000 (« Avancé » → « Continuer »).
+
+Les pièges que le script gère pour vous (référence, si vous lancez à la main) :
+- **Le widget exige HTTPS** (piège n°1) : `next dev --experimental-https`. Aligner d'abord
+  le ClientUserId en base sur l'EndUser des clés (piège n°3).
+- **CDN du widget = staging** même en prod (`NEXT_PUBLIC_OMNIFI_ENV=staging`, piège n°2 —
+  il doit matcher l'API jointe `api-stage`).
+- ⚠️ `--env-file` est INCOMPATIBLE avec `NODE_OPTIONS` sur Node 25 → **sourcer** (`set -a`),
+  jamais `--env-file`. Le headless `browse` rejette le cert auto-signé → vrai navigateur.
+- 🐳 **Cause n°1 de panne après un reboot** : conteneurs `tygr_postgres`/`tygr_wsproxy`
+  arrêtés → base injoignable. `docker ps` pour vérifier ; le script les redémarre seul.

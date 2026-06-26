@@ -22,12 +22,27 @@ clés, pas de l'hôte — confirmé tuteur). Branche `feat/verrou-prod-hote-part
   jamais conserver de vraie donnée sur un poste. Effort : ~0,5j (infra base) hors code app.
 
 - [ ] **PROD-ENDUSER1 (P1, déclencheur : avant le 1er parcours « connecter une banque »
-  en prod) — créer + inscrire l'EndUser de production.** L'annuaire des EndUsers Omni-FI
-  est rattaché aux CLÉS : l'EndUser sandbox actuel est inconnu des clés prod (`link-token`
-  échouerait). Étapes : `POST /clients/end-users` avec les clés prod → écrire la valeur
-  reçue dans `workspaces.omnifi_client_user_id` (UPDATE ; le code lit la colonne, pas
-  `.env` — `orchestration.ts:109`). Réversible (remettre l'EndUser sandbox). Hors code,
-  opérationnel. Cf. `docs/BASCULE-PRODUCTION-OMNIFI.md` § piège n°3.
+  en prod) — créer + inscrire l'EndUser de production. 🚧 BLOQUÉ côté Omni-FI (2026-06-26).**
+  L'annuaire des EndUsers Omni-FI est rattaché aux CLÉS : l'EndUser sandbox actuel est
+  inconnu des clés prod (`link-token` échouerait). Étapes : `POST /clients/end-users` avec
+  les clés prod → écrire la valeur reçue dans `workspaces.omnifi_client_user_id` (UPDATE ;
+  le code lit la colonne, pas `.env` — `orchestration.ts:109`). Réversible (remettre
+  l'EndUser sandbox). Hors code, opérationnel. Cf. `docs/BASCULE-PRODUCTION-OMNIFI.md` § piège n°3.
+  **BLOCAGE** : `POST /clients/end-users` avec les clés PROD renvoie `401 Invalid client
+  credentials` sur `api-stage.omni-fi.co`. Diagnostiqué : ce n'est PAS notre commande (test
+  de contrôle avec les clés SANDBOX du `.env` → `201 Created`), ni une faute de copie (clés
+  prod aux bonnes longueurs : client_id 39 car., secret 72 car.). ⇒ Les clés prod ne sont
+  pas reconnues par ce serveur (jamais générées / secret périmé — affiché 1 seule fois /
+  autre environnement). **Action requise (user + tuteur)** : (re)générer le secret via
+  `POST /clients/{ApiClientId}/keys/generate` OU faire confirmer par le tuteur qu'un
+  ApiClient de prod ACTIF existe bien sur `api-stage`. Tant que ce 401 n'est pas levé, la
+  bascule vraie donnée est impossible (le verrou code, lui, est PRÊT — PR #124 mergée).
+
+- [ ] **PROD-ENDUSER-DIAG-CLEANUP (P2, déclencheur : prochain ménage sandbox) — EndUser de
+  contrôle résiduel.** Le diagnostic du 401 (2026-06-26) a créé `tygr-diag-controle-sandbox`
+  dans l'annuaire SANDBOX (test prouvant la commande). Omni-FI n'expose pas de `DELETE
+  /clients/end-users/{id}` (→ 404 HTML). Résidu inerte (identifiant sans donnée bancaire,
+  bac à sable). Le purger si Omni-FI ajoute une route de suppression, sinon l'ignorer.
 
 ### Sync réel Omni-FI — déclenchement de scraping (POST /sync) livré (2026-06-25)
 
