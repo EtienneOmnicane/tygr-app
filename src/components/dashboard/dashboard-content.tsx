@@ -23,6 +23,7 @@ import type {
   ConcentrationVendors,
   PointCashflow,
 } from "@/server/insights/types";
+import type { WorkspaceRole } from "@/server/db/schema";
 
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
 import { formaterFraicheurRelative } from "@/lib/format-date";
@@ -58,12 +59,15 @@ export function DashboardContent({
   donnees,
   devise = "MUR",
   mois,
+  role,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
   /** Mois courant "YYYY-MM" (Maurice) — libellé des cartes de synthèse. */
   mois: string;
+  /** Rôle résolu serveur — gate le bouton « Synchroniser » du side-panel (confort UI). */
+  role: WorkspaceRole;
 }) {
   const {
     comptes,
@@ -107,6 +111,7 @@ export function DashboardContent({
             devise={devise}
             fraicheur={fraicheur}
             compteLabel={synchro?.compteLabel}
+            role={role}
           />
           {/* Pile aside : SOLDE → DÉTAILS (SidePanelKpi) → COMPTES CONNECTÉS. */}
           <ConnectedAccountsCard comptes={comptes} />

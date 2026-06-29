@@ -81,8 +81,10 @@ export default async function PageDashboard() {
   // (NB_MOIS_HISTORIQUE − 1) mois → couvre les mêmes N mois que la tendance.
   const fromFlux = premierJourMoisRecul(mois, NB_MOIS_HISTORIQUE - 1);
 
-  // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx.
-  const { donnees, devise } = await withWorkspace(session, async (tx) => {
+  // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx. Le
+  // `ctx.role` (re-résolu serveur) descend en prop pour gater le bouton « Synchroniser »
+  // côté UI (confort — la garde réelle est dans l'orchestration, cf. SyncButton).
+  const { donnees, devise, role } = await withWorkspace(session, async (tx, ctx) => {
     const [
       comptes,
       soldesParDevise,
@@ -121,6 +123,7 @@ export default async function PageDashboard() {
     const deviseBase = rows[0]?.base_currency ?? "MUR";
     return {
       devise: deviseBase,
+      role: ctx.role,
       donnees: {
         comptes,
         soldesParDevise,
@@ -138,5 +141,7 @@ export default async function PageDashboard() {
     };
   });
 
-  return <DashboardContent donnees={donnees} devise={devise} mois={mois} />;
+  return (
+    <DashboardContent donnees={donnees} devise={devise} mois={mois} role={role} />
+  );
 }

@@ -139,7 +139,13 @@ export default function DashboardPreviewPage() {
         </div>
       </div>
 
-      <DashboardContent donnees={donnees} devise="MUR" mois={DEMO_MOIS} />
+      {/* role ADMIN : la démo montre le bouton « Synchroniser » actif (état complet). */}
+      <DashboardContent
+        donnees={donnees}
+        devise="MUR"
+        mois={DEMO_MOIS}
+        role="ADMIN"
+      />
     </div>
   );
 }
