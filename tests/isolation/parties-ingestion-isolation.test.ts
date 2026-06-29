@@ -361,3 +361,41 @@ describe("versPartie (mappeur pur)", () => {
     expect(p).toEqual({ omnifiPartyId: "party-x", name: null, ownershipType: null });
   });
 });
+
+// ── Garde-fou L7a : la suite tourne-t-elle vraiment sous tygr_app ? ───────────
+// Sans cette précondition, un `set role tygr_app` régressé ferait tourner la suite
+// sous l'owner (RLS ignorée) en passant au vert silencieusement (faux-vert).
+describe("préconditions", () => {
+  it("0. les requêtes tournent sous tygr_app, pas sous l'owner (sinon la RLS est ignorée)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const res = await client.query<{ who: string }>("select current_user as who");
+    expect(res.rows[0].who).toBe("tygr_app");
+  });
+});
+
+// Contre-preuve R1 : prouve POURQUOI le rôle non-owner est vital. Sous l'owner la
+// frontière tenant ne filtre pas ; sous tygr_app elle filtre. Si l'app pointait sur
+// l'owner (RLS contournée), R1a casserait — l'angle mort devient bloquant.
+describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () => {
+  afterAll(async () => {
+    // Restaure l'invariant pour toute exécution ultérieure : rôle applicatif.
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("R1a. sous l'owner, un SELECT sans contexte voit l'AUTRE tenant (RLS ignorée)", async () => {
+    await client.exec(`reset role;`);
+    const res = await client.query<{ workspace_id: string }>(
+      "select workspace_id from workspace_members",
+    );
+    expect(res.rows.some((r) => r.workspace_id === WS_B)).toBe(true);
+  });
+
+  it("R1b. sous tygr_app, le contexte A ne voit JAMAIS le tenant B (la RLS filtre)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const vus = await withWorkspace(sessionA, (tx) =>
+      tx.select().from(schema.workspaceMembers),
+    );
+    expect(vus.every((r) => r.workspaceId === WS_A)).toBe(true);
+    expect(vus.some((r) => r.workspaceId === WS_B)).toBe(false);
+  });
+});
