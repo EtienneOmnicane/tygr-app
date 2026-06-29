@@ -22,6 +22,7 @@ import { z } from "zod";
 import { exigerSessionWorkspace } from "@/server/auth/session";
 import {
   assignerCompteEntite,
+  assignerPartieEntite,
   CompteIntrouvableError,
   creerEntite,
   definirScopesMembre,
@@ -29,6 +30,7 @@ import {
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
   MembreNonScopableError,
+  PartieIntrouvableError,
   renommerEntite,
   archiverEntite,
   withWorkspace,
@@ -73,6 +75,14 @@ const assignerCompteSchema = z
   })
   .strict();
 
+const assignerPartieSchema = z
+  .object({
+    partyId: z.string().uuid(),
+    // null = « non rattachée ». Chaîne vide du formulaire → null (cf. lecture formData).
+    entityId: z.string().uuid().nullable(),
+  })
+  .strict();
+
 const definirScopesSchema = z
   .object({
     userId: z.string().uuid(),
@@ -96,6 +106,7 @@ function mapErreur(e: unknown): EtatAction | null {
   if (
     e instanceof EntiteIntrouvableError ||
     e instanceof CompteIntrouvableError ||
+    e instanceof PartieIntrouvableError ||
     e instanceof MembreNonScopableError
   ) {
     return { erreur: "Ressource introuvable.", succes: null };
@@ -211,6 +222,39 @@ export async function assignerCompteAction(
     succes: parsed.data.entityId
       ? "Compte assigné à l'entité."
       : "Compte repassé en non assigné.",
+  };
+}
+
+export async function assignerPartieAction(
+  _etat: EtatAction,
+  formData: FormData,
+): Promise<EtatAction> {
+  const session = await exigerSessionWorkspace();
+  // Une valeur vide/absente du select = « non rattachée » (null).
+  const rawEntity = formData.get("entityId");
+  const parsed = assignerPartieSchema.safeParse({
+    partyId: formData.get("partyId"),
+    entityId: rawEntity ? String(rawEntity) : null,
+  });
+  if (!parsed.success) return { erreur: MESSAGE_INVALIDE, succes: null };
+
+  try {
+    await withWorkspace(session, (tx, ctx) =>
+      assignerPartieEntite(tx, ctx, {
+        partyId: parsed.data.partyId,
+        entityId: parsed.data.entityId,
+      }),
+    );
+  } catch (e) {
+    const m = mapErreur(e);
+    if (m) return m;
+    throw e;
+  }
+  return {
+    erreur: null,
+    succes: parsed.data.entityId
+      ? "Partie rattachée à l'entité."
+      : "Partie repassée en non rattachée.",
   };
 }
 
