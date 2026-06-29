@@ -164,7 +164,7 @@ export function DashboardContent({
           />
         ) : (
           <StateCard>
-            <h2 className="mb-2 text-sm font-semibold text-text">
+            <h2 className="mb-2 text-base font-semibold text-text">
               Transactions récentes
             </h2>
             <p className="text-sm text-text-muted">

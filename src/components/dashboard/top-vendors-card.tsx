@@ -70,7 +70,7 @@ export function TopVendorsCard({
     <StateCard>
       <div className="mb-4 flex items-start justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-text">{meta.titre}</h2>
+          <h2 className="text-base font-semibold text-text">{meta.titre}</h2>
           <p className="mt-0.5 text-xs text-text-muted">{meta.sousTitre}</p>
         </div>
       </div>
