@@ -220,15 +220,15 @@ export type { EntiteLue, MembreScope } from "@/server/repositories/entites";
 // Actions de admin/perimetres/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
 // @/server/repositories/* directement. Garde ADMIN portée par le repository (la RLS
 // tenant ne borne PAS le rôle → la garde applicative EST la sécurité). On n'ajoute ici
-// que les NOUVEAUX symboles : CompteIntrouvableError / MembreNonScopableError sont
-// déjà exportés ci-dessus (mêmes erreurs, partagées avec le repo entités).
+// que les NOUVEAUX symboles : CompteIntrouvableError / MembreNonScopableError /
+// PartieIntrouvableError sont déjà exportés ci-dessus (mêmes erreurs, définies dans le
+// repo entités et réutilisées par user-scopes — pas de classe homonyme dupliquée).
 export {
   listerScopesFinsMembre,
   definirScopesFinsMembre,
   octroyerScopeFin,
   revoquerScopeFin,
   ScopeFinNonAutoriseError,
-  PartieIntrouvableError,
   CibleScopeInvalideError,
 } from "@/server/repositories/user-scopes";
 export type {

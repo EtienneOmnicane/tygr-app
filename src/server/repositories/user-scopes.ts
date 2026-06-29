@@ -44,9 +44,10 @@ import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import {
   CompteIntrouvableError,
   MembreNonScopableError,
+  PartieIntrouvableError,
 } from "@/server/repositories/entites";
 
-export { CompteIntrouvableError, MembreNonScopableError };
+export { CompteIntrouvableError, MembreNonScopableError, PartieIntrouvableError };
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
@@ -60,15 +61,6 @@ export class ScopeFinNonAutoriseError extends Error {
   constructor() {
     super("Action non autorisée");
     this.name = "ScopeFinNonAutoriseError";
-  }
-}
-
-/** Une party visée est absente du workspace courant (introuvable = pas d'oracle). 404. */
-export class PartieIntrouvableError extends Error {
-  readonly code = "PARTY_NOT_FOUND";
-  constructor() {
-    super("Party introuvable");
-    this.name = "PartieIntrouvableError";
   }
 }
 
