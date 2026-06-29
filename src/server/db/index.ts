@@ -213,6 +213,28 @@ export {
 } from "@/server/repositories/entites";
 export type { EntiteLue, MembreScope } from "@/server/repositories/entites";
 
+// Périmètre fin par membre (user_scopes, L6a) : octroi / révocation ADMIN-only de la
+// maille party/compte qui pilote account_scope. Même frontière P0-a : les Server
+// Actions de admin/perimetres/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement. Garde ADMIN portée par le repository (la RLS
+// tenant ne borne PAS le rôle → la garde applicative EST la sécurité). On n'ajoute ici
+// que les NOUVEAUX symboles : CompteIntrouvableError / MembreNonScopableError sont
+// déjà exportés ci-dessus (mêmes erreurs, partagées avec le repo entités).
+export {
+  listerScopesFinsMembre,
+  definirScopesFinsMembre,
+  octroyerScopeFin,
+  revoquerScopeFin,
+  ScopeFinNonAutoriseError,
+  PartieIntrouvableError,
+  CibleScopeInvalideError,
+} from "@/server/repositories/user-scopes";
+export type {
+  ScopeFinMembre,
+  ScopesFinsAPoser,
+  CibleScopeFin,
+} from "@/server/repositories/user-scopes";
+
 // Moteur de règles de catégorisation : référentiel de règles + service
 // d'application (appliquerRegles crée des splits source='RULE' pour les
 // transactions non catégorisées qui matchent). Même frontière P0-a : les Server
