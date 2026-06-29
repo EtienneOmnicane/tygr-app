@@ -61,6 +61,8 @@ export function ReglesFeature({
   const [regles, setRegles] = useState<RegleUI[]>(initiales);
   const [erreur, setErreur] = useState<string | null>(null);
   const [creationEnCours, setCreationEnCours] = useState(false);
+  // Incrémenté après une création RÉUSSIE → signale à RegleForm de se vider.
+  const [cleResetForm, setCleResetForm] = useState(0);
   const [suppressionEnCours, setSuppressionEnCours] = useState<string | null>(null);
   const [reanalyseEnCours, setReanalyseEnCours] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
@@ -92,6 +94,8 @@ export function ReglesFeature({
           return;
         }
         await recharger();
+        // Succès : on vide le formulaire (signal via le compteur de reset).
+        setCleResetForm((n) => n + 1);
       } catch {
         setErreur("La création a échoué. Réessayez.");
       } finally {
@@ -203,6 +207,7 @@ export function ReglesFeature({
           categories={categories}
           onCreer={creer}
           enCours={creationEnCours}
+          cleReset={cleResetForm}
         />
       )}
 
