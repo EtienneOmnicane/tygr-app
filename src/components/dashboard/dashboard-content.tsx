@@ -32,7 +32,7 @@ import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
-import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
+import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
 import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
@@ -119,8 +119,24 @@ export function DashboardContent({
       }
     >
       <div className="flex flex-col gap-6">
-        {/* Ancre : courbe de FLUX net mensuel (gère son propre état partiel si vide). */}
-        <CashflowMainChart points={flux} devise={devise} />
+        {/* Toolbar contextuelle (UI_GUIDELINES §1.1, h-10) posée SUR le fond de page
+            (sans carte) : sépare l'ancre du chrome et donne de l'air en tête de zone.
+            À gauche le titre de section ; la droite est RÉSERVÉE aux futurs filtres
+            (sélecteur de période L8c) — non construits ici. Le toggle Barres/Courbe vit
+            dans l'en-tête de la carte d'ancre (il pilote cette carte). */}
+        <div className="flex h-10 items-center justify-between">
+          <h1 className="text-base font-semibold text-text">Trésorerie</h1>
+        </div>
+
+        {/* Ancre : FLUX net mensuel — carte unifiée avec toggle Barres/Courbe (L8a).
+            Les deux vues partagent les séries déjà chargées par la page (zéro fetch).
+            Chaque vue gère son propre état partiel/vide. */}
+        <FluxTresorerieCard
+          flux={flux}
+          serieMensuelle={serieMensuelle}
+          grilleMensuelle={grilleMensuelle}
+          devise={devise}
+        />
 
         {/* Vision Entrées / Sorties du mois (demande métier), VENTILÉE PAR DEVISE —
             au-dessus de la table. */}
