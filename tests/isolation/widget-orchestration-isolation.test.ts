@@ -141,6 +141,23 @@ function clientFactice(over: {
   } as unknown as OmniFiClient;
 }
 
+/**
+ * Sème une connexion RÉELLE dans WS_A (via le chemin widget drop-in, le SEUL qui crée
+ * une connexion neuve) et son compte, puis revient. Indispensable depuis le LOT 1 :
+ * `synchroniserConnexionsDepuisOmnifi` ne RAFRAÎCHIT plus que les connexions DÉJÀ en
+ * base — un cas de sync doit donc pré-semer sa connexion, sinon le périmètre l'ignore.
+ * Idempotent vis-à-vis du sync qui suit (mêmes upserts sur omnifi_*_id).
+ */
+async function semerConnexionEnBase(omnifiConnId: string, accountId: string) {
+  const c = clientFactice({
+    exchange: { ConnectionId: omnifiConnId, InstitutionId: "mcb" },
+    accounts: [
+      { AccountId: accountId, Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] },
+    ],
+  });
+  await finaliserConnexionDropin(c, execWs(ADMIN_A, WS_A), { publicToken: `pt-seed-${omnifiConnId}` });
+}
+
 beforeAll(async () => {
   const dir = path.join(process.cwd(), "drizzle", "migrations");
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".sql")).sort()) {
@@ -430,6 +447,7 @@ describe("finaliserConnexionsDropin — payload multi-connexions du hook", () =>
 
 describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections (postMessage cassé)", () => {
   it("liste les connexions par ClientUserId du workspace et persiste comptes (isolé de B)", async () => {
+    await semerConnexionEnBase("conn-sync-A", "oa-sync-A1"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-sync-A", InstitutionId: "mcb", Status: "active" }],
       accounts: [
@@ -452,6 +470,9 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     // Régression : ce chemin (bouton « Synchroniser mes comptes ») jetait
     // InstitutionName — la connexion restait institution_name=NULL malgré la donnée
     // API. On vérifie qu'il est désormais capturé et persisté.
+    // Périmètre LOT 1 : on sème la connexion (institution_name=NULL au semis, le drop-in
+    // ne le porte pas) puis le sync doit la RAFRAÎCHIR avec le nom de GET /connections.
+    await semerConnexionEnBase("conn-named", "oa-named");
     const c = clientFactice({
       connections: [
         {
@@ -474,6 +495,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
   });
 
   it("idempotent : deux synchros n'accumulent pas (upserts)", async () => {
+    await semerConnexionEnBase("conn-idem", "oa-idem"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-idem", InstitutionId: "mcb", Status: "active" }],
       accounts: [{ AccountId: "oa-idem", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "1000.00", Currency: "MUR" } }] }],
@@ -487,6 +509,9 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
   });
 
   it("ignore les connexions non actives", async () => {
+    // Périmètre LOT 1 : seule l'active est semée en base (la revoked est de toute façon
+    // exclue en amont par le filtre de Status — on ne sème donc QUE conn-active).
+    await semerConnexionEnBase("conn-active", "oa-actif-only");
     const c = clientFactice({
       connections: [
         { ConnectionId: "conn-active", InstitutionId: "mcb", Status: "active" },
@@ -511,6 +536,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
   it("importe AUSSI les transactions du compte (débloque Détails + Transactions récentes)", async () => {
     // La synchro ne doit pas seulement rattacher les comptes : elle ingère leurs
     // transactions (pipeline par page) — sinon le dashboard reste vide.
+    await semerConnexionEnBase("conn-tx", "oa-tx"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-tx", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-tx", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "9000.00", Currency: "MUR" } }] }],
@@ -544,6 +570,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
   it("DÉCLENCHE un sync RÉEL (POST /sync) avant de lire, puis ingère (job COMPLETED)", async () => {
     // Cœur du chantier : le bouton ne se contente plus de relire le cache amont, il
     // POST /sync/{connectionId} puis attend le job avant la boucle de lecture existante.
+    await semerConnexionEnBase("conn-trig", "oa-trig"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-trig", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-trig", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "100.00", Currency: "MUR" } }] }],
@@ -561,6 +588,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     // Le scraping redemande un OTP : on ne pilote pas la MFA serveur → on remonte le
     // signal de réparation (l'UI rouvrira le widget natif en REPAIR) et on STOPPE
     // cette connexion sans ingérer.
+    await semerConnexionEnBase("conn-otp", "oa-otp"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-otp", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-otp", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
@@ -580,6 +608,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     // GET /connections), on ne re-déclenche pas — mais on relit quand même les comptes
     // et leurs transactions (le user voit le dernier état connu).
     const futur = new Date(Date.now() + 10 * 60_000).toISOString();
+    await semerConnexionEnBase("conn-cd", "oa-cd"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-cd", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active", NextSyncAvailableAt: futur }],
       accounts: [{ AccountId: "oa-cd", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
@@ -611,6 +640,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     // Un job tourne déjà côté Omni-FI : declencherSync renvoie 400 « already running ».
     // On récupère le JobId courant et on poll dessus (latest-job STARTED → puis le
     // polling le verra terminal), sans re-déclencher.
+    await semerConnexionEnBase("conn-run", "oa-run"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-run", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-run", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
@@ -633,6 +663,7 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     // poller un vieux latest-job et conclure « sync effectué » (toujours vrai). MAIS,
     // depuis le correctif fail-soft, il ne fait PLUS `throw` non plus : il est capturé,
     // compté dans `echecs`, et la fonction atteint son `return`.
+    await semerConnexionEnBase("conn-bad", "oa-bad"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-bad", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-bad", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
@@ -646,6 +677,38 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
     ]);
     // On n'a PAS été chercher le dernier job sur ce 400 ambigu (garde inchangée).
     expect(c.getLatestSyncJob).not.toHaveBeenCalled();
+  });
+
+  // LOT 1 — PÉRIMÈTRE : le sync ne rafraîchit QUE les connexions déjà en base (créées
+  // via le widget). Une connexion vue par GET /connections mais ABSENTE de
+  // bank_connections est IGNORÉE : ni upsert, ni appel Omni-FI pour elle. Pour ajouter
+  // une banque → widget uniquement (DÉCISION PRODUIT actée).
+  it("une connexion vue par GET /connections mais ABSENTE de bank_connections n'est PAS créée (ignorée)", async () => {
+    // `listerConnexions` ne renvoie QU'UNE connexion JAMAIS semée en base : sur le code
+    // d'avant le périmètre, le sync la crée (upsert) et déclenche un sync pour elle. Le
+    // périmètre l'exclut AVANT la boucle → aucun appel Omni-FI pour elle, pas comptée.
+    const c = clientFactice({
+      connections: [
+        { ConnectionId: "conn-fantome", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" },
+      ],
+      accounts: [{ AccountId: "oa-fantome", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    // Connue côté Omni-FI mais absente de la base → ni traitée, ni comptée.
+    expect(r.connexions).toBe(0);
+    // Aucun appel Omni-FI émis pour elle : ni découverte de comptes, ni déclenchement.
+    expect(c.listerComptesConnexion).not.toHaveBeenCalledWith(
+      "conn-fantome",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(c.declencherSync).not.toHaveBeenCalled();
+    // Et elle n'a PAS été créée en base (le sync ne crée jamais une connexion inconnue).
+    const creee = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(bankConnections)).some((x) => x.omnifiConnectionId === "conn-fantome"),
+    );
+    expect(creee).toBe(false);
   });
 });
 
@@ -858,6 +921,9 @@ describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agré
 
   it("1 connexion qui THROW au milieu de 3 → echecs=1, les 2 autres rattachées, return ATTEINT (pas de throw)", async () => {
     const ids = ["fs-A", "fs-KO", "fs-C"];
+    // Périmètre LOT 1 : les 3 connexions doivent être en base pour entrer dans la boucle
+    // (sinon la KO serait filtrée AVANT listerComptesConnexion et ne lèverait jamais).
+    for (const id of ids) await semerConnexionEnBase(id, `oa-${id}`);
     const c = clientSyncAvecUnEchec(ids, "fs-KO", new OmniFiApiError(500, "INTERNAL", []));
 
     // Ne throw PAS (le cœur du correctif) : on obtient bien un résultat.
@@ -881,6 +947,7 @@ describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agré
 
   it("une erreur NON-OmniFiApiError (ex. panne DB) est aussi fail-soft (code machine, sans status)", async () => {
     const ids = ["fs2-OK", "fs2-KO"];
+    for (const id of ids) await semerConnexionEnBase(id, `oa-${id}`); // périmètre LOT 1
     const c = clientSyncAvecUnEchec(ids, "fs2-KO", new Error("boom DB"));
     const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
     expect(r.echecs).toBe(1);
@@ -892,6 +959,7 @@ describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agré
   it("TOUTES les connexions échouent → echecs===connexions, comptesRattaches=0 (agrégat « tout échoué » côté action)", async () => {
     // 1 seule connexion, qui échoue : echecs===connexions ET 0 compte → l'action
     // remontera MESSAGE_SYNC_TOUT_ECHOUE (testé via le contrat du résultat ici).
+    await semerConnexionEnBase("fs3-KO", "oa-fs3-KO"); // périmètre LOT 1 : connue en base
     const c = clientSyncAvecUnEchec(["fs3-KO"], "fs3-KO", new OmniFiApiError(503, "UNAVAILABLE", []));
     const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
     expect(r.connexions).toBe(1);
@@ -903,6 +971,9 @@ describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agré
     // Cross-review : le fail-soft ne doit JAMAIS transformer un signal fail-closed de
     // tenancy en simple « echec de connexion ». Si withWorkspace lève (rôle DB non sûr,
     // membership révoquée…), l'opération entière doit s'interrompre bruyamment.
+    // Périmètre LOT 1 : sec-KO doit être en base pour entrer dans la boucle et atteindre
+    // l'appel qui lève la garde tenant (sinon filtrée AVANT → l'erreur ne surviendrait pas).
+    await semerConnexionEnBase("sec-KO", "oa-sec-KO");
     const c = clientSyncAvecUnEchec(["sec-KO"], "sec-KO", new WorkspaceAccessDeniedError());
     await expect(
       synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A)),
