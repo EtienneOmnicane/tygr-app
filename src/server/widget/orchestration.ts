@@ -790,6 +790,29 @@ export async function synchroniserConnexionsDepuisOmnifi(
     pageC += 1;
   }
 
+  // 2bis. PÉRIMÈTRE (LOT 1) : le sync ne RAFRAÎCHIT que les connexions DÉJÀ en base de
+  // ce workspace (celles créées via le widget). Une connexion vue côté Omni-FI mais
+  // ABSENTE de bank_connections est IGNORÉE — JAMAIS créée par le sync (décision produit :
+  // ajouter une banque passe par le widget, pas par le bouton « Synchroniser »). Sans ce
+  // filtre, `GET /connections` ramène TOUT l'univers de l'EndUser et chaque connexion
+  // découverte était upsertée (banques jamais connectées créées en base).
+  //
+  // Le SELECT est SCOPÉ (DANS executer → RLS workspace courant) : il ne peut retourner que
+  // les omnifi_connection_id de CE tenant. Filtrer sur un ensemble non scopé réintroduirait
+  // une voie cross-tenant — la garde est volontairement fail-closed (un id inconnu = exclu).
+  const connexionsConnues = await executer(async (tx) => {
+    const lignes = await tx
+      .select({ omnifiConnectionId: bankConnections.omnifiConnectionId })
+      .from(bankConnections);
+    return new Set(lignes.map((l) => l.omnifiConnectionId));
+  });
+  // On ne garde que les connexions présentes en base. Une connexion exclue ici ne génère
+  // AUCUN appel Omni-FI en aval (ni listerComptesConnexion, ni declencherSync) et n'est PAS
+  // comptée dans `connexions` (le compteur reflète les banques réellement traitées).
+  const connexionsATraiter = connexions.filter((cx) =>
+    connexionsConnues.has(cx.ConnectionId),
+  );
+
   // 3. Pour CHAQUE connexion : (a) découvrir + persister les comptes, (b) DÉCLENCHER
   //    un sync RÉEL gardé par le cooldown puis attendre le job, (c) selon l'issue,
   //    ingérer les transactions de SES comptes (boucle de lecture INCHANGÉE). On
@@ -801,7 +824,7 @@ export async function synchroniserConnexionsDepuisOmnifi(
   const rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }> = [];
   const echecsDetail: ResultatSynchronisation["echecsDetail"] = [];
 
-  for (const cx of connexions) {
+  for (const cx of connexionsATraiter) {
     // FAIL-SOFT PAR CONNEXION : tout le corps de traitement d'UNE connexion est
     // enveloppé. Une erreur dure (OmniFiApiError 4xx/5xx hors 429/already-running gérés
     // en amont, désalignement, panne réseau, échec DB…) est CAPTURÉE ici : on l'enregistre
@@ -922,7 +945,10 @@ export async function synchroniserConnexionsDepuisOmnifi(
   }
 
   return {
-    connexions: connexions.length,
+    // Option 1 : on compte les connexions RÉELLEMENT traitées (connues en base), pas le
+    // total vu côté Omni-FI — cohérent avec le message UI « N banque(s) à jour » (un
+    // workspace sans connexion → 0 → message neutre côté action).
+    connexions: connexionsATraiter.length,
     comptesRattaches,
     transactionsImportees,
     aReparer,
