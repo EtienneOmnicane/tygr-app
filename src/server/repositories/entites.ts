@@ -28,6 +28,7 @@ import {
   bankAccounts,
   entities,
   memberEntityScopes,
+  parties,
   users,
   workspaceMembers,
 } from "@/server/db/schema";
@@ -64,6 +65,15 @@ export class CompteIntrouvableError extends Error {
   constructor() {
     super("Compte introuvable");
     this.name = "CompteIntrouvableError";
+  }
+}
+
+/** Party (entité légale Omni-FI) absente du workspace courant. */
+export class PartieIntrouvableError extends Error {
+  readonly code = "PARTY_NOT_FOUND";
+  constructor() {
+    super("Partie introuvable");
+    this.name = "PartieIntrouvableError";
   }
 }
 
@@ -360,6 +370,51 @@ export async function assignerCompteEntite<TDb extends AnyPgDatabase>(
     if (maj.length === 0) throw new CompteIntrouvableError();
   } catch (e) {
     if (e instanceof CompteIntrouvableError) throw e;
+    // FK composite (entity_id, workspace_id) → entities : entité absente du workspace.
+    if (codePg(e) === "23503") throw new EntiteIntrouvableError(); // foreign_key_violation
+    throw e;
+  }
+}
+
+/**
+ * Assigne une PARTY (entité légale Omni-FI) à une entité (BU), ou la repasse en
+ * « non rattachée » (entityId = null). Pendant côté `parties` de assignerCompteEntite
+ * (L6b). Même gabarit exactement : UPDATE borné workspace_id = ctx (jamais paramètre),
+ * 0 ligne (party d'un autre tenant / inexistante) → PartieIntrouvableError (404, pas
+ * d'oracle d'existence), SQLSTATE 23503 (FK composite parties_entity_workspace_fk) →
+ * EntiteIntrouvableError (entity_id d'un autre workspace).
+ *
+ * ⚠️ INVARIANT CRITIQUE (L6b) : `parties.entity_id` est un rattachement BU posé à la
+ * MAIN par l'ADMIN. L'ingestion (`upsertPartieEtRole`) l'OMET VOLONTAIREMENT de son
+ * `set` ON CONFLICT pour qu'un re-sync ne l'écrase jamais. Cette fonction écrit
+ * `entity_id` par un chemin SÉPARÉ (UPDATE direct gardé) : elle ne passe PAS par
+ * `upsertPartieEtRole` et ne change RIEN à cet ON CONFLICT. Un re-sync ultérieur ne
+ * réécrase donc pas l'assignation posée ici (prouvé par la suite d'isolation).
+ *
+ * ⚠️ Écriture sous garde ADMIN (Vision Globale) : `parties` n'a PAS de policy
+ * entity_scope (le périmètre entité borne bank_accounts, pas la table d'entités
+ * légales) ; seules tenant_isolation (étage 1) + la garde ADMIN gouvernent ici.
+ */
+export async function assignerPartieEntite<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  data: { partyId: string; entityId: string | null },
+): Promise<void> {
+  exigerAdmin(ctx);
+  try {
+    const maj = await tx
+      .update(parties)
+      .set({ entityId: data.entityId })
+      .where(
+        and(
+          eq(parties.id, data.partyId),
+          eq(parties.workspaceId, ctx.workspaceId),
+        ),
+      )
+      .returning({ id: parties.id });
+    if (maj.length === 0) throw new PartieIntrouvableError();
+  } catch (e) {
+    if (e instanceof PartieIntrouvableError) throw e;
     // FK composite (entity_id, workspace_id) → entities : entité absente du workspace.
     if (codePg(e) === "23503") throw new EntiteIntrouvableError(); // foreign_key_violation
     throw e;

@@ -204,10 +204,12 @@ export {
   renommerEntite,
   archiverEntite,
   assignerCompteEntite,
+  assignerPartieEntite,
   definirScopesMembre,
   EntiteNonAutoriseError,
   EntiteIntrouvableError,
   CompteIntrouvableError,
+  PartieIntrouvableError,
   EntiteNomDupliqueError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
