@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
     "test": "vitest run",
+    "test:isolation": "vitest run tests/isolation",
     "db:generate": "drizzle-kit generate",
     "db:provision": "node scripts/provision.mjs",
     "db:baseline": "node scripts/baseline-migrations.mjs",
