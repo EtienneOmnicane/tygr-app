@@ -35,7 +35,13 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Suite d'isolation anti-IDOR (BLOQUANTE — règle 2). Tourne sur PGlite,
+      # Suite complète (unit + integration + isolation). Tourne sur PGlite,
       # aucune base externe requise. Échec ici = pas de merge possible.
       - name: Tests (suite anti-IDOR incluse)
         run: npm test
+
+      # Suite anti-IDOR isolée — statut CI distinct et nommé (règle 2). Redondant
+      # avec le step global ci-dessus (ceinture ET bretelles) mais donne un signal
+      # propre et ciblé pour l'isolation tenant. BLOQUANT : un échec casse le job.
+      - name: Suite anti-IDOR (isolation)
+        run: npm run test:isolation
