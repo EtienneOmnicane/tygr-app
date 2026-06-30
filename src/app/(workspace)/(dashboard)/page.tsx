@@ -8,7 +8,11 @@
  *   tournent en parallèle (Promise.all) → une transaction, une revalidation de
  *   membership, RLS appliquée une fois. Le service `dashboard.ts` calcule toute
  *   agrégation en SQL (montants = chaînes, règle 8) ; la page ne recalcule rien.
- * - Fenêtre courbe = 90 jours glissants jusqu'à AUJOURD'HUI à Maurice (UTC+4).
+ * - Fenêtre = pilotée par le PRESET de période (L8c) lu dans `?periode`. Défaut
+ *   « 6m » si absent/invalide → comportement historique inchangé (NB_MOIS_HISTORIQUE
+ *   = 6). Les bornes sont résolues par `resoudrePeriode` (PUR, fuseau Maurice) — la
+ *   valeur d'URL brute ne touche jamais le SQL (normalisée en nbMois/dates typées).
+ *   Le MÊME preset pilote la courbe de flux, la tendance mensuelle et la grille d'axe.
  * - Mono-devise : on passe `base_currency` du workspace ; le service n'agrège que
  *   les comptes de cette devise (garde côté SQL).
  *
@@ -31,6 +35,7 @@ import {
   withWorkspace,
 } from "@/server/db";
 import { VENDORS_TOP_N_DEFAUT } from "@/lib/insights-schema";
+import { resoudrePeriode } from "@/lib/periode";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
@@ -39,28 +44,16 @@ import {
 
 import { DashboardContent } from "@/components/dashboard/dashboard-content";
 
-/** Date du jour au fuseau Maurice (UTC+4), format YYYY-MM-DD. */
-function aujourdhuiMaurice(): string {
-  const maintenant = new Date();
-  // Décale de +4h puis lit la date UTC → équivaut à la date locale Maurice.
-  const maurice = new Date(maintenant.getTime() + 4 * 60 * 60 * 1000);
-  return maurice.toISOString().slice(0, 10);
-}
-
 /**
- * Premier jour (YYYY-MM-DD) du mois obtenu en reculant de `recul` mois depuis
- * `mois` ("YYYY-MM"). Calcul pur sur les composantes (pas de fuseau : on raisonne
- * en mois calendaires Maurice, déjà portés par `mois`). Ex. ("2026-06", 5) →
- * "2026-01-01".
+ * Next 16 : `searchParams` est un Promise à `await` (AGENTS.md « This is NOT the
+ * Next.js you know »). Lire `?periode` opte la page en rendu dynamique — sans impact
+ * ici (le dashboard fetch déjà par requête sous withWorkspace, jamais prérendu).
  */
-function premierJourMoisRecul(mois: string, recul: number): string {
-  const [a, m] = mois.split("-").map(Number);
-  // Index 0-based du mois, reculé ; Date normalise les débordements d'année.
-  const d = new Date(Date.UTC(a, m - 1 - recul, 1));
-  return d.toISOString().slice(0, 10);
-}
-
-export default async function PageDashboard() {
+export default async function PageDashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ [cle: string]: string | string[] | undefined }>;
+}) {
   let session;
   try {
     session = await exigerSessionWorkspace();
@@ -74,12 +67,13 @@ export default async function PageDashboard() {
     throw erreur;
   }
 
-  const to = aujourdhuiMaurice();
-  const mois = to.slice(0, 7); // "YYYY-MM" courant
-  const NB_MOIS_HISTORIQUE = 6; // fenêtre de tendance (littéral serveur, jamais client)
-  // Fenêtre de la courbe de FLUX (granularité mois) : 1er jour du mois il y a
-  // (NB_MOIS_HISTORIQUE − 1) mois → couvre les mêmes N mois que la tendance.
-  const fromFlux = premierJourMoisRecul(mois, NB_MOIS_HISTORIQUE - 1);
+  // Preset de période (L8c) : la valeur d'URL est NORMALISÉE ici (liste blanche,
+  // défaut 6m). `resoudrePeriode` retourne les bornes typées — from/to (jours Maurice
+  // INCLUSIFS), nbMois (≥1, fenêtre de tendance) et moisAncrage ("YYYY-MM" courant).
+  // Pour « tout », from = plancher 1re partition ("2024-01-01") → from ≤ to garanti et
+  // pruning des partitions préservé (filtre sur transaction_date, jamais booking_date_time).
+  const { periode } = await searchParams;
+  const { from: fromFlux, to, nbMois, moisAncrage: mois } = resoudrePeriode(periode);
 
   // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx. Le
   // `ctx.role` (re-résolu serveur) descend en prop pour gater le bouton « Synchroniser »
@@ -110,9 +104,10 @@ export default async function PageDashboard() {
         direction: "outflow",
         topN: VENDORS_TOP_N_DEFAUT,
       }),
-      // Tendance N derniers mois jusqu'au mois courant Maurice. Une seule requête
-      // GROUP BY (mois, devise) ; les mois vides sont comblés par grilleMois côté UI.
-      syntheseParMois(tx, { moisFin: mois, nbMois: NB_MOIS_HISTORIQUE }),
+      // Tendance des `nbMois` derniers mois jusqu'au mois courant Maurice (piloté par
+      // le preset). Une seule requête GROUP BY (mois, devise) ; les mois vides sont
+      // comblés par grilleMois côté UI.
+      syntheseParMois(tx, { moisFin: mois, nbMois }),
       transactionsRecentes(tx),
       tx.execute(
         sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
@@ -134,8 +129,8 @@ export default async function PageDashboard() {
         synthesesMois,
         topVendors: vendors,
         serieMensuelle: serie,
-        // Axe continu des N mois (calcul pur, partagé avec l'UI).
-        grilleMensuelle: grilleMois(NB_MOIS_HISTORIQUE, mois),
+        // Axe continu des `nbMois` mois (calcul pur, partagé avec l'UI).
+        grilleMensuelle: grilleMois(nbMois, mois),
         transactionsRecentes: transactions,
       },
     };
