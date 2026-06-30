@@ -481,6 +481,63 @@ describe("#10 — view_filter inerte SANS filtre (rétro-compat L4 préservée e
   });
 });
 
+describe("#10bis ⭐ — la lecture DROIT-COMPLET (session sans viewFilter) ignore un view_filter actif", () => {
+  // Verrou du correctif L8b-1 (bug « le sélecteur de périmètre s'auto-ampute »,
+  // recon /tmp/recon-l8b1-fix.md §7.3). Le layout peuple le PerimetreSwitcher avec
+  // une session SANS viewFilter ({ userId, activeWorkspaceId } seulement) PRÉCISÉMENT
+  // pour que la liste reflète le DROIT COMPLET et non le filtre — sinon, une fois un
+  // filtre actif, la liste s'amputerait à l'ensemble filtré et on ne pourrait plus
+  // ré-élargir. On NE re-teste PAS ici l'intersection/le rétrécissement du view_filter
+  // (déjà couverts par la suite L5 account-scope-filles) : on prouve seulement la
+  // DIVERGENCE entre la session filtrée et la session droit-complet pour un MÊME membre.
+  //
+  // MGR_PARTY a pour DROIT {ACC_S1, ACC_S2}. On pose un viewFilter restreint à
+  // {ACC_S1} (sous-ensemble strict de son droit) et on compare les deux lectures.
+  const sessPartyFiltre = {
+    userId: MGR_PARTY,
+    activeWorkspaceId: WS_A,
+    viewFilter: [ACC_S1],
+  };
+
+  it("AVEC viewFilter [ACC_S1] → la lecture ne voit QUE ACC_S1 (le filtre mord)", async () => {
+    const vus = await comptesVisibles(sessPartyFiltre);
+    expect(vus).toEqual([ACC_S1]);
+    expect(vus).not.toContain(ACC_S2); // dans le droit, mais hors filtre d'affichage
+  });
+
+  it("SANS viewFilter (mêmes user+workspace) → la lecture voit TOUT le droit {S1, S2}", async () => {
+    // C'est EXACTEMENT ce que fait le layout pour alimenter le sélecteur : on ne
+    // passe que { userId, activeWorkspaceId } → le GUC view_filter n'est pas posé →
+    // clause RLS neutre → tout le droit (account_scope/tenant_isolation restent posés).
+    const vus = await comptesVisibles(sessParty);
+    expect(vus.sort()).toEqual([ACC_S1, ACC_S2].sort());
+  });
+
+  it("la lecture droit-complet est un SUR-ENSEMBLE STRICT de la lecture filtrée (anti-amputation)", async () => {
+    const droitComplet = await comptesVisibles(sessParty);
+    const filtre = await comptesVisibles(sessPartyFiltre);
+    // Tout ce que voit la vue filtrée est visible en droit-complet…
+    for (const id of filtre) expect(droitComplet).toContain(id);
+    // …et le droit-complet voit STRICTEMENT plus (au moins ACC_S2 en plus) : c'est la
+    // garantie que le sélecteur ne perd jamais un compte décoché (le bug corrigé).
+    expect(droitComplet.length).toBeGreaterThan(filtre.length);
+    expect(droitComplet).toContain(ACC_S2);
+    expect(filtre).not.toContain(ACC_S2);
+  });
+
+  it("la lecture droit-complet ne pose PAS le GUC view_filter, même quand un filtre EXISTE par ailleurs", async () => {
+    // Preuve directe du mécanisme : la session sans viewFilter laisse le GUC absent,
+    // donc la 2e clause AND de la policy account_scope court-circuite (neutre).
+    const guc = await withWorkspace(sessParty, async (tx) => {
+      const r = await tx.execute(
+        sql`select current_setting('app.current_view_filter', true) as v`,
+      );
+      return (r as unknown as { rows: { v: string | null }[] }).rows[0].v;
+    });
+    expect(guc === null || guc === "").toBe(true);
+  });
+});
+
 describe("résolveur — anti-élargissement (le scope ne vient QUE du contexte serveur)", () => {
   it("la session stricte (2 champs) interdit d'injecter un account_scope forgé", async () => {
     await expect(

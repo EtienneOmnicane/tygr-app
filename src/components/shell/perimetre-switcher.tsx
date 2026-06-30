@@ -176,22 +176,29 @@ export function PerimetreSwitcher({
               focus:outline-none focus:ring-2 focus:ring-primary"
           />
 
-          {/* Option « Groupe » épinglée : décocher tout = revenir au défaut. */}
+          {/* Option « Groupe » épinglée = état PAR DÉFAUT / reset (décocher tout).
+              Mise en évidence : encadré accent permanent (pas seulement quand
+              actif) pour signaler le « point de retour », ✓ quand actif. Tokens
+              sémantiques (primary), jamais vert/rouge de donnée. */}
           <button
             type="button"
             onClick={() => setCoches(new Set())}
             role="option"
             aria-selected={nbCoches === 0}
             className={cn(
-              "mb-1 flex w-full items-center justify-between rounded-control px-2 py-1.5",
+              "mb-1 flex w-full items-center justify-between rounded-control border px-2 py-1.5",
               "text-left text-sm transition-colors focus:outline-none focus-visible:ring-2",
               "focus-visible:ring-primary",
-              nbCoches === 0 ? "bg-primary-50 font-medium" : "hover:bg-surface-inset",
+              nbCoches === 0
+                ? "border-primary bg-primary-50 font-medium"
+                : "border-line/60 hover:bg-surface-inset",
             )}
           >
             <span>
               Groupe
-              <span className="ml-1 text-xs text-text-muted">· tous les comptes</span>
+              <span className="ml-1 text-xs text-text-muted">
+                · tous les comptes (vue par défaut)
+              </span>
             </span>
             {nbCoches === 0 && (
               <span aria-hidden className="text-xs font-semibold text-primary">✓</span>
@@ -251,7 +258,24 @@ export function PerimetreSwitcher({
             <input key={id} type="hidden" name="bankAccountId" value={id} />
           ))}
 
-          <div className="mt-2 flex items-center justify-end gap-2 border-t border-line pt-2">
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-line pt-2">
+            {/* « Tout effacer » : reset explicite de la sélection → « Groupe »
+                (l'utilisateur valide ensuite via Appliquer). Visible seulement
+                quand au moins un compte est coché. Bouton texte discret (tokens
+                sémantiques), jamais vert/rouge. */}
+            {nbCoches > 0 ? (
+              <button
+                type="button"
+                onClick={() => setCoches(new Set())}
+                className="rounded-control px-2 py-1 text-xs font-medium text-text-muted
+                  transition-colors hover:text-text focus:outline-none focus-visible:ring-2
+                  focus-visible:ring-primary"
+              >
+                Tout effacer
+              </button>
+            ) : (
+              <span aria-hidden />
+            )}
             <button
               type="submit"
               disabled={enCours}

@@ -99,23 +99,41 @@ export default async function WorkspaceLayout({
     const session = await exigerSessionWorkspace();
     userId = session.userId;
     viewFilterActif = session.viewFilter ?? null;
-    contexte = await withWorkspace(session, async (tx, ctx) => {
+
+    // (1) CONTEXTE du chrome (role + nom du workspace). On garde la SESSION
+    //     COMPLÈTE : le nom du workspace est indifférent au view_filter (il ne lit
+    //     aucun bank_accounts scopé), donc le filtre éventuel est sans effet ici.
+    const contexteChrome = await withWorkspace(session, async (tx, ctx) => {
       const lignes = await tx
         .select({ name: schema.workspaces.name })
         .from(schema.workspaces)
         .where(eq(schema.workspaces.id, ctx.workspaceId))
         .limit(1);
-      // listerComptes DANS la transaction existante (UN SEUL withWorkspace, perf
-      // — même argument que page.tsx:7) : alimente le sélecteur de périmètre du
-      // header. Liste scopée RLS (le membre ne voit que ses comptes).
-      const comptes = await listerComptes(tx);
       return {
         role: ctx.role,
         workspaceId: ctx.workspaceId,
         workspaceNom: lignes[0]?.name ?? "—",
-        comptes,
       };
     });
+
+    // (2) Liste qui ALIMENTE le sélecteur de périmètre : elle doit refléter le
+    //     DROIT COMPLET du membre, JAMAIS le view_filter — sinon, une fois un
+    //     filtre appliqué, listerComptes (SELECT bank_accounts, soumis à la clause
+    //     AND view_filter de la policy account_scope, 0016/0017) ne renverrait que
+    //     les comptes filtrés → le sélecteur s'auto-amputerait et on ne pourrait
+    //     plus ré-élargir (bug L8b-1). On lit donc dans une transaction SÉPARÉE
+    //     avec une session SANS viewFilter (mêmes 2 champs que le callback jwt,
+    //     config.ts:145-151) → le GUC app.current_view_filter n'est PAS posé →
+    //     clause view_filter neutre. account_scope / entity_scope / tenant_isolation
+    //     restent posés (sécurité INCHANGÉE) → la liste = exactement le droit du
+    //     membre, ni plus, ni moins. Transaction distincte = GUC en SET LOCAL, donc
+    //     aucune interférence avec la lecture filtrée des cartes (page.tsx).
+    const comptes = await withWorkspace(
+      { userId: session.userId, activeWorkspaceId: session.activeWorkspaceId },
+      (tx) => listerComptes(tx),
+    );
+
+    contexte = { ...contexteChrome, comptes };
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
