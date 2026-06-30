@@ -16,6 +16,30 @@
  * DROIT. « Groupe » et « filtre dont aucun compte n'est visible » convergent donc
  * vers le même résultat — voulu (un filtre vidé n'est pas « 0 ligne » côté token).
  */
+import { z } from "zod";
+
+/**
+ * Borne anti-abus du nombre de comptes filtrés. Alignée sur la borne `entityIds`
+ * de admin/entites/actions.ts:89. Un workspace a un nombre fini de comptes ;
+ * au-delà c'est forcément forgé → rejet bruyant.
+ */
+export const PERIMETRE_MAX_COMPTES = 200;
+
+/**
+ * Schéma STRICT du périmètre demandé (consommé par la Server Action
+ * definirViewFilter). `bankAccountIds` = liste d'UUID de comptes ; `[]` est VALIDE
+ * et signifie « Groupe » (aucun filtre). `.strict()` rejette tout champ en trop.
+ * La liste est seulement VALIDÉE ici (forme/borne) ; l'INTERSECTION avec les
+ * comptes réellement visibles se fait dans le callback jwt (normaliserViewFilter),
+ * et la SÉCURITÉ reste la RLS (le serveur intersecte le GUC, tenancy.ts:391-419).
+ */
+export const perimetreSchema = z
+  .object({
+    bankAccountIds: z.array(z.string().uuid()).max(PERIMETRE_MAX_COMPTES),
+  })
+  .strict();
+
+export type PerimetreValide = z.infer<typeof perimetreSchema>;
 
 /**
  * Réduit une demande de filtre (issue du client, donc non fiable) à la liste

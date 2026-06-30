@@ -24,6 +24,7 @@ import {
   exigerSessionWorkspace,
   ServiceIndisponibleError,
 } from "@/server/auth/session";
+import { perimetreSchema } from "@/server/auth/view-filter";
 import {
   type SyntheseMensuelle,
   syntheseParMois,
@@ -40,26 +41,6 @@ export interface EtatPerimetre {
 }
 
 const MESSAGE_PERIMETRE_INVALIDE = "Périmètre invalide.";
-
-/**
- * Borne anti-abus du nombre de comptes filtrés (L8b-1). Alignée sur la borne
- * `entityIds` de admin/entites/actions.ts:89. Un workspace a un nombre fini de
- * comptes ; au-delà c'est forcément forgé → rejet bruyant.
- */
-const PERIMETRE_MAX_COMPTES = 200;
-
-/**
- * Schéma STRICT du périmètre demandé. `bankAccountIds` = liste d'UUID de comptes ;
- * `[]` est VALIDE et signifie « Groupe » (aucun filtre). `.strict()` rejette tout
- * champ en trop. La liste est seulement VALIDÉE ici (forme) ; l'INTERSECTION avec
- * les comptes réellement visibles se fait dans le callback jwt (hygiène de token),
- * et la SÉCURITÉ reste la RLS (le serveur intersecte le GUC, tenancy.ts:391-419).
- */
-const perimetreSchema = z
-  .object({
-    bankAccountIds: z.array(z.string().uuid()).max(PERIMETRE_MAX_COMPTES),
-  })
-  .strict();
 
 /**
  * Définit le périmètre d'affichage (sélecteur de périmètre L8b-1). Calque de
