@@ -5,6 +5,26 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Sélecteur de périmètre (L8b-1) — bug d'auto-amputation corrigé (2026-06-30)
+
+Le `PerimetreSwitcher` ne s'auto-ampute plus : la liste qui le peuple reflète
+désormais le DROIT COMPLET du membre (lecture en session sans `viewFilter` dans le
+layout), pas le filtre actif. Affordance de reset ajoutée (« Tout effacer » +
+option « Groupe » mise en évidence). Dette UI ouverte par ce chantier :
+
+- [ ] **UI-PERIMETRE-ACCORDEON1 (P2, effort ~0,5 j) — sélecteur de périmètre en
+  accordéon banque→comptes (tri-state sur la banque : tout / partiel / rien) pour
+  gérer les gros volumes de comptes.** Aujourd'hui le sélecteur est une **liste
+  PLATE** de comptes (`src/components/shell/perimetre-switcher.tsx`) : parfait à
+  faible volume, mais illisible quand un manager a des dizaines de comptes répartis
+  sur plusieurs banques. Cible : grouper les comptes par `institutionName`, avec une
+  case par banque à **trois états** (tous cochés / partiellement cochés / aucun) qui
+  coche/décoche tous ses comptes d'un coup, et une section repliable par banque.
+  Pas de changement serveur (la sélection postée reste une liste de `bankAccountId`,
+  la RLS intersecte). **Déclencheur** : volumes réels — premier manager avec des
+  dizaines de comptes / plusieurs banques (retour terrain « la liste est trop
+  longue »). Tant que les workspaces restent à faible volume, la liste plate suffit.
+
 ### Verrou production sur hôte partagé — livré (2026-06-26)
 
 `config.ts` autorise désormais `OMNIFI_ENV="production"` sur l'hôte PARTAGÉ
