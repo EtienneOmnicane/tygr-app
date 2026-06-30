@@ -25,6 +25,19 @@ option « Groupe » mise en évidence). Dette UI ouverte par ce chantier :
   dizaines de comptes / plusieurs banques (retour terrain « la liste est trop
   longue »). Tant que les workspaces restent à faible volume, la liste plate suffit.
 
+- [ ] **PERIMETRE-ENTITE-DERIVE1 (P2, effort ~1 j) — le filtre « par entité » dérive
+  si l'ADMIN réassigne un compte.** L'axe Entité du sélecteur (L8b-2, stratégie a) pose
+  dans le token la **liste des `bankAccountId` de l'entité à l'instant T** (le token ne
+  stocke pas d'`entity_id`). Si l'ADMIN réassigne ensuite un compte à/hors de l'entité,
+  la liste figée ne suit pas → le libellé re-dérivé (`entiteDuFiltre`,
+  `src/components/shell/perimetre-switcher.tsx`) cesse de correspondre exactement et
+  retombe sur « N comptes » (pas de mensonge, mais on perd le nom). **Pas une dette
+  d'isolation** (la RLS reste la sécurité ; le filtre ne peut que rétrécir). **Déclencheur** :
+  réassignation de compte fréquente OU besoin produit d'un libellé entité stable.
+  **Résolution** : stratégie (b) (GUC `view_filter_entity` dédié, axe RLS complet) ou
+  recalcul du filtre au login / au changement d'assignation. Tant que les assignations
+  sont rares, la dérive est acceptable (péremption assumée par le plan L8b-2).
+
 ### Verrou production sur hôte partagé — livré (2026-06-26)
 
 `config.ts` autorise désormais `OMNIFI_ENV="production"` sur l'hôte PARTAGÉ

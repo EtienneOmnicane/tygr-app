@@ -35,6 +35,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/server/db/schema";
 import { bankAccounts, userScopes } from "@/server/db/schema";
+import { comptesParEntite } from "@/server/repositories/dashboard";
 import { createWithWorkspace } from "@/server/db/tenancy";
 
 const client = new PGlite();
@@ -53,8 +54,11 @@ const MGR_BU = "44444444-4444-4444-8444-444444444444"; // scope entité ENT_SUCR
 const MGR_VIDE = "55555555-5555-4555-8555-555555555555"; // scope party FANTOME (∅)
 const BOB_B = "66666666-6666-4666-8666-666666666666"; // membre WS_B
 
-// Entité (axe BU) — WS_A.
+// Entités (axe BU) — WS_A.
 const ENT_SUCRE = "e0000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+// ENT_HOLDING (L8b-2 #ent) : 2e entité, portée par ACC_H (party HOLDING, HORS du
+// droit de MGR_PARTY/MGR_BU) → prouve « filtre par entité hors droit → 0 ligne ».
+const ENT_HOLDING = "e1000000-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 // Parties WS_A (+ témoin WS_B).
 const PARTY_SUCRE = "9a000000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -65,7 +69,7 @@ const PARTY_B = "9c000000-cccc-4ccc-8ccc-cccccccccccc"; // WS_B
 // Comptes WS_A (+ témoin WS_B).
 const ACC_S1 = "acc05100-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // party SUCRE + entity ENT_SUCRE
 const ACC_S2 = "acc05200-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // party SUCRE
-const ACC_H = "acc00100-cccc-4ccc-8ccc-cccccccccccc"; // party HOLDING
+const ACC_H = "acc00100-cccc-4ccc-8ccc-cccccccccccc"; // party HOLDING + entity ENT_HOLDING
 const ACC_ORPHELIN = "acc00200-dddd-4ddd-8ddd-dddddddddddd"; // SANS party, entity_id NULL
 const ACC_B = "acc0bbbb-eeee-4eee-8eee-eeeeeeeeeeee"; // WS_B
 
@@ -130,12 +134,12 @@ beforeAll(async () => {
   if (!ent.rows.some((r) => r.policyname === "entity_scope"))
     throw new Error("entity_scope a disparu — L4 ne doit PAS la toucher.");
 
-  // 3. Seed owner (bypass RLS). WS_A : entité ENT_SUCRE ; parties SUCRE/HOLDING +
-  //    FANTOME (sans comptes) ; comptes ACC_S1(party SUCRE, entity ENT_SUCRE),
-  //    ACC_S2(party SUCRE), ACC_H(party HOLDING), ACC_ORPHELIN(sans party, NULL) ;
-  //    account_party_role SUCRE→{S1,S2}, HOLDING→{H} ; scopes : MGR_PARTY→SUCRE,
-  //    MGR_COMPTE→ACC_S1, MGR_BU→ENT_SUCRE (member_entity_scopes), MGR_VIDE→FANTOME.
-  //    WS_B : témoins cross-tenant, AUCUN scope.
+  // 3. Seed owner (bypass RLS). WS_A : entités ENT_SUCRE + ENT_HOLDING ; parties
+  //    SUCRE/HOLDING + FANTOME (sans comptes) ; comptes ACC_S1(party SUCRE, entity
+  //    ENT_SUCRE), ACC_S2(party SUCRE), ACC_H(party HOLDING, entity ENT_HOLDING),
+  //    ACC_ORPHELIN(sans party, NULL) ; account_party_role SUCRE→{S1,S2}, HOLDING→{H} ;
+  //    scopes : MGR_PARTY→SUCRE, MGR_COMPTE→ACC_S1, MGR_BU→ENT_SUCRE (member_entity_scopes),
+  //    MGR_VIDE→FANTOME. WS_B : témoins cross-tenant, AUCUN scope.
   await client.exec(`
     insert into workspaces (id, name, kind, omnifi_client_user_id) values
       ('${WS_A}','Groupe A','INTERNAL_BU','eu-a'),
@@ -155,7 +159,8 @@ beforeAll(async () => {
       ('${MGR_VIDE}','${WS_A}','MANAGER'),
       ('${BOB_B}','${WS_B}','MANAGER');
     insert into entities (id, workspace_id, name) values
-      ('${ENT_SUCRE}','${WS_A}','Sucrière BU');
+      ('${ENT_SUCRE}','${WS_A}','Sucrière BU'),
+      ('${ENT_HOLDING}','${WS_A}','Holding BU');
     insert into parties (id, workspace_id, omnifi_party_id, name, is_active) values
       ('${PARTY_SUCRE}','${WS_A}','pid-suc','Société Sucrière',true),
       ('${PARTY_HOLDING}','${WS_A}','pid-hold','Holding',true),
@@ -167,7 +172,7 @@ beforeAll(async () => {
     insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected, entity_id) values
       ('${ACC_S1}','${WS_A}','${CONN_A}','oa-s1','Sucre 1','MUR','1000.00',true,'${ENT_SUCRE}'),
       ('${ACC_S2}','${WS_A}','${CONN_A}','oa-s2','Sucre 2','MUR','2000.00',true,null),
-      ('${ACC_H}','${WS_A}','${CONN_A}','oa-h','Holding','MUR','3000.00',true,null),
+      ('${ACC_H}','${WS_A}','${CONN_A}','oa-h','Holding','MUR','3000.00',true,'${ENT_HOLDING}'),
       ('${ACC_ORPHELIN}','${WS_A}','${CONN_A}','oa-orph','Orphelin','MUR','4000.00',true,null),
       ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','9999.00',true,null);
     insert into account_party_role (workspace_id, bank_account_id, party_id, ownership_type, is_primary) values
@@ -429,6 +434,56 @@ describe("#aut ⭐ — AUTO-RÉFÉRENCE (axe BU résolu sans interaction parasit
     expect(r.accountScope).toEqual({ mode: "COMPTES", accountIds: [ACC_S1] });
     expect(r.entGuc).toBe(ENT_SUCRE);
     expect(r.accGuc).toBe(ACC_S1);
+  });
+});
+
+describe("#ent ⭐ — filtre d'affichage dérivé d'une ENTITÉ (L8b-2) ⊆ droit", () => {
+  // Prouve la propriété de sécurité de C1 (comptesParEntite) + C3 (definirPerimetreEntite) :
+  // un viewFilter issu de la TRADUCTION d'une entité reste TOUJOURS un sous-ensemble du
+  // droit du membre. comptesParEntite s'exécute SOUS le droit (entity_scope +
+  // account_scope déjà posés par withWorkspace), à la différence du bloc 4b de tenancy.ts
+  // (#aut) qui lit l'état BRUT pour CONSTRUIRE le droit.
+  //
+  // La suite teste le RÉSOLVEUR + la RLS sur Postgres réel ; elle ne peut PAS appeler la
+  // Server Action (unstable_update/redirect = runtime Next). On teste donc la COMPOSITION
+  // ÉQUIVALENTE : comptesParEntite(tx, ENT) (C1) PUIS une lecture avec viewFilter = <ce
+  // que renvoie comptesParEntite> — exactement ce que fait l'action, sans Next.
+  it("ADMIN (Vision Globale) filtrant ENT_SUCRE ne traduit QUE ACC_S1 (seul compte de l'entité)", async () => {
+    const ids = await withWorkspace(sessAdmin, (tx) => comptesParEntite(tx, ENT_SUCRE));
+    expect(ids).toEqual([ACC_S1]); // ACC_S2 est entity_id=null → hors ENT_SUCRE
+    // Le viewFilter dérivé, posé, restreint la vue à ce sous-ensemble (mécanique C3).
+    const vus = await withWorkspace({ ...sessAdmin, viewFilter: ids }, (tx) =>
+      tx.select({ id: bankAccounts.id }).from(bankAccounts).orderBy(bankAccounts.id),
+    );
+    expect(vus.map((l) => l.id)).toEqual([ACC_S1]);
+  });
+
+  it("ADMIN filtrant ENT_HOLDING traduit ACC_H (la 2e entité est bien distincte)", async () => {
+    const ids = await withWorkspace(sessAdmin, (tx) => comptesParEntite(tx, ENT_HOLDING));
+    expect(ids).toEqual([ACC_H]);
+  });
+
+  it("MGR_BU (scopé ENT_SUCRE) filtrant ENT_SUCRE voit le sous-ensemble dans son droit (ACC_S1)", async () => {
+    // entity_scope + account_scope déjà posés → la traduction est bornée au droit.
+    const ids = await withWorkspace(sessBu, (tx) => comptesParEntite(tx, ENT_SUCRE));
+    expect(ids).toEqual([ACC_S1]);
+  });
+
+  it("⭐ MGR_PARTY (droit party SUCRE = {S1,S2}) filtrant une entité HORS de son droit (ENT_HOLDING) → 0 ligne", async () => {
+    // ACC_H (∈ ENT_HOLDING) appartient à la party HOLDING, HORS du droit de MGR_PARTY
+    // (party SUCRE). Sous le droit, comptesParEntite ne voit ACC_H → liste VIDE. C'est
+    // la preuve qu'une entité hors-droit ne peut PAS faire fuiter de comptes (jamais
+    // « voir l'entité entière »). Côté action, [] ⇒ token sans filtre ⇒ « Groupe ».
+    const ids = await withWorkspace(sessParty, (tx) => comptesParEntite(tx, ENT_HOLDING));
+    expect(ids).toEqual([]);
+  });
+
+  it("MGR_PARTY filtrant ENT_SUCRE → sous-ensemble {ACC_S1} (jamais ACC_S2, hors de l'entité)", async () => {
+    // MGR_PARTY voit {S1,S2} (droit party). ENT_SUCRE ne contient QUE ACC_S1 (S2 a
+    // entity_id=null) → l'intersection droit ∩ entité = {ACC_S1}. Prouve que le filtre
+    // entité reste un sous-ensemble (ni l'entité entière au-delà du droit, ni tout le droit).
+    const ids = await withWorkspace(sessParty, (tx) => comptesParEntite(tx, ENT_SUCRE));
+    expect(ids).toEqual([ACC_S1]);
   });
 });
 

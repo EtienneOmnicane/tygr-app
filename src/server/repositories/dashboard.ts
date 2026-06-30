@@ -26,6 +26,7 @@ import {
   bankAccounts,
   bankConnections,
   balanceHistory,
+  entities,
   transactionsCache,
 } from "@/server/db/schema";
 import type { CategorySource } from "@/server/db/schema";
@@ -46,6 +47,24 @@ export interface CompteConnecte {
   currency: string;
   currentBalance: string | null;
   lastSyncedAt: Date | null;
+}
+
+/**
+ * Une ENTITÉ (BU) telle que le membre la voit, pour l'onglet « Par entité » du
+ * sélecteur de périmètre (L8b-2). Dérivée des COMPTES VISIBLES (pas de
+ * member_entity_scopes, qui rate la Vision Globale ; pas de listerEntites, ADMIN-only).
+ */
+export interface EntiteVisible {
+  entityId: string;
+  name: string;
+  /** Nb de comptes de cette entité visibles sous le droit (libellé « Sucre · 3 comptes »). */
+  nbComptes: number;
+  /**
+   * bankAccountId des comptes visibles de l'entité. Sert au libellé re-dérivé (C5) :
+   * égalité ENSEMBLISTE EXACTE entre cet ensemble et le view_filter courant ⇒ « Sucre ».
+   * (nbComptes === bankAccountIds.length ; les deux sont gardés pour la lisibilité.)
+   */
+  bankAccountIds: string[];
 }
 
 /**
@@ -139,6 +158,83 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
     .innerJoin(bankConnections, eq(bankAccounts.connectionId, bankConnections.id))
     .where(eq(bankAccounts.isSelected, true))
     .orderBy(bankAccounts.accountName);
+  return lignes;
+}
+
+/**
+ * Traduction « axe ENTITÉ → liste de bankAccountId » pour le sélecteur de périmètre
+ * (L8b-2). Renvoie les comptes de l'entité `entityId` VISIBLES sous le droit du membre.
+ *
+ * SÉCURITÉ — pourquoi cette lecture est sûre (différence CRITIQUE avec le bloc 4b de
+ * tenancy.ts) : 4b traduit entité→comptes AVANT la pose du droit (sur l'état tenant
+ * BRUT) parce qu'il CONSTRUIT le droit. Ici, au contraire, la fonction s'exécute DANS
+ * un withWorkspace dont la session a DÉJÀ posé `entity_scope` (RESTRICTIVE) et
+ * `account_scope` (RESTRICTIVE) — donc le SELECT ne voit QUE les comptes du périmètre du
+ * membre. Conséquences fail-closed :
+ *  - un `entityId` hors du périmètre du membre → 0 ligne (la RLS masque tout) ;
+ *  - une entité dont le membre ne voit qu'une partie des comptes → le SOUS-ENSEMBLE
+ *    visible, jamais l'entité entière. C'est cette lecture scopée qui empêche qu'une
+ *    entité hors-droit fasse fuiter des comptes (le rempart serveur view_filter, qui
+ *    intersecte DROIT ∩ filtre dans tenancy.ts, reste le garant ultime en aval).
+ *
+ * APPELANT (C3) : appeler avec une session SANS `viewFilter` (userId + activeWorkspaceId
+ * seulement). Sinon la clause AND view_filter de la policy account_scope amputerait la
+ * traduction (même mécanique que le bug #143) → l'entité ne pourrait jamais ré-élargir.
+ *
+ * Pas de filtre `workspace_id` paramètre : la RLS (tenant + entity + account scope) borne
+ * la lecture (CLAUDE.md règle 2). `eq` PARAMÉTRÉ (zéro interpolation). Ordre stable par
+ * `accountName` (déterminisme d'affichage + comparaison ensembliste du libellé, C5).
+ */
+export async function comptesParEntite(
+  tx: Tx,
+  entityId: string,
+): Promise<string[]> {
+  const lignes = await tx
+    .select({ id: bankAccounts.id })
+    .from(bankAccounts)
+    .where(eq(bankAccounts.entityId, entityId))
+    .orderBy(bankAccounts.accountName);
+  return lignes.map((l) => l.id);
+}
+
+/**
+ * Source des entités du sélecteur « Par entité » (L8b-2), pour TOUS les rôles (pas
+ * d'`exigerAdmin` : c'est le but — une lecture entités non-admin, scopée RLS). On
+ * NE réutilise PAS `listerEntites` (ADMIN-only, lèverait pour un MANAGER et exposerait
+ * un nbComptes non scopé) ni `member_entity_scopes` (vide en Vision Globale → raterait
+ * les entités du groupe).
+ *
+ * On part de `bank_accounts` (filtré par tenant_isolation + entity_scope + account_scope)
+ * et on `innerJoin entities` pour le nom : la BORNE entité vient du côté bank_accounts
+ * (un compte hors scope est déjà absent → son entité n'apparaît pas), donc fail-closed.
+ * `innerJoin` ⇒ les comptes `entity_id IS NULL` (non assignés, NULL-B) ne forment AUCUN
+ * groupe — ils restent accessibles via l'onglet « Par compte ».
+ *
+ * - Vision Globale (entity_scope non posé) : DISTINCT couvre toutes les entités portées
+ *   par ≥1 compte du groupe.
+ * - Vision Entité (membre scopé) : la liste se réduit aux entités du périmètre ayant ≥1
+ *   compte visible.
+ *
+ * Filtres : `isSelected=true` (cohérent avec listerComptes) + `isActive=true` (une entité
+ * archivée disparaît du picker ; un compte resté assigné à elle reste visible « Par
+ * compte »). `array_agg` calqué sur entites.ts (array_remove NULL par sécurité, même si
+ * l'innerJoin garantit déjà des id non-NULL). Ordre stable par nom.
+ */
+export async function listerEntitesVisibles(tx: Tx): Promise<EntiteVisible[]> {
+  const lignes = await tx
+    .select({
+      entityId: entities.id,
+      name: entities.name,
+      nbComptes: sql<number>`count(${bankAccounts.id})::int`,
+      bankAccountIds: sql<
+        string[]
+      >`coalesce(array_remove(array_agg(${bankAccounts.id}), null), '{}')::text[]`,
+    })
+    .from(bankAccounts)
+    .innerJoin(entities, eq(bankAccounts.entityId, entities.id))
+    .where(and(eq(bankAccounts.isSelected, true), eq(entities.isActive, true)))
+    .groupBy(entities.id, entities.name)
+    .orderBy(entities.name);
   return lignes;
 }
 

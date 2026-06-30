@@ -11,8 +11,8 @@ import {
   validerBascule,
   WorkspaceSwitchDeniedError,
 } from "@/server/auth/workspace-switch";
-import { perimetreSchema } from "@/server/auth/view-filter";
-import { identite } from "@/server/db";
+import { perimetreSchema, perimetreEntiteSchema } from "@/server/auth/view-filter";
+import { comptesParEntite, identite, withWorkspace } from "@/server/db";
 import { exigerSessionWorkspace } from "@/server/auth/session";
 
 export interface EtatBascule {
@@ -89,5 +89,50 @@ export async function definirViewFilter(
   // Écrit le JWT : le callback jwt RE-VALIDE/intersecte la demande (barrière n°2,
   // hygiène) avant de poser le champ. La sécurité réelle reste la RLS.
   await unstable_update({ viewFilter: parsed.data.bankAccountIds });
+  redirect("/");
+}
+
+/**
+ * Définit le périmètre d'affichage PAR ENTITÉ (sélecteur L8b-2, onglet « Par entité »).
+ * Action SŒUR de `definirViewFilter` : au lieu de recevoir des bankAccountId bruts, elle
+ * reçoit un `entityId` et le TRADUIT côté serveur en liste de comptes (sous le droit du
+ * membre) AVANT de réutiliser exactement le même canal view_filter.
+ *
+ * Pourquoi la traduction est SERVEUR (pas client) : le client ne doit pas pouvoir forger
+ * une liste arbitraire de comptes sous couvert d'« une entité ». Même si le rempart
+ * serveur (intersection DROIT ∩ filtre, tenancy.ts) interdit toute fuite, traduire ici
+ * garantit que le token reflète RÉELLEMENT les comptes de l'entité tels que le membre les
+ * voit — ce qui rend aussi le libellé re-dérivé (C5) fiable.
+ *
+ * Sécurité (exit-criteria règle 3) : authz via exigerSessionWorkspace ; Zod strict ;
+ * lecture DB UNIQUEMENT via withWorkspace + repo comptesParEntite (règle 2) ; un entityId
+ * hors du droit → comptesParEntite renvoie [] → viewFilter vide → callback jwt → undefined
+ * → « Groupe » (fail-soft cohérent, jamais de fuite). Erreur nommée, message générique.
+ */
+export async function definirPerimetreEntite(
+  _etat: EtatPerimetre,
+  formData: FormData,
+): Promise<EtatPerimetre> {
+  const session = await exigerSessionWorkspace();
+  const parsed = perimetreEntiteSchema.safeParse({
+    entityId: formData.get("entityId"),
+  });
+  if (!parsed.success) {
+    return { erreur: MESSAGE_PERIMETRE_INVALIDE };
+  }
+
+  // Traduction entité→comptes SOUS LE DROIT, session SANS viewFilter (userId +
+  // activeWorkspaceId seulement, calque config.ts) : sinon la clause AND view_filter de
+  // account_scope amputerait la traduction (mécanique du bug #143) → l'entité ne pourrait
+  // jamais ré-élargir un filtre déjà actif.
+  const bankAccountIds = await withWorkspace(
+    { userId: session.userId, activeWorkspaceId: session.activeWorkspaceId },
+    (tx) => comptesParEntite(tx, parsed.data.entityId),
+  );
+
+  // Réutilise le canal view_filter : le callback jwt re-valide/intersecte (hygiène), la
+  // RLS reste la sécurité. Liste vide (entité hors droit / sans compte visible) ⇒ token
+  // sans filtre ⇒ « Groupe ».
+  await unstable_update({ viewFilter: bankAccountIds });
   redirect("/");
 }

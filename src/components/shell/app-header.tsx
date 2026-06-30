@@ -14,7 +14,10 @@
 import Link from "next/link";
 
 import type { MembershipAvecNom } from "@/server/repositories/identite";
-import type { CompteConnecte } from "@/server/repositories/dashboard";
+import type {
+  CompteConnecte,
+  EntiteVisible,
+} from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 
 import { peutAdministrer } from "@/lib/permissions";
@@ -29,6 +32,7 @@ export function AppHeader({
   role,
   memberships,
   comptes,
+  entites,
   viewFilterActif,
   onDeconnexion,
 }: {
@@ -38,6 +42,8 @@ export function AppHeader({
   memberships: MembershipAvecNom[];
   /** Comptes visibles (scopés RLS) — alimentent le sélecteur de périmètre. */
   comptes: CompteConnecte[];
+  /** Entités visibles (scopées RLS) — alimentent l'onglet « Par entité » (L8b-2). */
+  entites: EntiteVisible[];
   /** viewFilter courant (ids) ; null = « Groupe ». Pour l'état actif du sélecteur. */
   viewFilterActif: string[] | null;
   /** Server Action de déconnexion, fournie par le layout. */
@@ -63,6 +69,7 @@ export function AppHeader({
         <PerimetreSwitcher
           key={viewFilterActif?.join(",") ?? "groupe"}
           comptes={comptes}
+          entites={entites}
           viewFilterActif={viewFilterActif}
         />
         <WorkspaceSwitcher

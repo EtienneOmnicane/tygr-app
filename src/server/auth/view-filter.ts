@@ -42,6 +42,23 @@ export const perimetreSchema = z
 export type PerimetreValide = z.infer<typeof perimetreSchema>;
 
 /**
+ * Schéma STRICT du périmètre demandé PAR ENTITÉ (L8b-2, mode onglet « Par entité »).
+ * UNE seule entité à la fois (l'UI à onglets impose le choix unique). La Server Action
+ * `definirPerimetreEntite` TRADUIT cet `entityId` en bankAccountId CÔTÉ SERVEUR (sous le
+ * droit) avant de réutiliser le canal view_filter — le client ne forge JAMAIS la liste.
+ *
+ * On NE réutilise PAS `perimetreSchema` (son champ est `bankAccountIds`, pluriel) : un
+ * champ `entityId` distinct rend l'intention explicite et `.strict()` rejette tout extra.
+ * Le sentinel « Groupe » de ce mode = on N'ÉMET PAS cette action (on retombe sur
+ * `definirViewFilter` avec `[]`), donc pas de cas « entityId vide » à gérer ici.
+ */
+export const perimetreEntiteSchema = z
+  .object({ entityId: z.string().uuid() })
+  .strict();
+
+export type PerimetreEntiteValide = z.infer<typeof perimetreEntiteSchema>;
+
+/**
  * Réduit une demande de filtre (issue du client, donc non fiable) à la liste
  * CANONIQUE à persister dans le token, ou `undefined` (= « Groupe »).
  *

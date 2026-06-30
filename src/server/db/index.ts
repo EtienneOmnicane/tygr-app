@@ -126,6 +126,8 @@ export {
 // hors contexte.
 export {
   listerComptes,
+  comptesParEntite,
+  listerEntitesVisibles,
   soldeConsolideCourant,
   soldesCourantsParDevise,
   courbeTresorerie,
@@ -137,6 +139,7 @@ export {
 } from "@/server/repositories/dashboard";
 export type {
   CompteConnecte,
+  EntiteVisible,
   PointCourbe,
   SoldeParDevise,
   SyntheseMois,

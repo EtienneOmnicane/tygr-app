@@ -18,8 +18,17 @@ import { notFound, redirect, unstable_rethrow } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { signOut } from "@/server/auth/config";
-import { identite, listerComptes, schema, withWorkspace } from "@/server/db";
-import type { CompteConnecte } from "@/server/repositories/dashboard";
+import {
+  identite,
+  listerComptes,
+  listerEntitesVisibles,
+  schema,
+  withWorkspace,
+} from "@/server/db";
+import type {
+  CompteConnecte,
+  EntiteVisible,
+} from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 import {
   AucunWorkspaceActifError,
@@ -88,6 +97,7 @@ export default async function WorkspaceLayout({
         workspaceId: string;
         workspaceNom: string;
         comptes: CompteConnecte[];
+        entites: EntiteVisible[];
       }
     | null = null;
   let userId: string | null = null;
@@ -133,7 +143,18 @@ export default async function WorkspaceLayout({
       (tx) => listerComptes(tx),
     );
 
-    contexte = { ...contexteChrome, comptes };
+    // (3) Entités VISIBLES qui peuplent l'onglet « Par entité » du sélecteur (L8b-2).
+    //     MÊME exigence que (2) : session SANS viewFilter (droit complet) pour que la
+    //     liste d'entités reste COMPLÈTE même quand un filtre est actif — sinon elle
+    //     s'auto-amputerait après filtrage (leçon #143) et on ne pourrait plus
+    //     ré-élargir vers une autre entité. Transaction distincte (SET LOCAL) → aucune
+    //     interférence avec les lectures filtrées des cartes (page.tsx).
+    const entites = await withWorkspace(
+      { userId: session.userId, activeWorkspaceId: session.activeWorkspaceId },
+      (tx) => listerEntitesVisibles(tx),
+    );
+
+    contexte = { ...contexteChrome, comptes, entites };
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
@@ -165,6 +186,7 @@ export default async function WorkspaceLayout({
         role={contexte.role}
         memberships={memberships}
         comptes={contexte.comptes}
+        entites={contexte.entites}
         viewFilterActif={viewFilterActif}
         onDeconnexion={deconnecter}
       />
