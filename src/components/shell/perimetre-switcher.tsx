@@ -156,7 +156,7 @@ export function PerimetreSwitcher({
         <form
           action={action}
           className="absolute right-0 z-20 mt-2 w-[300px] rounded-control bg-surface-card
-            p-2 shadow-popover"
+            p-2 text-text shadow-popover"
           role="dialog"
           aria-label="Choisir le périmètre d'affichage"
         >
