@@ -19,7 +19,7 @@
  *
  * ⚠️ Le net peut être NÉGATIF : ligne de zéro visible, domaine Y incluant toujours 0.
  */
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { PointCashflow } from "@/server/insights/types";
 
@@ -27,13 +27,26 @@ import { formatMontant, estNegatif } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateIllustration } from "@/components/dashboard/states/primitives";
 
-// Géométrie du viewBox (unités SVG, mises à l'échelle en %).
-const VB_W = 720;
+// Géométrie du viewBox (unités SVG). La HAUTEUR est fixe ; la LARGEUR `vbW` est
+// DÉRIVÉE de la taille rendue réelle (ResizeObserver, cf. `Trace`) pour que 1 unité
+// SVG = 1 px sur les DEUX axes — donc AUCUNE déformation. Le viewBox épousant le
+// ratio de la zone rendue, `preserveAspectRatio` reste au défaut (`xMidYMid meet`)
+// sans rien étirer ni letterboxer. (Avant : viewBox 720×280 fixe + `preserveAspect
+// Ratio="none"` étirait courbe ET labels — cause racine corrigée ici.)
 const VB_H = 280;
+const VB_W_DEFAUT = 720; // ratio de repli avant la 1re mesure (SSR / 1er paint)
 const PAD_L = 56; // marge axe Y (montants tabular)
 const PAD_R = 16;
 const PAD_T = 16;
 const PAD_B = 28; // marge axe X (mois)
+
+/**
+ * Hauteur de l'ancre — UI_GUIDELINES §4.2 : « ~55vh (min 380px) ». Le plafond 520px
+ * évite que le graphe devienne absurdement grand sur très grand écran (le `min-h
+ * -[380px]` de la carte porte déjà le plancher ; ici on porte la VALEUR fluide). La
+ * même hauteur sert au tracé ET à l'état vide → aucun saut de layout au toggle/vide.
+ */
+const HAUTEUR_ANCRE = "clamp(380px, 55vh, 520px)";
 
 /** Convertit une chaîne décimale en number POUR LA GÉOMÉTRIE uniquement. */
 function valeurGeo(montant: string): number {
@@ -74,7 +87,10 @@ export function FluxCourbe({
  */
 function CourbeVide() {
   return (
-    <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
+    <div
+      className="flex flex-col items-center justify-center text-center"
+      style={{ minHeight: HAUTEUR_ANCRE }}
+    >
       <StateIllustration
         variant="empty"
         className="mb-4 h-14 w-14 text-text-faint"
@@ -103,6 +119,30 @@ function Trace({
   survol: number | null;
   setSurvol: (i: number | null) => void;
 }) {
+  // Largeur du viewBox DÉRIVÉE de la taille rendue : on mesure le SVG (px) et on
+  // pose `vbW = VB_H × largeur/hauteur` pour que l'échelle horizontale égale la
+  // verticale (1 unité SVG identique sur les deux axes) → zéro déformation, et le
+  // viewBox colle au ratio rendu → zéro letterboxing. Repli `VB_W_DEFAUT` avant la
+  // 1re mesure (SSR / 1er paint) et tant que la hauteur est nulle (anti division
+  // par zéro). `vbW` est de la PURE géométrie (jamais réinjecté dans un montant —
+  // frontière float, règle 8).
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [vbW, setVbW] = useState(VB_W_DEFAUT);
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(([entree]) => {
+      const { width, height } = entree.contentRect;
+      if (height <= 0) return;
+      // Borné : jamais < la zone des marges horizontales (évite un viewBox dégénéré
+      // sur une carte très haute et étroite) ni une largeur absurde.
+      const derive = Math.round((VB_H * width) / height);
+      setVbW(Math.min(Math.max(derive, PAD_L + PAD_R + 1), 4000));
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
   // Bornes Y (géométrie). Le domaine inclut TOUJOURS 0 (le net traverse zéro) et
   // s'élargit légèrement pour ne pas coller aux bords.
   const valeurs = points.map((p) => valeurGeo(p.net));
@@ -114,7 +154,7 @@ function Trace({
 
   const x = (i: number) =>
     PAD_L +
-    (i / Math.max(points.length - 1, 1)) * (VB_W - PAD_L - PAD_R);
+    (i / Math.max(points.length - 1, 1)) * (vbW - PAD_L - PAD_R);
   const y = (v: number) =>
     PAD_T + (1 - (v - yMin) / (yMax - yMin)) * (VB_H - PAD_T - PAD_B);
 
@@ -144,11 +184,12 @@ function Trace({
   return (
     <div className="relative">
       <svg
-        viewBox={`0 0 ${VB_W} ${VB_H}`}
-        className="h-[300px] w-full"
+        ref={svgRef}
+        viewBox={`0 0 ${vbW} ${VB_H}`}
+        className="w-full"
+        style={{ height: HAUTEUR_ANCRE }}
         role="img"
         aria-label="Courbe du flux net de trésorerie par mois"
-        preserveAspectRatio="none"
       >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -163,7 +204,7 @@ function Trace({
             <line
               x1={PAD_L}
               y1={g.py}
-              x2={VB_W - PAD_R}
+              x2={vbW - PAD_R}
               y2={g.py}
               stroke="var(--color-line)"
               strokeWidth={1}
@@ -183,7 +224,7 @@ function Trace({
         <line
           x1={PAD_L}
           y1={yZero}
-          x2={VB_W - PAD_R}
+          x2={vbW - PAD_R}
           y2={yZero}
           stroke="var(--color-line-strong)"
           strokeWidth={1}
@@ -206,9 +247,9 @@ function Trace({
         {points.map((p, i) => (
           <g key={p.bucket}>
             <rect
-              x={x(i) - (VB_W - PAD_L - PAD_R) / points.length / 2}
+              x={x(i) - (vbW - PAD_L - PAD_R) / points.length / 2}
               y={PAD_T}
-              width={(VB_W - PAD_L - PAD_R) / points.length}
+              width={(vbW - PAD_L - PAD_R) / points.length}
               height={VB_H - PAD_T - PAD_B}
               fill="transparent"
               onMouseEnter={() => setSurvol(i)}
@@ -242,7 +283,7 @@ function Trace({
           {formaterMoisAnnee(points[0].bucket)}
         </text>
         <text
-          x={VB_W - PAD_R}
+          x={vbW - PAD_R}
           y={VB_H - 8}
           textAnchor="end"
           className="fill-text-faint text-[10px]"
