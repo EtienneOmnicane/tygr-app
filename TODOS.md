@@ -5,6 +5,85 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Polish dashboard v2 — dettes ouvertes après UI-FLUX-CHART-POLISH (#147 mergée, 2026-06-30)
+
+Chantier graphe de flux livré et mergé (#147 : courbe corrigée — déformation +
+hauteur §4.2 ; barres — hauteur, responsive, labels, plafond largeur). Dettes
+visuelles restantes ci-dessous. **NOTE DE REGROUPEMENT** : `UI-FLUX-CHART-GABARIT1`
++ `UI-FLUX-CHART-NICE-SCALE1` + `UI-FLUX-BARRE-LARGEUR-PROD1` + `UI-SOLDE-CARD-POLISH1`
+sont **tous du polish visuel dashboard** (même validation = l'œil) → à traiter
+idéalement en **UN chantier « polish dashboard v2 »** (évite 4 micro-PR et 4 cycles
+recon/plan).
+
+- [ ] **UI-FLUX-CHART-GABARIT1 (P2, effort ~0,25 j hors arbitrage) — la DIV conteneur
+  du graphe est trop HAUTE → aspect surdimensionné/« enfantin » (le tracé lui-même est
+  ok).** Cause = `HAUTEUR_ANCRE = clamp(380px, 55vh, 520px)` introduit en #147
+  (`src/components/dashboard/flux-layout.ts`, constante UNIQUE → fix s'applique à la
+  courbe ET aux barres d'un coup, trivial une fois la valeur décidée). ⚠️ **ARBITRAGE
+  REQUIS** : le `55vh` vient de `UI_GUIDELINES.md` §4.2 — le baisser (ex. ~40-45vh, ou
+  plafond plus bas) **s'écarte de la charte**. À trancher : ajuster la valeur **vs**
+  respecter le design system (valider avec le mainteneur de la charte si besoin). Repère :
+  on était à `300px` fixe le matin du 2026-06-30 (jugé « écrasé ») → viser **entre les
+  deux**. **Déclencheur** : décision sur la valeur cible (chiffre + accord charte).
+
+- [ ] **UI-FLUX-CHART-NICE-SCALE1 (P2, effort ~0,5 j) — échelle « nice » non implémentée :
+  un mois à fort montant écrase les petits (courbe ET barres).** Reporté VOLONTAIREMENT du
+  polish #147 (juger le visuel d'abord). Fix : arrondi du `max` (puissance de 10 / pas
+  régulier) dans `flux-bars.tsx` (barres) + domaine Y de la courbe dans `flux-chart-trace.tsx`.
+  ⚠️ Isolation : le `max` des barres vient de `maxFenetre` (`flux-projection.ts`) qui n'est
+  importé QUE par `flux-bars.tsx` → post-traiter localement ou modifier `maxFenetre` est
+  sans effet de bord ; NE PAS toucher `projeterSurGrille`/`MoisAffiche` (partagés avec le
+  tableau « Évolution mensuelle »). **Déclencheur** : ce chantier polish dashboard v2.
+
+- [ ] **UI-FLUX-BARRE-LARGEUR-PROD1 (P2, effort ~0,1 j) — `LARGEUR_BARRE_MAX=40px` jugé
+  sur données CREUSES.** Le plafond de largeur de barre (`flux-bars.tsx`) a été réglé alors
+  que les fenêtres courtes étaient vides (faute de seed 2026 dense au moment du QA).
+  Revérifier le rendu des barres sur fenêtre courte avec de **vraies données 2026 denses**
+  (seed réparé en #146) et ajuster la constante si besoin. **Déclencheur** : QA visuel sur
+  données denses (ce chantier polish dashboard v2).
+
+- [ ] **UI-SOLDE-CARD-POLISH1 (P2, effort ~0,25 j) — carte SOLDE mal espacée.** « Rs » collé
+  au montant (manque de respiration devise↔chiffre — vérifier que l'espace fine insécable
+  U+202F de `format-montant.ts` est bien rendue, sinon ajuster l'espacement de la carte) ;
+  bloc « il y a Xh » / « Synchroniser » mal aligné/rangé à droite. Composant carte solde du
+  side-panel (distinct du graphe). Niveau classes Tailwind a priori. **Déclencheur** : ce
+  chantier polish dashboard v2.
+
+- [ ] **UI-FLUX-HOOK-MIGRATION1 (P3, effort ~0,2 j, NON bloquant) — une seule implémentation
+  du ResizeObserver.** La courbe (`flux-chart-trace.tsx`) garde son `ResizeObserver` INLINE ;
+  les barres utilisent le hook extrait `use-dimensions-svg.ts` (#147). Migrer la courbe vers
+  le hook partagé pour n'avoir qu'une implémentation (anti-duplication). **Déclencheur** :
+  prochaine retouche de la courbe OU passage anti-dette. Raccroché au plus tard à un chantier
+  nommé (règle 9, P3 ne pourrit pas).
+
+### Infra — découverte à clarifier (2026-06-30)
+
+- [ ] **REPO-PARENT-IMBRIQUE1 (P2, effort ~0,25 j, NE PAS toucher à l'aveugle) — un dépôt git
+  PARENT existe dans `Desktop/TYGR/`** (branche `feature/epic3-dashboard-ui-states` + dossier
+  `worktrees/`), DISTINCT de `Desktop/TYGR/tygr-app/` (le vrai dépôt applicatif). Sans impact
+  tant qu'on travaille DEPUIS `tygr-app/`, mais **piège latent** : une commande git lancée du
+  mauvais dossier opère sur le parent. À clarifier : que contient-il, encore utile, archiver ?
+  **Réflexe immédiat** : `git rev-parse --show-toplevel` AVANT toute commande git sensible
+  (doit afficher `…/tygr-app`). **Déclencheur** : avant toute opération git destructive à la
+  racine OU revue d'hygiène du poste. (Cohérent avec la directive mémoire « racine git ».)
+
+### Chantiers PRODUIT à cadrer (pas encore lancés, 2026-06-30)
+
+- [ ] **REGLES-OPERATIONNEL1 (P2, effort à chiffrer après recon) — onglet Règles jugé « pas
+  opérationnel ».** Amélioration d'EXISTANT (`src/app/(workspace)/regles/`, moteur
+  `categorization_rules`) → **recon de l'existant nécessaire** pour comprendre ce qui manque
+  AVANT de planifier (point de départ plus clair que les pages neuves). **Déclencheur** : début
+  de chantier Règles (recon d'abord).
+
+- [ ] **NAV-GRAPHIQUES1 (P2, CADRAGE PRODUIT requis) — activer l'onglet Graphiques** (page à
+  créer / aujourd'hui vide ou inactive). **Cadrage produit d'abord** : quel contenu ? quels
+  graphes ? réutilise-t-il le moteur flux (`flux-*`, insights) ou autre ? Benchmark/challenger
+  à faire. **Déclencheur** : décision produit sur le contenu de la page.
+
+- [ ] **NAV-ECHEANCES1 (P2, CADRAGE PRODUIT requis — décision métier clawdy/Omnicane) — activer
+  l'onglet Échéances** (page neuve). Sujet MÉTIER, pas technique : prévisionnel ? factures à
+  venir ? rappels ? **Déclencheur** : décision produit/métier sur la nature de l'écran.
+
 ### Sélecteur de périmètre (L8b-1) — bug d'auto-amputation corrigé (2026-06-30)
 
 Le `PerimetreSwitcher` ne s'auto-ampute plus : la liste qui le peuple reflète
