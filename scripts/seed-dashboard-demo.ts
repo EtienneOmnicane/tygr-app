@@ -15,9 +15,24 @@
  * jours calendaires Maurice (les soldes EOD sont des dates nues, cf. doc Fern).
  * Données fictives uniquement (sociétés mauriciennes plausibles) — pas de PII réelle.
  *
- * RESET : chaque run purge d'abord les données de démo du workspace (rôle owner,
- * DELETE physique) pour un état déterministe — légitime ici car données 100 %
- * fictives. Ne JAMAIS pointer ce script sur un workspace contenant de la vraie donnée.
+ * IDEMPOTENCE (pas de purge) : aucun RESET préalable. Le déterminisme repose
+ * UNIQUEMENT sur l'idempotence des upserts (ids stables : demo-conn-mcb,
+ * demo-acc-mcb-4521, demo-tx-NNNN), calqué sur scripts/seed-omnifi-demo.ts. Un
+ * ré-run met à jour les lignes existantes (onConflictDoUpdate, dont is_removed
+ * remis à false) sans créer de doublon. On NE supprime RIEN physiquement : les
+ * tables transactions_cache / balance_history sont append-only (trigger 0004,
+ * « Intégrité append-only »), et le DELETE physique y est refusé même sous le
+ * rôle owner — c'est précisément le DELETE de l'ancien reset qui heurtait cette
+ * garde. Ne JAMAIS pointer ce script sur un workspace contenant de la vraie donnée.
+ *
+ * LIMITE (jeu de données figé entre runs) : tant que le jeu reste identique d'un
+ * run à l'autre, l'état est déterministe. Si l'on RÉDUIT/RENUMÉROTE les
+ * transactions ou RACCOURCIT la fenêtre, des lignes orphelines peuvent subsister :
+ * les transactions disparues sont MASQUABLES (is_removed=true, exclues des
+ * lectures) mais les soldes balance_history d'une date qui n'est plus générée NE
+ * SONT PAS masquables (pas de colonne is_removed sur cette table) et resteraient
+ * VISIBLES. Le nettoyage de ce cas relève d'une purge dédiée à traiter à ce
+ * moment-là, hors de ce script.
  */
 import { neonConfig, Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
@@ -201,29 +216,11 @@ async function main() {
       process.exit(1);
     }
     userId = m.rows[0].user_id;
-
-    // RESET déterministe (rôle owner, hors RLS — script d'admin de démo) : purge
-    // les données de démo du workspace avant ré-insertion, pour éviter des
-    // transactions orphelines/tombstones accumulées entre deux runs (le nombre/
-    // l'ordre des tx peut changer quand on ajuste le jeu). DELETE physique
-    // assumé ICI car données 100 % fictives de démo (jamais de la vraie donnée).
-    await ac.query(
-      "delete from transactions_cache where workspace_id = $1",
-      [workspaceId],
-    );
-    await ac.query(
-      "delete from balance_history where workspace_id = $1",
-      [workspaceId],
-    );
-    await ac.query(
-      "delete from bank_accounts where workspace_id = $1",
-      [workspaceId],
-    );
-    await ac.query(
-      "delete from bank_connections where workspace_id = $1",
-      [workspaceId],
-    );
-    console.log("Reset des données de démo du workspace effectué.");
+    // Pas de purge : le déterminisme repose sur l'idempotence des upserts (cf.
+    // en-tête). L'ancien RESET par DELETE physique heurtait la garde append-only
+    // (trigger 0004) — même sous l'owner — et a été retiré. La connexion owner ne
+    // sert plus QU'À résoudre workspace_id + un membre ADMIN/MANAGER hors RLS
+    // (traduction de l'omnifi_client_user_id public → UUIDs serveur).
   } finally {
     ac.release();
     await adminPool.end();
