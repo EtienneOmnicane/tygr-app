@@ -48,6 +48,35 @@ function libelleCompte(c: CompteConnecte): string {
   return c.institutionName ? `${c.institutionName} · ${c.accountName}` : c.accountName;
 }
 
+/**
+ * Re-dérive le NOM de l'entité dont l'ensemble de comptes correspond EXACTEMENT au
+ * filtre courant (égalité ENSEMBLISTE : même cardinalité + mêmes ids), sinon `null`.
+ * PURE (testable, sans effet). Sert au libellé du déclencheur (« Sucre ») et à
+ * l'onglet ouvert par défaut.
+ *
+ * Pourquoi l'égalité EXACTE (et pas « même nombre de comptes ») : deux entités de
+ * même taille seraient confondues, et un filtre « par compte » de N comptes piochés
+ * dans des entités différentes afficherait à tort un nom d'entité. On n'affiche
+ * « Sucre » QUE si le filtre est exactement l'ensemble des comptes (visibles) de Sucre.
+ *
+ * Péremption assumée (stratégie a, dette PERIMETRE-ENTITE-DERIVE1) : si l'ADMIN
+ * réassigne ensuite un compte à/hors de l'entité, le filtre stocké (figé sur les
+ * anciens ids) ne correspond plus → `null` → repli « N comptes ». Pas de mensonge.
+ */
+function entiteDuFiltre(
+  viewFilterActif: string[] | null,
+  entites: EntiteVisible[],
+): string | null {
+  if (!viewFilterActif || viewFilterActif.length === 0) return null;
+  const filtre = new Set(viewFilterActif);
+  if (filtre.size !== viewFilterActif.length) return null; // doublons → pas un ensemble propre
+  for (const e of entites) {
+    if (e.bankAccountIds.length !== filtre.size) continue;
+    if (e.bankAccountIds.every((id) => filtre.has(id))) return e.name;
+  }
+  return null;
+}
+
 export function PerimetreSwitcher({
   comptes,
   entites,
@@ -62,9 +91,22 @@ export function PerimetreSwitcher({
 }) {
   const [ouvert, setOuvert] = useState(false);
   const [recherche, setRecherche] = useState("");
-  const [onglet, setOnglet] = useState<Onglet>("compte");
   const conteneurRef = useRef<HTMLDivElement>(null);
   const inputRechercheRef = useRef<HTMLInputElement>(null);
+
+  // Entité dont l'ensemble de comptes correspond EXACTEMENT au filtre courant (ou
+  // null). Dérive l'onglet ouvert par défaut + la présélection. Stable au remount
+  // (key viewFilterActif), donc calculée une fois ici (pas un useMemo dépendant).
+  const entiteActive = entites.find(
+    (e) => entiteDuFiltre(viewFilterActif, [e]) !== null,
+  );
+
+  // Onglet ouvert par défaut : « Par entité » si le filtre actif EST une entité
+  // connue (présélectionnée), sinon « Par compte ». Repart de cette vérité serveur
+  // au remount.
+  const [onglet, setOnglet] = useState<Onglet>(
+    () => (entiteActive ? "entite" : "compte"),
+  );
 
   // Deux useActionState distincts (une action par onglet). Seul le <form> de
   // l'onglet ACTIF est rendu, donc une seule action peut être soumise à la fois.
@@ -94,8 +136,11 @@ export function PerimetreSwitcher({
   );
 
   // Sélection locale « Par entité » (UNE entité, radio-like). Le mode « Par entité »
-  // est INDÉPENDANT de `coches` (pas de mixage). Repart de null au remount.
-  const [entiteChoisie, setEntiteChoisie] = useState<string | null>(null);
+  // est INDÉPENDANT de `coches` (pas de mixage). Présélectionne l'entité active si le
+  // filtre courant correspond exactement à l'une d'elles ; sinon null (« Groupe »).
+  const [entiteChoisie, setEntiteChoisie] = useState<string | null>(
+    () => entiteActive?.entityId ?? null,
+  );
 
   // Fermeture clic-extérieur (mousedown) + Échap (calque CategoryPicker).
   useEffect(() => {
@@ -123,14 +168,18 @@ export function PerimetreSwitcher({
     if (ouvert) requestAnimationFrame(() => inputRechercheRef.current?.focus());
   }, [ouvert]);
 
-  // Libellé du déclencheur : « Groupe » (0 coché), le compte (1), « N comptes » (N).
+  // Libellé du déclencheur (FERMÉ) : dérivé de la vérité serveur `viewFilterActif`.
+  //   « Groupe » (0)  →  « Sucre » si le filtre = exactement une entité (C5)  →  le
+  //   nom du compte (1 compte, hors entité)  →  « N comptes » (repli / péremption).
   // INVARIANT : tout id de `coches` provient de `comptes` (init filtré par idsConnus
   // + basculer() n'ajoute que des ids de la liste rendue) → le find à 1 coché ne
-  // retourne jamais undefined. (Le libellé re-dérivé « entité X » arrive en C5.)
+  // retourne jamais undefined.
   const nbCoches = coches.size;
   let libelleDeclencheur: string;
   if (nbCoches === 0) {
     libelleDeclencheur = "Groupe";
+  } else if (entiteActive) {
+    libelleDeclencheur = entiteActive.name; // ex. « Sucre »
   } else if (nbCoches === 1) {
     libelleDeclencheur = libelleCompte(
       comptes.find((c) => coches.has(c.bankAccountId))!,
