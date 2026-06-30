@@ -18,7 +18,8 @@ import { notFound, redirect, unstable_rethrow } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { signOut } from "@/server/auth/config";
-import { identite, schema, withWorkspace } from "@/server/db";
+import { identite, listerComptes, schema, withWorkspace } from "@/server/db";
+import type { CompteConnecte } from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 import {
   AucunWorkspaceActifError,
@@ -82,22 +83,37 @@ export default async function WorkspaceLayout({
   // Next 16.2 ; cf. TODOS). On gère donc l'incident dans le layout lui-même
   // plutôt que de propager. FAIL-CLOSED conservé : aucune session n'est servie.
   let contexte:
-    | { role: WorkspaceRole; workspaceId: string; workspaceNom: string }
+    | {
+        role: WorkspaceRole;
+        workspaceId: string;
+        workspaceNom: string;
+        comptes: CompteConnecte[];
+      }
     | null = null;
   let userId: string | null = null;
+  // viewFilter courant (L8b-1) : INTENTION de périmètre portée par la session,
+  // passée au header pour que le sélecteur affiche l'état actif (comptes cochés).
+  // Absent/null ⇒ « Groupe ». Lecture seule (pas une autorité — la RLS décide).
+  let viewFilterActif: string[] | null = null;
   try {
     const session = await exigerSessionWorkspace();
     userId = session.userId;
+    viewFilterActif = session.viewFilter ?? null;
     contexte = await withWorkspace(session, async (tx, ctx) => {
       const lignes = await tx
         .select({ name: schema.workspaces.name })
         .from(schema.workspaces)
         .where(eq(schema.workspaces.id, ctx.workspaceId))
         .limit(1);
+      // listerComptes DANS la transaction existante (UN SEUL withWorkspace, perf
+      // — même argument que page.tsx:7) : alimente le sélecteur de périmètre du
+      // header. Liste scopée RLS (le membre ne voit que ses comptes).
+      const comptes = await listerComptes(tx);
       return {
         role: ctx.role,
         workspaceId: ctx.workspaceId,
         workspaceNom: lignes[0]?.name ?? "—",
+        comptes,
       };
     });
   } catch (erreur) {
@@ -130,6 +146,8 @@ export default async function WorkspaceLayout({
         workspaceNom={contexte.workspaceNom}
         role={contexte.role}
         memberships={memberships}
+        comptes={contexte.comptes}
+        viewFilterActif={viewFilterActif}
         onDeconnexion={deconnecter}
       />
       {children}

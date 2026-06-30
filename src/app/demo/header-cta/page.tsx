@@ -15,6 +15,7 @@
  */
 import { AppHeader } from "@/components/shell/app-header";
 import type { MembershipAvecNom } from "@/server/repositories/identite";
+import type { CompteConnecte } from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 
 export const metadata = { title: "Démo — Header CTA banque" };
@@ -27,6 +28,26 @@ async function deconnecterFactice() {
 const MEMBERSHIPS_FICTIFS: MembershipAvecNom[] = [
   { workspaceId: "ws-demo-1", nom: "Omnicane HQ", role: "ADMIN", kind: "PROD" },
   { workspaceId: "ws-demo-2", nom: "Sucrière BU", role: "MANAGER", kind: "PROD" },
+];
+
+/** Comptes fictifs pour alimenter le sélecteur de périmètre (L8b-1) en démo. */
+const COMPTES_FICTIFS: CompteConnecte[] = [
+  {
+    bankAccountId: "acc-demo-1",
+    accountName: "Compte courant MUR",
+    institutionName: "Absa",
+    currency: "MUR",
+    currentBalance: "1250000.00",
+    lastSyncedAt: new Date(),
+  },
+  {
+    bankAccountId: "acc-demo-2",
+    accountName: "Compte USD",
+    institutionName: "MCB",
+    currency: "USD",
+    currentBalance: "82000.00",
+    lastSyncedAt: new Date(),
+  },
 ];
 
 const ROLES: Array<{ role: WorkspaceRole; titre: string; attendu: string }> = [
@@ -60,6 +81,8 @@ export default function DemoHeaderCta() {
             workspaceNom="Omnicane HQ"
             role={role}
             memberships={MEMBERSHIPS_FICTIFS}
+            comptes={COMPTES_FICTIFS}
+            viewFilterActif={null}
             onDeconnexion={deconnecterFactice}
           />
         </section>
