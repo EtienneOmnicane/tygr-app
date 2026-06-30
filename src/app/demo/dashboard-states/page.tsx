@@ -19,13 +19,15 @@ import {
   DashboardErrorState,
   DashboardLoadingState,
 } from "@/components/dashboard/states";
+import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 
-type EtatDemo = "loading" | "empty" | "error";
+type EtatDemo = "loading" | "empty" | "error" | "sync";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "loading", label: "Chargement" },
   { id: "empty", label: "Vide" },
   { id: "error", label: "Erreur" },
+  { id: "sync", label: "Bouton Synchroniser" },
 ];
 
 export default function DashboardStatesDemoPage() {
@@ -95,8 +97,95 @@ export default function DashboardStatesDemoPage() {
           {etat === "error" && (
             <DashboardErrorState detail="OMNIFI_SYNC_TIMEOUT · connexion expirée après 30 s" />
           )}
+          {etat === "sync" && <DemoSyncStates />}
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Vitrine FIGÉE des états du bouton « Synchroniser » (L8a) — reproduit le markup de
+ * `SyncButton` dans chacun de ses 5 états + le cas VIEWER, pour la capture headless
+ * (les états réels sont pilotés par le retour de la Server Action, non injectable en
+ * démo — même approche que `widget-feedback.tsx` monté figé). Couleurs : succès
+ * `text-success`, erreur `text-danger` (jamais un rouge de donnée, §3.4) ; le bouton
+ * est un lien d'action `text-primary` (§2.3). Aucune couleur de donnée ici.
+ */
+function DemoSyncStates() {
+  return (
+    <div className="rounded-card bg-surface-card p-6 shadow-card">
+      <h2 className="mb-4 text-base font-semibold text-text">
+        Bouton « Synchroniser » — états
+      </h2>
+      <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
+        <CasSync titre="Repos (MANAGER/ADMIN)">
+          <BoutonRepos />
+        </CasSync>
+        <CasSync titre="En cours">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary opacity-48">
+            <IconeSynchro className="h-3.5 w-3.5 motion-safe:animate-spin" />
+            Synchronisation…
+          </span>
+        </CasSync>
+        <CasSync titre="Succès">
+          <div className="flex flex-col items-start gap-1.5">
+            <BoutonRepos />
+            <p className="text-xs text-success">Comptes à jour.</p>
+          </div>
+        </CasSync>
+        <CasSync titre="Erreur">
+          <div className="flex flex-col items-start gap-1.5">
+            <BoutonRepos />
+            <p className="text-xs text-danger">Action non autorisée.</p>
+          </div>
+        </CasSync>
+        <CasSync titre="Réparation MFA">
+          <div className="flex flex-col items-start gap-1.5">
+            <BoutonRepos />
+            <p className="text-xs text-text-muted">
+              Une vérification de sécurité est requise.{" "}
+              <span className="font-semibold text-primary underline">
+                Reconnecter
+              </span>
+            </p>
+          </div>
+        </CasSync>
+        <CasSync titre="VIEWER (inerte)">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-text-faint">
+            <IconeSynchro className="h-3.5 w-3.5" />
+            Synchroniser
+          </span>
+        </CasSync>
+      </div>
+    </div>
+  );
+}
+
+/** Bouton « Synchroniser » au repos (lien d'action primary + icône). */
+function BoutonRepos() {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+      <IconeSynchro className="h-3.5 w-3.5" />
+      Synchroniser
+    </span>
+  );
+}
+
+/** Cellule de la vitrine : libellé d'état + rendu. */
+function CasSync({
+  titre,
+  children,
+}: {
+  titre: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2 border-b border-line/60 pb-4">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted">
+        {titre}
+      </span>
+      {children}
     </div>
   );
 }

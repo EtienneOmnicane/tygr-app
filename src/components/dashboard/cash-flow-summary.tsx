@@ -44,7 +44,7 @@ export function CashFlowSummary({
   return (
     <StateCard>
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-text">Synthèse du mois</h2>
+        <h2 className="text-base font-semibold text-text">Synthèse du mois</h2>
         <span className="text-xs text-text-muted">{formaterMoisAnnee(mois)}</span>
       </div>
 

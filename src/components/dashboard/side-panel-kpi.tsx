@@ -26,12 +26,14 @@ import type {
   SyntheseMoisDevise,
 } from "@/server/repositories/dashboard";
 import type { Fraicheur } from "@/lib/format-date";
+import type { WorkspaceRole } from "@/server/db/schema";
 
 import { replierSynthesesMois } from "@/lib/synthese-mois";
 import { formatMontant, symbolePrefixe } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
+import { SyncButton } from "@/components/dashboard/sync-button";
 
 export function SidePanelKpi({
   soldesParDevise,
@@ -40,6 +42,7 @@ export function SidePanelKpi({
   devise,
   fraicheur,
   compteLabel,
+  role,
 }: {
   /** Soldes consolidés courants, une entrée par devise (chaînes décimales). */
   soldesParDevise: SoldeParDevise[];
@@ -56,6 +59,8 @@ export function SidePanelKpi({
   fraicheur: Fraicheur | null;
   /** Compte de la synchro la plus récente — enrichit le tooltip de la pastille. */
   compteLabel?: string | null;
+  /** Rôle résolu serveur — gate le bouton « Synchroniser » (confort UI ; garde réelle serveur). */
+  role: WorkspaceRole;
 }) {
   // Repli : aucun solde (aucun compte sélectionné) → on montre 0 dans la devise de
   // base, plutôt qu'une carte vide. Le multi-devises empile une ligne par devise.
@@ -74,16 +79,22 @@ export function SidePanelKpi({
       {/* Carte SOLDE (§1.3) : une ligne par devise. Mono → gros montant ;
           multi → pile égalitaire à décimales alignées (§7-1). */}
       <StateCard>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+        <div className="flex items-start justify-between gap-2">
+          <span className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
             {monoDevise ? "Solde" : "Soldes par devise"}
           </span>
-          {fraicheur && (
-            <BalanceFreshnessPill
-              fraicheur={fraicheur}
-              compteLabel={compteLabel}
-            />
-          )}
+          {/* Pastille de fraîcheur + bouton « Synchroniser » (L8a) groupés à droite :
+              on rafraîchit la donnée là où on en lit l'âge. Le bouton gère son propre
+              gating (VIEWER inerte) et son feedback inline. */}
+          <div className="flex flex-col items-end gap-1.5">
+            {fraicheur && (
+              <BalanceFreshnessPill
+                fraicheur={fraicheur}
+                compteLabel={compteLabel}
+              />
+            )}
+            <SyncButton role={role} />
+          </div>
         </div>
 
         {monoDevise ? (

@@ -1,34 +1,23 @@
 "use client";
 
 /**
- * Courbe de FLUX de trésorerie — ANCRE du dashboard (UI_GUIDELINES §4.2). SVG
- * « maison » (décision revue : Tremor incompatible React 19 ; cohérent avec le
- * zéro-dépendance des états). Ligne + aire `primary` + ligne de zéro + axes +
- * tooltip au survol. Hauteur min 380px (§4.2).
+ * Rendu SVG de la COURBE de flux net mensuel — EXTRAIT verbatim de
+ * `cashflow-main-chart.tsx` (L8a) pour être réutilisé par la carte d'ancre unifiée
+ * `flux-tresorerie-card.tsx` (toggle Barres/Courbe). La GÉOMÉTRIE est INCHANGÉE
+ * (viewBox, paddings, ligne de zéro, graduations, tooltip, zones de survol) : c'est
+ * un déplacement, pas une réécriture — aucune régression de dessin attendue.
  *
- * CHANGEMENT DE GRANDEUR (2026-06-24) : on trace désormais le FLUX NET mensuel
- * (entrées − sorties par mois, dérivé de `transactions_cache` via
- * `cashflowParDevise`), PAS le solde consolidé EOD. Raison : `balance_history`
- * est vide en Staging (Omni-FI n'expose pas `/balances/history`, DASH-SOLDE2),
- * donc la courbe de solde restait perpétuellement « en cours de synchronisation »,
- * alors que les flux, eux, existent. Le titre dit « Flux de trésorerie » pour
- * rester honnête sur la grandeur affichée (un net, pas un niveau).
- *
- * Présentationnel : reçoit `PointCashflow[]` (UNE devise — la base_currency, filtrée
- * en amont par la page ; le multi-série est une dette explicite DASH-CASHFLOW-MULTISERIE).
- *
- * ⚠️ Le net peut être NÉGATIF (un mois où les sorties dépassent les entrées) — la
- * courbe de solde ne l'était jamais. On trace donc une LIGNE DE ZÉRO visible et le
- * domaine Y inclut toujours 0. Tooltip = entrées (vert) / sorties (rouge) / net.
+ * `FluxCourbe` rend UNIQUEMENT le corps du graphe (le `Trace` quand il y a des points,
+ * sinon `CourbeVide`) et porte son propre état de survol + `useId` du gradient.
+ * L'en-tête de carte (titre + légende) et la `StateCard` vivent dans le conteneur,
+ * partagés avec la vue « barres ».
  *
  * ⚠️ Frontière float (règle 8) : les montants restent des CHAÎNES pour l'affichage
- * (tooltip, axe Y → `formatMontant`). Le `Number()` interne sert UNIQUEMENT à la
- * GÉOMÉTRIE (position en pixels) — un cul-de-sac qui ne réinjecte jamais dans un
- * montant affiché. Aucune somme financière ici.
+ * (tooltip, axe Y → `formatMontant`/`compact`). Le `Number()` interne (`valeurGeo`)
+ * sert UNIQUEMENT à la GÉOMÉTRIE (position en pixels) — cul-de-sac qui ne réinjecte
+ * jamais dans un montant affiché. Aucune somme financière ici.
  *
- * État PARTIEL (décision revue) : `points` vide alors que le reste du dashboard a
- * des données → message « aucun flux sur la période » DANS la carte, pas un
- * dashboard vide. La carte garde sa place (pas de saut de layout).
+ * ⚠️ Le net peut être NÉGATIF : ligne de zéro visible, domaine Y incluant toujours 0.
  */
 import { useId, useState } from "react";
 
@@ -36,7 +25,7 @@ import type { PointCashflow } from "@/server/insights/types";
 
 import { formatMontant, estNegatif } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
-import { StateCard, StateIllustration } from "@/components/dashboard/states/primitives";
+import { StateIllustration } from "@/components/dashboard/states/primitives";
 
 // Géométrie du viewBox (unités SVG, mises à l'échelle en %).
 const VB_W = 720;
@@ -51,7 +40,11 @@ function valeurGeo(montant: string): number {
   return Number(montant);
 }
 
-export function CashflowMainChart({
+/**
+ * Corps « courbe » de l'ancre Flux. Vide → message neutre (la carte garde sa place) ;
+ * sinon → tracé SVG. Le survol est local (îlot client).
+ */
+export function FluxCourbe({
   points,
   devise,
 }: {
@@ -61,36 +54,17 @@ export function CashflowMainChart({
   const gradId = useId();
   const [survol, setSurvol] = useState<number | null>(null);
 
+  if (points.length === 0) {
+    return <CourbeVide />;
+  }
   return (
-    <StateCard className="min-h-[380px]">
-      {/* En-tête de carte (§4.2 : titre + légende). */}
-      <div className="mb-4 flex items-start justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-text">
-            Flux de trésorerie
-          </h2>
-          <p className="mt-0.5 text-xs text-text-muted">
-            Entrées − sorties par mois
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-text-muted">
-          <span aria-hidden className="h-2 w-2 rounded-full bg-primary" />
-          Flux net
-        </div>
-      </div>
-
-      {points.length === 0 ? (
-        <CourbeVide />
-      ) : (
-        <Trace
-          points={points}
-          devise={devise}
-          gradId={gradId}
-          survol={survol}
-          setSurvol={setSurvol}
-        />
-      )}
-    </StateCard>
+    <Trace
+      points={points}
+      devise={devise}
+      gradId={gradId}
+      survol={survol}
+      setSurvol={setSurvol}
+    />
   );
 }
 

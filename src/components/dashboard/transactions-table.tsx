@@ -28,7 +28,7 @@ export function TransactionsTable({
 }) {
   return (
     <StateCard>
-      <h2 className="mb-4 text-sm font-semibold text-text">
+      <h2 className="mb-4 text-base font-semibold text-text">
         Transactions récentes
       </h2>
 

@@ -46,6 +46,7 @@ import {
   type EtatDemarrage,
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
+import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import {
   ROUTE_DASHBOARD,
   WidgetFeedback,
@@ -71,25 +72,6 @@ const ETAT_FINALISATION_VIDE: EtatFinalisationUI = { erreur: null, succes: null 
 /** Repli si la création du LinkToken REPAIR échoue sans message serveur exploitable. */
 const MESSAGE_REPAIR_ECHEC =
   "La reconnexion n’a pas pu démarrer. Réessayez dans un instant.";
-
-/** Icône « flèches circulaires » (↻) du bouton de synchronisation. Décorative. */
-function IconeSynchro() {
-  return (
-    <svg
-      aria-hidden
-      viewBox="0 0 16 16"
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9M2.5 8a5.5 5.5 0 0 1 9.4-3.9" />
-      <path d="M12.2 1.8v2.6h-2.6M3.8 14.2v-2.6h2.6" />
-    </svg>
-  );
-}
 
 /**
  * Launcher chargé via `next/dynamic` (`ssr:false`) : le hook `useOmniFILink` touche
