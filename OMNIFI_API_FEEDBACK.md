@@ -23,6 +23,9 @@ Ce document est factuel et constructif : chaque point indique le **symptôme obs
 | 9 | Widget : `parentOrigin` jamais établi → `onSuccess` jamais émis | **Critique** | **✅ Résolu côté Omni-FI** (handshake `ready`/`ready-ack`, vérifié runtime 2026-06-19) |
 | 10 | Routes documentées mais **non déployées** sur staging : `GET /accounts/{id}/transactions/sync` et `GET /accounts/{id}/balances/history` → `404`. De plus la pagination réelle (`page`) diverge de la doc (curseur `NextCursor`/`HasMore`) | **Élevé** | **⏳ Confirmé « extensions futures » par Omni-FI (2026-06-19)** — TYGR construit sur les routes par PAGE |
 | 11 | SDK : CDN passe à `onSuccess` un **tableau nu**, mais types + README promettent `{ connections }` → `TypeError .map` | **Critique** | **✅ Contourné côté TYGR** (normalisation des 2 formes + tests) ; alignement SDK recommandé |
+| 12 | Widget iframe cross-origin (`postMessage`) — compatibilité **Safari / WebKit** non documentée ni testée (ITP, stockage partitionné, cookies tiers) ; risque de blocage du handshake et de l'OTP | **À investiguer** | ⏳ Non vérifié côté TYGR (testé seulement sous Chrome) — demande de confirmation côté Omni-FI |
+| 13 | **Deux vocabulaires de statut** pour un même sync (machine `SyncJob` `PENDING→…→COMPLETED` ≠ 12 `EventType` webhook `sync.retrieving_*`), sans table de correspondance ni séparation claire « login interactif » vs « ingestion serveur » | Moyen | ⏳ Confusion documentaire — clarification demandée |
+| 14 | `sync.completed` (webhook) non mis en avant comme **signal de fin propre** : la doc pousse au polling alors qu'un webhook éviterait l'attente active | Mineur | Suggestion |
 
 ---
 
@@ -270,6 +273,142 @@ L'essentiel est qu'un intégrateur TypeScript qui fait confiance à `OmniFISucce
 n'obtienne pas un `undefined` à l'exécution. C'est exactement le type de divergence qu'un
 premier intégrateur peut révéler avant la publication npm — autant la régler avant que le
 SDK ne soit figé sur le registre public.
+
+---
+
+## 12. Compatibilité Safari / WebKit du widget — non documentée, non garantie (à investiguer)
+
+**Symptôme (À INVESTIGUER, non encore reproduit côté TYGR).** Notre validation de bout
+en bout (§9, §11) a été faite **sous Chrome uniquement**. Le widget est une **iframe
+cross-origin** (`staging-connect.omni-fi.co`) chargée dans la page hôte (origine TYGR),
+et tout le flux de fin de parcours repose sur un **handshake `postMessage`**
+(`omni-fi:ready` / `omni-fi:ready-ack`, cf. §9). Or **Safari / WebKit applique des
+restrictions sur les iframes tierces que Chrome n'applique pas** (ou plus tard). Tant que
+le parcours n'a pas été validé sous Safari (desktop **et** iOS), nous considérons la
+compatibilité comme **non garantie** — c'est un risque réel pour une base d'utilisateurs
+mauriciens où Safari/iOS est très présent.
+
+**Mécanismes WebKit susceptibles de casser le parcours (à vérifier côté Omni-FI).**
+1. **ITP / Storage Access** : Safari **partitionne (ou bloque) le stockage et les cookies
+   des iframes tierces** par défaut. Si le widget (`staging-connect.omni-fi.co`) s'appuie
+   sur un cookie de session, un `localStorage`/`sessionStorage`, ou un `SessionToken`
+   conservé côté iframe pour porter l'état entre les étapes du SyncJob, cet état peut être
+   **vidé ou isolé** sous Safari → session perdue en plein parcours (typiquement au moment
+   du challenge MFA ou de la sélection de comptes).
+2. **`postMessage` + vérification d'origine** : le handshake `ready`/`ready-ack` doit
+   fonctionner à l'identique sous WebKit. À confirmer qu'aucune hypothèse propre à
+   Blink (timing de chargement de l'iframe, `targetOrigin`, accès à `window.parent`)
+   ne fait échouer l'amorçage du `parentOrigin` sous Safari — sinon on retombe sur le
+   bug §9 (« `onSuccess` jamais émis »), mais cette fois **uniquement sous Safari**.
+3. **Pop-ups / redirections d'auth bancaire** : si une banque ouvre une fenêtre ou
+   redirige hors iframe, le **bloqueur de pop-ups** et la **politique de navigation
+   cross-origin** de Safari sont plus stricts. À vérifier que le retour vers l'iframe
+   (et l'émission de `onSuccess`) survit à ce détour sous WebKit.
+4. **Certificat de développement local** : en dev, l'iframe HTTPS (`staging-connect`)
+   imbriquée dans `https://localhost:3000` (certificat auto-signé) peut être traitée
+   différemment par Safari (gestion plus stricte des certificats non fiables dans un
+   contexte tiers).
+
+**Impact.** Si l'un de ces points casse, l'utilisateur Safari **ne peut pas connecter sa
+banque** (parcours interrompu, ou `onSuccess` jamais émis) — alors que tout fonctionne
+sous Chrome. Le repli serveur `GET /connections` (§5) **limite** la casse côté données
+(les comptes finissent rattachés par re-synchronisation manuelle), mais l'**expérience de
+connexion in-widget reste cassée** pour ces utilisateurs.
+
+**Ce que nous demandons / recommandons (côté Omni-FI).**
+1. **Confirmer si le widget est officiellement supporté et testé sous Safari** (desktop +
+   iOS) et, si oui, **documenter les versions minimales** et toute exigence (ex. recours à
+   l'API **Storage Access**, en-têtes `Permissions-Policy`/`Content-Security-Policy:
+   frame-ancestors` attendus côté hôte, `sandbox`/`allow` requis sur l'iframe).
+2. **Ne pas dépendre d'un stockage d'iframe tierce** pour porter l'état du parcours sous
+   Safari (préférer un état porté par le `postMessage` / le `SessionToken` passé
+   explicitement), ou documenter le déclenchement de **Storage Access** au bon moment.
+3. Indiquer le **comportement attendu en mode navigation privée Safari** (où les
+   restrictions sont encore plus strictes).
+
+> **Statut côté TYGR : non testé.** Nous signalons ce point **par prudence** (pas comme un
+> bug constaté) : notre preuve runtime §9/§11 est Chrome-only. Nous prévoyons un passage QA
+> Safari (desktop + iOS) de notre côté ; une confirmation de votre support Safari nous
+> dirait si un échec éventuel relève du widget ou de notre intégration.
+
+---
+
+## 13. Statuts de synchronisation : DEUX vocabulaires pour un même job + confusion « phase login » / « phase ingestion »
+
+**Symptôme (clarté documentaire).** La doc décrit l'avancement d'une synchronisation avec
+**deux jeux de statuts distincts, dans deux sections différentes, sans aucune table de
+correspondance** :
+
+- **Machine à états du `SyncJob`** (`§ Sync Engine`) — 8 états, vocabulaire « technique » :
+  ```
+  PENDING → STARTED → LOGGING_IN → [OTP_REQUESTED → OTP_WAITING] → RETRIEVING → PARSING → ENRICHING → COMPLETED
+                                                                                                      ↘ FAILED
+  ```
+- **`EventType` des webhooks** (`§ Payload Webhook`) — **12 événements**, vocabulaire
+  « granulaire » et **différent** :
+  ```
+  sync.started · sync.mfa_required · sync.retrieving_data · sync.data_retrieved ·
+  sync.retrieving_parties · sync.parties_retrieved · sync.retrieving_accounts ·
+  sync.accounts_retrieved · sync.retrieving_transactions · sync.transactions_retrieved ·
+  sync.completed · sync.failed
+  ```
+
+**En quoi c'est déroutant pour un intégrateur.**
+1. **Aucune correspondance explicite.** Rien ne dit que `RETRIEVING` (poll) ⇄
+   `sync.retrieving_data`/`sync.retrieving_transactions` (webhook), ni que `LOGGING_IN`/
+   `OTP_REQUESTED` ⇄ `sync.mfa_required`, ni que `ENRICHING` mène à `PersistenceStats`. On
+   doit **deviner** l'alignement entre la valeur lue dans `GET /sync/job/{JobId}.Status` et
+   l'`EventType` reçu sur le webhook. Pour une UI qui affiche une progression, ces deux
+   sources doivent pourtant être réconciliées.
+2. **La frontière « interactif » vs « back-office » est implicite.** Le parcours a en
+   réalité **deux natures d'étapes** qu'un lecteur perçoit comme « phase 1 / phase 2 » mais
+   que la doc présente comme une **seule séquence linéaire** :
+   - une **phase interactive / temps réel** où l'utilisateur agit *dans le widget*
+     (`LOGGING_IN`, `OTP_REQUESTED`/`OTP_WAITING`) — pilotée par le `SessionToken` (Bearer),
+     polling de `GET /sync/job/{JobId}`, l'UI **doit** réagir (champ OTP, resend, cooldown) ;
+   - une **phase d'ingestion serveur** (`RETRIEVING → PARSING → ENRICHING → COMPLETED`) qui
+     se déroule **côté Omni-FI sans interaction** — l'utilisateur n'a plus rien à faire, et
+     l'intégrateur peut soit **continuer à poller**, soit **attendre le webhook
+     `sync.completed`** (cf. §14).
+   La doc gagnerait à **nommer ces deux phases** et à dire explicitement, pour chaque état,
+   *qui doit agir* (l'utilisateur dans le widget, ou personne / attente serveur).
+3. **`OTP_REQUESTED` vs `OTP_WAITING` ré-emploient le mot « waiting » à contre-sens
+   intuitif.** La doc le précise (`OTP_REQUESTED` = code envoyé, en attente de **saisie** ;
+   `OTP_WAITING` = saisie reçue, **validation** en cours) — c'est bien, mais c'est
+   contre-intuitif (« waiting » = on attend la banque, alors qu'on pourrait croire qu'on
+   attend l'utilisateur). Ce point précis est déjà documenté ; à conserver bien visible.
+
+**Recommandation (côté doc Omni-FI).**
+1. **Une table unique de correspondance** `SyncJob.Status` ⇄ `EventType` webhook (une ligne
+   par état, colonnes : statut poll, événement(s) webhook équivalent(s), « qui agit »,
+   « UI attendue »). C'est le livrable qui dissout la confusion.
+2. **Nommer explicitement les deux phases** (ex. « Phase interactive — authentification &
+   MFA » vs « Phase d'ingestion — récupération & persistance ») et placer la frontière
+   exactement après `OTP_WAITING` / avant `RETRIEVING`. Indiquer que la phase d'ingestion
+   ne requiert **aucune action utilisateur** et peut être suivie par **webhook** plutôt que
+   par polling.
+3. Rappeler que **tous les scrapers n'émettent pas chaque événement** (déjà noté pour les
+   webhooks) — donc une UI de progression doit être **tolérante aux étapes manquées** et ne
+   jamais supposer une séquence complète.
+
+---
+
+## 14. `sync.completed` : signal de fin propre sous-exploité (la doc pousse au polling)
+
+**Observation (suggestion, mineure).** Pour savoir qu'un sync est terminé, la doc met en
+avant le **polling** de `GET /sync/job/{JobId}` (« utilisé pour le polling »). Pourtant, le
+webhook **`sync.completed`** (avec `ConnectionId` + `JobId`, signé HMAC-SHA256) est un
+signal de fin **propre, fiable et sans attente active**. Pour la **phase d'ingestion**
+(§13, où l'utilisateur n'a plus rien à faire), le polling est du gaspillage : un webhook
+`sync.completed` permettrait de déclencher notre rafraîchissement de données **à l'instant
+exact** où elles sont prêtes, sans boucle d'attente ni quotas de polling consommés.
+
+**Recommandation.** Documenter **`sync.completed` comme le moyen recommandé** de détecter la
+fin de la phase d'ingestion (le polling restant le fallback pour les intégrateurs sans
+endpoint webhook public). Préciser la **garantie de livraison** (au-moins-une-fois ?
+ré-essais ? ordre ?) et confirmer que `sync.completed` est **toujours** émis en fin de
+succès (vs « tous les scrapers n'émettent pas chaque événement », qui ne doit s'appliquer
+qu'aux événements **intermédiaires**, pas au terminal).
 
 ---
 
