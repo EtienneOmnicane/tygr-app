@@ -149,6 +149,22 @@ export function formaterMoisAnnee(libelleMois: string): string {
 }
 
 /**
+ * Formate un libellé de mois `YYYY-MM` en COURT « Juin 26 » (mois 3 premières
+ * lettres + année sur 2 chiffres) — pour les axes de graphe denses où le mois plein
+ * ne tient pas. L'année (2 chiffres) lève l'ambiguïté entre deux mois homonymes
+ * d'années différentes (deux « Jan » sur l'axe). Dérive de la MÊME table `MOIS_PLEINS`
+ * (source unique de formatage, dette C8) — aucun parser ni `new Date` (pas de fuseau).
+ * Entrée hors forme `YYYY-MM` → restituée telle quelle (défense).
+ */
+export function formaterMoisCourt(libelleMois: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(libelleMois);
+  if (!m) return libelleMois;
+  const idx = Number(m[2]) - 1;
+  if (idx < 0 || idx >= 12) return libelleMois;
+  return `${MOIS_PLEINS[idx].slice(0, 3)} ${m[1].slice(2)}`;
+}
+
+/**
  * Fraîcheur d'un solde COURANT à partir de sa dernière synchro `lastSyncedAt`
  * (UI_GUIDELINES §3.7 — pastille success/warning/danger). C'est la VRAIE réponse à
  * DR-F3 : on qualifie l'âge de la donnée instantanée, on n'affiche JAMAIS un EOD de

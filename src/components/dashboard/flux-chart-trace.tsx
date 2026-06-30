@@ -26,6 +26,7 @@ import type { PointCashflow } from "@/server/insights/types";
 import { formatMontant, estNegatif } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateIllustration } from "@/components/dashboard/states/primitives";
+import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
 
 // Géométrie du viewBox (unités SVG). La HAUTEUR est fixe ; la LARGEUR `vbW` est
 // DÉRIVÉE de la taille rendue réelle (ResizeObserver, cf. `Trace`) pour que 1 unité
@@ -39,14 +40,7 @@ const PAD_L = 56; // marge axe Y (montants tabular)
 const PAD_R = 16;
 const PAD_T = 16;
 const PAD_B = 28; // marge axe X (mois)
-
-/**
- * Hauteur de l'ancre — UI_GUIDELINES §4.2 : « ~55vh (min 380px) ». Le plafond 520px
- * évite que le graphe devienne absurdement grand sur très grand écran (le `min-h
- * -[380px]` de la carte porte déjà le plancher ; ici on porte la VALEUR fluide). La
- * même hauteur sert au tracé ET à l'état vide → aucun saut de layout au toggle/vide.
- */
-const HAUTEUR_ANCRE = "clamp(380px, 55vh, 520px)";
+// Hauteur de l'ancre (§4.2) partagée avec les barres → `flux-layout.ts` (anti-dup).
 
 /** Convertit une chaîne décimale en number POUR LA GÉOMÉTRIE uniquement. */
 function valeurGeo(montant: string): number {

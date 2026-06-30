@@ -22,12 +22,14 @@
  */
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
-import { formaterMoisAnnee } from "@/lib/format-date";
+import { formaterMoisCourt } from "@/lib/format-date";
 import {
   maxFenetre,
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
+import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
+import { useDimensionsSvg } from "@/components/dashboard/use-dimensions-svg";
 
 /**
  * Corps « barres » de l'ancre Flux : projette la série sur la grille puis rend les
@@ -50,7 +52,10 @@ export function FluxBarres({
 
   if (aucunMouvement) {
     return (
-      <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
+      <div
+        className="flex flex-col items-center justify-center text-center"
+        style={{ minHeight: HAUTEUR_ANCRE }}
+      >
         <p className="text-sm font-medium text-text">
           Aucun mouvement sur la période
         </p>
@@ -63,7 +68,10 @@ export function FluxBarres({
   }
 
   return (
-    <div className="flex min-h-[300px] flex-col justify-center">
+    <div className="flex flex-col" style={{ minHeight: HAUTEUR_ANCRE }}>
+      {/* Le SVG remplit la hauteur disponible (flex-1) ET la largeur (w-full) :
+          les barres ne sont plus « perdues » dans du vide (C1) et s'étalent sur
+          toute la largeur de la carte (C2). */}
       <BarresMensuelles mois={mois} max={max} devise={devise} />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -76,11 +84,27 @@ export function FluxBarres({
   );
 }
 
+// Géométrie des barres. Le viewBox est en px RÉELS (mesurés) → 1 unité = 1 px, donc
+// AUCUNE déformation (cohérent avec la courbe). Dimensions de repli avant la 1re
+// mesure (SSR / 1er paint), ratio plausible d'une carte d'ancre.
+const LARGEUR_DEFAUT = 640;
+const HAUTEUR_DEFAUT = 380;
+const BANDE_LABELS = 22; // px réservés sous l'axe pour les libellés de mois
+const FRACTION_BARRE = 0.5; // largeur d'une barre = 50 % de sa colonne (reste = gap)
+const MAX_LABELS = 8; // densité max de labels d'axe X (C3 : 1 label sur N au-delà)
+
 /**
  * Barres empilées par mois : entrée (inflow) vers le haut, sortie (outflow) vers le
  * bas, à partir d'une ligne de base centrale. Hauteur ∝ montant / max de la fenêtre.
  * SVG inline (zéro dépendance — Tremor incompatible React 19, cohérent avec
  * `flux-chart-trace.tsx`).
+ *
+ * REMPLISSAGE (C1+C2) : le SVG fait `w-full` et porte `HAUTEUR_ANCRE`, et son viewBox
+ * suit la taille RÉELLE mesurée (`useDimensionsSvg`). La hauteur d'une demi-bande et
+ * la largeur des colonnes sont donc DÉRIVÉES de l'espace réel (plus de plafond 64px
+ * en dur, plus de scroll horizontal) : les barres occupent toute la carte sans être
+ * déformées (1 unité = 1 px). `parseFloat` ne sert QU'À la hauteur (géométrie),
+ * jamais à un montant affiché (frontière float, règle 8).
  */
 function BarresMensuelles({
   mois,
@@ -91,73 +115,93 @@ function BarresMensuelles({
   max: number;
   devise: string;
 }) {
-  const hauteurDemi = 64; // px pour la plus grande barre (entrée OU sortie)
-  const largeurBarre = 28;
-  const gap = 16;
-  const largeur = mois.length * (largeurBarre + gap);
-  const hauteur = hauteurDemi * 2 + 28; // + bande de labels sous l'axe
+  const { ref, largeur, hauteur } = useDimensionsSvg(
+    LARGEUR_DEFAUT,
+    HAUTEUR_DEFAUT,
+  );
+
+  // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
+  // centre de cette zone (entrées au-dessus, sorties en dessous). `hauteurDemi`
+  // borné ≥ 0 par sécurité (cartes très basses).
+  const hauteurDemi = Math.max((hauteur - BANDE_LABELS) / 2, 0);
+  const yAxe = hauteurDemi;
+
+  // Une colonne par mois ; la barre occupe `FRACTION_BARRE` de sa colonne, centrée
+  // (le reste fait l'espace inter-barres). Garde-fou `mois.length` (jamais 0 ici :
+  // l'appelant a déjà filtré `aucunMouvement`, mais on ne divise pas par zéro).
+  const pas = mois.length > 0 ? largeur / mois.length : largeur;
+  const largeurBarre = pas * FRACTION_BARRE;
+
+  // C3 — densité des labels : au-delà de MAX_LABELS mois, on n'affiche qu'un label
+  // sur `pasLabel`, régulièrement espacé, en garantissant TOUJOURS le premier (i=0)
+  // et le dernier (lisibilité des bornes de la fenêtre).
+  const pasLabel = Math.max(1, Math.ceil(mois.length / MAX_LABELS));
+  const dernier = mois.length - 1;
 
   return (
-    <div className="overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${largeur} ${hauteur}`}
-        width={largeur}
-        height={hauteur}
-        role="img"
-        aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
-        className="max-w-full"
-      >
-        {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
-            projet (cf. flux-chart-trace.tsx) — les utilitaires fill-/stroke-
-            custom ne sont pas employés pour les traits ici. */}
-        <line
-          x1={0}
-          y1={hauteurDemi}
-          x2={largeur}
-          y2={hauteurDemi}
-          stroke="var(--color-line)"
-          strokeWidth={1}
-        />
-        {mois.map((m, i) => {
-          const cx = i * (largeurBarre + gap) + gap / 2;
-          const hEntree = max > 0 ? (Math.abs(parseFloat(m.entrees)) / max) * hauteurDemi : 0;
-          const hSortie = max > 0 ? (Math.abs(parseFloat(m.sorties)) / max) * hauteurDemi : 0;
-          // Libellé court : initiale du mois (M de l'axe). Le détail est dans le tableau.
-          const labelCourt = formaterMoisAnnee(m.libelleMois).slice(0, 3);
-          return (
-            <g key={m.libelleMois}>
-              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={hauteurDemi - hEntree}
-                width={largeurBarre}
-                height={hEntree}
-                rx={2}
-                fill="var(--color-inflow)"
-              />
-              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={hauteurDemi}
-                width={largeurBarre}
-                height={hSortie}
-                rx={2}
-                fill="var(--color-outflow)"
-              />
-              {/* Label du mois sous l'axe */}
+    <svg
+      ref={ref}
+      viewBox={`0 0 ${largeur} ${hauteur}`}
+      className="w-full"
+      style={{ height: HAUTEUR_ANCRE }}
+      role="img"
+      aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
+    >
+      {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
+          projet (cf. flux-chart-trace.tsx) — les utilitaires fill-/stroke-
+          custom ne sont pas employés pour les traits ici. */}
+      <line
+        x1={0}
+        y1={yAxe}
+        x2={largeur}
+        y2={yAxe}
+        stroke="var(--color-line)"
+        strokeWidth={1}
+      />
+      {mois.map((m, i) => {
+        const cx = i * pas + (pas - largeurBarre) / 2;
+        const hEntree =
+          max > 0 ? (Math.abs(parseFloat(m.entrees)) / max) * hauteurDemi : 0;
+        const hSortie =
+          max > 0 ? (Math.abs(parseFloat(m.sorties)) / max) * hauteurDemi : 0;
+        const labelVisible = i % pasLabel === 0 || i === dernier;
+        return (
+          <g key={m.libelleMois}>
+            {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
+            <rect
+              x={cx}
+              y={yAxe - hEntree}
+              width={largeurBarre}
+              height={hEntree}
+              rx={2}
+              fill="var(--color-inflow)"
+            />
+            {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
+            <rect
+              x={cx}
+              y={yAxe}
+              width={largeurBarre}
+              height={hSortie}
+              rx={2}
+              fill="var(--color-outflow)"
+            />
+            {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
+                court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
+                complet reste dans le tableau « Évolution mensuelle ». */}
+            {labelVisible && (
               <text
                 x={cx + largeurBarre / 2}
-                y={hauteurDemi * 2 + 18}
+                y={hauteur - 6}
                 textAnchor="middle"
                 fill="var(--color-text-muted)"
                 className="text-[10px]"
               >
-                {labelCourt}
+                {formaterMoisCourt(m.libelleMois)}
               </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
