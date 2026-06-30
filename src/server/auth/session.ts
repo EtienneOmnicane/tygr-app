@@ -87,6 +87,11 @@ export async function exigerSessionWorkspace(): Promise<WorkspaceSession> {
   const parsed = workspaceSessionSchema.safeParse({
     userId: session.userId,
     activeWorkspaceId: session.activeWorkspaceId,
+    // viewFilter (L8b-1) : INTENTION d'affichage du sélecteur de périmètre, portée
+    // par le token. `?? undefined` car le schéma attend `optional()` (pas `null`) ;
+    // absent/[] ⇒ « Groupe » (withWorkspace ne pose alors PAS le GUC, tenancy.ts:419).
+    // NON FIABLE : le serveur l'intersecte avec le DROIT — ne confère aucun accès.
+    viewFilter: session.viewFilter ?? undefined,
   });
   if (!parsed.success) {
     // JWT au contenu inattendu : on le traite comme une absence de session.
