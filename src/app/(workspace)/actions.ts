@@ -11,6 +11,7 @@ import {
   validerBascule,
   WorkspaceSwitchDeniedError,
 } from "@/server/auth/workspace-switch";
+import { perimetreSchema } from "@/server/auth/view-filter";
 import { identite } from "@/server/db";
 import { exigerSessionWorkspace } from "@/server/auth/session";
 
@@ -19,6 +20,13 @@ export interface EtatBascule {
 }
 
 const MESSAGE_BASCULE_REFUSEE = "Workspace indisponible.";
+
+/** État du formulaire du sélecteur de périmètre (useActionState côté client). */
+export interface EtatPerimetre {
+  erreur: string | null;
+}
+
+const MESSAGE_PERIMETRE_INVALIDE = "Périmètre invalide.";
 
 /**
  * Bascule vers `workspaceCible`. Re-valide la membership (S1, barrière n°1)
@@ -44,6 +52,42 @@ export async function basculerWorkspace(
   }
 
   // Met à jour le JWT (le callback jwt re-valide la membership — barrière n°2).
-  await unstable_update({ activeWorkspaceId: workspaceValide });
+  // `viewFilter: null` PURGE le filtre de périmètre au changement de workspace
+  // (L8b-1, §8.5) : un filtre sur les comptes de l'ancien workspace donnerait,
+  // une fois posé sur le nouveau, un dashboard VIDE (intersection avec un autre
+  // DROIT = ∅). On repart donc sur « Groupe ». `null` (pas `undefined`) pour que
+  // la clé soit présente dans le payload et déclenche le reset côté callback jwt.
+  await unstable_update({ activeWorkspaceId: workspaceValide, viewFilter: null });
+  redirect("/");
+}
+
+/**
+ * Définit le périmètre d'affichage (sélecteur de périmètre L8b-1). Co-localisée
+ * avec `basculerWorkspace` (même niveau workspace) car le `PerimetreSwitcher` est
+ * monté dans le header GLOBAL du groupe — il s'affiche sur toutes les pages, pas
+ * seulement le dashboard. Calque : auth → validation → unstable_update → redirect.
+ * « Groupe » = liste vide → le callback jwt retire le champ du token → GUC non
+ * posé → on voit tout le DROIT.
+ *
+ * Sécurité (exit-criteria règle 3) : authz via exigerSessionWorkspace ; validation
+ * Zod stricte ; aucun accès direct au client DB (la re-validation des comptes vit
+ * dans le callback jwt, sous withWorkspace) ; erreur nommée, message générique.
+ */
+export async function definirViewFilter(
+  _etat: EtatPerimetre,
+  formData: FormData,
+): Promise<EtatPerimetre> {
+  await exigerSessionWorkspace();
+  // getAll → string[] (0..N champs `bankAccountId`). « Groupe » = aucun champ ⇒ [].
+  const parsed = perimetreSchema.safeParse({
+    bankAccountIds: formData.getAll("bankAccountId"),
+  });
+  if (!parsed.success) {
+    return { erreur: MESSAGE_PERIMETRE_INVALIDE };
+  }
+
+  // Écrit le JWT : le callback jwt RE-VALIDE/intersecte la demande (barrière n°2,
+  // hygiène) avant de poser le champ. La sécurité réelle reste la RLS.
+  await unstable_update({ viewFilter: parsed.data.bankAccountIds });
   redirect("/");
 }

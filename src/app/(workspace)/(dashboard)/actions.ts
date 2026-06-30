@@ -32,6 +32,11 @@ export type ResultatAction<T = void> =
   | { ok: true; data: T }
   | { ok: false; code: string; message: string };
 
+// Le sélecteur de périmètre (definirViewFilter / EtatPerimetre) vit au niveau
+// workspace (`(workspace)/actions.ts`, à côté de basculerWorkspace) car son
+// PerimetreSwitcher est monté dans le header GLOBAL du groupe, pas seulement sur
+// le dashboard. Cf. revue d'altitude L8b-1.
+
 /** Borne du nombre de mois demandés (1..36 ; 3 ans suffisent pour un graphique). */
 const syntheseParMoisSchema = z
   .object({ nbMois: z.number().int().min(1).max(36).default(12) })

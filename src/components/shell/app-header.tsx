@@ -14,10 +14,12 @@
 import Link from "next/link";
 
 import type { MembershipAvecNom } from "@/server/repositories/identite";
+import type { CompteConnecte } from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 
 import { peutAdministrer } from "@/lib/permissions";
 import { WorkspaceSwitcher } from "@/components/shell/workspace-switcher";
+import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
 import { AppNav } from "@/components/shell/app-nav";
 import { BankCtaLink } from "@/components/shell/bank-cta";
 
@@ -26,12 +28,18 @@ export function AppHeader({
   workspaceNom,
   role,
   memberships,
+  comptes,
+  viewFilterActif,
   onDeconnexion,
 }: {
   workspaceId: string;
   workspaceNom: string;
   role: WorkspaceRole;
   memberships: MembershipAvecNom[];
+  /** Comptes visibles (scopés RLS) — alimentent le sélecteur de périmètre. */
+  comptes: CompteConnecte[];
+  /** viewFilter courant (ids) ; null = « Groupe ». Pour l'état actif du sélecteur. */
+  viewFilterActif: string[] | null;
   /** Server Action de déconnexion, fournie par le layout. */
   onDeconnexion: () => void;
 }) {
@@ -48,6 +56,15 @@ export function AppHeader({
       <AppNav />
 
       <div className="ml-auto flex items-center gap-3">
+        {/* Sélecteur de périmètre d'affichage (L8b-1) : Groupe / banque(s). La
+            `key` dérivée du périmètre actif force un remount propre quand le
+            serveur change le viewFilter (après Appliquer + redirect) — la
+            sélection locale repart alors sur la nouvelle vérité sans effet. */}
+        <PerimetreSwitcher
+          key={viewFilterActif?.join(",") ?? "groupe"}
+          comptes={comptes}
+          viewFilterActif={viewFilterActif}
+        />
         <WorkspaceSwitcher
           actifId={workspaceId}
           actifNom={workspaceNom}
