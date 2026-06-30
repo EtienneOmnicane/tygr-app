@@ -12,6 +12,7 @@
  *   └──────────────────────────────────────────────────────────────────┘
  */
 import Link from "next/link";
+import { Suspense } from "react";
 
 import type { MembershipAvecNom } from "@/server/repositories/identite";
 import type {
@@ -23,6 +24,7 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import { peutAdministrer } from "@/lib/permissions";
 import { WorkspaceSwitcher } from "@/components/shell/workspace-switcher";
 import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
+import { PeriodeSwitcher } from "@/components/shell/periode-switcher";
 import { AppNav } from "@/components/shell/app-nav";
 import { BankCtaLink } from "@/components/shell/bank-cta";
 
@@ -62,6 +64,20 @@ export function AppHeader({
       <AppNav />
 
       <div className="ml-auto flex items-center gap-3">
+        {/* Sélecteur de PÉRIODE (L8c) : presets Ce mois / 3m / 6m / 12m / Tout. Lit/écrit
+            `?periode` (filtre de lecture, hors RLS) côté client. Sous <Suspense> car
+            useSearchParams force le bail-out CSR au prerender (recommandation Next 16) —
+            fallback inerte aux mêmes dimensions pour éviter le saut de layout. */}
+        <Suspense
+          fallback={
+            <div
+              aria-hidden
+              className="h-7 w-[260px] rounded-full bg-surface-inset"
+            />
+          }
+        >
+          <PeriodeSwitcher />
+        </Suspense>
         {/* Sélecteur de périmètre d'affichage (L8b-1) : Groupe / banque(s). La
             `key` dérivée du périmètre actif force un remount propre quand le
             serveur change le viewFilter (après Appliquer + redirect) — la
