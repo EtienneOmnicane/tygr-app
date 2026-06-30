@@ -9,65 +9,25 @@
  *
  * `FluxBarres` rend UNIQUEMENT le corps (barres ou message « pas de mouvement »).
  * Le tableau récapitulatif mensuel RESTE dans `monthly-cashflow.tsx` (carte
- * « Évolution mensuelle »), qui réutilise `projeterSurGrille`/`maxFenetre` exportés
- * ici pour ne pas dupliquer la logique de projection.
+ * « Évolution mensuelle »), qui réutilise `projeterSurGrille` (module NEUTRE
+ * `flux-projection.ts`, importé ici aussi) pour ne pas dupliquer la projection.
+ *
+ * ⚠️ La projection (`projeterSurGrille`/`maxFenetre`/`MoisAffiche`) vit dans
+ * `flux-projection.ts` (`.ts` neutre, SANS `"use client"`) car `monthly-cashflow.tsx`
+ * — un Server Component — l'appelle ; une fonction d'un module client ne peut pas être
+ * invoquée depuis le serveur (fix C2). Ce fichier-ci reste client (JSX/SVG des barres).
  *
  * ⚠️ Multi-devises (règle 8) : MONO-AFFICHÉ sur la devise de BASE ; aucune addition
- * cross-devise, aucune conversion FX. Un mois qui n'a que d'autres devises reste à 0.
- * `parseFloat` n'est utilisé QUE pour l'ÉCHELLE (hauteur de barre) — JAMAIS pour un
- * montant affiché (les montants passent par `formatMontant` sur la chaîne, côté tableau).
+ * cross-devise, aucune conversion FX.
  */
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { formaterMoisAnnee } from "@/lib/format-date";
-
-/** Une cellule mensuelle réduite à la devise de base (ce que la carte affiche). */
-export interface MoisAffiche {
-  libelleMois: string;
-  entrees: string; // chaîne décimale, devise de base (ou "0")
-  sorties: string; // chaîne décimale, devise de base (ou "0")
-  variation: string; // chaîne décimale, devise de base (ou "0")
-  /** Vrai si le mois porte des flux dans une devise ≠ base (signalé, jamais sommé). */
-  autresDevises: boolean;
-}
-
-/**
- * Projette la série à plat (mois × devise) sur la GRILLE des mois attendus, réduite
- * à la devise de base. La grille garantit l'axe continu (un mois sans aucune
- * transaction apparaît à 0). Un mois qui n'a que d'autres devises reste à 0 + drapeau
- * `autresDevises` (on n'affiche jamais le montant d'une autre devise à la place).
- */
-export function projeterSurGrille(
-  serie: SyntheseMensuelle[],
-  grille: string[],
-  devise: string,
-): MoisAffiche[] {
-  const cible = devise.trim().toUpperCase();
-  return grille.map((libelleMois) => {
-    const duMois = serie.filter((s) => s.mois === libelleMois);
-    const base = duMois.find((s) => s.currency.toUpperCase() === cible);
-    const autresDevises = duMois.some((s) => s.currency.toUpperCase() !== cible);
-    return {
-      libelleMois,
-      entrees: base?.entrees ?? "0",
-      sorties: base?.sorties ?? "0",
-      variation: base?.variation ?? "0",
-      autresDevises,
-    };
-  });
-}
-
-/** Plus grande valeur (entrée OU sortie) de la fenêtre — échelle des barres. */
-export function maxFenetre(mois: MoisAffiche[]): number {
-  let max = 0;
-  for (const m of mois) {
-    // Échelle uniquement (hauteur relative) — parseFloat est ACCEPTABLE ici car ce
-    // n'est PAS un montant affiché (les montants affichés passent par formatMontant
-    // sur la chaîne). On borne juste la hauteur d'une barre.
-    max = Math.max(max, Math.abs(parseFloat(m.entrees)), Math.abs(parseFloat(m.sorties)));
-  }
-  return max;
-}
+import {
+  maxFenetre,
+  projeterSurGrille,
+  type MoisAffiche,
+} from "@/components/dashboard/flux-projection";
 
 /**
  * Corps « barres » de l'ancre Flux : projette la série sur la grille puis rend les

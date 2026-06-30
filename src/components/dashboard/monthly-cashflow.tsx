@@ -6,8 +6,9 @@
  *
  * Depuis L8a, les BARRES de cette carte ont migré dans l'ancre (vue « Barres »). Cette
  * carte ne garde QUE le tableau ; elle réutilise `projeterSurGrille` (axe continu,
- * réduction à la devise de base) exporté par `flux-bars.tsx` pour ne PAS dupliquer la
- * logique de projection.
+ * réduction à la devise de base) depuis le module NEUTRE `flux-projection.ts` — ce
+ * Server Component ne peut PAS importer de `flux-bars.tsx` (client) — pour ne PAS
+ * dupliquer la logique de projection.
  *
  * Présentationnel PUR (UI_GUIDELINES) : reçoit la SÉRIE mensuelle DÉJÀ agrégée en SQL
  * (`syntheseParMois` → une ligne par (mois, devise)) + la GRILLE des mois attendus
@@ -28,7 +29,7 @@ import { StateCard } from "@/components/dashboard/states/primitives";
 import {
   projeterSurGrille,
   type MoisAffiche,
-} from "@/components/dashboard/flux-bars";
+} from "@/components/dashboard/flux-projection";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 export function MonthlyCashflow({
