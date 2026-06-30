@@ -1652,6 +1652,34 @@ matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
   chemin heureux + cartographié + absent/non-cartographié). **Déclencheur** : lors du chantier
   de refonte globale UX/UI ou lors du prochain grand refactor des tableaux de données.
 
+### Dettes ouvertes par L8b-1 (sélecteur de périmètre, 2026-06-30)
+
+Relevées en cross-review de `feat/l8b1-perimetre-switcher` (constats #2/#3/#5,
+confiance ≤5/10 — nettoyages, non bloquants). Le câblage sécurité (intersection
+serveur RLS, fail-closed) est sain ; ces entrées sont de la réutilisation/efficacité.
+
+- [ ] **UI-CN-DEDUP1 (P2) — extraire le helper `cn` local dans `src/lib/cn.ts`.**
+  `cn(...)` est redéfini à l'identique dans `components/shell/perimetre-switcher.tsx`
+  et `components/ui/category/category-picker.tsx` (2 copies verbatim ; `workspace-switcher.tsx`
+  n'en utilise pas, incohérence préexistante). Toujours zéro dépendance externe (règle 9
+  respectée — ce n'est PAS clsx). **Déclencheur** : 3e réutilisation du pattern, OU adoption
+  future de `clsx`/`cva`. **Effort** : S.
+
+- [ ] **UI-POPOVER-HOOK1 (P2) — factoriser la mécanique popover (clic-extérieur mousedown
+  + Échap capture + focus auto rAF) dans un hook partagé `usePopoverDismiss`.** Réimplémentée
+  mot pour mot dans `perimetre-switcher.tsx` et `category-picker.tsx:81-114`. Divergence déjà
+  constatée : le `stopImmediatePropagation` du CategoryPicker (Échap qui ne ferme pas une
+  modale parente) n'est PAS reporté dans le switcher (simple `stopPropagation`) — bénin tant
+  que le switcher reste hors modale (header). **Déclencheur** : 3e popover, OU besoin de monter
+  le switcher dans une modale. **Effort** : M.
+
+- [ ] **PERF-LISTERCOMPTES-CACHE1 (P2) — mémoïser `listerComptes` par requête via `React.cache`.**
+  Sur le dashboard, `listerComptes` tourne 2× par rendu : `(workspace)/layout.tsx` (pour le
+  sélecteur de périmètre) ET `(dashboard)/page.tsx` (pour les cartes), dans deux `withWorkspace`
+  distincts (RSC ne partagent pas de transaction). Lecture indexée légère, mais redondante.
+  `React.cache(listerComptes)` dédoublonnerait sur un même rendu. **Déclencheur** : profilage
+  du TTFB dashboard, OU passage de `listerComptes` à une lecture coûteuse. **Effort** : S.
+
 ## P3 — plus tard
 
 - [ ] **FEAT-3.3 Console mur de la dette** — endpoints `/debt/*` disponibles côté API.

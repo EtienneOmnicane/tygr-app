@@ -32,7 +32,7 @@ import { useActionState } from "react";
 import {
   definirViewFilter,
   type EtatPerimetre,
-} from "@/app/(workspace)/(dashboard)/actions";
+} from "@/app/(workspace)/actions";
 import type { CompteConnecte } from "@/server/repositories/dashboard";
 
 function cn(...classes: Array<string | false | null | undefined>): string {
@@ -105,13 +105,17 @@ export function PerimetreSwitcher({
   }, [ouvert]);
 
   // Libellé du déclencheur : « Groupe » (0 coché), le compte (1), « N comptes » (N).
+  // INVARIANT : tout id de `coches` provient de `comptes` (init filtré par idsConnus
+  // + basculer() n'ajoute que des ids de la liste rendue) → le find à 1 coché ne
+  // retourne jamais undefined (pas de branche de repli morte).
   const nbCoches = coches.size;
   let libelleDeclencheur: string;
   if (nbCoches === 0) {
     libelleDeclencheur = "Groupe";
   } else if (nbCoches === 1) {
-    const seul = comptes.find((c) => coches.has(c.bankAccountId));
-    libelleDeclencheur = seul ? libelleCompte(seul) : "1 compte";
+    libelleDeclencheur = libelleCompte(
+      comptes.find((c) => coches.has(c.bankAccountId))!,
+    );
   } else {
     libelleDeclencheur = `${nbCoches} comptes`;
   }
