@@ -50,6 +50,24 @@ export interface CompteConnecte {
 }
 
 /**
+ * Une ENTITÉ (BU) telle que le membre la voit, pour l'onglet « Par entité » du
+ * sélecteur de périmètre (L8b-2). Dérivée des COMPTES VISIBLES (pas de
+ * member_entity_scopes, qui rate la Vision Globale ; pas de listerEntites, ADMIN-only).
+ */
+export interface EntiteVisible {
+  entityId: string;
+  name: string;
+  /** Nb de comptes de cette entité visibles sous le droit (libellé « Sucre · 3 comptes »). */
+  nbComptes: number;
+  /**
+   * bankAccountId des comptes visibles de l'entité. Sert au libellé re-dérivé (C5) :
+   * égalité ENSEMBLISTE EXACTE entre cet ensemble et le view_filter courant ⇒ « Sucre ».
+   * (nbComptes === bankAccountIds.length ; les deux sont gardés pour la lisibilité.)
+   */
+  bankAccountIds: string[];
+}
+
+/**
  * Solde consolidé COURANT d'une devise (somme des `current_balance` des comptes de
  * cette devise). Multi-devises (CLAUDE.md) : on NE somme JAMAIS entre devises — on
  * expose une ligne PAR devise, l'UI les affiche côte à côte (« 7 074 400 MUR » +
@@ -177,6 +195,47 @@ export async function comptesParEntite(
     .where(eq(bankAccounts.entityId, entityId))
     .orderBy(bankAccounts.accountName);
   return lignes.map((l) => l.id);
+}
+
+/**
+ * Source des entités du sélecteur « Par entité » (L8b-2), pour TOUS les rôles (pas
+ * d'`exigerAdmin` : c'est le but — une lecture entités non-admin, scopée RLS). On
+ * NE réutilise PAS `listerEntites` (ADMIN-only, lèverait pour un MANAGER et exposerait
+ * un nbComptes non scopé) ni `member_entity_scopes` (vide en Vision Globale → raterait
+ * les entités du groupe).
+ *
+ * On part de `bank_accounts` (filtré par tenant_isolation + entity_scope + account_scope)
+ * et on `innerJoin entities` pour le nom : la BORNE entité vient du côté bank_accounts
+ * (un compte hors scope est déjà absent → son entité n'apparaît pas), donc fail-closed.
+ * `innerJoin` ⇒ les comptes `entity_id IS NULL` (non assignés, NULL-B) ne forment AUCUN
+ * groupe — ils restent accessibles via l'onglet « Par compte ».
+ *
+ * - Vision Globale (entity_scope non posé) : DISTINCT couvre toutes les entités portées
+ *   par ≥1 compte du groupe.
+ * - Vision Entité (membre scopé) : la liste se réduit aux entités du périmètre ayant ≥1
+ *   compte visible.
+ *
+ * Filtres : `isSelected=true` (cohérent avec listerComptes) + `isActive=true` (une entité
+ * archivée disparaît du picker ; un compte resté assigné à elle reste visible « Par
+ * compte »). `array_agg` calqué sur entites.ts (array_remove NULL par sécurité, même si
+ * l'innerJoin garantit déjà des id non-NULL). Ordre stable par nom.
+ */
+export async function listerEntitesVisibles(tx: Tx): Promise<EntiteVisible[]> {
+  const lignes = await tx
+    .select({
+      entityId: entities.id,
+      name: entities.name,
+      nbComptes: sql<number>`count(${bankAccounts.id})::int`,
+      bankAccountIds: sql<
+        string[]
+      >`coalesce(array_remove(array_agg(${bankAccounts.id}), null), '{}')::text[]`,
+    })
+    .from(bankAccounts)
+    .innerJoin(entities, eq(bankAccounts.entityId, entities.id))
+    .where(and(eq(bankAccounts.isSelected, true), eq(entities.isActive, true)))
+    .groupBy(entities.id, entities.name)
+    .orderBy(entities.name);
+  return lignes;
 }
 
 /**
