@@ -26,6 +26,7 @@ import {
   bankAccounts,
   bankConnections,
   balanceHistory,
+  entities,
   transactionsCache,
 } from "@/server/db/schema";
 import type { CategorySource } from "@/server/db/schema";
@@ -140,6 +141,42 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
     .where(eq(bankAccounts.isSelected, true))
     .orderBy(bankAccounts.accountName);
   return lignes;
+}
+
+/**
+ * Traduction « axe ENTITÉ → liste de bankAccountId » pour le sélecteur de périmètre
+ * (L8b-2). Renvoie les comptes de l'entité `entityId` VISIBLES sous le droit du membre.
+ *
+ * SÉCURITÉ — pourquoi cette lecture est sûre (différence CRITIQUE avec le bloc 4b de
+ * tenancy.ts) : 4b traduit entité→comptes AVANT la pose du droit (sur l'état tenant
+ * BRUT) parce qu'il CONSTRUIT le droit. Ici, au contraire, la fonction s'exécute DANS
+ * un withWorkspace dont la session a DÉJÀ posé `entity_scope` (RESTRICTIVE) et
+ * `account_scope` (RESTRICTIVE) — donc le SELECT ne voit QUE les comptes du périmètre du
+ * membre. Conséquences fail-closed :
+ *  - un `entityId` hors du périmètre du membre → 0 ligne (la RLS masque tout) ;
+ *  - une entité dont le membre ne voit qu'une partie des comptes → le SOUS-ENSEMBLE
+ *    visible, jamais l'entité entière. C'est cette lecture scopée qui empêche qu'une
+ *    entité hors-droit fasse fuiter des comptes (le rempart serveur view_filter, qui
+ *    intersecte DROIT ∩ filtre dans tenancy.ts, reste le garant ultime en aval).
+ *
+ * APPELANT (C3) : appeler avec une session SANS `viewFilter` (userId + activeWorkspaceId
+ * seulement). Sinon la clause AND view_filter de la policy account_scope amputerait la
+ * traduction (même mécanique que le bug #143) → l'entité ne pourrait jamais ré-élargir.
+ *
+ * Pas de filtre `workspace_id` paramètre : la RLS (tenant + entity + account scope) borne
+ * la lecture (CLAUDE.md règle 2). `eq` PARAMÉTRÉ (zéro interpolation). Ordre stable par
+ * `accountName` (déterminisme d'affichage + comparaison ensembliste du libellé, C5).
+ */
+export async function comptesParEntite(
+  tx: Tx,
+  entityId: string,
+): Promise<string[]> {
+  const lignes = await tx
+    .select({ id: bankAccounts.id })
+    .from(bankAccounts)
+    .where(eq(bankAccounts.entityId, entityId))
+    .orderBy(bankAccounts.accountName);
+  return lignes.map((l) => l.id);
 }
 
 /**

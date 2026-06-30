@@ -126,6 +126,7 @@ export {
 // hors contexte.
 export {
   listerComptes,
+  comptesParEntite,
   soldeConsolideCourant,
   soldesCourantsParDevise,
   courbeTresorerie,
