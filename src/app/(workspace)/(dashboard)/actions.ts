@@ -15,8 +15,10 @@
  * - Retour normalisé ResultatAction (jamais d'exception propagée au client).
  * - Pas de PII (agrégats de montants uniquement, jamais de libellé).
  */
+import { redirect } from "next/navigation";
 import { z } from "zod";
 
+import { unstable_update } from "@/server/auth/config";
 import { moisCourantMaurice } from "@/lib/format-date";
 import {
   exigerSessionWorkspace,
@@ -31,6 +33,62 @@ import {
 export type ResultatAction<T = void> =
   | { ok: true; data: T }
   | { ok: false; code: string; message: string };
+
+/** État du formulaire du sélecteur de périmètre (useActionState côté client). */
+export interface EtatPerimetre {
+  erreur: string | null;
+}
+
+const MESSAGE_PERIMETRE_INVALIDE = "Périmètre invalide.";
+
+/**
+ * Borne anti-abus du nombre de comptes filtrés (L8b-1). Alignée sur la borne
+ * `entityIds` de admin/entites/actions.ts:89. Un workspace a un nombre fini de
+ * comptes ; au-delà c'est forcément forgé → rejet bruyant.
+ */
+const PERIMETRE_MAX_COMPTES = 200;
+
+/**
+ * Schéma STRICT du périmètre demandé. `bankAccountIds` = liste d'UUID de comptes ;
+ * `[]` est VALIDE et signifie « Groupe » (aucun filtre). `.strict()` rejette tout
+ * champ en trop. La liste est seulement VALIDÉE ici (forme) ; l'INTERSECTION avec
+ * les comptes réellement visibles se fait dans le callback jwt (hygiène de token),
+ * et la SÉCURITÉ reste la RLS (le serveur intersecte le GUC, tenancy.ts:391-419).
+ */
+const perimetreSchema = z
+  .object({
+    bankAccountIds: z.array(z.string().uuid()).max(PERIMETRE_MAX_COMPTES),
+  })
+  .strict();
+
+/**
+ * Définit le périmètre d'affichage (sélecteur de périmètre L8b-1). Calque de
+ * `basculerWorkspace` ((workspace)/actions.ts) : auth → validation → unstable_update
+ * → redirect. « Groupe » = liste vide → le callback jwt retire le champ du token →
+ * GUC non posé → on voit tout le DROIT.
+ *
+ * Sécurité (exit-criteria règle 3) : authz via exigerSessionWorkspace ; validation
+ * Zod stricte ; aucun accès direct au client DB (la re-validation des comptes vit
+ * dans le callback jwt, sous withWorkspace) ; erreur nommée, message générique.
+ */
+export async function definirViewFilter(
+  _etat: EtatPerimetre,
+  formData: FormData,
+): Promise<EtatPerimetre> {
+  await exigerSessionWorkspace();
+  // getAll → string[] (0..N champs `bankAccountId`). « Groupe » = aucun champ ⇒ [].
+  const parsed = perimetreSchema.safeParse({
+    bankAccountIds: formData.getAll("bankAccountId"),
+  });
+  if (!parsed.success) {
+    return { erreur: MESSAGE_PERIMETRE_INVALIDE };
+  }
+
+  // Écrit le JWT : le callback jwt RE-VALIDE/intersecte la demande (barrière n°2,
+  // hygiène) avant de poser le champ. La sécurité réelle reste la RLS.
+  await unstable_update({ viewFilter: parsed.data.bankAccountIds });
+  redirect("/");
+}
 
 /** Borne du nombre de mois demandés (1..36 ; 3 ans suffisent pour un graphique). */
 const syntheseParMoisSchema = z

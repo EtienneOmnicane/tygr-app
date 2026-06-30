@@ -44,6 +44,11 @@ export async function basculerWorkspace(
   }
 
   // Met à jour le JWT (le callback jwt re-valide la membership — barrière n°2).
-  await unstable_update({ activeWorkspaceId: workspaceValide });
+  // `viewFilter: null` PURGE le filtre de périmètre au changement de workspace
+  // (L8b-1, §8.5) : un filtre sur les comptes de l'ancien workspace donnerait,
+  // une fois posé sur le nouveau, un dashboard VIDE (intersection avec un autre
+  // DROIT = ∅). On repart donc sur « Groupe ». `null` (pas `undefined`) pour que
+  // la clé soit présente dans le payload et déclenche le reset côté callback jwt.
+  await unstable_update({ activeWorkspaceId: workspaceValide, viewFilter: null });
   redirect("/");
 }
