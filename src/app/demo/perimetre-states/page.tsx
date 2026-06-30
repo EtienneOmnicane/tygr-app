@@ -18,7 +18,10 @@
  * les tests + le vrai dashboard).
  */
 import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
-import type { CompteConnecte } from "@/server/repositories/dashboard";
+import type {
+  CompteConnecte,
+  EntiteVisible,
+} from "@/server/repositories/dashboard";
 
 export const metadata = { title: "Démo — Sélecteur de périmètre" };
 
@@ -46,6 +49,24 @@ const COMPTES: CompteConnecte[] = [
     currency: "MUR",
     currentBalance: "540000.00",
     lastSyncedAt: new Date(),
+  },
+];
+
+// Entités mock pour l'onglet « Par entité » (L8b-2). « Sucre » groupe les deux
+// comptes MUR ; « Énergie » le compte USD — pour juger le picker d'entités et le
+// libellé re-dérivé (C5) sur fond réel.
+const ENTITES: EntiteVisible[] = [
+  {
+    entityId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "Sucre",
+    nbComptes: 2,
+    bankAccountIds: [COMPTES[0].bankAccountId, COMPTES[2].bankAccountId],
+  },
+  {
+    entityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    name: "Énergie",
+    nbComptes: 1,
+    bankAccountIds: [COMPTES[1].bankAccountId],
   },
 ];
 
@@ -77,6 +98,7 @@ export default function DemoPerimetreStates() {
             <div className="ml-auto flex items-center gap-3">
               <PerimetreSwitcher
                 comptes={COMPTES}
+                entites={ENTITES}
                 viewFilterActif={viewFilterActif}
               />
               <span className="rounded-full bg-surface-inset px-3 py-1 text-xs font-medium text-ink">

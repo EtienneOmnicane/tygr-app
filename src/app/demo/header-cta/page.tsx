@@ -15,7 +15,10 @@
  */
 import { AppHeader } from "@/components/shell/app-header";
 import type { MembershipAvecNom } from "@/server/repositories/identite";
-import type { CompteConnecte } from "@/server/repositories/dashboard";
+import type {
+  CompteConnecte,
+  EntiteVisible,
+} from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 
 export const metadata = { title: "Démo — Header CTA banque" };
@@ -47,6 +50,22 @@ const COMPTES_FICTIFS: CompteConnecte[] = [
     currency: "USD",
     currentBalance: "82000.00",
     lastSyncedAt: new Date(),
+  },
+];
+
+/** Entités fictives pour alimenter l'onglet « Par entité » (L8b-2) en démo. */
+const ENTITES_FICTIVES: EntiteVisible[] = [
+  {
+    entityId: "ent-demo-1",
+    name: "Sucre",
+    nbComptes: 1,
+    bankAccountIds: ["acc-demo-1"],
+  },
+  {
+    entityId: "ent-demo-2",
+    name: "Énergie",
+    nbComptes: 1,
+    bankAccountIds: ["acc-demo-2"],
   },
 ];
 
@@ -82,6 +101,7 @@ export default function DemoHeaderCta() {
             role={role}
             memberships={MEMBERSHIPS_FICTIFS}
             comptes={COMPTES_FICTIFS}
+            entites={ENTITES_FICTIVES}
             viewFilterActif={null}
             onDeconnexion={deconnecterFactice}
           />
