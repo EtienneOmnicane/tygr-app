@@ -29,10 +29,12 @@ function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
 }
 
-/** Largeurs §2.2 : 480px formulaire simple, 720px tableaux de règles. */
+/** Largeurs §2.2 : 480px formulaire simple, 720px tableaux de règles, 840px
+ * surface multi-colonnes (ventilation : catégorie + montant + actions par ligne). */
 const LARGEURS = {
   sm: "max-w-[480px]",
   lg: "max-w-[720px]",
+  xl: "max-w-[840px]",
 } as const;
 
 export function Modal({

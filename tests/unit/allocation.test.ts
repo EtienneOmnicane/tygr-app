@@ -11,6 +11,7 @@ import {
   depuisCentimes,
   ligneEnDepassement,
   lignesEnDoublon,
+  montantPourLeReste,
   montantValide,
   peutValider,
   versPayload,
@@ -105,6 +106,59 @@ describe("ligneEnDepassement", () => {
   it("ne marque rien si pas de dépassement", () => {
     const lignes = [ligne("a", CAT, "50.00")];
     expect(ligneEnDepassement("100.00", lignes, "a")).toBe(false);
+  });
+});
+
+describe("montantPourLeReste (bouton « Tout le reste » — TX-QA-SPLIT-MAX1)", () => {
+  it("donne le reste global quand la ligne courante est vide", () => {
+    // Total 100, une autre ligne à 30 → la ligne vide peut absorber 70.
+    const lignes = [ligne("a", CAT, "30"), ligne("b", null, "")];
+    expect(montantPourLeReste("100.00", lignes, "b")).toBe("70.00");
+  });
+
+  it("exclut la contribution ACTUELLE de la ligne (ne sous-compte pas)", () => {
+    // Total 100, ligne courante déjà à 20, une autre à 30. « Tout le reste » sur la
+    // courante doit valoir 100 − 30 = 70 (et NON 100 − 20 − 30 = 50).
+    const lignes = [ligne("a", CAT, "30"), ligne("b", CAT2, "20")];
+    expect(montantPourLeReste("100.00", lignes, "b")).toBe("70.00");
+  });
+
+  it("vaut le total entier quand la ligne courante est la seule renseignée", () => {
+    const lignes = [ligne("a", CAT, "40")];
+    expect(montantPourLeReste("100.00", lignes, "a")).toBe("100.00");
+  });
+
+  it("fonctionne SANS catégorie sur la ligne courante (remplit juste le montant)", () => {
+    // Décision produit : « Tout le reste » autorisé même sans catégorie choisie.
+    const lignes = [ligne("a", CAT, "30"), ligne("b", null, "")];
+    expect(montantPourLeReste("100.00", lignes, "b")).toBe("70.00");
+  });
+
+  it("préserve les décimales exactes (aucun float)", () => {
+    // 0.10 + 0.20 en binaire = 0.30000000000000004 ; en centimes c'est exact.
+    const lignes = [ligne("a", CAT, "0.10"), ligne("b", CAT2, "0.15"), ligne("c", null, "")];
+    expect(montantPourLeReste("1.00", lignes, "c")).toBe("0.75");
+  });
+
+  it("renvoie null quand il ne reste rien (somme des autres = total)", () => {
+    const lignes = [ligne("a", CAT, "100"), ligne("b", null, "")];
+    expect(montantPourLeReste("100.00", lignes, "b")).toBeNull();
+  });
+
+  it("renvoie null si les AUTRES lignes dépassent déjà le total (jamais de négatif)", () => {
+    const lignes = [ligne("a", CAT, "120"), ligne("b", null, "")];
+    expect(montantPourLeReste("100.00", lignes, "b")).toBeNull();
+  });
+
+  it("ignore les montants invalides des autres lignes", () => {
+    // "abc" n'est pas un montant valide → compté 0, ne réduit pas le reste.
+    const lignes = [ligne("a", CAT, "abc"), ligne("b", CAT2, "25"), ligne("c", null, "")];
+    expect(montantPourLeReste("100.00", lignes, "c")).toBe("75.00");
+  });
+
+  it("traite un total invalide comme 0 → null", () => {
+    const lignes = [ligne("a", null, ""), ligne("b", null, "")];
+    expect(montantPourLeReste("", lignes, "a")).toBeNull();
   });
 });
 
