@@ -141,7 +141,7 @@ export function Modal({
               type="button"
               onClick={onClose}
               aria-label="Fermer"
-              className="absolute right-5 top-1/2 -translate-y-1/2 rounded-control p-1
+              className="absolute right-5 top-1/2 -translate-y-1/2 cursor-pointer rounded-control p-1
                 text-text-muted transition-colors hover:text-text
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
