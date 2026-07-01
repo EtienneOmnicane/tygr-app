@@ -31,6 +31,7 @@ import {
   ServiceIndisponibleError,
 } from "@/server/auth/session";
 import {
+  CategorieDupliqueeError,
   CategorieIntrouvableError,
   CategorieNonAutoriseeError,
   CurseurInvalideError,
@@ -88,6 +89,9 @@ function echec(
   if (erreur instanceof VentilationDepasseError) {
     code = erreur.code; // VENTILATION_EXCEEDS_AMOUNT
     message = "La somme des catégorisations dépasse le montant de la transaction.";
+  } else if (erreur instanceof CategorieDupliqueeError) {
+    code = erreur.code; // CATEGORY_DUPLICATE_IN_SPLIT
+    message = "Une catégorie ne peut être utilisée qu'une seule fois par transaction.";
   } else if (erreur instanceof TransactionIntrouvableError) {
     code = erreur.code; // TRANSACTION_NOT_FOUND
     message = "Transaction introuvable.";

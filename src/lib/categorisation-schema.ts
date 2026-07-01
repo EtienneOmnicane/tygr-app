@@ -76,7 +76,26 @@ export const remplacerSplitsSchema = z
           })
           .strict(),
       )
-      .max(50),
+      .max(50)
+      // Intégrité de ventilation (TX-QA-SPLIT-DOUBLON1) : une catégorie ne peut
+      // apparaître qu'UNE fois dans l'état cible. Défense en profondeur — le
+      // repository reste la garde canonique (CategorieDupliqueeError, sous RLS,
+      // testable en isolation) ; ce refine rejette au plus tôt à la frontière
+      // (code INVALID_PARAMS). L'unicité porte sur la FORME du payload (categoryId),
+      // pas sur un invariant cross-lignes de la base.
+      .superRefine((splits, ctx) => {
+        const vus = new Set<string>();
+        splits.forEach((s, i) => {
+          if (vus.has(s.categoryId)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "Catégorie en double : une catégorie ne peut être utilisée qu'une fois.",
+              path: [i, "categoryId"],
+            });
+          }
+          vus.add(s.categoryId);
+        });
+      }),
   })
   .strict();
 

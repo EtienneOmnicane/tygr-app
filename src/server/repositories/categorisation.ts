@@ -61,6 +61,23 @@ export class VentilationDepasseError extends Error {
   }
 }
 
+/**
+ * Levée quand l'état cible de ventilation contient DEUX parts sur la MÊME
+ * catégorie (TX-QA-SPLIT-DOUBLON1). Décision produit 2026-07-01 : on INTERDIT à
+ * la validation (pas de fusion des montants) — deux parts sur la même catégorie
+ * n'ont aucun sens métier (elles faussent tout regroupement par catégorie). La
+ * garde vit dans `remplacerSplits` (état cible complet) et non `ajouterSplit` :
+ * la règle porte sur l'ensemble cible, pas sur une part isolée. Contrainte
+ * d'INTÉGRITÉ de ventilation, distincte de l'invariant de somme.
+ */
+export class CategorieDupliqueeError extends Error {
+  readonly code = "CATEGORY_DUPLICATE_IN_SPLIT";
+  constructor() {
+    super("Une même catégorie est utilisée sur plusieurs parts de la ventilation.");
+    this.name = "CategorieDupliqueeError";
+  }
+}
+
 /** Levée quand la transaction visée n'existe pas dans le workspace courant. */
 export class TransactionIntrouvableError extends Error {
   readonly code = "TRANSACTION_NOT_FOUND";
@@ -315,6 +332,21 @@ export async function remplacerSplits<TDb extends AnyPgDatabase>(
     .for("update");
   if (txn.length === 0) {
     throw new TransactionIntrouvableError();
+  }
+
+  // 1bis. INTÉGRITÉ de ventilation : aucune catégorie en double dans l'état cible
+  //   (TX-QA-SPLIT-DOUBLON1). VÉRIFIÉE AVANT l'invariant de somme (décision
+  //   verrouillée « doublon d'abord ») : un payload violant les DEUX règles (somme
+  //   dépassée ET doublon) lève CategorieDupliqueeError, jamais VentilationDepasseError
+  //   — l'ordre est verrouillé par un test dédié. Détection PURE sur categoryId (aucune
+  //   requête, ne touche pas aux montants — règle 8) : un Set dédoublonne, si sa taille
+  //   diffère du nombre de cibles, une catégorie apparaît ≥ 2 fois. Liste vide/une part
+  //   ne peuvent pas produire de doublon (garde inactive). Les catégories sont ici
+  //   toujours définies (SplitCible.categoryId est non-null ; le null n'atteint pas
+  //   cette couche).
+  const idsCibles = cibles.map((c) => c.categoryId);
+  if (new Set(idsCibles).size !== idsCibles.length) {
+    throw new CategorieDupliqueeError();
   }
 
   // 2. Invariant sur l'ÉTAT CIBLE complet : Σ |amount| ≤ |montant txn|. Somme

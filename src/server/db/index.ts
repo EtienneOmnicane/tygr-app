@@ -171,6 +171,7 @@ export {
   renommerCategorie,
   archiverCategorie,
   VentilationDepasseError,
+  CategorieDupliqueeError,
   TransactionIntrouvableError,
   CategorieIntrouvableError,
   CategorieNonAutoriseeError,
