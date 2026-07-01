@@ -64,6 +64,10 @@ export function ReglesFeature({
   const [suppressionEnCours, setSuppressionEnCours] = useState<string | null>(null);
   const [reanalyseEnCours, setReanalyseEnCours] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
+  /** Règle en cours d'édition (null = formulaire en mode création). */
+  const [regleEnEdition, setRegleEnEdition] = useState<RegleUI | null>(null);
+  const [editionEnCours, setEditionEnCours] = useState(false);
+  const [reordreEnCours, setReordreEnCours] = useState(false);
 
   // id catégorie → nom lisible, pour l'affichage de la liste.
   const nomParCategorie = useMemo(
@@ -122,6 +126,78 @@ export function ReglesFeature({
     [actions, recharger],
   );
 
+  const demarrerEdition = useCallback((regle: RegleUI) => {
+    setErreur(null);
+    setInfo(null);
+    setRegleEnEdition(regle);
+  }, []);
+
+  const annulerEdition = useCallback(() => {
+    setRegleEnEdition(null);
+  }, []);
+
+  const modifier = useCallback(
+    async (input: {
+      ruleId: string;
+      pattern?: string;
+      matchType?: RuleMatchType;
+      categoryId?: string;
+      isActive?: boolean;
+    }) => {
+      setErreur(null);
+      setInfo(null);
+      setEditionEnCours(true);
+      try {
+        const res = await actions.modifierRegle(input);
+        if (!res.ok) {
+          setErreur(messagePourCode(res.code, res.message));
+          return;
+        }
+        setRegleEnEdition(null);
+        await recharger();
+      } catch {
+        setErreur("La modification a échoué. Réessayez.");
+      } finally {
+        setEditionEnCours(false);
+      }
+    },
+    [actions, recharger],
+  );
+
+  const reordonner = useCallback(
+    async (nouvelOrdreActifs: string[]) => {
+      setErreur(null);
+      setInfo(null);
+      // Optimisme UI : on réordonne localement d'abord (feedback immédiat), puis on
+      // confirme au serveur. En cas d'échec, on recharge pour resynchroniser.
+      const avant = regles;
+      const parId = new Map(regles.map((r) => [r.id, r]));
+      const actifsReordonnes = nouvelOrdreActifs
+        .map((id) => parId.get(id))
+        .filter((r): r is RegleUI => r !== undefined)
+        .map((r, i) => ({ ...r, priority: i }));
+      const archivees = regles.filter((r) => !r.isActive);
+      setRegles([...actifsReordonnes, ...archivees]);
+      setReordreEnCours(true);
+      try {
+        const res = await actions.reordonnerRegles(nouvelOrdreActifs);
+        if (!res.ok) {
+          setErreur(messagePourCode(res.code, res.message));
+          setRegles(avant); // rollback visuel
+          await recharger(); // resync avec la vérité serveur
+          return;
+        }
+        await recharger();
+      } catch {
+        setErreur("Le réordonnancement a échoué. Réessayez.");
+        setRegles(avant);
+      } finally {
+        setReordreEnCours(false);
+      }
+    },
+    [actions, recharger, regles],
+  );
+
   const reanalyser = useCallback(async () => {
     if (!actions.appliquerRegles) return;
     setErreur(null);
@@ -144,15 +220,24 @@ export function ReglesFeature({
     }
   }, [actions, recharger]);
 
-  const activesDabord = useMemo(
-    () =>
-      [...regles].sort((a, b) => {
-        // Actives en tête, puis priorité décroissante, puis motif (stable).
-        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-        if (a.priority !== b.priority) return b.priority - a.priority;
-        return a.pattern.localeCompare(b.pattern, "fr");
-      }),
-    [regles],
+  // Ordre d'affichage = ordre d'APPLICATION réel. Le serveur renvoie DÉJÀ les règles
+  // triées par `asc(priority), asc(createdAt)` (listerRegles) — l'ordre total qui
+  // décide quelle règle matche. On ne le RECALCULE pas côté client (RegleUI ne porte
+  // pas createdAt → un tri client se tromperait sur les ex æquo de priorité, très
+  // fréquents tant que les priorités valent 0). On se contente d'une PARTITION STABLE :
+  // actives d'abord (dans l'ordre serveur), archivées ensuite (dans l'ordre serveur).
+  // La position visuelle d'une règle active = sa priorité réelle → le réordonnancement
+  // par glisser ne ment jamais.
+  const activesDabord = useMemo(() => {
+    const actives = regles.filter((r) => r.isActive);
+    const archivees = regles.filter((r) => !r.isActive);
+    return [...actives, ...archivees];
+  }, [regles]);
+
+  /** ids des règles ACTIVES dans l'ordre affiché (source pour le réordonnancement). */
+  const idsActifsOrdonnes = useMemo(
+    () => activesDabord.filter((r) => r.isActive).map((r) => r.id),
+    [activesDabord],
   );
 
   const aucuneRegle = regles.length === 0;
@@ -197,14 +282,29 @@ export function ReglesFeature({
         </div>
       )}
 
-      {/* Création (cachée en lecture seule). */}
-      {peutGerer && (
-        <RegleForm
-          categories={categories}
-          onCreer={creer}
-          enCours={creationEnCours}
-        />
-      )}
+      {/* Formulaire (caché en lecture seule) : création OU édition d'une règle.
+          `key` remonte le composant quand la règle éditée change → pré-remplissage
+          par initialisation d'état (pas de synchro d'effet). */}
+      {peutGerer &&
+        (regleEnEdition ? (
+          <RegleForm
+            key={regleEnEdition.id}
+            mode="edition"
+            valeurInitiale={regleEnEdition}
+            categories={categories}
+            onCreer={creer}
+            onModifier={modifier}
+            onAnnuler={annulerEdition}
+            enCours={editionEnCours}
+          />
+        ) : (
+          <RegleForm
+            key="creation"
+            categories={categories}
+            onCreer={creer}
+            enCours={creationEnCours}
+          />
+        ))}
 
       {/* Liste ou état vide. */}
       {aucuneRegle ? (
@@ -223,6 +323,11 @@ export function ReglesFeature({
           nomParCategorie={nomParCategorie}
           onSupprimer={supprimer}
           suppressionEnCours={suppressionEnCours}
+          onModifier={demarrerEdition}
+          onReordonner={reordonner}
+          idsActifsOrdonnes={idsActifsOrdonnes}
+          reordreEnCours={reordreEnCours}
+          idEnEdition={regleEnEdition?.id ?? null}
           peutGerer={peutGerer}
         />
       )}

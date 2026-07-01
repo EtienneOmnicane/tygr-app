@@ -36,6 +36,8 @@ import {
   archiverRegleAction,
   creerRegleAction,
   listerReglesAction,
+  modifierRegleAction,
+  reordonnerReglesAction,
 } from "./actions";
 
 export const metadata = { title: "Règles — TYGR" };
@@ -96,9 +98,17 @@ export default async function PageRegles() {
       "use server";
       return creerRegleAction(input);
     },
+    async modifierRegle(input) {
+      "use server";
+      return modifierRegleAction(input);
+    },
     async archiverRegle(ruleId) {
       "use server";
       return archiverRegleAction(ruleId);
+    },
+    async reordonnerRegles(ordre) {
+      "use server";
+      return reordonnerReglesAction({ ordre });
     },
     async appliquerRegles() {
       "use server";

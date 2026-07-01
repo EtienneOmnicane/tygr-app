@@ -46,8 +46,26 @@ export interface ActionsRegles {
     categoryId: string;
     priority?: number;
   }): Promise<ResultatAction<{ ruleId: string }>>;
+  /**
+   * Modifie une règle existante (champs partiels). Sert aussi à RÉACTIVER une règle
+   * archivée (`isActive:true`). La priorité n'est PAS passée ici : elle est pilotée
+   * par le réordonnancement (`reordonnerRegles`).
+   */
+  modifierRegle(input: {
+    ruleId: string;
+    pattern?: string;
+    matchType?: RuleMatchType;
+    categoryId?: string;
+    isActive?: boolean;
+  }): Promise<ResultatAction>;
   /** Archive une règle (is_active=false) — « supprimer » côté UI. */
   archiverRegle(ruleId: string): Promise<ResultatAction>;
+  /**
+   * Réordonne les règles ACTIVES : `ordre` = liste des ruleId dans le nouvel ordre
+   * visuel (la 1re gagne). Écriture de GOUVERNANCE réservée MANAGER/ADMIN côté
+   * serveur. `ordre` doit être exactement l'ensemble des règles actives.
+   */
+  reordonnerRegles(ordre: string[]): Promise<ResultatAction>;
   /**
    * Ré-applique les règles aux transactions NON catégorisées (déclenchement
    * manuel). RÉSERVÉ MANAGER/ADMIN côté serveur (écrit des splits en masse) — la
