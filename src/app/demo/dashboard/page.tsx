@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
+  DEMO_DASHBOARD_UN_MOIS,
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
 } from "@/lib/dashboard-demo-fixtures";
@@ -24,11 +25,12 @@ import {
   type DonneesDashboard,
 } from "@/components/dashboard/dashboard-content";
 
-type EtatDemo = "succes" | "partiel" | "vide";
+type EtatDemo = "succes" | "un-mois" | "partiel" | "vide";
 type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "succes", label: "Succès" },
+  { id: "un-mois", label: "1 mois peuplé (fix courbe)" },
   { id: "partiel", label: "Partiel (post-onboarding)" },
   { id: "vide", label: "Vide" },
 ];
@@ -61,9 +63,11 @@ export default function DashboardPreviewPage() {
     const base =
       etat === "succes"
         ? DEMO_DASHBOARD
-        : etat === "partiel"
-          ? DEMO_DASHBOARD_PARTIEL
-          : DEMO_DASHBOARD_VIDE;
+        : etat === "un-mois"
+          ? DEMO_DASHBOARD_UN_MOIS
+          : etat === "partiel"
+            ? DEMO_DASHBOARD_PARTIEL
+            : DEMO_DASHBOARD_VIDE;
     // L'état « vide » n'a pas de compte → la fraîcheur n'a pas d'effet (pas de pastille).
     return etat === "vide" ? base : avecFraicheur(base, heures);
   }, [etat, fraicheur]);

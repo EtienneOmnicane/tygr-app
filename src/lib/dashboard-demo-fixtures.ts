@@ -162,3 +162,26 @@ export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
   grilleMensuelle: [],
   transactionsRecentes: [],
 };
+
+/**
+ * État « UN SEUL MOIS PEUPLÉ » sur une fenêtre de 6 mois — le cas qui EFFONDRAIT la
+ * courbe (fix « courbe effondrée »). Comptes/soldes/vendors/transactions réalistes
+ * (état complet), mais la SÉRIE mensuelle n'a qu'un mois de mouvement (2026-01) tandis
+ * que la GRILLE couvre 6 mois. Attendu : la courbe trace 6 points (mois vides à zéro,
+ * axe pleine largeur) + le bandeau info « dernières données : Janvier 2026 » ; les barres
+ * restent inchangées. `flux` porte 1 point (cohérent avec l'état « complet »).
+ */
+export const DEMO_DASHBOARD_UN_MOIS: DonneesDashboard = {
+  comptes: DEMO_DASHBOARD.comptes,
+  soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
+  flux: [
+    { bucket: "2026-01", currency: "MUR", entrees: "3800000.00", sorties: "3450000.00", net: "350000.00", nbTransactions: 42 },
+  ],
+  synthesesMois: DEMO_DASHBOARD.synthesesMois,
+  topVendors: DEMO_DASHBOARD.topVendors,
+  serieMensuelle: [
+    { mois: "2026-01", currency: "MUR", entrees: "3800000.00", sorties: "3450000.00", variation: "350000.00" },
+  ],
+  grilleMensuelle: ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"],
+  transactionsRecentes: DEMO_DASHBOARD.transactionsRecentes,
+};

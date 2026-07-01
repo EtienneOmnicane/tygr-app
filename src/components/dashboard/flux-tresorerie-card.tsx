@@ -3,10 +3,15 @@
 /**
  * Carte ANCRE du dashboard (UI_GUIDELINES §1.1/§4.2) : « Flux de trésorerie » unifiée
  * (L8a). Un TOGGLE Barres/Courbe bascule entre deux vues de la MÊME grandeur mensuelle
- * (entrées − sorties par mois), sans aucun fetch : les deux séries arrivent déjà en
- * props depuis la page RSC (`flux` = cashflowParDevise, `serieMensuelle`+`grille` =
- * syntheseParMois). On réutilise les rendus SVG extraits (`FluxCourbe`, `FluxBarres`) —
- * géométrie inchangée vs l'existant.
+ * (entrées − sorties par mois), sans aucun fetch. Les DEUX vues dérivent de la MÊME source
+ * en props (`serieMensuelle` = syntheseParMois + `grilleMensuelle` = grilleMois) : les
+ * barres via `projeterSurGrille`, la courbe via `projeterPointsCourbe` (même grille continue
+ * → N points, mois vides à zéro). On réutilise les rendus SVG extraits (`FluxCourbe`,
+ * `FluxBarres`) — géométrie inchangée vs l'existant.
+ *
+ * ⚠️ La courbe ne consomme PLUS les points bruts de `cashflowParDevise` (mois vides absents),
+ * qui s'effondraient à 1 point quand un seul mois de la fenêtre était peuplé (fix « courbe
+ * effondrée »). Elle passe désormais par la grille, exactement comme les barres.
  *
  * Îlot client : porte l'état du toggle. Le survol de la courbe est local à `FluxCourbe`.
  *
@@ -17,32 +22,47 @@
  */
 import { useState } from "react";
 
-import type { PointCashflow } from "@/server/insights/types";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
+import { formaterMoisAnnee } from "@/lib/format-date";
 import { cn } from "@/components/ui/states/primitives";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { FluxCourbe } from "@/components/dashboard/flux-chart-trace";
 import { FluxBarres } from "@/components/dashboard/flux-bars";
+import { projeterPointsCourbe } from "@/components/dashboard/flux-projection";
 
 type Vue = "courbe" | "barres";
 
 export function FluxTresorerieCard({
-  flux,
   serieMensuelle,
   grilleMensuelle,
   devise,
 }: {
-  /** Points de flux net mensuel (UNE devise, base_currency) — vue Courbe. */
-  flux: PointCashflow[];
-  /** Série entrées/sorties (mois × devise) — vue Barres. */
+  /** Série entrées/sorties (mois × devise) — alimente COURBE (via grille) ET barres. */
   serieMensuelle: SyntheseMensuelle[];
-  /** Axe continu des mois attendus (comble les mois sans transaction) — vue Barres. */
+  /** Axe continu des mois attendus (comble les mois sans transaction). */
   grilleMensuelle: string[];
   /** Devise de base du workspace. */
   devise: string;
 }) {
   const [vue, setVue] = useState<Vue>("courbe");
+
+  // La COURBE consomme désormais la MÊME série continue que les barres (projetée sur la
+  // grille → N points, mois vides à net="0"), au lieu des points bruts filtrés qui
+  // s'effondraient à 1 point quand un seul mois de la fenêtre était peuplé.
+  const pointsCourbe = projeterPointsCourbe(serieMensuelle, grilleMensuelle, devise);
+  // Un mois est « peuplé » (dans la devise de base) s'il porte un mouvement non nul.
+  const moisPeuples = pointsCourbe.filter(
+    (p) => p.entrees !== "0" || p.sorties !== "0",
+  );
+  // 0 mois peuplé : préserver EXACTEMENT l'écran vide actuel. Comme la série a toujours N
+  // points (jamais 0), la garde `points.length === 0` de FluxCourbe ne se déclencherait
+  // plus → on lui passe [] pour ré-obtenir `CourbeVide` (message « Aucun flux… »).
+  const courbeVide = moisPeuples.length === 0;
+  // 1 seul mois peuplé : la courbe s'affiche pleine largeur, mais on signale que les
+  // autres mois sont à zéro (bandeau info, tokens neutres) — le graphe n'est pas masqué.
+  const moisUnique =
+    moisPeuples.length === 1 ? moisPeuples[0]!.bucket : null;
 
   return (
     <StateCard className="min-h-[380px]">
@@ -60,7 +80,24 @@ export function FluxTresorerieCard({
       </div>
 
       {vue === "courbe" ? (
-        <FluxCourbe points={flux} devise={devise} />
+        <>
+          {/* Bandeau INFO : uniquement si UN seul mois est peuplé sur la fenêtre. Chrome
+              neutre (surface-inset / text-muted) — jamais de vert/rouge (réservés à la
+              donnée), jamais de couleur en dur. N'existe pas de token `info` au projet. */}
+          {moisUnique && (
+            <p
+              role="status"
+              className="mb-3 rounded-control border border-line bg-surface-inset px-3 py-2 text-xs text-text-muted"
+            >
+              Données disponibles sur un seul mois — dernières données&nbsp;:{" "}
+              <span className="font-medium text-text">
+                {formaterMoisAnnee(moisUnique)}
+              </span>
+              . Les autres mois de la période sont sans mouvement.
+            </p>
+          )}
+          <FluxCourbe points={courbeVide ? [] : pointsCourbe} devise={devise} />
+        </>
       ) : (
         <FluxBarres serie={serieMensuelle} grille={grilleMensuelle} devise={devise} />
       )}

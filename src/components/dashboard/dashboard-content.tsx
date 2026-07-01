@@ -72,13 +72,16 @@ export function DashboardContent({
   const {
     comptes,
     soldesParDevise,
-    flux,
     synthesesMois,
     topVendors,
     serieMensuelle,
     grilleMensuelle,
     transactionsRecentes,
   } = donnees;
+  // NB : `donnees.flux` n'est PLUS déstructuré ici — la courbe ne le consomme plus
+  // (elle dérive de la série mensuelle projetée, cf. FluxTresorerieCard). Le champ reste
+  // néanmoins un discriminant vivant de l'état d'onboarding, lu par `choisirEtatDashboard`
+  // (partiel vs complet) via l'objet `donnees` complet ci-dessous.
 
   // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
   // (état "vide" ; "partiel"/"complet" montent le shell ci-dessous — chaque zone
@@ -132,7 +135,6 @@ export function DashboardContent({
             Les deux vues partagent les séries déjà chargées par la page (zéro fetch).
             Chaque vue gère son propre état partiel/vide. */}
         <FluxTresorerieCard
-          flux={flux}
           serieMensuelle={serieMensuelle}
           grilleMensuelle={grilleMensuelle}
           devise={devise}
