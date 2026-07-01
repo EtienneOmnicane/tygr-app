@@ -723,6 +723,39 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
       pagination keyset (même piège que TX-FILTRE1), à arbitrer au moment de l'implémentation.
       **Déclencheur** : cette demande utilisateur de filtrer par catégorie.
 
+- [ ] **TX-QA-SPLIT-DOUBLON1 (P1) — deux splits sur la MÊME catégorie autorisés sur une
+      transaction ventilée** — Effort S/M (gardien Backend + Front). Date 2026-07-01.
+      Reproduit par clawdy : on peut affecter DEUX parts de ventilation à la même catégorie
+      sur une même transaction. Aucun sens métier (fausse tout regroupement par catégorie).
+      **Décision clawdy 2026-07-01 : INTERDIRE** (erreur à la validation), **pas** de fusion
+      automatique des montants. Garde **REQUISE côté SERVEUR** — la ventilation est écrite par
+      `remplacerSplits` (état cible complet, tout-ou-rien), qui est la vérité : une garde UI
+      seule est contournable par appel direct de la Server Action. Poser le rejet des
+      catégories en double dans le repository, à côté de l'invariant de somme existant
+      (`src/server/repositories/categorisation.ts:298` `remplacerSplits`, étape 2 validation
+      de l'état cible ; lève actuellement `VentilationDepasseError` — prévoir une erreur
+      nommée dédiée, ex. `CategorieDupliqueeError`), et/ou dans le schéma
+      (`src/lib/categorisation-schema.ts:66` `remplacerSplitsSchema`, `.array().max(50)`
+      sans contrainte d'unicité aujourd'hui). Idéalement AUSSI une erreur inline UI en amont
+      (« catégorie déjà utilisée ») dans `src/components/ui/category/split-allocation-modal.tsx`
+      pour ne pas amener l'utilisateur jusqu'au rejet serveur. Touche la ventilation → **test
+      d'isolation du cas attendu** (2 splits même catégorie → rejet). NB : ce n'est **pas** une
+      dette d'isolation tenant / append-only / montants (qui se corrigeraient immédiatement) —
+      c'est une **règle d'intégrité de ventilation**. Marqué **P1** car bug de **données**, pas
+      du polish. **Déclencheur** : cette passe QA (intégrité de la ventilation).
+
+- [ ] **TX-QA-SPLIT-MAX1 (P2) — bouton « Tout le reste » / « Max » pour remplir le montant
+      restant d'un split** — Effort S (gardien Front). Date 2026-07-01. Dans la modale de
+      ventilation, l'utilisateur doit saisir à la main le montant EXACT de chaque part ;
+      pénible et source d'erreur (un centime manquant et le « reste » ne tombe jamais à 0).
+      Souhait clawdy : un bouton « Tout le reste » / « Max » qui remplit automatiquement le
+      montant RESTANT sur le split courant. Confort UI pur. Fichier probable :
+      `src/components/ui/category/split-allocation-modal.tsx` (le montant restant est déjà
+      calculé — `etat.reste` via `calculerAllocation`, cf. le raccourci existant
+      `categoriserLeReste` qui pré-remplit une NOUVELLE ligne ; ici il s'agit de remplir la
+      ligne COURANTE). Respecter la règle 8 (montants = chaînes décimales, le « reste » =
+      soustraction en décimal, **jamais** de float). **Déclencheur** : cette passe QA.
+
 ### Findings QA nav + Empty States (UI, 2026-06-17)
 
 - [x] **Routes `/demo/*` redirigées vers `/login` (P1, sécurité/routing)** —
