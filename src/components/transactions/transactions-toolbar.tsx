@@ -146,6 +146,40 @@ export function TransactionsToolbar({
           ))}
         </select>
       </label>
+
+      {/* Bornes de date comptable (from/to) — INCLUSES. Opt-in : vides = aucune
+          fenêtre (montre tout). Le range part au SERVEUR (WHERE gte/lte via
+          versInputBackend) — JAMAIS de filtrage date côté client (TX-FILTRE1).
+          `<input type="date">` émet nativement `YYYY-MM-DD` = format attendu par
+          `transaction_date`, sans conversion. Bornage croisé min/max = garde-fou
+          visuel ; la vraie garde `dateDebut ≤ dateFin` reste côté serveur (Zod). */}
+      <label className="inline-flex items-center gap-2 text-sm text-text-muted">
+        <span className="sr-only">Date de début</span>
+        <input
+          type="date"
+          value={filtres.dateDebut ?? ""}
+          max={filtres.dateFin || undefined}
+          disabled={disabled}
+          onChange={(e) =>
+            onChange({ ...filtres, dateDebut: e.target.value || undefined })
+          }
+          className={champSelect}
+        />
+      </label>
+
+      <label className="inline-flex items-center gap-2 text-sm text-text-muted">
+        <span className="sr-only">Date de fin</span>
+        <input
+          type="date"
+          value={filtres.dateFin ?? ""}
+          min={filtres.dateDebut || undefined}
+          disabled={disabled}
+          onChange={(e) =>
+            onChange({ ...filtres, dateFin: e.target.value || undefined })
+          }
+          className={champSelect}
+        />
+      </label>
     </div>
   );
 }

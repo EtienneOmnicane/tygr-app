@@ -134,12 +134,19 @@ export type CurseurTransactions = string;
  * Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ».
  * NB : pas de filtre `sens` (Entrées/Sorties) — non supporté par le schéma de
  * lecture Backend v1 ; le filtrer côté client casserait la pagination (TX-FILTRE1).
+ * Les BORNES DE DATE (`dateDebut`/`dateFin`), elles, SONT supportées serveur (WHERE
+ * `gte/lte` sur `transaction_date`) : exposées ici, elles partent au WHERE via
+ * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
  */
 export interface FiltresTransactions {
   /** Restreindre à un compte connecté. */
   bankAccountId?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
+  /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */
+  dateDebut?: string;
+  /** Borne INCLUSE de fin (date comptable Maurice, `YYYY-MM-DD`). */
+  dateFin?: string;
 }
 
 /** Une page de résultats (B1). `curseurSuivant` null = dernière page. */
