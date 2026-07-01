@@ -56,6 +56,25 @@ recon/plan).
   prochaine retouche de la courbe OU passage anti-dette. Raccroché au plus tard à un chantier
   nommé (règle 9, P3 ne pourrit pas).
 
+- [ ] **DASH-ETAT-DISCRIMINANT1 (P3, effort ~0,3 j — décision comportementale AVANT code) —
+  `page.tsx` appelle encore `cashflowParDevise` dont le SEUL rôle résiduel est d'alimenter le
+  champ `flux`, lui-même consommé UNIQUEMENT par `choisirEtatDashboard` (discriminant
+  partiel/complet).** Contexte : depuis la PR #150 (fix « courbe effondrée »), la courbe ne
+  lit plus `flux` (elle dérive de `serieMensuelle` projetée) → `flux` n'est plus qu'un
+  discriminant d'état d'onboarding. Candidat : basculer le discriminant sur `serieMensuelle`
+  (ex. `serieMensuelle.length === 0`, ou une variante scopée à la devise de base) puis retirer
+  du dashboard le champ `flux` + l'appel `cashflowParDevise` (l.98) + `fromFlux`/`to` (l.76)
+  → **une requête SQL en moins par chargement du dashboard**. ⚠️ NE PAS toucher la DÉFINITION
+  de `cashflowParDevise` (`insights.ts`, testée en isolation directe) ni son export barrel —
+  on retire un APPELANT, pas la capacité. ⚠️ **Touche la logique d'onboarding** (partiel =
+  « synchro en cours ») ET un **cas de bord** : un workspace n'ayant QUE des transactions hors
+  devise de base (base MUR, tx uniquement USD) passerait de « partiel » à « complet » avec la
+  variante simple `serieMensuelle.length` — la variante scopée devise l'évite mais élargit la
+  signature de `choisirEtatDashboard`. **Chantier DÉDIÉ logique d'état, JAMAIS un rider d'un
+  autre PR** (risque de régression d'onboarding silencieuse). **Déclencheur** : décision
+  comportementale sur le cas USD-only (accepter l'écart simple vs préserver la sémantique
+  mono-devise), puis chantier nommé. Origine : rebond de la PR #150 (revue Tech Lead 2026-07-01).
+
 ### Infra — découverte à clarifier (2026-06-30)
 
 - [ ] **REPO-PARENT-IMBRIQUE1 (P2, effort ~0,25 j, NE PAS toucher à l'aveugle) — un dépôt git
