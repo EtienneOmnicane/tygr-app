@@ -405,11 +405,13 @@ export function SplitAllocationModal({
                       onClick={() => mettreLeResteSurLigne(ligne.cle)}
                       aria-label={`Affecter tout le reste à cette catégorie (${formatMontant(resteCible, transaction.devise)})`}
                       title="Affecter tout le reste à cette ligne"
-                      className="shrink-0 cursor-pointer whitespace-nowrap rounded-control px-1.5 py-1
-                        text-xs font-semibold text-primary transition-colors hover:text-primary-600
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      className="inline-flex h-9 shrink-0 cursor-pointer items-center whitespace-nowrap
+                        rounded-control border border-line bg-surface-inset px-2.5 text-xs
+                        font-semibold text-text transition-colors hover:border-primary
+                        hover:text-primary focus:outline-none focus-visible:ring-2
+                        focus-visible:ring-primary"
                     >
-                      Tout le reste
+                      Max
                     </button>
                   )}
                   <button
