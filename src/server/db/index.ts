@@ -250,8 +250,11 @@ export {
   creerRegle,
   modifierRegle,
   archiverRegle,
+  reordonnerRegles,
   appliquerRegles,
   RegleIntrouvableError,
+  RegleNonAutoriseeError,
+  OrdreReglesInvalideError,
 } from "@/server/repositories/regles-categorisation";
 export type {
   RegleLue,

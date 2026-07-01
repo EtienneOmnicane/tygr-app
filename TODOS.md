@@ -69,11 +69,24 @@ recon/plan).
 
 ### Chantiers PRODUIT à cadrer (pas encore lancés, 2026-06-30)
 
-- [ ] **REGLES-OPERATIONNEL1 (P2, effort à chiffrer après recon) — onglet Règles jugé « pas
+- [~] **REGLES-OPERATIONNEL1 (P2, effort à chiffrer après recon) — onglet Règles jugé « pas
   opérationnel ».** Amélioration d'EXISTANT (`src/app/(workspace)/regles/`, moteur
   `categorization_rules`) → **recon de l'existant nécessaire** pour comprendre ce qui manque
   AVANT de planifier (point de départ plus clair que les pages neuves). **Déclencheur** : début
-  de chantier Règles (recon d'abord).
+  de chantier Règles (recon d'abord). **EN COURS** : chantier « Règles v1 — Édition + Priorité »
+  (branche `feature/regles-edition-priorite`, 2026-07-01) livre l'édition, la réactivation via
+  édition, le réordonnancement par priorité (drag + flèches) et la garde de rôle serveur.
+
+- [ ] **REGLE-REORDER-CONCUR1 (P2, effort ~0,25 j, 2026-07-01) — réordonnancement des règles en
+  last-write-wins.** `reordonnerRegles` (repo) réécrit l'ensemble des priorités des règles
+  actives en une transaction, SANS verrou optimiste. Deux gestionnaires qui réordonnent (ou
+  créent, cf. défaut `max+1`) en parallèle → le dernier COMMIT gagne. **Pas d'incohérence de
+  données** (les priorités restent une permutation valide, l'ordre total `asc(priority),
+  asc(createdAt)` reste déterministe) → risque purement cosmétique (un réordre peut être écrasé
+  silencieusement). Parade possible : version optimiste (colonne `updated_at`/compteur) ou
+  `SELECT … FOR UPDATE` sur l'ensemble actif. **Déclencheur** : premier workspace réel avec
+  plusieurs gestionnaires qui éditent les règles simultanément, OU signalement « mon
+  réordonnancement a sauté ».
 
 - [ ] **NAV-GRAPHIQUES1 (P2, CADRAGE PRODUIT requis) — activer l'onglet Graphiques** (page à
   créer / aujourd'hui vide ou inactive). **Cadrage produit d'abord** : quel contenu ? quels

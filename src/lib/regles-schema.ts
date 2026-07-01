@@ -61,6 +61,28 @@ export const archiverRegleSchema = z
   .strict();
 
 /**
+ * Réordonnancement des règles ACTIVES : liste ORDONNÉE des ruleId (le nouvel ordre
+ * visuel). La priorité de chaque règle devient son index (0-based). `ordre` doit
+ * être exactement l'ensemble des règles actives du workspace (l'égalité d'ensembles
+ * est vérifiée côté repository sous RLS, pas ici — Zod ne connaît pas la base). Ici
+ * on garde la FORME : uuids valides, au moins un, sans doublon, borne haute
+ * pragmatique (le volume de règles est petit).
+ */
+export const reordonnerReglesSchema = z
+  .object({
+    ordre: z
+      .array(z.string().uuid())
+      .min(1, "Ordre vide")
+      .max(1000)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "Ordre invalide (doublon).",
+      }),
+  })
+  .strict();
+
+export type ReordonnerReglesInput = z.infer<typeof reordonnerReglesSchema>;
+
+/**
  * Application des règles : optionnellement bornée à un compte. Aucun montant ni
  * libellé en entrée (le service lit la base). bankAccountId facultatif (uuid).
  */
