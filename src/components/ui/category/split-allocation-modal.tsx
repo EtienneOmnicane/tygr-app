@@ -29,6 +29,7 @@ import { Modal } from "@/components/ui/modal/modal";
 import {
   calculerAllocation,
   ligneEnDepassement,
+  lignesEnDoublon,
   montantValide,
   peutValider,
   versPayload,
@@ -129,6 +130,10 @@ export function SplitAllocationModal({
     () => calculerAllocation(transaction.montantAbs, lignes),
     [transaction.montantAbs, lignes],
   );
+  // Lignes dont la catégorie est utilisée sur ≥ 2 parts (TX-QA-SPLIT-DOUBLON1) :
+  // peintes en `danger` + « Valider » bloqué (peutValider en tient compte). L'UI
+  // évite au client d'atteindre le rejet serveur, sans jamais le remplacer.
+  const clesEnDoublon = useMemo(() => lignesEnDoublon(lignes), [lignes]);
   const valider = peutValider(transaction.montantAbs, lignes);
 
   function majLigne(cle: string, patch: Partial<LigneAllocation>) {
@@ -292,11 +297,10 @@ export function SplitAllocationModal({
               lignes,
               ligne.cle,
             );
+            const enDoublon = clesEnDoublon.has(ligne.cle);
             return (
-              <div
-                key={ligne.cle}
-                className="flex flex-col gap-2 sm:flex-row sm:items-center"
-              >
+              <div key={ligne.cle} className="flex flex-col gap-1">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 {/* Sélecteur de catégorie */}
                 <div className="relative sm:flex-1">
                   <button
@@ -304,9 +308,12 @@ export function SplitAllocationModal({
                     onClick={() =>
                       setPickerOuvert(pickerOuvert === ligne.cle ? null : ligne.cle)
                     }
-                    className="flex h-10 w-full cursor-pointer items-center justify-between rounded-control
-                      border border-line bg-surface-inset px-3 text-sm text-text
-                      focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    className={cn(
+                      `flex h-10 w-full cursor-pointer items-center justify-between rounded-control
+                      border bg-surface-inset px-3 text-sm text-text
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-primary`,
+                      enDoublon ? "border-danger" : "border-line",
+                    )}
                   >
                     {cat ? (
                       <CategoryBadge name={cat.name} colorKey={cat.id} size="sm" />
@@ -386,6 +393,15 @@ export function SplitAllocationModal({
                     <span aria-hidden>🗑</span>
                   </button>
                 </div>
+              </div>
+              {/* Doublon de catégorie (TX-QA-SPLIT-DOUBLON1) : message inline sous la
+                  ligne fautive. Confort UI — la garde serveur reste souveraine. */}
+              {enDoublon && (
+                <p role="alert" className="flex items-center gap-1.5 text-xs text-danger">
+                  <span aria-hidden>⚠</span>
+                  Catégorie déjà utilisée — choisissez-en une autre ou fusionnez les montants.
+                </p>
+              )}
               </div>
             );
           })}

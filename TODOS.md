@@ -723,8 +723,19 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
       pagination keyset (même piège que TX-FILTRE1), à arbitrer au moment de l'implémentation.
       **Déclencheur** : cette demande utilisateur de filtrer par catégorie.
 
-- [ ] **TX-QA-SPLIT-DOUBLON1 (P1) — deux splits sur la MÊME catégorie autorisés sur une
-      transaction ventilée** — Effort S/M (gardien Backend + Front). Date 2026-07-01.
+- [x] **TX-QA-SPLIT-DOUBLON1 (P1) — deux splits sur la MÊME catégorie autorisés sur une
+      transaction ventilée** — ✅ LIVRÉ (branche `feat/tx-split-doublon`, 2026-07-01). Garde
+      SERVEUR canonique `CategorieDupliqueeError` (code `CATEGORY_DUPLICATE_IN_SPLIT`) dans
+      `remplacerSplits`, insérée AVANT le bloc somme (ordre « doublon d'abord » verrouillé par
+      un test dédié : payload 900+200 sur la même catégorie → CategorieDupliquee, PAS
+      VentilationDepasse). Défense en profondeur : `.superRefine` d'unicité sur
+      `remplacerSplitsSchema` + gating UI (`lignesEnDoublon` pur, marquage `danger` +
+      `role="alert"` + « Valider » désactivé). Invariant de somme INCHANGÉ (ajout only).
+      Tests : +4 isolation (rejet, contrôle distinct, ordre, non-régression atomicité) avec
+      fixture `CAT_A2`, migration chirurgicale des cas de somme (categoryId seul modifié,
+      montants/seuils intacts) ; +5 unitaires `lignesEnDoublon`/`peutValider`. Suite complète
+      785/785 verte, typecheck+lint+build OK, Visual QA du gating concluant. Effort S/M
+      (gardien Backend + Front). Date 2026-07-01.
       Reproduit par clawdy : on peut affecter DEUX parts de ventilation à la même catégorie
       sur une même transaction. Aucun sens métier (fausse tout regroupement par catégorie).
       **Décision clawdy 2026-07-01 : INTERDIRE** (erreur à la validation), **pas** de fusion

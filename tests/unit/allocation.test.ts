@@ -10,6 +10,7 @@ import {
   enCentimes,
   depuisCentimes,
   ligneEnDepassement,
+  lignesEnDoublon,
   montantValide,
   peutValider,
   versPayload,
@@ -21,6 +22,7 @@ function ligne(cle: string, categoryId: string | null, montantSaisi: string): Li
 }
 
 const CAT = "11111111-1111-4111-8111-111111111111";
+const CAT2 = "22222222-2222-4222-8222-222222222222";
 
 describe("enCentimes / depuisCentimes", () => {
   it("convertit sans perte de précision (pas de float)", () => {
@@ -125,6 +127,46 @@ describe("peutValider", () => {
 
   it("refuse s'il n'y a aucune ligne valide", () => {
     expect(peutValider("100.00", [ligne("a", null, "")])).toBe(false);
+  });
+
+  it("refuse deux lignes sur la MÊME catégorie (doublon interdit — TX-QA-SPLIT-DOUBLON1)", () => {
+    expect(
+      peutValider("100.00", [ligne("a", CAT, "40.00"), ligne("b", CAT, "30.00")]),
+    ).toBe(false);
+  });
+
+  it("autorise deux lignes sur des catégories DISTINCTES", () => {
+    expect(
+      peutValider("100.00", [ligne("a", CAT, "40.00"), ligne("b", CAT2, "30.00")]),
+    ).toBe(true);
+  });
+});
+
+describe("lignesEnDoublon", () => {
+  it("marque TOUTES les lignes d'une catégorie utilisée ≥ 2 fois", () => {
+    const lignes = [
+      ligne("a", CAT, "40.00"),
+      ligne("b", CAT, "30.00"),
+      ligne("c", CAT2, "10.00"),
+    ];
+    const doublons = lignesEnDoublon(lignes);
+    expect(doublons.has("a")).toBe(true);
+    expect(doublons.has("b")).toBe(true);
+    expect(doublons.has("c")).toBe(false); // CAT2 unique
+  });
+
+  it("ne marque rien quand toutes les catégories sont distinctes", () => {
+    expect(
+      lignesEnDoublon([ligne("a", CAT, "40.00"), ligne("b", CAT2, "30.00")]).size,
+    ).toBe(0);
+  });
+
+  it("ignore les lignes SANS catégorie (null n'est jamais un doublon)", () => {
+    // Deux lignes sans catégorie ne se rejettent pas entre elles (elles n'atteignent
+    // pas le serveur — versPayload les écarte).
+    expect(
+      lignesEnDoublon([ligne("a", null, "40.00"), ligne("b", null, "30.00")]).size,
+    ).toBe(0);
   });
 });
 

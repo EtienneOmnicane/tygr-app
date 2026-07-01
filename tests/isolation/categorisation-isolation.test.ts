@@ -24,6 +24,7 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   ajouterSplit,
   archiverCategorie,
+  CategorieDupliqueeError,
   CategorieIntrouvableError,
   CategorieNonAutoriseeError,
   creerCategorie,
@@ -55,6 +56,7 @@ const sessionViewer = { userId: VICTOR, activeWorkspaceId: WS_A };
 const TXN_A = "eeee1111-eeee-4eee-8eee-eeeeeeeeeeee";
 const TXN_B = "eeee2222-eeee-4eee-8eee-eeeeeeeeeeee";
 const CAT_A = "aaaacccc-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const CAT_A2 = "aaaadddd-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // 2e catégorie de WS_A (cas de contrôle doublon)
 const CAT_B = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 beforeAll(async () => {
@@ -87,7 +89,7 @@ beforeAll(async () => {
       ('${TXN_A}','${WS_A}','dddd0001-dddd-4ddd-8ddd-dddddddddddd','t-a','2026-03-15','2026-03-15T08:00:00Z','-1000.00','MUR','Debit','x'),
       ('${TXN_B}','${WS_B}','dddd0002-dddd-4ddd-8ddd-dddddddddddd','t-b','2026-03-15','2026-03-15T08:00:00Z','-1000.00','MUR','Debit','y');
     insert into categories (id,workspace_id,name) values
-      ('${CAT_A}','${WS_A}','Fournisseurs'), ('${CAT_B}','${WS_B}','Loyer');
+      ('${CAT_A}','${WS_A}','Fournisseurs'), ('${CAT_A2}','${WS_A}','Salaires'), ('${CAT_B}','${WS_B}','Loyer');
   `);
 
   await client.exec(
@@ -252,7 +254,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     const r = await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [
         { categoryId: CAT_A, amount: "700.00" },
-        { categoryId: CAT_A, amount: "300.00" },
+        { categoryId: CAT_A2, amount: "300.00" },
       ]),
     );
     expect(r.remplaces).toBe(2);
@@ -268,7 +270,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
       withWorkspace(sessionA, (tx, ctx) =>
         remplacerSplits(tx, ctx, refA, [
           { categoryId: CAT_A, amount: "900.00" },
-          { categoryId: CAT_A, amount: "200.00" }, // 1100 > 1000
+          { categoryId: CAT_A2, amount: "200.00" }, // 1100 > 1000
         ]),
       ),
     ).rejects.toBeInstanceOf(VentilationDepasseError);
@@ -287,6 +289,72 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     expect(splits).toHaveLength(0);
   });
 
+  // ── TX-QA-SPLIT-DOUBLON1 : deux parts sur la MÊME catégorie interdites ──────
+  it("REFUSE deux splits sur la MÊME catégorie (CategorieDupliqueeError)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "600.00" },
+          { categoryId: CAT_A, amount: "400.00" }, // même catégorie → rejet
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+  });
+
+  it("accepte deux splits sur des catégories DISTINCTES (contrôle)", async () => {
+    const r = await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "600.00" },
+        { categoryId: CAT_A2, amount: "400.00" }, // catégories distinctes → OK
+      ]),
+    );
+    expect(r.remplaces).toBe(2);
+  });
+
+  it("ORDRE VERROUILLÉ : doublon PRIME sur la somme (900+200 sur CAT_A → CategorieDupliquee, PAS VentilationDepasse)", async () => {
+    // Un payload viole LES DEUX règles : somme 1100 > 1000 (dépassement) ET même
+    // catégorie deux fois (doublon). La garde de doublon est placée AVANT le bloc
+    // somme → c'est CategorieDupliqueeError qui doit être levée. Ce test verrouille
+    // l'ordre : quiconque inverserait les gardes le casserait.
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "900.00" },
+          { categoryId: CAT_A, amount: "200.00" },
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+  });
+
+  it("non-régression atomicité : un rejet de doublon laisse l'état d'AVANT intact", async () => {
+    // Pose un état valide (distinct), puis tente un remplacement en doublon : la
+    // garde lève AVANT le DELETE (l.1bis, avant somme et avant DELETE) → rien n'a
+    // bougé (aucun split supprimé ni inséré).
+    await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "600.00" },
+        { categoryId: CAT_A2, amount: "400.00" },
+      ]),
+    );
+    const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(avant).toHaveLength(2);
+
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "100.00" },
+          { categoryId: CAT_A, amount: "100.00" }, // doublon
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+
+    // L'état d'AVANT est intact (600 + 400 sur CAT_A/CAT_A2).
+    const apres = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(apres).toHaveLength(2);
+    expect(apres.every((s) => s.amount === "600.00" || s.amount === "400.00")).toBe(true);
+    expect(apres.some((s) => s.amount === "100.00")).toBe(false);
+  });
+
   it("ROLLBACK si l'échec survient APRÈS le DELETE (FK invalide sur le 2e INSERT)", async () => {
     // Cas le plus dangereux (relevé en cross-review) : la somme passe la
     // validation (le DELETE s'exécute), le 1er INSERT réussit, puis le 2e viole
@@ -295,7 +363,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [
         { categoryId: CAT_A, amount: "600.00" },
-        { categoryId: CAT_A, amount: "400.00" },
+        { categoryId: CAT_A2, amount: "400.00" },
       ]),
     );
     const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));

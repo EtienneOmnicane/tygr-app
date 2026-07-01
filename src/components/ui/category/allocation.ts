@@ -127,9 +127,35 @@ export function ligneEnDepassement(
 }
 
 /**
+ * Ensemble des `cle` de lignes en DOUBLON de catégorie : une catégorie choisie
+ * (non-null) sur ≥ 2 lignes marque TOUTES ses lignes (miroir de
+ * `ligneEnDepassement`). Sert à peindre les champs fautifs en `danger` et à
+ * bloquer « Valider » AVANT le rejet serveur (TX-QA-SPLIT-DOUBLON1). L'UI est un
+ * confort : le repository reste la garde. Ne touche pas aux montants — la
+ * détection porte sur `categoryId` (règle 8, aucun float). Les lignes sans
+ * catégorie (null) ne comptent pas comme doublon (elles n'atteignent pas le
+ * serveur — cf. versPayload).
+ */
+export function lignesEnDoublon(lignes: LigneAllocation[]): Set<string> {
+  const compte = new Map<string, string[]>(); // categoryId -> [cle…]
+  for (const ligne of lignes) {
+    if (ligne.categoryId === null) continue;
+    const cles = compte.get(ligne.categoryId) ?? [];
+    cles.push(ligne.cle);
+    compte.set(ligne.categoryId, cles);
+  }
+  const enDoublon = new Set<string>();
+  for (const cles of compte.values()) {
+    if (cles.length > 1) for (const c of cles) enDoublon.add(c);
+  }
+  return enDoublon;
+}
+
+/**
  * Peut-on valider (envoyer au serveur) ? Oui si : au moins une ligne valide,
- * AUCUN dépassement, et toute ligne « active » (montant OU catégorie saisi) est
- * COMPLÈTE (catégorie + montant valides). Le PARTIEL est autorisé (somme < total).
+ * AUCUN dépassement, AUCUN doublon de catégorie, et toute ligne « active »
+ * (montant OU catégorie saisi) est COMPLÈTE (catégorie + montant valides). Le
+ * PARTIEL est autorisé (somme < total).
  */
 export function peutValider(
   montantTotal: string,
@@ -137,6 +163,8 @@ export function peutValider(
 ): boolean {
   const etat = calculerAllocation(montantTotal, lignes);
   if (!etat.aAuMoinsUneLigne || etat.depasse) return false;
+  // Doublon de catégorie interdit (l'UI n'amène jamais jusqu'au rejet serveur).
+  if (lignesEnDoublon(lignes).size > 0) return false;
   for (const ligne of lignes) {
     const aMontant = ligne.montantSaisi.trim() !== "";
     const aCategorie = ligne.categoryId !== null;
