@@ -30,6 +30,7 @@ import {
   calculerAllocation,
   ligneEnDepassement,
   lignesEnDoublon,
+  montantPourLeReste,
   montantValide,
   peutValider,
   versPayload,
@@ -167,6 +168,15 @@ export function SplitAllocationModal({
     if (montantValide(resteC)) ajouterLigne(resteC);
   }
 
+  function mettreLeResteSurLigne(cle: string) {
+    // Raccourci TX-QA-SPLIT-MAX1 : la ligne COURANTE absorbe tout le reste (≠
+    // categoriserLeReste qui crée une nouvelle ligne). Le montant est calculé en
+    // centimes par le helper pur (reste + contribution actuelle de la ligne),
+    // null si rien à ventiler → aucune action.
+    const cible = montantPourLeReste(transaction.montantAbs, lignes, cle);
+    if (cible !== null) majLigne(cle, { montantSaisi: cible });
+  }
+
   async function soumettre() {
     if (!valider || enCours) return;
     setEnCours(true);
@@ -298,6 +308,13 @@ export function SplitAllocationModal({
               ligne.cle,
             );
             const enDoublon = clesEnDoublon.has(ligne.cle);
+            // Montant qui ferait absorber tout le reste à CETTE ligne (null si rien
+            // à ventiler → bouton « Tout le reste » masqué). Calcul pur en centimes.
+            const resteCible = montantPourLeReste(
+              transaction.montantAbs,
+              lignes,
+              ligne.cle,
+            );
             return (
               <div key={ligne.cle} className="flex flex-col gap-1">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -382,6 +399,19 @@ export function SplitAllocationModal({
                     )}
                   />
                   <span className="text-xs text-text-muted">{transaction.devise}</span>
+                  {resteCible !== null && (
+                    <button
+                      type="button"
+                      onClick={() => mettreLeResteSurLigne(ligne.cle)}
+                      aria-label={`Affecter tout le reste à cette catégorie (${formatMontant(resteCible, transaction.devise)})`}
+                      title="Affecter tout le reste à cette ligne"
+                      className="shrink-0 cursor-pointer whitespace-nowrap rounded-control px-1.5 py-1
+                        text-xs font-semibold text-primary transition-colors hover:text-primary-600
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    >
+                      Tout le reste
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => retirerLigne(ligne.cle)}

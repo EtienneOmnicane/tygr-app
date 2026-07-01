@@ -755,17 +755,22 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
       c'est une **règle d'intégrité de ventilation**. Marqué **P1** car bug de **données**, pas
       du polish. **Déclencheur** : cette passe QA (intégrité de la ventilation).
 
-- [ ] **TX-QA-SPLIT-MAX1 (P2) — bouton « Tout le reste » / « Max » pour remplir le montant
-      restant d'un split** — Effort S (gardien Front). Date 2026-07-01. Dans la modale de
-      ventilation, l'utilisateur doit saisir à la main le montant EXACT de chaque part ;
-      pénible et source d'erreur (un centime manquant et le « reste » ne tombe jamais à 0).
-      Souhait clawdy : un bouton « Tout le reste » / « Max » qui remplit automatiquement le
-      montant RESTANT sur le split courant. Confort UI pur. Fichier probable :
-      `src/components/ui/category/split-allocation-modal.tsx` (le montant restant est déjà
-      calculé — `etat.reste` via `calculerAllocation`, cf. le raccourci existant
-      `categoriserLeReste` qui pré-remplit une NOUVELLE ligne ; ici il s'agit de remplir la
-      ligne COURANTE). Respecter la règle 8 (montants = chaînes décimales, le « reste » =
-      soustraction en décimal, **jamais** de float). **Déclencheur** : cette passe QA.
+- [x] **TX-QA-SPLIT-MAX1 (P2) — bouton « Tout le reste » / « Max » pour remplir le montant
+      restant d'un split** — ✅ LIVRÉ (branche `feat/tx-split-max`, 2026-07-01). Chaque ligne
+      de la modale de ventilation porte un lien « Tout le reste » qui met SON montant = montant
+      restant à ventiler, en un clic (fini la saisie manuelle du chiffre exact). Helper PUR
+      `montantPourLeReste(montantTotal, lignes, cleLigne)` dans `allocation.ts` : calcul 100 %
+      centimes (BigInt, règle 8, aucun float), il EXCLUT la contribution actuelle de la ligne
+      (`total − sommeDesAUTRESlignes`) sinon on sous-compterait ; renvoie `null` si ≤ 0 (ligne
+      déjà couverte par les autres OU dépassement) → bouton MASQUÉ, jamais de négatif injecté.
+      Distinct de `categoriserLeReste` (qui, lui, crée une NOUVELLE ligne). Décision produit :
+      autorisé même SANS catégorie choisie (remplit juste le montant ; `peutValider` garde le
+      blocage à l'envoi). Gardes #157 (doublon) et invariant de somme intacts — c'est de l'aide
+      à la saisie, la validation serveur reste la vérité. Tests : 8 cas ajoutés dans
+      `tests/unit/allocation.test.ts` (reste positif, exclusion de la contribution courante,
+      décimales exactes, reste 0 → null, dépassement des autres → null, sans catégorie).
+      Visual QA `/demo/transactions` : clic remplit au centime près, reste tombe à 0 ; ligne
+      couverte / dépassement → bouton off. **Déclencheur** : cette passe QA.
 
 ### Findings QA nav + Empty States (UI, 2026-06-17)
 

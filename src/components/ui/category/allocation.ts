@@ -127,6 +127,33 @@ export function ligneEnDepassement(
 }
 
 /**
+ * Montant qui, posé sur la ligne `cleLigne`, absorbe TOUT le reste à ventiler
+ * (bouton « Tout le reste », TX-QA-SPLIT-MAX1). On retire d'abord la contribution
+ * actuelle de la ligne (sinon on additionnerait à ce qu'elle mettait déjà), puis
+ * on lui attribue le reste global : `cible = reste + contributionCourante`, soit
+ * `total − sommeDesAUTRESlignes`. Renvoie la chaîne décimale, ou `null` si ce
+ * montant est ≤ 0 (ligne déjà pleine ou dépassement — rien à injecter, pas de
+ * négatif). Calcul 100 % centimes (règle 8, aucun float) ; réutilise `enCentimes`
+ * (pas de reste maison). L'UI est un confort : la garde de somme serveur reste juge.
+ */
+export function montantPourLeReste(
+  montantTotal: string,
+  lignes: LigneAllocation[],
+  cleLigne: string,
+): string | null {
+  const totalC = enCentimes(montantTotal) ?? ZERO;
+  let sommeAutresC = ZERO;
+  for (const ligne of lignes) {
+    if (ligne.cle === cleLigne) continue; // on exclut la ligne courante
+    const c = enCentimes(ligne.montantSaisi);
+    if (c !== null && c > ZERO) sommeAutresC += c;
+  }
+  const cibleC = totalC - sommeAutresC;
+  if (cibleC <= ZERO) return null;
+  return depuisCentimes(cibleC);
+}
+
+/**
  * Ensemble des `cle` de lignes en DOUBLON de catégorie : une catégorie choisie
  * (non-null) sur ≥ 2 lignes marque TOUTES ses lignes (miroir de
  * `ligneEnDepassement`). Sert à peindre les champs fautifs en `danger` et à
