@@ -70,6 +70,10 @@ export function versInputBackend(
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
+  // Bornes de date : passe-plat direct (même format YYYY-MM-DD des deux côtés) →
+  // WHERE gte/lte serveur. Zod re-valide forme + validité calendaire + intervalle.
+  if (filtres?.dateDebut) input.dateDebut = filtres.dateDebut;
+  if (filtres?.dateFin) input.dateFin = filtres.dateFin;
   if (curseur) input.curseur = curseur;
   return input;
 }
