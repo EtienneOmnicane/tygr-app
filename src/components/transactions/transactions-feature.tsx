@@ -210,9 +210,9 @@ export function TransactionsFeature({
             type="button"
             onClick={() => void chargerPlus()}
             disabled={chargement}
-            className="inline-flex h-10 items-center rounded-control border border-line
+            className="inline-flex h-10 cursor-pointer items-center rounded-control border border-line
               bg-surface-inset px-4 text-sm font-medium text-text transition-colors
-              hover:bg-surface-card disabled:opacity-[0.48] focus:outline-none
+              hover:bg-surface-card disabled:cursor-not-allowed disabled:opacity-[0.48] focus:outline-none
               focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
           >
             {chargement ? "Chargement…" : "Charger plus"}
@@ -260,7 +260,7 @@ export function TransactionsFeature({
           <button
             type="button"
             onClick={() => setErreurOuverture(false)}
-            className="shrink-0 font-medium underline underline-offset-2
+            className="shrink-0 cursor-pointer font-medium underline underline-offset-2
               focus:outline-none focus-visible:ring-2 focus-visible:ring-danger"
           >
             Fermer

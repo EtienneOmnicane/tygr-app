@@ -206,7 +206,7 @@ function ItemCategorie({
       aria-selected={selectionne}
       onClick={() => onSelect(categorie.id)}
       className={cn(
-        "flex w-full items-center rounded-control px-2 py-1.5 text-left transition-colors",
+        "flex w-full cursor-pointer items-center rounded-control px-2 py-1.5 text-left transition-colors",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         indent && "pl-6",
         selectionne ? "bg-primary-50" : "hover:bg-surface-inset",
@@ -282,7 +282,7 @@ function CreationCategorie({
         <button
           type="button"
           onClick={ouvrir}
-          className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left
+          className="flex w-full cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 text-left
             text-sm font-medium text-primary transition-colors hover:bg-primary-50
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
@@ -325,7 +325,7 @@ function CreationCategorie({
           type="button"
           onClick={() => void soumettre()}
           disabled={nom.trim() === "" || enCours}
-          className="inline-flex h-9 items-center justify-center rounded-control bg-primary
+          className="inline-flex h-9 cursor-pointer items-center justify-center rounded-control bg-primary
             px-3 text-sm font-semibold text-text-onink transition-colors hover:bg-primary-600
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
             disabled:cursor-not-allowed disabled:opacity-48"
@@ -336,10 +336,10 @@ function CreationCategorie({
           type="button"
           onClick={annuler}
           disabled={enCours}
-          className="inline-flex h-9 items-center justify-center rounded-control px-2 text-sm
+          className="inline-flex h-9 cursor-pointer items-center justify-center rounded-control px-2 text-sm
             font-medium text-text-muted transition-colors hover:text-text
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-            disabled:opacity-48"
+            disabled:cursor-not-allowed disabled:opacity-48"
         >
           Annuler
         </button>

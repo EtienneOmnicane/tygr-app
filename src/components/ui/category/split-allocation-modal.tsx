@@ -199,7 +199,7 @@ export function SplitAllocationModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-sm font-semibold text-primary hover:text-primary-600
+            className="cursor-pointer text-sm font-semibold text-primary hover:text-primary-600
               focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             Annuler
@@ -208,11 +208,11 @@ export function SplitAllocationModal({
             type="button"
             onClick={soumettre}
             disabled={!valider || enCours}
-            className="inline-flex h-10 items-center rounded-control bg-success px-5
+            className="inline-flex h-10 cursor-pointer items-center rounded-control bg-success px-5
               text-sm font-semibold text-text-onink transition-opacity
               hover:opacity-90 focus:outline-none focus-visible:ring-2
               focus-visible:ring-primary focus-visible:ring-offset-2
-              disabled:opacity-48"
+              disabled:cursor-not-allowed disabled:opacity-48"
           >
             {enCours ? "Enregistrement…" : "Valider"}
           </button>
@@ -304,7 +304,7 @@ export function SplitAllocationModal({
                     onClick={() =>
                       setPickerOuvert(pickerOuvert === ligne.cle ? null : ligne.cle)
                     }
-                    className="flex h-10 w-full items-center justify-between rounded-control
+                    className="flex h-10 w-full cursor-pointer items-center justify-between rounded-control
                       border border-line bg-surface-inset px-3 text-sm text-text
                       focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   >
@@ -379,7 +379,7 @@ export function SplitAllocationModal({
                     type="button"
                     onClick={() => retirerLigne(ligne.cle)}
                     aria-label="Retirer cette catégorie"
-                    className="rounded-control p-1.5 text-text-muted transition-colors
+                    className="cursor-pointer rounded-control p-1.5 text-text-muted transition-colors
                       hover:text-danger focus:outline-none focus-visible:ring-2
                       focus-visible:ring-primary"
                   >
@@ -395,9 +395,9 @@ export function SplitAllocationModal({
               type="button"
               onClick={() => ajouterLigne()}
               disabled={lignes.length >= MAX_SPLITS}
-              className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary
+              className="inline-flex cursor-pointer items-center gap-1.5 text-sm font-semibold text-primary
                 hover:text-primary-600 focus:outline-none focus-visible:ring-2
-                focus-visible:ring-primary disabled:opacity-48"
+                focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-48"
             >
               <span aria-hidden>+</span> Ajouter une catégorie
             </button>
@@ -407,7 +407,7 @@ export function SplitAllocationModal({
               <button
                 type="button"
                 onClick={categoriserLeReste}
-                className="text-sm font-semibold text-primary hover:text-primary-600
+                className="cursor-pointer text-sm font-semibold text-primary hover:text-primary-600
                   focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 + Catégoriser le reste ({formatMontant(etat.reste, transaction.devise)})

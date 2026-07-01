@@ -235,9 +235,9 @@ function LigneCategorie({
         type="button"
         onClick={() => onArchiver(categorie.id)}
         disabled={disabled}
-        className="text-xs font-semibold text-text-muted transition-colors
+        className="cursor-pointer text-xs font-semibold text-text-muted transition-colors
           hover:text-danger focus:outline-none focus-visible:ring-2
-          focus-visible:ring-primary disabled:opacity-48"
+          focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-48"
       >
         Archiver
       </button>
