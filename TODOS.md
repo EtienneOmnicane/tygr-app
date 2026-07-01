@@ -649,6 +649,11 @@ Dettes ouvertes héritées du câblage :
       retour UX « je veux voir la catégorie sans cliquer ». Backend enrichit la ligne
       du `categoryId`/`categoryName` quand il n'y a qu'un split ; l'UI peuple alors
       `TransactionListItem.categorie` (déjà prévu au type) → `CategoryBadge` nommé.
+      **Re-confirmé par clawdy (2026-07-01)** : souhait explicite d'afficher le **nom +
+      un badge** de la catégorie au lieu du **compteur** « 1 catégorie ». C'est
+      exactement ce ticket ; le bug QA remonté sous l'étiquette « TX-QA-CAT-BADGE1 » y
+      est **absorbé** (pas de doublon, règle 9). Recoupe aussi la partie « afficher le
+      nom + corriger l'accord pluriel » de **QA-UX-CATEG-COHERENCE1**.
 - [ ] **TECH-DASHBOARD-CASCADE (P2) — aligner la table du DASHBOARD sur la cascade de
       libellé de `/transactions`** — Effort M (gardien Backend + Front). Date 2026-06-23.
       La cascade intelligente (marchand → catégorie FR → brut bancaire → repli) +
@@ -670,6 +675,53 @@ Dettes ouvertes héritées du câblage :
 
 Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants.
 Plan de référence : `PLAN-transactions-page.md`.
+
+### Bugs QA /transactions relevés par clawdy (2026-07-01)
+
+Passe QA visuelle de la page `/transactions` et de la modale de ventilation par clawdy.
+Constats d'**ergonomie / affordance / layout** — aucun ne touche l'isolation tenant,
+l'append-only ni les montants (sinon corrigé immédiatement, pas consigné). Bugs de fond
+sur la catégorie (compteur au lieu du nom, filtre Sens) déjà tracés ailleurs :
+**TX-QA-CAT-BADGE1** est absorbé par **TX-BADGE1** (ci-dessus, re-confirmé le 2026-07-01)
+et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lecture seule.
+
+- [ ] **TX-QA-CURSOR1 (P2) — `cursor: pointer` absent au survol des boutons cliquables**
+      — Effort S (gardien Front). Date 2026-07-01. Les éléments cliquables du picker de
+      catégorie et de la modale de ventilation n'exposent **aucun** `cursor-pointer` : au
+      survol, le curseur reste une flèche → l'utilisateur ne perçoit pas qu'ils sont
+      cliquables. Vérifié : les seuls `cursor-*` présents sont des `disabled:cursor-not-allowed`
+      (état désactivé). Éléments concernés (tous SANS `cursor-pointer`) : options de
+      catégorie et « + Ajouter une catégorie » (`src/components/ui/category/category-picker.tsx:203`,
+      `:282`), boutons Créer / Annuler (`category-picker.tsx:324`, `:335`), boutons de la
+      modale de ventilation ouvrir/valider/ajouter/retirer/« catégoriser le reste »
+      (`src/components/ui/category/split-allocation-modal.tsx:199`, `:207`, `:378`, `:394`,
+      `:407`), « Charger plus » et fermeture d'erreur (`src/components/transactions/transactions-feature.tsx:209`,
+      `:260`), archiver une catégorie (`src/components/ui/category/category-manager-modal.tsx:234`),
+      croix de fermeture de modale (`src/components/ui/modal/modal.tsx:140`). **Exception** :
+      la LIGNE du tableau (`<tr>`) porte déjà `cursor-pointer` (`transaction-row.tsx:90`) —
+      elle n'est pas concernée. **Déclencheur** : cette passe QA (affordance des contrôles).
+
+- [ ] **TX-QA-CREER-CAT-OVERFLOW1 (P2) — le bloc « créer une catégorie » déborde de son
+      conteneur (bouton « Annuler » qui dépasse)** — Effort S (gardien Front). Date
+      2026-07-01. Dans le picker de catégorie, le mode déplié de création aligne sur UNE
+      seule rangée un `<input>` + les boutons « Créer » et « Annuler » via un
+      `flex items-center gap-2`, sans `flex-wrap` ni contrainte de rétrécissement sur le
+      champ ; dans la largeur étroite du popover, l'ensemble déborde et « Annuler » sort du
+      cadre. Fichier probable : `src/components/ui/category/category-picker.tsx:296-346`
+      (conteneur `flex` ligne 298, `input flex-1` ligne 320, boutons lignes 324 et 335).
+      **Déclencheur** : cette passe QA (layout du bloc de création inline).
+
+- [ ] **TX-QA-FILTRE-CAT1 (P2) — filtre par catégorie absent sur `/transactions`** —
+      Effort S (gardien Front). Date 2026-07-01. La toolbar propose Compte, Statut de
+      ventilation et bornes de date, mais **aucun filtre par catégorie** ; l'utilisateur
+      demande de pouvoir restreindre la liste à une catégorie donnée. Fichier :
+      `src/components/transactions/transactions-toolbar.tsx` (aucun select catégorie). À
+      distinguer de **TX-FILTRE1** (filtre *Sens* Entrées/Sorties), qui est un besoin
+      différent : ici il s'agit bien de la CATÉGORIE. NB (lecture seule, non tranché) : le
+      schéma de lecture Backend (`listerTransactionsSchema`, `.strict`) ne porte pas non
+      plus de champ catégorie aujourd'hui — un filtrage purement client casserait la
+      pagination keyset (même piège que TX-FILTRE1), à arbitrer au moment de l'implémentation.
+      **Déclencheur** : cette demande utilisateur de filtrer par catégorie.
 
 ### Findings QA nav + Empty States (UI, 2026-06-17)
 
