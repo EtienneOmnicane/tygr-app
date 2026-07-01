@@ -250,6 +250,25 @@ describe("filtres", () => {
     expect(page.lignes.map((l) => l.id)).toEqual([T3, T2]);
   });
 
+  // Demi-bornes : couvrent les branches if(dateDebut)/if(dateFin) prises
+  // INDÉPENDAMMENT (chemins UI « depuis » et « jusqu'à », types-transactions §2.1) —
+  // le cas from+to ci-dessus ne les exerce pas isolément.
+  it("dateDebut seul → uniquement les transactions ≥ borne (borne basse)", async () => {
+    // ≥ 2026-03-14 : T1 (03-15), T3/T2 (03-14) ; exclut T4 (03-13). T5 tombstone.
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ dateDebut: "2026-03-14", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T1, T3, T2]);
+  });
+
+  it("dateFin seul → uniquement les transactions ≤ borne (borne haute)", async () => {
+    // ≤ 2026-03-14 : T3/T2 (03-14), T4 (03-13) ; exclut T1 (03-15). T5 tombstone.
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ dateFin: "2026-03-14", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T3, T2, T4]);
+  });
+
   it("filtre par compte (un seul compte ici → toutes les lignes vivantes)", async () => {
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ bankAccountId: ACC_A, limite: 100 })),
