@@ -1,19 +1,26 @@
 "use client";
 
 /**
- * Formulaire de création d'une règle de catégorisation. Présentationnel : état
- * LOCAL du formulaire (motif / stratégie / catégorie / priorité), remonte la
- * création via `onCreer` (le conteneur appelle la Server Action et gère le retour).
+ * Formulaire de règle de catégorisation — BIMODAL (création / édition).
+ * Présentationnel : état LOCAL du formulaire (motif / stratégie / catégorie, + case
+ * « Règle active » en édition), remonte l'action via `onCreer` (création) ou
+ * `onModifier` (édition) ; le conteneur appelle la Server Action et gère le retour.
+ *
+ * La PRIORITÉ n'est jamais éditée ici : elle est pilotée par le réordonnancement de
+ * la liste (drag / flèches) — une seule source de vérité pour l'ordre.
+ *
+ * Le pré-remplissage se fait à l'initialisation des `useState` : le conteneur REMONTE
+ * ce composant (via `key`) quand la règle éditée change, donc pas de synchro d'effet.
  *
  * Validation côté UI = garde-fou ergonomique (motif non vide, catégorie choisie) ;
- * la vraie validation (zod strict + FK) vit côté serveur. Aucune couleur en dur,
- * aucune dépendance externe (`cn` local) — UI_GUIDELINES.
+ * la vraie validation (zod strict + FK + rôle) vit côté serveur. Aucune couleur en
+ * dur, aucune dépendance externe (`cn` local) — UI_GUIDELINES.
  */
 import { useId, useMemo, useState } from "react";
 
 import type { CategorieUI } from "@/components/ui/category";
 
-import type { RuleMatchType } from "./types-regles";
+import type { RegleUI, RuleMatchType } from "./types-regles";
 
 function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
@@ -38,9 +45,22 @@ function optionsCategories(categories: CategorieUI[]) {
   return options;
 }
 
+/** Entrée d'édition remontée au conteneur (priority exclue — pilotée par le réordre). */
+export interface ModificationRegle {
+  ruleId: string;
+  pattern: string;
+  matchType: RuleMatchType;
+  categoryId: string;
+  isActive: boolean;
+}
+
 export function RegleForm({
   categories,
   onCreer,
+  mode = "creation",
+  valeurInitiale,
+  onModifier,
+  onAnnuler,
   enCours = false,
 }: {
   categories: CategorieUI[];
@@ -50,12 +70,27 @@ export function RegleForm({
     matchType: RuleMatchType;
     categoryId: string;
   }) => void;
+  /** "creation" (défaut) ou "edition" (pré-rempli depuis `valeurInitiale`). */
+  mode?: "creation" | "edition";
+  /** Règle à éditer (obligatoire si mode="edition") — pré-remplit le formulaire. */
+  valeurInitiale?: RegleUI;
+  /** Remonte la modification (mode édition). */
+  onModifier?: (input: ModificationRegle) => void;
+  /** Annule l'édition (referme le mode édition côté conteneur). */
+  onAnnuler?: () => void;
   /** Désactive le formulaire pendant l'appel serveur. */
   enCours?: boolean;
 }) {
-  const [pattern, setPattern] = useState("");
-  const [matchType, setMatchType] = useState<RuleMatchType>("contains");
-  const [categoryId, setCategoryId] = useState("");
+  const edition = mode === "edition" && valeurInitiale !== undefined;
+
+  const [pattern, setPattern] = useState(edition ? valeurInitiale!.pattern : "");
+  const [matchType, setMatchType] = useState<RuleMatchType>(
+    edition ? valeurInitiale!.matchType : "contains",
+  );
+  const [categoryId, setCategoryId] = useState(
+    edition ? valeurInitiale!.categoryId : "",
+  );
+  const [isActive, setIsActive] = useState(edition ? valeurInitiale!.isActive : true);
 
   const options = useMemo(() => optionsCategories(categories), [categories]);
   const motifValide = pattern.trim().length > 0;
@@ -64,6 +99,7 @@ export function RegleForm({
   const idMotif = useId();
   const idMatch = useId();
   const idCat = useId();
+  const idActive = useId();
 
   const champ =
     "h-10 rounded-control border border-line bg-surface-card px-3 text-sm text-text " +
@@ -73,7 +109,17 @@ export function RegleForm({
   function soumettre(e: React.FormEvent) {
     e.preventDefault();
     if (!peutSoumettre) return;
-    onCreer({ pattern: pattern.trim(), matchType, categoryId });
+    if (edition) {
+      onModifier?.({
+        ruleId: valeurInitiale!.id,
+        pattern: pattern.trim(),
+        matchType,
+        categoryId,
+        isActive,
+      });
+    } else {
+      onCreer({ pattern: pattern.trim(), matchType, categoryId });
+    }
   }
 
   return (
@@ -81,7 +127,9 @@ export function RegleForm({
       onSubmit={soumettre}
       className="rounded-control border border-line bg-surface-card p-4"
     >
-      <p className="mb-3 text-sm font-semibold text-text">Nouvelle règle</p>
+      <p className="mb-3 text-sm font-semibold text-text">
+        {edition ? "Modifier la règle" : "Nouvelle règle"}
+      </p>
 
       <div className="flex flex-wrap items-end gap-3">
         {/* Stratégie : « Si le libellé [contient / commence par] » */}
@@ -155,9 +203,57 @@ export function RegleForm({
               : "cursor-not-allowed bg-surface-inset text-text-faint",
           )}
         >
-          {enCours ? "Création…" : "Créer la règle"}
+          {enCours
+            ? edition
+              ? "Enregistrement…"
+              : "Création…"
+            : edition
+              ? "Enregistrer"
+              : "Créer la règle"}
         </button>
+
+        {edition && (
+          <button
+            type="button"
+            onClick={onAnnuler}
+            disabled={enCours}
+            className="h-10 rounded-control border border-line px-4 text-sm font-medium text-text-muted
+              transition-colors hover:bg-surface-inset focus:outline-none
+              focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-[0.48]"
+          >
+            Annuler
+          </button>
+        )}
       </div>
+
+      {/* Case « Règle active » (édition seule) : décocher = archiver, cocher = réactiver. */}
+      {edition && (
+        <label
+          htmlFor={idActive}
+          className="mt-3 flex w-fit items-center gap-2 text-sm text-text"
+        >
+          <input
+            id={idActive}
+            type="checkbox"
+            checked={isActive}
+            disabled={enCours}
+            onChange={(e) => setIsActive(e.target.checked)}
+            className="size-4 rounded border-line text-primary focus:ring-primary disabled:opacity-[0.48]"
+          />
+          Règle active
+        </label>
+      )}
+
+      {/* Microcopy anti-illusion : l'édition n'agit qu'en avant (le service ignore les
+          transactions déjà catégorisées). On NE laisse PAS croire qu'on répare le passé. */}
+      {edition && (
+        <p className="mt-3 text-xs text-text-muted">
+          Les modifications s’appliquent aux <strong>prochaines</strong>{" "}
+          catégorisations. Les transactions déjà classées ne sont pas reclassées
+          automatiquement. Pour appliquer cette règle aux transactions non encore
+          catégorisées, lancez <strong>Ré-analyser les transactions</strong>.
+        </p>
+      )}
     </form>
   );
 }

@@ -26,13 +26,16 @@ import {
 } from "@/server/auth/session";
 import {
   CategorieIntrouvableError,
+  OrdreReglesInvalideError,
   RegleIntrouvableError,
+  RegleNonAutoriseeError,
   type ResultatApplication,
   appliquerRegles,
   archiverRegle,
   creerRegle,
   listerRegles,
   modifierRegle,
+  reordonnerRegles,
   withWorkspace,
 } from "@/server/db";
 import {
@@ -40,6 +43,7 @@ import {
   archiverRegleSchema,
   creerRegleSchema,
   modifierRegleSchema,
+  reordonnerReglesSchema,
 } from "@/lib/regles-schema";
 
 /** Résultat normalisé (miroir de `ResultatAction` du contrat UI). */
@@ -85,7 +89,13 @@ function echec(
   } else if (erreur instanceof CategorieIntrouvableError) {
     code = erreur.code; // CATEGORY_NOT_FOUND
     message = "Catégorie introuvable.";
-  } else if (erreur instanceof RoleInsuffisantError) {
+  } else if (erreur instanceof OrdreReglesInvalideError) {
+    code = erreur.code; // RULES_ORDER_MISMATCH
+    message = "L’ordre des règles a changé. Rechargez la page.";
+  } else if (
+    erreur instanceof RoleInsuffisantError ||
+    erreur instanceof RegleNonAutoriseeError
+  ) {
     code = erreur.code; // FORBIDDEN_ROLE
     message = "Action réservée aux gestionnaires.";
   } else if (erreur instanceof ServiceIndisponibleError) {
@@ -122,6 +132,8 @@ export async function creerRegleAction(input: {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
   }
   try {
+    // Garde de rôle (VIEWER refusé) portée par le repository `creerRegle`
+    // (RegleNonAutoriseeError) — testable sous RLS, cf. repo.
     const r = await withWorkspace(session, (tx, ctx) =>
       creerRegle(tx, ctx, parsed.data),
     );
@@ -146,6 +158,7 @@ export async function modifierRegleAction(input: {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
   }
   try {
+    // Garde de rôle portée par le repository `modifierRegle` (cf. créer).
     await withWorkspace(session, (tx, ctx) =>
       modifierRegle(tx, ctx, parsed.data),
     );
@@ -165,6 +178,7 @@ export async function archiverRegleAction(
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
   }
   try {
+    // Garde de rôle portée par le repository `archiverRegle` (cf. créer).
     await withWorkspace(session, (tx, ctx) =>
       archiverRegle(tx, ctx, parsed.data.ruleId),
     );
@@ -196,5 +210,32 @@ export async function appliquerReglesAction(opts?: {
     return { ok: true, data: r };
   } catch (erreur) {
     return echec(erreur, session.activeWorkspaceId, "appliquer-regles");
+  }
+}
+
+/**
+ * Réordonne les règles ACTIVES (drag/flèches) : `ordre` = liste des ruleId dans le
+ * nouvel ordre visuel → priority = index. Écriture de GOUVERNANCE réservée
+ * MANAGER/ADMIN (garde peutModifier DANS la transaction, comme appliquerRegles). Le
+ * repository exige que `ordre` soit exactement l'ensemble des règles actives du
+ * workspace (égalité d'ensembles, anti-IDOR) → sinon RULES_ORDER_MISMATCH.
+ */
+export async function reordonnerReglesAction(input: {
+  ordre: string[];
+}): Promise<ResultatAction> {
+  const session = await exigerSessionWorkspace();
+  const parsed = reordonnerReglesSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
+  }
+  try {
+    // Garde de gouvernance (MANAGER/ADMIN) + égalité d'ensembles portées par le
+    // repository `reordonnerRegles` (RegleNonAutoriseeError / OrdreReglesInvalideError).
+    await withWorkspace(session, (tx, ctx) =>
+      reordonnerRegles(tx, ctx, parsed.data.ordre),
+    );
+    return { ok: true, data: undefined };
+  } catch (erreur) {
+    return echec(erreur, session.activeWorkspaceId, "reordonner-regles");
   }
 }

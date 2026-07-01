@@ -31,6 +31,7 @@ import {
 } from "@/server/db/schema";
 import type { RuleMatchType } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
+import { peutModifier } from "@/lib/permissions";
 import { ecrireAudit } from "@/server/repositories/categorisation";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -66,6 +67,21 @@ export class RegleIntrouvableError extends Error {
   constructor() {
     super("Règle introuvable.");
     this.name = "RegleIntrouvableError";
+  }
+}
+
+/**
+ * Levée quand le rôle courant n'a pas le droit d'écrire sur le référentiel de règles.
+ * Authoring (créer/modifier/archiver) + réordonnancement = ouverts aux MEMBRES
+ * (MANAGER/ADMIN, `peutModifier`), fermés au VIEWER. Garde SERVEUR portée par le
+ * repository (pattern des catégories `CategorieNonAutoriseeError`) → testable sous RLS
+ * réelle et bloquante en CI, contrairement à une garde posée seulement dans l'action.
+ */
+export class RegleNonAutoriseeError extends Error {
+  readonly code = "FORBIDDEN_ROLE";
+  constructor() {
+    super("Action réservée aux gestionnaires.");
+    this.name = "RegleNonAutoriseeError";
   }
 }
 
@@ -107,12 +123,40 @@ export async function listerRegles<TDb extends AnyPgDatabase>(
  * Crée une règle. Le WITH CHECK RLS garantit le bon workspace ; la FK category
  * COMPOSITE garantit que category_id appartient au MÊME workspace (impossible de
  * cibler la catégorie d'un autre tenant). Retourne l'id créé.
+ *
+ * Priorité par défaut = `max(priority des règles ACTIVES du workspace) + 1` (fin de
+ * file) quand `input.priority` est absent. Ce n'est PAS « jamais en collision » dans
+ * l'absolu : deux créations concurrentes peuvent lire le même max avant l'insert de
+ * l'autre (last-write-wins, dette REGLE-REORDER-CONCUR1). L'ordre reste DÉTERMINISTE
+ * — l'ordre total du service et de l'affichage est `asc(priority), asc(createdAt)`,
+ * donc un ex æquo de priority est départagé par la date de création — et il se
+ * NORMALISE densément (0,1,2…) au premier réordonnancement. Calcul sous RLS (scope
+ * workspace) : `max` ne voit que les règles du tenant courant.
  */
 export async function creerRegle<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   ctx: WorkspaceContext,
   input: RegleACreer,
 ): Promise<{ ruleId: string }> {
+  if (!peutModifier(ctx.role)) throw new RegleNonAutoriseeError();
+
+  let priority = input.priority;
+  if (priority === undefined) {
+    // max(priority) des ACTIVES + 1 ; -1 sur workspace vide → première règle à 0.
+    const [{ prochaine }] = await tx
+      .select({
+        prochaine: sql<number>`coalesce(max(${categorizationRules.priority}), -1) + 1`,
+      })
+      .from(categorizationRules)
+      .where(
+        and(
+          eq(categorizationRules.workspaceId, ctx.workspaceId),
+          eq(categorizationRules.isActive, true),
+        ),
+      );
+    priority = Number(prochaine);
+  }
+
   const inserted = await tx
     .insert(categorizationRules)
     .values({
@@ -120,7 +164,7 @@ export async function creerRegle<TDb extends AnyPgDatabase>(
       pattern: input.pattern,
       matchType: input.matchType,
       categoryId: input.categoryId,
-      priority: input.priority ?? 0,
+      priority,
       createdBy: ctx.userId,
     })
     .returning({ id: categorizationRules.id });
@@ -137,6 +181,10 @@ export async function modifierRegle<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   input: RegleAModifier,
 ): Promise<void> {
+  // Rôle vérifié AVANT existence (anti-oracle, pattern catégories) : un VIEWER
+  // n'apprend même pas si la règle existe.
+  if (!peutModifier(ctx.role)) throw new RegleNonAutoriseeError();
+
   const set: Record<string, unknown> = {};
   if (input.pattern !== undefined) set.pattern = input.pattern;
   if (input.matchType !== undefined) set.matchType = input.matchType;
@@ -184,6 +232,8 @@ export async function archiverRegle<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   ruleId: string,
 ): Promise<void> {
+  if (!peutModifier(ctx.role)) throw new RegleNonAutoriseeError();
+
   const maj = await tx
     .update(categorizationRules)
     .set({ isActive: false })
@@ -195,6 +245,88 @@ export async function archiverRegle<TDb extends AnyPgDatabase>(
     )
     .returning({ id: categorizationRules.id });
   if (maj.length === 0) throw new RegleIntrouvableError();
+}
+
+/** Levée quand `ordre` n'est pas exactement l'ensemble des règles actives du workspace. */
+export class OrdreReglesInvalideError extends Error {
+  readonly code = "RULES_ORDER_MISMATCH";
+  constructor() {
+    super("L’ordre fourni ne correspond pas aux règles actives.");
+    this.name = "OrdreReglesInvalideError";
+  }
+}
+
+/**
+ * Réordonne les règles ACTIVES du workspace : la priorité de chaque règle devient
+ * son index dans `ordreIds` (0-based), densément (0,1,2…). Le service applique la
+ * priorité la plus PETITE en premier (regles-categorisation.ts, listerRegles
+ * `asc(priority)`) → l'id en tête de `ordreIds` gagne.
+ *
+ * SÉCURITÉ — égalité d'ensembles (anti-IDOR strict) : `ordreIds` DOIT être exactement
+ * l'ensemble des règles actives du workspace courant (même cardinalité, mêmes
+ * membres). On lit d'abord cet ensemble SOUS RLS (donc scindé au tenant), puis on
+ * exige `set(ordreIds) === set(actives)`. Cela rejette d'un bloc :
+ *  - un id d'un AUTRE tenant (invisible sous RLS → absent de l'ensemble actif) ;
+ *  - un id archivé (isActive=false, hors ensemble actif) ;
+ *  - un id inexistant ; un SOUS-ensemble ou un SUR-ensemble (cardinalités ≠).
+ * Un simple « lignes mises à jour ≠ longueur » ne suffirait pas (laisserait passer
+ * un sous-ensemble ou un id archivé). Rejet → OrdreReglesInvalideError (fail-loud).
+ *
+ * ATOMICITÉ : tout se fait dans la transaction withWorkspace courante (BEGIN…COMMIT).
+ * Un rejet lève AVANT tout UPDATE → aucune priorité n'est écrite (état d'origine
+ * intact). Les N UPDATE réussissent ou rollback ensemble.
+ *
+ * CONCURRENCE : last-write-wins assumé en v1 (dette REGLE-REORDER-CONCUR1, P2). Deux
+ * réordonnancements concurrents → le dernier COMMIT gagne ; les priorités restent une
+ * permutation valide (pas d'incohérence de données).
+ *
+ * Ne touche PAS les règles archivées (elles ne participent pas au match ; leur
+ * priority est inerte).
+ */
+export async function reordonnerRegles<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  ordreIds: string[],
+): Promise<void> {
+  // Gouvernance : MANAGER/ADMIN (peutModifier), fermé au VIEWER. Rôle AVANT toute
+  // lecture (anti-oracle).
+  if (!peutModifier(ctx.role)) throw new RegleNonAutoriseeError();
+
+  // 1. Ensemble des règles ACTIVES du workspace (sous RLS → tenant courant only).
+  const actives = await tx
+    .select({ id: categorizationRules.id })
+    .from(categorizationRules)
+    .where(
+      and(
+        eq(categorizationRules.workspaceId, ctx.workspaceId),
+        eq(categorizationRules.isActive, true),
+      ),
+    );
+
+  // 2. Égalité d'ensembles : même cardinalité ET mêmes membres.
+  const ensembleActif = new Set(actives.map((r) => r.id));
+  const ensembleDemande = new Set(ordreIds);
+  const memeCardinalite =
+    ensembleActif.size === ensembleDemande.size &&
+    ordreIds.length === ensembleActif.size; // ordreIds sans doublon (garanti Zod) et complet
+  const memesMembres =
+    memeCardinalite && ordreIds.every((id) => ensembleActif.has(id));
+  if (!memesMembres) throw new OrdreReglesInvalideError();
+
+  // 3. priority = index (dense). Scope workspace_id en défense en profondeur (RLS
+  //    borne déjà) ; tout id est prouvé du tenant par l'étape 2, donc chaque UPDATE
+  //    matche exactement 1 ligne.
+  for (let i = 0; i < ordreIds.length; i += 1) {
+    await tx
+      .update(categorizationRules)
+      .set({ priority: i })
+      .where(
+        and(
+          eq(categorizationRules.id, ordreIds[i]),
+          eq(categorizationRules.workspaceId, ctx.workspaceId),
+        ),
+      );
+  }
 }
 
 /* ------------------------------------------------------------------ */

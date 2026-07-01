@@ -35,7 +35,10 @@ import {
   echapperLike,
   listerRegles,
   modifierRegle,
+  OrdreReglesInvalideError,
   RegleIntrouvableError,
+  RegleNonAutoriseeError,
+  reordonnerRegles,
 } from "@/server/repositories/regles-categorisation";
 
 const client = new PGlite();
@@ -49,6 +52,7 @@ const VICTOR = "33333333-3333-4333-8333-333333333333"; // VIEWER de A
 const BOB = "22222222-2222-4222-8222-222222222222"; // MANAGER de B
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
 const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
+const sessionViewer = { userId: VICTOR, activeWorkspaceId: WS_A }; // VIEWER de A
 
 const ACCT_A = "dddd0001-dddd-4ddd-8ddd-dddddddddddd";
 const ACCT_B = "dddd0002-dddd-4ddd-8ddd-dddddddddddd";
@@ -438,6 +442,273 @@ describe("règle archivée + CRUD scopé", () => {
     ).then((rs) => rs.find((r) => r.id === edf.id)!);
     expect(apres.pattern).toBe("ELECTRICITE");
     expect(apres.priority).toBe(3);
+  });
+});
+
+describe("autorisation d'authoring — VIEWER refusé AU SERVEUR (garde repository)", () => {
+  // La garde peutModifier(ctx.role) est portée par le REPOSITORY (pattern
+  // creerCategorie) → testable sous RLS réelle, rôle résolu depuis workspace_members.
+  // VICTOR est VIEWER de A. Le rôle est vérifié AVANT l'existence (anti-oracle).
+  it("VIEWER ne peut PAS créer une règle (RegleNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        creerRegle(tx, ctx, {
+          pattern: "INTERDIT",
+          matchType: "contains",
+          categoryId: CAT_A,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RegleNonAutoriseeError);
+  });
+
+  it("VIEWER ne peut PAS modifier une règle (rôle AVANT existence : id bidon → NonAutorisee)", async () => {
+    // Un VIEWER n'apprend même pas si la règle existe : la garde de rôle précède le
+    // check d'existence. On vise volontairement un id inexistant → pas RULE_NOT_FOUND.
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        modifierRegle(tx, ctx, {
+          ruleId: "99999999-9999-4999-8999-999999999999",
+          isActive: false,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RegleNonAutoriseeError);
+  });
+
+  it("VIEWER ne peut PAS archiver une règle (RegleNonAutorisee)", async () => {
+    const regleA = await withWorkspace(sessionA, (tx, ctx) => listerRegles(tx, ctx));
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        archiverRegle(tx, ctx, regleA[0].id),
+      ),
+    ).rejects.toBeInstanceOf(RegleNonAutoriseeError);
+  });
+
+  it("VIEWER ne peut PAS réordonner (gouvernance — RegleNonAutorisee)", async () => {
+    const regleA = await withWorkspace(sessionA, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        reordonnerRegles(
+          tx,
+          ctx,
+          regleA.map((r) => r.id),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(RegleNonAutoriseeError);
+  });
+});
+
+describe("réactivation via modifierRegle (isActive=true)", () => {
+  it("une règle archivée puis réactivée redevient active ET ré-applicable", async () => {
+    // Nouvelle txn non catégorisée + règle dédiée, archivée avant application.
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into transactions_cache
+        (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,clean_label) values
+        ('eeee0200-eeee-4eee-8eee-eeeeeeeeeeee','${WS_A}','${ACCT_A}','t-react','${DATE}','${DATE}T08:00:00Z','-42.00','MUR','Debit','REACTIVE ME');
+    `);
+    await client.exec(`set role tygr_app;`);
+
+    const { ruleId } = await withWorkspace(sessionA, (tx, ctx) =>
+      creerRegle(tx, ctx, {
+        pattern: "REACTIVE ME",
+        matchType: "contains",
+        categoryId: CAT_A,
+      }),
+    );
+    await withWorkspace(sessionA, (tx, ctx) => archiverRegle(tx, ctx, ruleId));
+
+    // Archivée : n'apparaît plus dans les actives.
+    const activesApresArchive = await withWorkspace(sessionA, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    expect(activesApresArchive.some((r) => r.id === ruleId)).toBe(false);
+
+    // Réactivation via l'édition.
+    await withWorkspace(sessionA, (tx, ctx) =>
+      modifierRegle(tx, ctx, { ruleId, isActive: true }),
+    );
+    const activesApresReactive = await withWorkspace(sessionA, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    expect(activesApresReactive.some((r) => r.id === ruleId)).toBe(true);
+
+    // Et elle catégorise à nouveau (preuve fonctionnelle de la réactivation).
+    const r = await withWorkspace(sessionA, (tx, ctx) =>
+      appliquerRegles(tx, ctx, { bankAccountId: ACCT_A }),
+    );
+    expect(r.splitsCrees).toBeGreaterThanOrEqual(1);
+    expect(
+      await splitsDe(sessionA, "eeee0200-eeee-4eee-8eee-eeeeeeeeeeee"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("réordonnancement — priorité (drag/flèches)", () => {
+  // Un workspace DÉDIÉ (WS_R) pour maîtriser l'ensemble exact des règles actives
+  // (l'égalité d'ensembles porte sur TOUTES les actives du workspace).
+  const WS_R = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const CAROL = "44444444-4444-4444-8444-444444444444"; // MANAGER de R
+  const sessionR = { userId: CAROL, activeWorkspaceId: WS_R };
+  const ACCT_R = "dddd0003-dddd-4ddd-8ddd-dddddddddddd";
+  const CAT_R1 = "cccc1111-cccc-4ccc-8ccc-cccccccccccc";
+  const CAT_R2 = "cccc2222-cccc-4ccc-8ccc-cccccccccccc";
+  let idFoo = "";
+  let idFooBar = "";
+
+  it("prépare WS_R : 2 règles actives qui CHEVAUCHENT le même libellé", async () => {
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into workspaces (id,name,kind,omnifi_client_user_id) values
+        ('${WS_R}','BU R','INTERNAL_BU','eu-r');
+      insert into users (id,email,full_name) values ('${CAROL}','c@g.mu','Carol');
+      insert into workspace_members (user_id,workspace_id,role) values ('${CAROL}','${WS_R}','MANAGER');
+      insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,created_by) values
+        ('cccc0003-cccc-4ccc-8ccc-cccccccccccc','${WS_R}','c-r','mcb','${CAROL}');
+      insert into bank_accounts (id,workspace_id,connection_id,omnifi_account_id,account_name,currency) values
+        ('${ACCT_R}','${WS_R}','cccc0003-cccc-4ccc-8ccc-cccccccccccc','a-r','CC','MUR');
+      insert into categories (id,workspace_id,name) values
+        ('${CAT_R1}','${WS_R}','R-Un'), ('${CAT_R2}','${WS_R}','R-Deux');
+    `);
+    await client.exec(`set role tygr_app;`);
+
+    // Deux motifs qui matchent tous deux « FOO BAR SHOP » : « FOO » (→CAT_R1) et
+    // « FOO BAR » (→CAT_R2). L'ordre décide lequel gagne.
+    idFoo = (
+      await withWorkspace(sessionR, (tx, ctx) =>
+        creerRegle(tx, ctx, { pattern: "FOO", matchType: "contains", categoryId: CAT_R1 }),
+      )
+    ).ruleId;
+    idFooBar = (
+      await withWorkspace(sessionR, (tx, ctx) =>
+        creerRegle(tx, ctx, { pattern: "FOO BAR", matchType: "contains", categoryId: CAT_R2 }),
+      )
+    ).ruleId;
+
+    // Défaut max+1 : priorités DISTINCTES (0 puis 1), jamais deux fois 0.
+    const regles = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    const prios = regles.map((r) => r.priority).sort((a, b) => a - b);
+    expect(prios).toEqual([0, 1]);
+  });
+
+  it("ordre initial (FOO en tête) : la règle FOO gagne le chevauchement", async () => {
+    // FOO créée en premier → priority 0 → en tête → gagne.
+    await withWorkspace(sessionR, (tx, ctx) =>
+      reordonnerRegles(tx, ctx, [idFoo, idFooBar]),
+    );
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into transactions_cache
+        (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,clean_label) values
+        ('eeee0301-eeee-4eee-8eee-eeeeeeeeeeee','${WS_R}','${ACCT_R}','t-r1','${DATE}','${DATE}T08:00:00Z','-11.00','MUR','Debit','FOO BAR SHOP');
+    `);
+    await client.exec(`set role tygr_app;`);
+
+    await withWorkspace(sessionR, (tx, ctx) => appliquerRegles(tx, ctx));
+    const s = await splitsDe(sessionR, "eeee0301-eeee-4eee-8eee-eeeeeeeeeeee");
+    expect(s).toHaveLength(1);
+    expect(s[0].categoryId).toBe(CAT_R1); // FOO a gagné
+    expect(s[0].ruleId).toBe(idFoo);
+  });
+
+  it("après réordonnancement (FOO BAR en tête) : c'est FOO BAR qui gagne (l'ordre décide)", async () => {
+    // On inverse l'ordre → FOO BAR devient priority 0.
+    await withWorkspace(sessionR, (tx, ctx) =>
+      reordonnerRegles(tx, ctx, [idFooBar, idFoo]),
+    );
+    // Densité : priorités normalisées 0,1 dans le nouvel ordre.
+    const regles = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    const parId = new Map(regles.map((r) => [r.id, r.priority]));
+    expect(parId.get(idFooBar)).toBe(0);
+    expect(parId.get(idFoo)).toBe(1);
+
+    // NOUVELLE txn identique (l'ancienne est déjà splittée, exclue par NOT EXISTS).
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into transactions_cache
+        (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,clean_label) values
+        ('eeee0302-eeee-4eee-8eee-eeeeeeeeeeee','${WS_R}','${ACCT_R}','t-r2','${DATE}','${DATE}T08:00:00Z','-12.00','MUR','Debit','FOO BAR SHOP');
+    `);
+    await client.exec(`set role tygr_app;`);
+
+    await withWorkspace(sessionR, (tx, ctx) => appliquerRegles(tx, ctx));
+    const s = await splitsDe(sessionR, "eeee0302-eeee-4eee-8eee-eeeeeeeeeeee");
+    expect(s).toHaveLength(1);
+    expect(s[0].categoryId).toBe(CAT_R2); // FOO BAR gagne désormais
+    expect(s[0].ruleId).toBe(idFooBar);
+  });
+
+  it("ATOMICITÉ + égalité d'ensembles : un ordre INCOMPLET est rejeté SANS rien écrire", async () => {
+    // Ordre = un sous-ensemble (une seule des deux règles actives) → mismatch.
+    // Vérifie qu'aucune priorité n'a bougé (état d'origine 0,1 préservé).
+    const avant = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    const prioAvant = new Map(avant.map((r) => [r.id, r.priority]));
+
+    await expect(
+      withWorkspace(sessionR, (tx, ctx) => reordonnerRegles(tx, ctx, [idFooBar])),
+    ).rejects.toBeInstanceOf(OrdreReglesInvalideError);
+
+    const apres = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    for (const r of apres) {
+      expect(r.priority).toBe(prioAvant.get(r.id)); // inchangé
+    }
+  });
+
+  it("égalité d'ensembles : un ordre contenant un id ARCHIVÉ est rejeté", async () => {
+    // On archive FOO BAR (n'est plus dans l'ensemble actif), puis on tente un ordre
+    // qui l'inclut → mismatch (l'ordre doit être EXACTEMENT les actives).
+    await withWorkspace(sessionR, (tx, ctx) => archiverRegle(tx, ctx, idFooBar));
+    await expect(
+      withWorkspace(sessionR, (tx, ctx) =>
+        reordonnerRegles(tx, ctx, [idFoo, idFooBar]),
+      ),
+    ).rejects.toBeInstanceOf(OrdreReglesInvalideError);
+    // Réordonner juste l'actif restant (idFoo seul) réussit.
+    await withWorkspace(sessionR, (tx, ctx) => reordonnerRegles(tx, ctx, [idFoo]));
+    const actives = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    expect(actives).toHaveLength(1);
+    expect(actives[0].priority).toBe(0);
+    // Restaure pour l'isolation du test suivant.
+    await withWorkspace(sessionR, (tx, ctx) =>
+      modifierRegle(tx, ctx, { ruleId: idFooBar, isActive: true }),
+    );
+  });
+
+  it("anti-IDOR par ensembles : un ordre incluant une règle d'un AUTRE tenant est rejeté ; l'autre tenant intact", async () => {
+    // Une règle de A (WS_A) glissée dans l'ordre de R → invisible sous RLS de R,
+    // donc absente de l'ensemble actif de R → cardinalité ≠ → mismatch. Et AUCUNE
+    // règle de A n'est modifiée.
+    const regleDeA = await withWorkspace(sessionA, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    const idDeA = regleDeA[0].id;
+    const prioDeA_avant = regleDeA[0].priority;
+
+    const activesR = await withWorkspace(sessionR, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    );
+    await expect(
+      withWorkspace(sessionR, (tx, ctx) =>
+        reordonnerRegles(tx, ctx, [...activesR.map((r) => r.id), idDeA]),
+      ),
+    ).rejects.toBeInstanceOf(OrdreReglesInvalideError);
+
+    // La règle de A n'a pas bougé.
+    const regleDeA_apres = await withWorkspace(sessionA, (tx, ctx) =>
+      listerRegles(tx, ctx, { actives: true }),
+    ).then((rs) => rs.find((r) => r.id === idDeA)!);
+    expect(regleDeA_apres.priority).toBe(prioDeA_avant);
   });
 });
 
