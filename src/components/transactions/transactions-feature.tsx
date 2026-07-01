@@ -49,6 +49,7 @@ export function TransactionsFeature({
   comptes,
   actions,
   remplacerSplits,
+  creerCategorie,
   /** Y a-t-il au moins une banque connectée ? (oriente l'Empty State.) */
   aucuneBanque,
 }: {
@@ -65,6 +66,13 @@ export function TransactionsFeature({
     ref: { transactionId: string; transactionDate: string },
     splits: Array<{ categoryId: string; amount: string }>,
   ) => Promise<ResultatAction>;
+  /**
+   * Crée une catégorie (Nature) depuis le picker de la modale (creerCategorieAction).
+   * Optionnel : absent (p. ex. démo) → pas de bouton « Ajouter une catégorie ».
+   */
+  creerCategorie?: (
+    name: string,
+  ) => Promise<ResultatAction<{ categoryId: string }>>;
   aucuneBanque: boolean;
 }) {
   const [lignes, setLignes] = useState<TransactionListItem[]>(initial.lignes);
@@ -202,9 +210,9 @@ export function TransactionsFeature({
             type="button"
             onClick={() => void chargerPlus()}
             disabled={chargement}
-            className="inline-flex h-10 items-center rounded-control border border-line
+            className="inline-flex h-10 cursor-pointer items-center rounded-control border border-line
               bg-surface-inset px-4 text-sm font-medium text-text transition-colors
-              hover:bg-surface-card disabled:opacity-[0.48] focus:outline-none
+              hover:bg-surface-card disabled:cursor-not-allowed disabled:opacity-[0.48] focus:outline-none
               focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
           >
             {chargement ? "Chargement…" : "Charger plus"}
@@ -252,7 +260,7 @@ export function TransactionsFeature({
           <button
             type="button"
             onClick={() => setErreurOuverture(false)}
-            className="shrink-0 font-medium underline underline-offset-2
+            className="shrink-0 cursor-pointer font-medium underline underline-offset-2
               focus:outline-none focus-visible:ring-2 focus-visible:ring-danger"
           >
             Fermer
@@ -285,6 +293,7 @@ export function TransactionsFeature({
             )
           }
           onSaved={apresSauvegarde}
+          onCreateCategorie={creerCategorie}
         />
       )}
     </div>

@@ -49,13 +49,62 @@ const HOTES_AUTORISES = new Set([
 ]);
 
 /**
+ * Hôtes de PRODUCTION Omni-FI (sous-ensemble de l'allow-list). Sert au verrou
+ * sandbox (ci-dessous) ET à la garde de cohérence env↔hôte : un OMNIFI_ENV=sandbox
+ * pointant un hôte de prod (ou l'inverse) est une mauvaise configuration, refusée
+ * fail-closed. `api-stage` / `stage` sont pré-prod (sandbox). Garder cette liste à
+ * jour si Omni-FI ajoute un hôte de prod.
+ */
+const HOTES_PRODUCTION = new Set(["api.omni-fi.co"]);
+
+/**
+ * Hôtes PARTAGÉS sandbox↔production (constat 2026-06-26, confirmé par le tuteur).
+ * Omni-FI n'a PAS d'hôte de prod distinct : `api-stage.omni-fi.co` sert pour le
+ * sandbox ET la production. Ce qui distingue « vraie donnée » de « bac à sable »,
+ * ce sont les CLÉS ApiClient (`prod_…` vs `sand_…`) et l'EndUser rattaché — PAS
+ * l'hôte. Sur un hôte partagé, l'hôte ne peut donc plus arbitrer l'environnement :
+ * c'est l'opt-in `OMNIFI_AUTORISER_PRODUCTION="1"` qui porte l'intention prod.
+ *
+ * Conséquences (vs un hôte « sandbox-only » ou « prod-only ») :
+ *  - la garde de cohérence env↔hôte NE refuse PAS un env=production sur ces hôtes ;
+ *  - mais le verrou (fail-closed par défaut) exige le drapeau pour autoriser la prod.
+ * Garder cet ensemble à jour si Omni-FI ouvre enfin un hôte de prod dédié (il sortira
+ * alors de HOTES_PARTAGES pour rejoindre HOTES_PRODUCTION seul).
+ */
+const HOTES_PARTAGES = new Set(["api-stage.omni-fi.co", "stage.omni-fi.co"]);
+
+/**
+ * 🔒 VERROU SANDBOX (exigence tuteur, 2026-06-22 ; piloté par env 2026-06-24) —
+ * fail-closed STRUCTUREL, **verrouillé PAR DÉFAUT**. Tant que le verrou tient,
+ * l'application REFUSE de démarrer le client Omni-FI en production : ni
+ * `OMNIFI_ENV=production`, ni un hôte de prod ne sont tolérés, quel que soit le
+ * reste du `.env`. C'est volontairement un garde-fou CODE (pas une simple
+ * convention d'env) : un `.env` mal réglé ne peut pas taper la prod par accident.
+ *
+ * ➡️ DÉVERROUILLAGE (test de la prod) : poser **explicitement**
+ * `OMNIFI_AUTORISER_PRODUCTION="1"` dans le `.env` local (voir `.env.prod.example`).
+ * C'est un opt-in volontaire et local : le dépôt reste fail-closed pour quiconque
+ * ne pose pas ce drapeau (CI, autre dev, prod non préparée). On n'écrit JAMAIS le
+ * déverrouillage en dur dans le code — il vit dans l'env de celui qui assume la prod.
+ *
+ * La fonction (vs constante) garantit une relecture de `process.env` à chaque
+ * `lireConfig` : un test peut basculer le flag puis `_reinitialiserConfigOmniFi()`.
+ * La garde de cohérence env↔hôte et la validation anti-fuite de secret restent
+ * actives dans les DEUX cas (verrouillé comme déverrouillé).
+ */
+function verrouSandboxActif(): boolean {
+  return process.env.OMNIFI_AUTORISER_PRODUCTION !== "1";
+}
+
+/**
  * Valide OMNIFI_BASE_URL contre une fuite de secret (constat sécurité S1) :
  * `startsWith("https://")` est contournable (`https://x\t@evil/` → host evil).
  * On parse réellement l'URL et on exige : protocole https, AUCUN userinfo
  * (user:pass@ détournerait le host), hôte dans l'allow-list. Renvoie l'URL
- * normalisée (origin + path sans slash final).
+ * normalisée (origin + path sans slash final) ET le hostname (pour les gardes
+ * env↔hôte et sandbox de lireConfig).
  */
-function validerBaseUrl(brut: string): string {
+function validerBaseUrl(brut: string): { baseUrl: string; hostname: string } {
   let url: URL;
   try {
     url = new URL(brut);
@@ -78,7 +127,10 @@ function validerBaseUrl(brut: string): string {
         `Attendu l'un de : ${[...HOTES_AUTORISES].join(", ")} (docs § Environnements)`,
     );
   }
-  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+  return {
+    baseUrl: `${url.origin}${url.pathname}`.replace(/\/+$/, ""),
+    hostname: url.hostname,
+  };
 }
 
 function lireConfig(): OmniFiConfig {
@@ -89,7 +141,49 @@ function lireConfig(): OmniFiConfig {
     );
   }
 
-  const baseUrl = validerBaseUrl(exiger("OMNIFI_BASE_URL"));
+  const { baseUrl, hostname } = validerBaseUrl(exiger("OMNIFI_BASE_URL"));
+  const hoteEstProd = HOTES_PRODUCTION.has(hostname);
+  const hoteEstPartage = HOTES_PARTAGES.has(hostname);
+
+  // 🔒 VERROU PRODUCTION (fail-closed, verrouillé par défaut) : tant que
+  // OMNIFI_AUTORISER_PRODUCTION!="1", AUCUN chemin de prod n'est toléré — ni l'env
+  // "production" (sur N'IMPORTE quel hôte, partagé inclus : l'hôte ne distingue plus
+  // la prod), ni un hôte prod-only. Refus bruyant (erreur de déploiement). Le verrou
+  // mord AVANT la garde de cohérence pour donner le message « poser le drapeau ».
+  if (verrouSandboxActif()) {
+    if (environment === "production") {
+      throw new OmniFiConfigError(
+        'Verrou production actif : OMNIFI_ENV="production" interdit tant que ' +
+          'OMNIFI_AUTORISER_PRODUCTION!="1". Poser ce drapeau (.env.prod.example) ' +
+          "pour autoriser la vraie donnée (clés prod).",
+      );
+    }
+    if (hoteEstProd) {
+      throw new OmniFiConfigError(
+        `Verrou production actif : l'hôte de production (${hostname}) est interdit tant ` +
+          'que OMNIFI_AUTORISER_PRODUCTION!="1". Utiliser un hôte sandbox ' +
+          "(api-stage.omni-fi.co / stage.omni-fi.co), ou poser le drapeau.",
+      );
+    }
+  }
+
+  // Garde de COHÉRENCE env↔hôte (active même hors verrou) : un env qui ment sur la
+  // cible est une mauvaise config → fail-closed. Un hôte PARTAGÉ (api-stage/stage)
+  // accepte LÉGITIMEMENT les deux env (l'intention prod vient des clés + du drapeau,
+  // pas de l'hôte) → aucun refus de cohérence sur ces hôtes. Le refus ne vise que les
+  // hôtes NON partagés : prod-only avec env=sandbox, ou sandbox-only avec env=production.
+  if (environment === "sandbox" && hoteEstProd) {
+    throw new OmniFiConfigError(
+      `Incohérence : OMNIFI_ENV="sandbox" mais l'hôte ${hostname} est un hôte de ` +
+        "production. Pointer un hôte sandbox/partagé, ou corriger OMNIFI_ENV.",
+    );
+  }
+  if (environment === "production" && !hoteEstProd && !hoteEstPartage) {
+    throw new OmniFiConfigError(
+      `Incohérence : OMNIFI_ENV="production" mais l'hôte ${hostname} n'est ni un hôte ` +
+        "de production ni un hôte partagé. Corriger OMNIFI_BASE_URL ou OMNIFI_ENV.",
+    );
+  }
 
   return {
     baseUrl,

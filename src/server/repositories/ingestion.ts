@@ -13,11 +13,15 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
+  accountPartyRole,
   bankAccounts,
   bankConnections,
   balanceHistory,
+  parties,
   transactionsCache,
 } from "@/server/db/schema";
+import type { CategorySource } from "@/server/db/schema";
+import type { OmniFiAccount } from "@/server/omnifi";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -25,6 +29,8 @@ type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 export interface ConnexionAUpserter {
   omnifiConnectionId: string;
   institutionId: string;
+  /** Nom lisible de l'institution (ex. « Absa Internet Banking ») ; null si absent. */
+  institutionName: string | null;
   status: string;
   nextSyncAvailableAt: Date | null;
 }
@@ -44,10 +50,19 @@ export interface TransactionAUpserter {
   amount: string; // numeric en chaîne (règle 8)
   currency: string;
   creditDebit: "Credit" | "Debit";
-  bankLabelRaw: string;
+  bankLabelRaw: string | null;
   cleanLabel: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Métadonnées de classification amont (TECH-API-TRACE) — descriptives, normalisées
+   *  via chaineOuNull, jamais bornées par un CHECK (cf. schema.ts). */
+  confidenceLevel: string | null;
+  classificationSource: string | null;
+  ruleIdMatch: string | null;
+  /** Provenance auto de la catégorie OBIE (cf. orchestrateur.versLignePersistee). */
+  isAutoCategorized: boolean;
+  /** Source auto (NULL si non auto). Toujours cohérent avec isAutoCategorized. */
+  categorySource: CategorySource | null;
   isRemoved: boolean;
 }
 
@@ -72,6 +87,7 @@ export async function upsertConnexion<TDb extends AnyPgDatabase>(
       workspaceId: ctx.workspaceId,
       omnifiConnectionId: c.omnifiConnectionId,
       institutionId: c.institutionId,
+      institutionName: c.institutionName,
       status: c.status,
       nextSyncAvailableAt: c.nextSyncAvailableAt,
       createdBy: ctx.userId,
@@ -79,6 +95,9 @@ export async function upsertConnexion<TDb extends AnyPgDatabase>(
     .onConflictDoUpdate({
       target: bankConnections.omnifiConnectionId,
       set: {
+        // On rafraîchit le nom à chaque ingestion (l'institution peut être
+        // renommée amont, ou la 1re ingestion l'avait laissé NULL).
+        institutionName: c.institutionName,
         status: c.status,
         nextSyncAvailableAt: c.nextSyncAvailableAt,
       },
@@ -112,6 +131,11 @@ export async function upsertCompte<TDb extends AnyPgDatabase>(
     .onConflictDoUpdate({
       target: bankAccounts.omnifiAccountId,
       set: {
+        // Un compte re-découvert via une AUTRE connexion suit la connexion la plus
+        // récente (la sandbox renvoie les mêmes AccountId sur chaque reconnexion ;
+        // sans ça le compte resterait collé à sa 1re connexion → mauvais
+        // institution_name au dashboard, et les nouvelles connexions à 0 compte).
+        connectionId,
         accountName: c.accountName,
         currency: c.currency,
         currentBalance: c.currentBalance,
@@ -170,6 +194,11 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
         cleanLabel: t.cleanLabel,
         primaryCategory: t.primaryCategory,
         subCategory: t.subCategory,
+        confidenceLevel: t.confidenceLevel,
+        classificationSource: t.classificationSource,
+        ruleIdMatch: t.ruleIdMatch,
+        isAutoCategorized: t.isAutoCategorized,
+        categorySource: t.categorySource,
         isRemoved: t.isRemoved,
       })
       .onConflictDoUpdate({
@@ -182,6 +211,17 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
           cleanLabel: t.cleanLabel,
           primaryCategory: t.primaryCategory,
           subCategory: t.subCategory,
+          // Métadonnées de classification amont : un re-sync reflète toujours l'état
+          // Omni-FI courant (déterministe/idempotent, comme les autres champs).
+          confidenceLevel: t.confidenceLevel,
+          classificationSource: t.classificationSource,
+          ruleIdMatch: t.ruleIdMatch,
+          // On reflète toujours l'état Omni-FI courant : un re-sync remet le marqueur
+          // en cohérence avec la catégorie reçue (déterministe, idempotent). Le
+          // marqueur est orthogonal aux splits — ne touche jamais la catégorisation
+          // manuelle/règles (table transaction_categorizations, intacte).
+          isAutoCategorized: t.isAutoCategorized,
+          categorySource: t.categorySource,
           isRemoved: t.isRemoved,
         },
       });
@@ -215,18 +255,125 @@ export async function upsertSoldes<TDb extends AnyPgDatabase>(
 }
 
 /**
- * Avance le curseur de sync d'un compte — DANS la même transaction que les
- * upserts (plan : pas de trou entre données persistées et curseur). Met aussi à
- * jour last_synced_at.
+ * Marque la dernière synchronisation d'un compte (`last_synced_at`). Le modèle
+ * d'ingestion est par PAGE (on relit toujours depuis la page 1) : il n'y a plus de
+ * curseur à persister — la colonne `sync_cursor` reste orpheline (dette TODOS,
+ * retrait différé pour ne pas coupler ce changement à une migration).
  */
-export async function avancerCurseur<TDb extends AnyPgDatabase>(
+export async function marquerSynchronise<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   bankAccountId: string,
-  nextCursor: string,
   maintenant: Date,
 ): Promise<void> {
   await tx
     .update(bankAccounts)
-    .set({ syncCursor: nextCursor, lastSyncedAt: maintenant })
+    .set({ lastSyncedAt: maintenant })
     .where(eq(bankAccounts.id, bankAccountId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Ingestion des PARTIES (détention compte↔party) — L3               */
+/*                                                                    */
+/* Alimente `parties` + `account_party_role` depuis `OmniFiAccount`.  */
+/* Best-effort ADDITIF (INSERT/UPDATE, jamais de DELETE) ; aucune     */
+/* lecture branchée dessus à ce stade (le périmètre account_scope est */
+/* L4). L'écriture est appelée par l'orchestration APRÈS le commit    */
+/* des comptes, dans une transaction SÉPARÉE (la couche bancaire ne   */
+/* doit jamais être empoisonnée par un échec parties) — cf.           */
+/* persisterConnexionEtComptes (orchestration.ts).                    */
+/* ------------------------------------------------------------------ */
+
+/** Normalise une chaîne Omni-FI vers `string | null` (vide/espaces → null).
+ *  Réplique locale du helper d'ingestion (orchestrateur.ts) — dépendance pure
+ *  triviale, gardée ici pour que la couche repository reste autonome. */
+function chaineOuNull(s: string | undefined | null): string | null {
+  const v = s?.trim();
+  return v ? v : null;
+}
+
+/** Party à upserter, dérivée d'un `OmniFiAccount`. `name`/`ownershipType` sont
+ *  des hints amont (nullable, rafraîchis au re-sync). */
+export interface PartieAUpserter {
+  omnifiPartyId: string;
+  name: string | null;
+  ownershipType: string | null;
+}
+
+/**
+ * Mappe un `OmniFiAccount` vers la party à upserter, ou `null` quand le compte
+ * ne porte AUCUNE party exploitable (`PartyId` absent/vide). Fonction PURE,
+ * testable en isolation.
+ *
+ * DÉCISION 1 (L3) : le contrat HTTP ne porte qu'UN `PartyId` SCALAIRE par compte
+ * (pas de `Parties[]`). Ce mappeur produit donc au plus UNE party. Le jour où
+ * l'amont exposera un tableau, SEUL ce mappeur changera (renverra une liste) —
+ * la boucle d'écriture en aval itère déjà sur une collection (0/1 aujourd'hui),
+ * donc rien d'autre ne bouge.
+ */
+export function versPartie(c: OmniFiAccount): PartieAUpserter | null {
+  const omnifiPartyId = chaineOuNull(c.PartyId);
+  if (omnifiPartyId === null) return null;
+  return {
+    omnifiPartyId,
+    name: chaineOuNull(c.PartyName),
+    ownershipType: chaineOuNull(c.OwnershipType),
+  };
+}
+
+/**
+ * Upsert idempotent d'une party + de sa liaison de détention à un compte.
+ * Tout dans la transaction `withWorkspace` courante (RLS : workspace_id vient de
+ * `ctx`, JAMAIS de la donnée Omni-FI — CLAUDE.md règle 2).
+ *
+ * Invariant CRITIQUE (aligné sur `bank_accounts.entity_id`) : les champs HUMAINS
+ * ou immuables — `entityId`, `isActive`, `createdAt`, `id` — sont OMIS du
+ * `set` des deux upserts. Un re-sync rafraîchit les hints amont (`name`,
+ * `ownershipType`) mais ne réécrase JAMAIS un rattachement BU ou un archivage
+ * décidé par l'ADMIN.
+ */
+export async function upsertPartieEtRole<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  bankAccountId: string,
+  p: PartieAUpserter,
+): Promise<void> {
+  // a. Party : idempotente sur (workspace_id, omnifi_party_id). On NE touche que
+  //    les hints amont au conflit — entity_id / is_active / created_at restent
+  //    HUMAINS (mêmes invariant et raison que bank_accounts.entity_id).
+  const lignes = await tx
+    .insert(parties)
+    .values({
+      workspaceId: ctx.workspaceId,
+      omnifiPartyId: p.omnifiPartyId,
+      name: p.name,
+      ownershipType: p.ownershipType,
+    })
+    .onConflictDoUpdate({
+      target: [parties.workspaceId, parties.omnifiPartyId],
+      set: { name: p.name, ownershipType: p.ownershipType },
+    })
+    .returning({ id: parties.id });
+  const partyId = lignes[0].id;
+
+  // b. Liaison compte↔party : idempotente sur la PK composite. `ownership_type`
+  //    est NOT NULL côté schéma → repli "PRIMARY" si l'amont ne fournit rien
+  //    (un compte avec une party mais sans rôle est traité comme détenteur
+  //    principal). `is_primary` reflète l'unique party scalaire d'aujourd'hui.
+  await tx
+    .insert(accountPartyRole)
+    .values({
+      workspaceId: ctx.workspaceId,
+      bankAccountId,
+      partyId,
+      ownershipType: p.ownershipType ?? "PRIMARY",
+      isPrimary: true,
+    })
+    .onConflictDoUpdate({
+      target: [
+        accountPartyRole.workspaceId,
+        accountPartyRole.bankAccountId,
+        accountPartyRole.partyId,
+      ],
+      set: { ownershipType: p.ownershipType ?? "PRIMARY" },
+    });
 }

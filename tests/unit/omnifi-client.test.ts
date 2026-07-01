@@ -63,7 +63,9 @@ describe("chemin heureux — décodage d'enveloppe", () => {
     expect(r.Data).toEqual(data); // Q2 : enveloppe complète (Data + Links/Meta)
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("/connections");
-    expect(url).toContain("clientUserId=user-123");
+    // Omni-FI lit le param en snake_case (ResolveEndUser → query_params.get("client_user_id")).
+    // En camelCase il renvoie 403 (param ignoré). Vérifié runtime 2026-06-18.
+    expect(url).toContain("client_user_id=user-123");
     expect(url).toContain("pageSize=50");
     expect(url).not.toContain("page="); // valeur undefined omise
     const headers = (init as RequestInit).headers as Record<string, string>;
@@ -71,21 +73,27 @@ describe("chemin heureux — décodage d'enveloppe", () => {
     expect(headers["x-fapi-interaction-id"]).toBe("fixed-interaction-id");
   });
 
-  it("syncTransactions transmet cursor + count et encode l'accountId", async () => {
-    const data = { Added: [], Modified: [], Removed: [], NextCursor: "n", HasMore: false };
-    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }));
+  it("listerTransactionsPage transmet page + pageSize, encode l'accountId et renvoie l'enveloppe", async () => {
+    const data = { Transaction: [] };
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson({ Data: data, Links: { Next: null }, Meta: { TotalPages: 1 } }),
+    );
     const client = creerClient(fetchMock as unknown as typeof fetch);
 
-    const r = await client.syncTransactions("acc/42", CLIENT_USER_ID, {
-      cursor: "cur",
-      count: 200,
+    const env = await client.listerTransactionsPage("acc/42", CLIENT_USER_ID, {
+      page: 2,
+      pageSize: 50,
     });
 
-    expect(r.HasMore).toBe(false);
+    // Enveloppe complète conservée (Links/Meta) pour que l'ingestion itère par page.
+    expect(env.Data.Transaction).toEqual([]);
+    expect(env.Meta?.TotalPages).toBe(1);
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain("/accounts/acc%2F42/transactions/sync");
-    expect(url).toContain("cursor=cur");
-    expect(url).toContain("count=200");
+    expect(url).toContain("/accounts/acc%2F42/transactions");
+    expect(url).not.toContain("/transactions/sync");
+    expect(url).toContain("page=2");
+    expect(url).toContain("pageSize=50");
+    expect(url).toContain("client_user_id=");
   });
 });
 
@@ -125,9 +133,9 @@ describe("mapping des erreurs API (règle 3)", () => {
     );
     const client = creerClient(fetchMock as unknown as typeof fetch);
 
-    const erreur: OmniFiApiError = await client
-      .syncTransactions("acc", CLIENT_USER_ID)
-      .catch((e) => e);
+    const erreur = (await client
+      .listerTransactionsPage("acc", CLIENT_USER_ID)
+      .catch((e) => e)) as OmniFiApiError;
 
     expect(erreur).toBeInstanceOf(OmniFiApiError);
     expect(erreur.estRateLimit).toBe(true);
@@ -326,15 +334,14 @@ describe("configuration (lecture d'env, règle 8)", () => {
     expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
   });
 
-  it("S1 — les 3 hôtes documentés sont acceptés", () => {
+  it("S1 — les hôtes SANDBOX documentés sont acceptés (sous verrou sandbox)", () => {
     // NOTE (2026-06-16) : "sandbox.omni-fi.co" (coquille doc, NXDOMAIN) retiré de
-    // l'allow-list. Hôtes valides : api (prod), api-stage (API pré-prod, dump
-    // tuteur), stage (CDN widget). Base SANS /v1 : routes à la racine.
-    for (const hote of [
-      "api.omni-fi.co",
-      "api-stage.omni-fi.co",
-      "stage.omni-fi.co",
-    ]) {
+    // l'allow-list. Hôtes sandbox valides : api-stage (API pré-prod, dump tuteur),
+    // stage (CDN widget). Base SANS /v1 : routes à la racine.
+    // ⚠️ MAJ verrou sandbox (2026-06-22) : api.omni-fi.co (PROD) n'est plus accepté
+    // sous OMNIFI_ENV=sandbox (cf. cas dédié ci-dessous) — il reste dans l'allow-list
+    // anti-fuite de secret, mais le verrou + la cohérence env↔hôte le refusent.
+    for (const hote of ["api-stage.omni-fi.co", "stage.omni-fi.co"]) {
       vi.stubEnv("OMNIFI_ENV", "sandbox");
       vi.stubEnv("OMNIFI_BASE_URL", `https://${hote}`);
       vi.stubEnv("OMNIFI_CLIENT_ID", "c");
@@ -342,6 +349,27 @@ describe("configuration (lecture d'env, règle 8)", () => {
       _reinitialiserConfigOmniFi();
       expect(obtenirConfigOmniFi().baseUrl).toBe(`https://${hote}`);
     }
+  });
+
+  it("🔒 verrou sandbox — OMNIFI_ENV=production refusé (recette sandbox uniquement)", () => {
+    // L'hôte est cohérent (prod), mais le VERROU interdit tout chemin de prod.
+    vi.stubEnv("OMNIFI_ENV", "production");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api.omni-fi.co");
+    vi.stubEnv("OMNIFI_CLIENT_ID", "c");
+    vi.stubEnv("OMNIFI_SECRET", "s");
+    _reinitialiserConfigOmniFi();
+    expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
+  });
+
+  it("🔒 verrou sandbox — hôte de PROD (api.omni-fi.co) refusé même en OMNIFI_ENV=sandbox", () => {
+    // Le verrou ET la garde de cohérence refusent un hôte de prod sous sandbox : on
+    // ne peut pas taper la prod par accident avec un .env mal réglé.
+    vi.stubEnv("OMNIFI_ENV", "sandbox");
+    vi.stubEnv("OMNIFI_BASE_URL", "https://api.omni-fi.co");
+    vi.stubEnv("OMNIFI_CLIENT_ID", "c");
+    vi.stubEnv("OMNIFI_SECRET", "s");
+    _reinitialiserConfigOmniFi();
+    expect(() => obtenirConfigOmniFi()).toThrow(OmniFiConfigError);
   });
 
   it("base URL avec slash final → normalisée (pas de // dans l'URL finale)", async () => {
@@ -362,7 +390,74 @@ describe("configuration (lecture d'env, règle 8)", () => {
     await client.listerConnexions(CLIENT_USER_ID);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      "https://api-stage.omni-fi.co/connections?clientUserId=user-123",
+      "https://api-stage.omni-fi.co/connections?client_user_id=user-123",
     );
+  });
+});
+
+describe("déclenchement de sync (POST /sync/{id}, GET .../latest-job)", () => {
+  it("declencherSync POST l'URL snake_case avec ApiKey et renvoie le SyncJob (Data)", async () => {
+    const data = { JobId: "job-1", Status: "PENDING", IsManual: true };
+    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }, { status: 201 }));
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const job = await client.declencherSync("conn/42", CLIENT_USER_ID);
+
+    expect(job).toEqual(data);
+    const [url, init] = fetchMock.mock.calls[0];
+    // ConnectionId encodé ; param en snake_case (camelCase ignoré → 403 amont).
+    expect(url).toContain("/sync/conn%2F42");
+    expect(url).toContain("client_user_id=user-123");
+    expect((init as RequestInit).method).toBe("POST");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
+  });
+
+  it("declencherSync 429 → OmniFiApiError.estRateLimit avec Retry-After (NE PAS avaler)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson(
+        { Code: "429 TooManyRequests", Message: "rate" },
+        { status: 429, headers: { "Retry-After": "900" } },
+      ),
+    );
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const erreur = await client.declencherSync("conn-1", CLIENT_USER_ID).catch((e) => e);
+
+    expect(erreur).toBeInstanceOf(OmniFiApiError);
+    expect(erreur.estRateLimit).toBe(true);
+    expect(erreur.retryAfterSeconds).toBe(900);
+  });
+
+  it("declencherSync 400 'sync already running' → OmniFiApiError status 400 (job déjà en cours)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson(
+        { Code: "BAD_REQUEST", Message: "sync already running" },
+        { status: 400 },
+      ),
+    );
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const erreur = await client.declencherSync("conn-1", CLIENT_USER_ID).catch((e) => e);
+
+    expect(erreur).toBeInstanceOf(OmniFiApiError);
+    expect(erreur.status).toBe(400);
+    expect(erreur.obieCode).toBe("BAD_REQUEST");
+  });
+
+  it("getLatestSyncJob GET l'URL latest-job snake_case et renvoie le SyncJob (Data)", async () => {
+    const data = { JobId: "job-9", Status: "COMPLETED", NextSyncAvailableAt: "2026-06-25T10:00:00Z" };
+    const fetchMock = vi.fn().mockResolvedValue(reponseJson({ Data: data }));
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const job = await client.getLatestSyncJob("conn-1", CLIENT_USER_ID);
+
+    expect(job).toEqual(data);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/sync/conn-1/latest-job");
+    expect(url).toContain("client_user_id=user-123");
+    expect((init as RequestInit).method ?? "GET").toBe("GET");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("ApiKey client_test:sand_sk_secret");
   });
 });

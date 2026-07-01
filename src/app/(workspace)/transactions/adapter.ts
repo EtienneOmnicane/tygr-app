@@ -12,8 +12,10 @@
  *  - `categorie {id,name}` : Backend ne renvoie pas LA catégorie unique, juste
  *    `nbSplits` → on n'affiche un badge nommé que si on le sait ; sinon le badge de
  *    comptage générique (« 1 catégorie » / « N catégories ») via `nbCategories` ;
- *  - libellé : `cleanLabel` peut être null (bank_label_raw = PII, jamais exposé) →
- *    fallback neutre non-PII ;
+ *  - libellé : cascade marchand → catégorie FR → brut bancaire → repli générique
+ *    (`resoudreLibelle`, source unique). Le brut (`bankLabelRaw`) n'est plus masqué
+ *    (arbitrage produit 2026-06-23 : utilisabilité > interdiction PII stricte) ; il
+ *    sert d'ultime filet visuel ET d'infobulle `title` (cf. `transaction-row.tsx`) ;
  *  - filtre `sens` : NON supporté par le schéma Backend (.strict, pas de champ) →
  *    non transmis (cf. toolbar v1 sans Sens, tracé TODOS TX-FILTRE1).
  *
@@ -31,10 +33,15 @@ import type {
 
 import type {
   FiltresTransactions,
+  NiveauFiabilite,
   PageTransactions,
+  SourceClassification,
   StatutCategorisation,
   TransactionListItem,
 } from "@/components/transactions/types-transactions";
+
+import { categorieFr, CATEGORIE_FR_PAR_DEFAUT } from "@/lib/categories-fr";
+import { resoudreLibelle } from "@/components/transactions/libelle-transaction";
 
 /** Map statut serveur (MAJ) → statut UI (minuscules). */
 const STATUT_UI: Record<StatutVentilation, StatutCategorisation> = {
@@ -63,6 +70,10 @@ export function versInputBackend(
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
+  // Bornes de date : passe-plat direct (même format YYYY-MM-DD des deux côtés) →
+  // WHERE gte/lte serveur. Zod re-valide forme + validité calendaire + intervalle.
+  if (filtres?.dateDebut) input.dateDebut = filtres.dateDebut;
+  if (filtres?.dateFin) input.dateFin = filtres.dateFin;
   if (curseur) input.curseur = curseur;
   return input;
 }
@@ -76,11 +87,28 @@ export function versLigneUI(
   nomParCompte: Map<string, string>,
 ): TransactionListItem {
   const statut = STATUT_UI[ligne.statut];
+  const categorieBanque = traduireCategorieBanque(ligne.primaryCategory);
   return {
     transactionId: ligne.id,
     transactionDate: ligne.transactionDate,
-    // cleanLabel privilégié ; fallback neutre non-PII si null (bank_label_raw exclu).
-    label: ligne.cleanLabel ?? "Opération bancaire",
+    // `label` (plat, pour l'aria) = MÊME cascade que le rendu visuel (marchand →
+    // catégorie FR → brut bancaire → repli générique), via `resoudreLibelle` : l'aria
+    // annonce EXACTEMENT le texte vu à l'écran (pas le brut quand un marchand/catégorie
+    // l'a remplacé). Le rendu typographié (plein vs atténué) est, lui, dans le composant.
+    label: resoudreLibelle({
+      cleanLabel: ligne.cleanLabel,
+      categorieFr: categorieBanque,
+      bankLabelRaw: ligne.bankLabelRaw,
+    }).texte,
+    cleanLabel: ligne.cleanLabel,
+    bankLabelRaw: ligne.bankLabelRaw,
+    // Catégorie OBIE traduite en FR (résolue plus haut, réutilisée pour le `label`).
+    // `null` (= pas de sous-texte, et niveau 2 de cascade inactif) quand la catégorie
+    // est absente OU non cartographiée : `categorieFr` retombe sur « Non catégorisé »
+    // dans ces deux cas, mais l'afficher ici se confondrait avec le statut de
+    // VENTILATION manuelle (concept distinct) — et le remonter en libellé principal
+    // serait un faux « marchand ».
+    categorieBanque,
     compteNom: nomParCompte.get(ligne.bankAccountId) ?? "Compte",
     montantAbs: depouillerSigne(ligne.amount),
     devise: ligne.currency,
@@ -90,6 +118,11 @@ export function versLigneUI(
     // Backend ne renvoie pas la catégorie unique → badge de comptage générique.
     categorie: null,
     nbCategories: ligne.nbSplits,
+    // Métadonnées de fiabilité amont (TECH-API-TRACE) NORMALISÉES vers des unions :
+    // toute valeur brute inattendue (la colonne est sans CHECK côté DB) retombe sur
+    // `null` → l'UI ne voit jamais de chaîne libre et reste insensible aux nouveautés API.
+    niveauFiabilite: normaliserNiveauFiabilite(ligne.confidenceLevel),
+    sourceClassification: normaliserSourceClassification(ligne.classificationSource),
   };
 }
 
@@ -109,4 +142,57 @@ export function versPageUI(
 function depouillerSigne(montant: string): string {
   const t = montant.trim();
   return t.startsWith("-") ? t.slice(1) : t;
+}
+
+/**
+ * Traduit la catégorie OBIE pour l'affichage, ou `null` si rien d'utile à montrer.
+ * `categorieFr` renvoie toujours une chaîne (« Non catégorisé » par défaut) ; ici on
+ * REJETTE ce défaut vers `null` pour ne pas afficher un sous-texte trompeur quand la
+ * catégorie est absente ou non cartographiée (cf. `versLigneUI`).
+ */
+function traduireCategorieBanque(primaryCategory: string | null): string | null {
+  if (!primaryCategory?.trim()) return null;
+  const fr = categorieFr(primaryCategory);
+  return fr === CATEGORIE_FR_PAR_DEFAUT ? null : fr;
+}
+
+/**
+ * Normalise le `confidence_level` BRUT amont (chaîne libre, colonne sans CHECK) vers
+ * l'union `NiveauFiabilite`, ou `null` si absent/non reconnu. Robuste à la casse et aux
+ * espaces (la trace amont est fidèle mais on ne suppose pas une casse fixe). Toute valeur
+ * hors des trois niveaux connus → `null` : l'UI ne décide rien sur une valeur qu'elle ne
+ * comprend pas (pas de badge erroné), et reste insensible à une nouveauté d'API.
+ */
+function normaliserNiveauFiabilite(brut: string | null): NiveauFiabilite | null {
+  switch (brut?.trim().toLowerCase()) {
+    case "high":
+      return "High";
+    case "medium":
+      return "Medium";
+    case "low":
+      return "Low";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Normalise la `classification_source` BRUTE amont vers l'union `SourceClassification`,
+ * ou `null` si absente/non reconnue. Même principe défensif que ci-dessus. NB :
+ * `USER_RULE` = règle Omni-FI (concept C), à ne pas confondre avec la ventilation
+ * manuelle TYGR (concept A) — la distinction est portée par les libellés d'infobulle UI.
+ */
+function normaliserSourceClassification(
+  brut: string | null,
+): SourceClassification | null {
+  switch (brut?.trim().toUpperCase()) {
+    case "USER_RULE":
+      return "USER_RULE";
+    case "SYSTEM_RULE":
+      return "SYSTEM_RULE";
+    case "ML_FALLBACK":
+      return "ML_FALLBACK";
+    default:
+      return null;
+  }
 }

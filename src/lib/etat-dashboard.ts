@@ -6,14 +6,16 @@
  *
  * Trois états (décisions revue eng) :
  *   - "vide"    : AUCUN compte connecté → empty global + CTA de connexion.
- *   - "partiel" : comptes présents MAIS courbe vide (workspace fraîchement
- *                 connecté, soldes pas encore synchronisés) → KPI/solde affichés,
- *                 courbe et table avec leur propre vide par section.
- *   - "complet" : comptes + au moins un point de courbe → dashboard plein.
+ *   - "partiel" : comptes présents MAIS aucun flux (workspace fraîchement
+ *                 connecté, transactions pas encore synchronisées) → KPI/solde
+ *                 affichés, courbe et table avec leur propre vide par section.
+ *   - "complet" : comptes + au moins un point de flux → dashboard plein.
  *
- * La distinction vide/partiel se fait sur la PRÉSENCE de comptes, pas sur la
- * courbe : un workspace avec comptes mais sans historique n'est pas « vide »,
- * il est en cours de synchronisation.
+ * La distinction vide/partiel se fait sur la PRÉSENCE de comptes, pas sur les
+ * flux : un workspace avec comptes mais sans données n'est pas « vide », il est
+ * en cours de synchronisation. (La courbe trace le flux net mensuel dérivé des
+ * transactions — `flux` ; balance_history n'est plus la source, cf.
+ * cashflow-main-chart.)
  */
 import type { DonneesDashboard } from "@/components/dashboard/dashboard-content";
 
@@ -23,7 +25,7 @@ export function choisirEtatDashboard(donnees: DonneesDashboard): EtatDashboard {
   if (donnees.comptes.length === 0) {
     return "vide";
   }
-  if (donnees.courbe.length === 0) {
+  if (donnees.flux.length === 0) {
     return "partiel";
   }
   return "complet";

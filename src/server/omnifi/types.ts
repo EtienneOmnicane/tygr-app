@@ -82,34 +82,64 @@ export interface OmniFiBalanceHistoryData {
 
 export type OmniFiCreditDebit = "Credit" | "Debit";
 
+/**
+ * Bloc d'enrichissement IMBRIQUÉ (serializer Django `get_Enrichment`, faisant foi —
+ * omni-fi-core/apps/transactions/serializers.py). Le serializer pose TOUJOURS ces 6
+ * clés, avec un DÉFAUT en CHAÎNE VIDE ("") — pas `null` — quand la donnée manque
+ * (sauf PrimaryCategory → "Uncategorized", ConfidenceLevel → "Low"). PIÈGE : ne
+ * jamais persister "" tel quel (cf. `versLignePersistee` / orchestrateur.ts qui
+ * normalise "" → null). Champs optionnels par prudence défensive (un payload plus
+ * ancien pourrait omettre l'objet), mais le contrat actuel les pose tous.
+ */
+export interface OmniFiEnrichment {
+  CleanMerchantName?: string;
+  PrimaryCategory?: string;
+  SubCategory?: string;
+  ConfidenceLevel?: string;
+  ClassificationSource?: string;
+  RuleIdMatch?: string;
+}
+
 export interface OmniFiTransaction {
   TransactionId: string;
   AccountId: string;
   PartyId?: string;
   TransactionReference?: string;
-  Description: string;
+  /**
+   * Libellé narratif BRUT de la transaction — nom OBIE officiel du champ
+   * (`OBReadTransaction6.TransactionInformation`, texte non structuré, max 500).
+   * C'est CE champ que l'API publique Omni-FI expose (conforme OBIE, vérifié
+   * runtime + audit serializer). Les noms `Description`/`raw`/`raw_description`
+   * NE SONT PAS dans le contrat HTTP public (`raw*` = couche scraping interne).
+   * Source unique du `bank_label_raw` quand l'enrichissement marchand est absent.
+   */
+  TransactionInformation?: string;
   NormalizedDescription?: string;
+  /** Solde courant après l'opération (OBIE). L'API sandbox le renvoie souvent
+   *  `null` → l'historique de soldes reste alors vide (cf. courbe de trésorerie). */
+  RunningBalance?: OmniFiAmount | null;
   Amount: OmniFiAmount;
   CreditDebitIndicator: OmniFiCreditDebit;
   Status: string;
   BookingDateTime: string;
   ValueDateTime?: string;
-  PrimaryCategory?: string;
-  SubCategory?: string;
-  CleanMerchantName?: string;
+  /** Enrichissement IMBRIQUÉ — voir OmniFiEnrichment. Remplace les anciens champs
+   *  à plat PrimaryCategory/SubCategory/CleanMerchantName (jamais émis par l'API ;
+   *  cause du fallback « Opération bancaire », PROD-MERCHANT1). */
+  Enrichment?: OmniFiEnrichment;
   IsDuplicate?: boolean;
   ManuallyOverridden?: boolean;
   IsActive?: boolean;
 }
 
-/* --- Transactions sync par curseur (docs § GET /accounts/{id}/transactions/sync) --- */
+/* --- Transactions paginées par PAGE (GET /accounts/{id}/transactions) ---
+ * Contrat réel déployé (aligné OBIE — confirmé Omni-FI 2026-06-19) : liste plate
+ * `Data.Transaction[]` + pagination via l'enveloppe `Links.Next` / `Meta.TotalPages`.
+ * (L'ancien `/transactions/sync` par curseur — Added/Modified/Removed/NextCursor —
+ * est une extension future NON déployée ; cf. OMNIFI_API_FEEDBACK.md §10.) */
 
-export interface OmniFiTransactionsSyncData {
-  Added: OmniFiTransaction[];
-  Modified: OmniFiTransaction[];
-  Removed: Array<{ TransactionId: string }>;
-  NextCursor: string;
-  HasMore: boolean;
+export interface OmniFiTransactionsData {
+  Transaction: OmniFiTransaction[];
 }
 
 /* --- Résumé agrégé (docs § GET /accounts/{id}/transactions/summary) --- */
@@ -141,6 +171,17 @@ export interface CreerLinkTokenParams {
   AppLogoUrl?: string;
   AccountSelectionEnabled?: boolean;
   WebhookUrl?: string;
+  /**
+   * Champs du mode REPAIR (re-connexion d'une connexion en erreur, doc API
+   * § « mode Repair »). Passés ENSEMBLE : Omni-FI renvoie alors un LinkToken
+   * `Mode: REPAIR` verrouillé sur la banque défaillante, et le widget natif
+   * reprend au bon écran (saisie OTP). `ConnectionId` = UUID de la connexion ;
+   * `JobId` = UUID du SyncJob en échec. Omis pour un onboarding normal.
+   */
+  ConnectionId?: string;
+  JobId?: string;
+  /** `CREDENTIALS` ou `MFA_CHALLENGE` — étape de reprise. Omis = dérivée par l'amont. */
+  ResumeStep?: "CREDENTIALS" | "MFA_CHALLENGE";
 }
 
 export interface OmniFiLinkTokenData {

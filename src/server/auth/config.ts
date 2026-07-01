@@ -14,8 +14,9 @@ import argon2 from "argon2";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
-import { identite } from "@/server/db";
+import { identite, listerComptes, withWorkspace } from "@/server/db";
 import { extraireIp } from "@/server/auth/rate-limit-ip";
+import { normaliserViewFilter } from "@/server/auth/view-filter";
 import {
   extraireIdentifiants,
   verifierIdentifiants,
@@ -76,12 +77,15 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
   callbacks: {
     async jwt({ token, user, trigger, session }) {
       // `user` n'est défini qu'à la connexion : on fige userId et on résout le
-      // workspace actif par défaut = premier membership (tri déterministe par
-      // workspace_id, lu sous RLS via own_memberships_select).
+      // workspace actif par défaut = celui qui contient LE PLUS de comptes
+      // bancaires (DASH-WSACTIF1), repli déterministe par nom à égalité. Évite le
+      // « 0,00 Rs » d'un workspace « groupe » vide qui gagnait par hasard sur une
+      // BU pleine (l'ancien choix = 1er membership trié par UUID, arbitraire).
+      // Lu sous RLS (own_memberships_select + tenant_isolation), jamais un
+      // paramètre client. Null si aucun membership → AucunWorkspaceActifError.
       if (user?.id) {
         token.userId = user.id;
-        const memberships = await identite.membershipsDe(user.id);
-        token.activeWorkspaceId = memberships[0]?.workspaceId ?? null;
+        token.activeWorkspaceId = await identite.membershipParDefaut(user.id);
       }
 
       // Bascule de workspace (Epic 2 / unstable_update) — DÉFENSE EN PROFONDEUR
@@ -103,6 +107,60 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
         // Sinon : silencieusement ignoré — le token garde l'ancien workspace,
         // aucune exposition cross-tenant possible.
       }
+
+      // viewFilter (L8b-1) — sélecteur de périmètre. BLOC SÉPARÉ du précédent
+      // (NE PAS fusionner : workspace et filtre ont des signaux et des gardes
+      // distincts). Le signal est la PRÉSENCE de la clé `viewFilter` dans le
+      // payload d'update (`"viewFilter" in session`), pour distinguer :
+      //   • clé ABSENTE   → update non concerné par le filtre → on ne touche à rien
+      //                      (p.ex. un futur update qui ne porte que d'autres champs).
+      //   • viewFilter = null / [] → RESET explicite → « Groupe » (champ retiré).
+      //     (basculerWorkspace envoie `null` pour purger le filtre au changement
+      //      de workspace : un filtre d'un autre tenant donnerait un dashboard vide.)
+      //   • viewFilter = [ids] → INTENTION du sélecteur. On RE-VALIDE (hygiène de
+      //     token, PAS la sécurité — la RLS intersecte de toute façon) : on
+      //     n'écrit que les comptes RÉELLEMENT visibles du membre (listerComptes
+      //     sous RLS dans le workspace courant du token). Liste vide après
+      //     intersection → champ retiré (« Groupe »). Calque de la re-validation
+      //     membership ci-dessus : un id forgé ne peut pas s'installer dans le token.
+      if (
+        trigger === "update" &&
+        typeof token.userId === "string" &&
+        session !== null &&
+        session !== undefined &&
+        "viewFilter" in session
+      ) {
+        const demande = (session as { viewFilter?: unknown }).viewFilter;
+        if (
+          Array.isArray(demande) &&
+          demande.length > 0 &&
+          typeof token.activeWorkspaceId === "string"
+        ) {
+          // Demande non vide : on lit les comptes visibles puis on intersecte.
+          // withWorkspace re-valide la membership + applique la RLS (le token a
+          // déjà un activeWorkspaceId re-validé). En cas d'échec DB on retombe
+          // FAIL-CLOSED sur « Groupe » (champ retiré) plutôt que de persister une
+          // demande non vérifiée.
+          try {
+            const comptes = await withWorkspace(
+              {
+                userId: token.userId,
+                activeWorkspaceId: token.activeWorkspaceId,
+              },
+              (tx) => listerComptes(tx),
+            );
+            token.viewFilter = normaliserViewFilter(
+              demande as string[],
+              comptes.map((c) => c.bankAccountId),
+            );
+          } catch {
+            token.viewFilter = undefined;
+          }
+        } else {
+          // null / [] / non-tableau / pas de workspace résolu → reset « Groupe ».
+          token.viewFilter = undefined;
+        }
+      }
       return token;
     },
     async session({ session, token }) {
@@ -110,6 +168,9 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
         session.userId = token.userId;
       }
       session.activeWorkspaceId = token.activeWorkspaceId ?? null;
+      // viewFilter (L8b-1) : restitué pour exigerSessionWorkspace (session.ts).
+      // null/absent du token ⇒ null ⇒ « Groupe » côté lecture.
+      session.viewFilter = token.viewFilter ?? null;
       return session;
     },
   },

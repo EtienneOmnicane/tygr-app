@@ -29,10 +29,12 @@ function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
 }
 
-/** Largeurs §2.2 : 480px formulaire simple, 720px tableaux de règles. */
+/** Largeurs §2.2 : 480px formulaire simple, 720px tableaux de règles, 840px
+ * surface multi-colonnes (ventilation : catégorie + montant + actions par ligne). */
 const LARGEURS = {
   sm: "max-w-[480px]",
   lg: "max-w-[720px]",
+  xl: "max-w-[840px]",
 } as const;
 
 export function Modal({
@@ -141,7 +143,7 @@ export function Modal({
               type="button"
               onClick={onClose}
               aria-label="Fermer"
-              className="absolute right-5 top-1/2 -translate-y-1/2 rounded-control p-1
+              className="absolute right-5 top-1/2 -translate-y-1/2 cursor-pointer rounded-control p-1
                 text-text-muted transition-colors hover:text-text
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >

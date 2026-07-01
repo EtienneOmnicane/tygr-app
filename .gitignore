@@ -40,8 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Template d'env versionné (aucun secret)
+# Templates d'env versionnés (aucun secret — valeurs vides)
 !.env.example
+!.env.prod.example
 .gstack/
 
 # node_modules internes des packages vendorés (deps de build régénérables — cf. SECURITY_VENDORING.md)

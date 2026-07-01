@@ -127,9 +127,62 @@ export function ligneEnDepassement(
 }
 
 /**
+ * Montant qui, posé sur la ligne `cleLigne`, absorbe TOUT le reste à ventiler
+ * (bouton « Tout le reste », TX-QA-SPLIT-MAX1). On retire d'abord la contribution
+ * actuelle de la ligne (sinon on additionnerait à ce qu'elle mettait déjà), puis
+ * on lui attribue le reste global : `cible = reste + contributionCourante`, soit
+ * `total − sommeDesAUTRESlignes`. Renvoie la chaîne décimale, ou `null` si ce
+ * montant est ≤ 0 (ligne déjà pleine ou dépassement — rien à injecter, pas de
+ * négatif). Calcul 100 % centimes (règle 8, aucun float) ; réutilise `enCentimes`
+ * (pas de reste maison). L'UI est un confort : la garde de somme serveur reste juge.
+ */
+export function montantPourLeReste(
+  montantTotal: string,
+  lignes: LigneAllocation[],
+  cleLigne: string,
+): string | null {
+  const totalC = enCentimes(montantTotal) ?? ZERO;
+  let sommeAutresC = ZERO;
+  for (const ligne of lignes) {
+    if (ligne.cle === cleLigne) continue; // on exclut la ligne courante
+    const c = enCentimes(ligne.montantSaisi);
+    if (c !== null && c > ZERO) sommeAutresC += c;
+  }
+  const cibleC = totalC - sommeAutresC;
+  if (cibleC <= ZERO) return null;
+  return depuisCentimes(cibleC);
+}
+
+/**
+ * Ensemble des `cle` de lignes en DOUBLON de catégorie : une catégorie choisie
+ * (non-null) sur ≥ 2 lignes marque TOUTES ses lignes (miroir de
+ * `ligneEnDepassement`). Sert à peindre les champs fautifs en `danger` et à
+ * bloquer « Valider » AVANT le rejet serveur (TX-QA-SPLIT-DOUBLON1). L'UI est un
+ * confort : le repository reste la garde. Ne touche pas aux montants — la
+ * détection porte sur `categoryId` (règle 8, aucun float). Les lignes sans
+ * catégorie (null) ne comptent pas comme doublon (elles n'atteignent pas le
+ * serveur — cf. versPayload).
+ */
+export function lignesEnDoublon(lignes: LigneAllocation[]): Set<string> {
+  const compte = new Map<string, string[]>(); // categoryId -> [cle…]
+  for (const ligne of lignes) {
+    if (ligne.categoryId === null) continue;
+    const cles = compte.get(ligne.categoryId) ?? [];
+    cles.push(ligne.cle);
+    compte.set(ligne.categoryId, cles);
+  }
+  const enDoublon = new Set<string>();
+  for (const cles of compte.values()) {
+    if (cles.length > 1) for (const c of cles) enDoublon.add(c);
+  }
+  return enDoublon;
+}
+
+/**
  * Peut-on valider (envoyer au serveur) ? Oui si : au moins une ligne valide,
- * AUCUN dépassement, et toute ligne « active » (montant OU catégorie saisi) est
- * COMPLÈTE (catégorie + montant valides). Le PARTIEL est autorisé (somme < total).
+ * AUCUN dépassement, AUCUN doublon de catégorie, et toute ligne « active »
+ * (montant OU catégorie saisi) est COMPLÈTE (catégorie + montant valides). Le
+ * PARTIEL est autorisé (somme < total).
  */
 export function peutValider(
   montantTotal: string,
@@ -137,6 +190,8 @@ export function peutValider(
 ): boolean {
   const etat = calculerAllocation(montantTotal, lignes);
   if (!etat.aAuMoinsUneLigne || etat.depasse) return false;
+  // Doublon de catégorie interdit (l'UI n'amène jamais jusqu'au rejet serveur).
+  if (lignesEnDoublon(lignes).size > 0) return false;
   for (const ligne of lignes) {
     const aMontant = ligne.montantSaisi.trim() !== "";
     const aCategorie = ligne.categoryId !== null;

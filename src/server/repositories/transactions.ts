@@ -31,7 +31,12 @@
 import { and, eq, gte, ilike, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
-import { transactionsCache } from "@/server/db/schema";
+import {
+  bankAccounts,
+  bankConnections,
+  transactionsCache,
+} from "@/server/db/schema";
+import type { CategorySource } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import {
   estDateComptableValide,
@@ -50,12 +55,47 @@ export interface TransactionLigne {
   id: string;
   transactionDate: string;
   bankAccountId: string;
+  /** Nom OBIE du compte porteur (ex. « Main Operating Account »), via bank_accounts. */
+  accountName: string;
+  /** Nom lisible de la banque (ex. « Bank One », « SBM »), via bank_connections ;
+   *  null si l'institution n'a pas encore été renseignée (DASH-INST1, expand-safe). */
+  institutionName: string | null;
   amount: string;
   currency: string;
   creditDebit: "Credit" | "Debit";
   cleanLabel: string | null;
+  /**
+   * Libellé brut bancaire (OBIE TransactionInformation), null si absent. Sert de
+   * REPLI d'affichage quand `cleanLabel` (marchand enrichi) est vide — décision
+   * produit assumée 2026-06-23 : on préfère montrer le narratif brut (« DBIT / POS
+   * / … ») plutôt qu'un « Opération bancaire » générique. Narratif de relevé, pas
+   * de PII nominative ; la recherche (ILIKE) reste sur cleanLabel uniquement.
+   */
+  bankLabelRaw: string | null;
   primaryCategory: string | null;
   subCategory: string | null;
+  /** Provenance auto de la catégorie OBIE (true = pré-catégorisée par Omni-FI). */
+  isAutoCategorized: boolean;
+  /** Source de la catégorie auto (NULL si non auto). */
+  categorySource: CategorySource | null;
+  /**
+   * Fiabilité AMONT de la classification Omni-FI (TECH-API-TRACE, bloc Enrichment).
+   * Libellé ordinal BRUT tel que persisté (`High`/`Medium`/`Low`, ou autre valeur
+   * future — la colonne est sans CHECK, résilience API). NULL si non remontée (ligne
+   * antérieure à la migration 0012, ou payload muet). ⚠️ `"Low"` est le DÉFAUT du
+   * serializer amont : il ne signifie pas « douteux » en soi — la décision d'affichage
+   * (badge « À vérifier ») croise ce niveau avec la présence d'une catégorie, côté UI.
+   * La NORMALISATION en union typée se fait dans l'adaptateur (frontière UI), pas ici :
+   * le repository reste fidèle à la source.
+   */
+  confidenceLevel: string | null;
+  /**
+   * Sous-source amont de la classification (`USER_RULE`/`SYSTEM_RULE`/`ML_FALLBACK`,
+   * doc API « Priorité de classification »). BRUT, NULL si non remontée. À DISTINGUER
+   * de `categorySource` ('OMNIFI', système TYGR) : granularité différente. ⚠️
+   * `USER_RULE` = règle définie DANS Omni-FI, JAMAIS la ventilation manuelle TYGR.
+   */
+  classificationSource: string | null;
   /** Nombre de splits de catégorisation rattachés. */
   nbSplits: number;
   /** Somme des montants de splits (chaîne numeric ; "0" si aucun). */
@@ -229,17 +269,41 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       id: transactionsCache.id,
       transactionDate: transactionsCache.transactionDate,
       bankAccountId: transactionsCache.bankAccountId,
+      // Provenance bancaire par transaction (challenge mapping 2026-06-22) : nom du
+      // compte (bank_accounts) + nom de l'institution (bank_connections). Exposés ICI
+      // pour que l'UI affiche « Bank One » sans reconstruire une map fragile côté Front.
+      accountName: bankAccounts.accountName,
+      institutionName: bankConnections.institutionName,
       amount: transactionsCache.amount,
       currency: transactionsCache.currency,
       creditDebit: transactionsCache.creditDebit,
       cleanLabel: transactionsCache.cleanLabel,
+      bankLabelRaw: transactionsCache.bankLabelRaw,
       primaryCategory: transactionsCache.primaryCategory,
       subCategory: transactionsCache.subCategory,
+      isAutoCategorized: transactionsCache.isAutoCategorized,
+      categorySource: transactionsCache.categorySource,
+      // Métadonnées de fiabilité AMONT (TECH-API-TRACE) — brutes ; la normalisation
+      // en union + la règle d'affichage vivent côté UI. `rule_id_match` NON projeté :
+      // identifiant opaque sans usage d'affichage (décision plan §3, dette P2 si besoin).
+      confidenceLevel: transactionsCache.confidenceLevel,
+      classificationSource: transactionsCache.classificationSource,
       nbSplits: nbSplitsExpr,
       montantVentile: montantVentileExpr,
       statut: statutExpr,
     })
     .from(transactionsCache)
+    // Jointures de provenance. innerJoin SÛR : transactions_cache.bank_account_id est
+    // NOT NULL et bank_accounts.connection_id est NOT NULL → 1 transaction = 1 compte =
+    // 1 connexion (cardinalité inchangée, aucune ligne perdue). BONUS sécurité
+    // (ENTITY-READ-JOIN1) : joindre bank_accounts fait HÉRITER la policy RLS
+    // entity_scope (étage 2) → en Vision Entité, les transactions des comptes hors
+    // périmètre sont masquées ; en Vision Globale (GUC vide), liste inchangée.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .innerJoin(
+      bankConnections,
+      eq(bankAccounts.connectionId, bankConnections.id),
+    )
     .leftJoin(
       agg,
       sql`agg.txn_id = ${transactionsCache.id} and agg.txn_date = ${transactionsCache.transactionDate}`,

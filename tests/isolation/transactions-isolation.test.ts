@@ -75,9 +75,9 @@ beforeAll(async () => {
       ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob');
     insert into workspace_members (user_id,workspace_id,role) values
       ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER');
-    insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,created_by) values
-      ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','${ALICE}'),
-      ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','${BOB}');
+    insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,institution_name,created_by) values
+      ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','Mauritius Commercial Bank','${ALICE}'),
+      ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','Bank One','${BOB}');
     insert into bank_accounts (id,workspace_id,connection_id,omnifi_account_id,account_name,currency) values
       ('${ACC_A}','${WS_A}','cccc0001-cccc-4ccc-8ccc-cccccccccccc','a-a','CC','MUR'),
       ('dddd0002-dddd-4ddd-8ddd-dddddddddddd','${WS_B}','cccc0002-cccc-4ccc-8ccc-cccccccccccc','a-b','CC','MUR');
@@ -250,10 +250,95 @@ describe("filtres", () => {
     expect(page.lignes.map((l) => l.id)).toEqual([T3, T2]);
   });
 
+  // Demi-bornes : couvrent les branches if(dateDebut)/if(dateFin) prises
+  // INDÉPENDAMMENT (chemins UI « depuis » et « jusqu'à », types-transactions §2.1) —
+  // le cas from+to ci-dessus ne les exerce pas isolément.
+  it("dateDebut seul → uniquement les transactions ≥ borne (borne basse)", async () => {
+    // ≥ 2026-03-14 : T1 (03-15), T3/T2 (03-14) ; exclut T4 (03-13). T5 tombstone.
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ dateDebut: "2026-03-14", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T1, T3, T2]);
+  });
+
+  it("dateFin seul → uniquement les transactions ≤ borne (borne haute)", async () => {
+    // ≤ 2026-03-14 : T3/T2 (03-14), T4 (03-13) ; exclut T1 (03-15). T5 tombstone.
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ dateFin: "2026-03-14", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T3, T2, T4]);
+  });
+
   it("filtre par compte (un seul compte ici → toutes les lignes vivantes)", async () => {
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ bankAccountId: ACC_A, limite: 100 })),
     );
     expect(page.lignes.map((l) => l.id)).toEqual(ORDRE_ATTENDU);
+  });
+
+  // Provenance bancaire par transaction (challenge mapping 2026-06-22) : la jointure
+  // bank_accounts ⋈ bank_connections expose accountName + institutionName.
+  describe("provenance : nom de compte + nom d'institution joints", () => {
+    it("chaque ligne porte accountName (bank_accounts) et institutionName (bank_connections)", async () => {
+      const page = await withWorkspace(sessionA, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      );
+      expect(page.lignes.length).toBeGreaterThan(0);
+      // WS_A : compte « CC » rattaché à la connexion « Mauritius Commercial Bank ».
+      for (const l of page.lignes) {
+        expect(l.accountName).toBe("CC");
+        expect(l.institutionName).toBe("Mauritius Commercial Bank");
+      }
+    });
+
+    it("l'institution suit le TENANT : depuis B, c'est « Bank One », jamais celle de A", async () => {
+      const page = await withWorkspace(sessionB, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      );
+      expect(page.lignes.length).toBeGreaterThan(0);
+      for (const l of page.lignes) {
+        expect(l.institutionName).toBe("Bank One");
+        expect(l.institutionName).not.toBe("Mauritius Commercial Bank");
+      }
+    });
+  });
+});
+
+// ── Garde-fou L7a : la suite tourne-t-elle vraiment sous tygr_app ? ───────────
+// Sans cette précondition, un `set role tygr_app` régressé ferait tourner la suite
+// sous l'owner (RLS ignorée) en passant au vert silencieusement (faux-vert). Le test
+// pose lui-même le rôle (auto-suffisant, indépendant de l'ordre des autres cas).
+describe("préconditions", () => {
+  it("0. les requêtes tournent sous tygr_app, pas sous l'owner (sinon la RLS est ignorée)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const res = await client.query<{ who: string }>("select current_user as who");
+    expect(res.rows[0].who).toBe("tygr_app");
+  });
+});
+
+// Contre-preuve R1 : prouve POURQUOI le rôle non-owner est vital. Sous l'owner la
+// frontière tenant ne filtre pas ; sous tygr_app elle filtre. Si l'app pointait sur
+// l'owner (RLS contournée), R1a casserait — l'angle mort devient bloquant.
+describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () => {
+  afterAll(async () => {
+    // Restaure l'invariant pour toute exécution ultérieure : rôle applicatif.
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("R1a. sous l'owner, un SELECT sans contexte voit l'AUTRE tenant (RLS ignorée)", async () => {
+    await client.exec(`reset role;`);
+    const res = await client.query<{ workspace_id: string }>(
+      "select workspace_id from workspace_members",
+    );
+    expect(res.rows.some((r) => r.workspace_id === WS_B)).toBe(true);
+  });
+
+  it("R1b. sous tygr_app, le contexte A ne voit JAMAIS le tenant B (la RLS filtre)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const vus = await withWorkspace(sessionA, (tx) =>
+      tx.select().from(schema.workspaceMembers),
+    );
+    expect(vus.every((r) => r.workspaceId === WS_A)).toBe(true);
+    expect(vus.some((r) => r.workspaceId === WS_B)).toBe(false);
   });
 });

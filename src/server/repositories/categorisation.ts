@@ -61,6 +61,23 @@ export class VentilationDepasseError extends Error {
   }
 }
 
+/**
+ * Levée quand l'état cible de ventilation contient DEUX parts sur la MÊME
+ * catégorie (TX-QA-SPLIT-DOUBLON1). Décision produit 2026-07-01 : on INTERDIT à
+ * la validation (pas de fusion des montants) — deux parts sur la même catégorie
+ * n'ont aucun sens métier (elles faussent tout regroupement par catégorie). La
+ * garde vit dans `remplacerSplits` (état cible complet) et non `ajouterSplit` :
+ * la règle porte sur l'ensemble cible, pas sur une part isolée. Contrainte
+ * d'INTÉGRITÉ de ventilation, distincte de l'invariant de somme.
+ */
+export class CategorieDupliqueeError extends Error {
+  readonly code = "CATEGORY_DUPLICATE_IN_SPLIT";
+  constructor() {
+    super("Une même catégorie est utilisée sur plusieurs parts de la ventilation.");
+    this.name = "CategorieDupliqueeError";
+  }
+}
+
 /** Levée quand la transaction visée n'existe pas dans le workspace courant. */
 export class TransactionIntrouvableError extends Error {
   readonly code = "TRANSACTION_NOT_FOUND";
@@ -232,7 +249,7 @@ export async function supprimerSplit<TDb extends AnyPgDatabase>(
   return { supprime: true };
 }
 
-interface EvenementAudit {
+export interface EvenementAudit {
   transactionId: string;
   transactionDate: string;
   action: "CREATE" | "UPDATE" | "DELETE";
@@ -245,8 +262,11 @@ interface EvenementAudit {
  * Écrit une ligne d'audit immuable. Résout le nom de catégorie pour un snapshot
  * lisible (la catégorie peut être renommée/désactivée plus tard). INSERT
  * uniquement (la table est append-only : UPDATE/DELETE rejetés par trigger).
+ *
+ * Exporté pour que le moteur de règles (regles-categorisation.ts) écrive l'audit
+ * par la MÊME source unique (un split RULE produit un événement CREATE/source=RULE).
  */
-async function ecrireAudit<TDb extends AnyPgDatabase>(
+export async function ecrireAudit<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   ctx: WorkspaceContext,
   evt: EvenementAudit,
@@ -312,6 +332,21 @@ export async function remplacerSplits<TDb extends AnyPgDatabase>(
     .for("update");
   if (txn.length === 0) {
     throw new TransactionIntrouvableError();
+  }
+
+  // 1bis. INTÉGRITÉ de ventilation : aucune catégorie en double dans l'état cible
+  //   (TX-QA-SPLIT-DOUBLON1). VÉRIFIÉE AVANT l'invariant de somme (décision
+  //   verrouillée « doublon d'abord ») : un payload violant les DEUX règles (somme
+  //   dépassée ET doublon) lève CategorieDupliqueeError, jamais VentilationDepasseError
+  //   — l'ordre est verrouillé par un test dédié. Détection PURE sur categoryId (aucune
+  //   requête, ne touche pas aux montants — règle 8) : un Set dédoublonne, si sa taille
+  //   diffère du nombre de cibles, une catégorie apparaît ≥ 2 fois. Liste vide/une part
+  //   ne peuvent pas produire de doublon (garde inactive). Les catégories sont ici
+  //   toujours définies (SplitCible.categoryId est non-null ; le null n'atteint pas
+  //   cette couche).
+  const idsCibles = cibles.map((c) => c.categoryId);
+  if (new Set(idsCibles).size !== idsCibles.length) {
+    throw new CategorieDupliqueeError();
   }
 
   // 2. Invariant sur l'ÉTAT CIBLE complet : Σ |amount| ≤ |montant txn|. Somme
@@ -404,6 +439,34 @@ export class CategorieIntrouvableError extends Error {
 }
 
 /**
+ * Levée quand une MUTATION du référentiel (créer/renommer/archiver une catégorie)
+ * est tentée par un non-ADMIN. Décision PO 2026-06-22 (révision de 2026-06-17) :
+ * administrer la taxonomie est réservé à l'ADMIN. La garde est portée par le
+ * REPOSITORY (calque sur entites.ts) : le rôle vient du CONTEXTE (re-résolu à
+ * chaque requête par withWorkspace), jamais d'un paramètre — et TOUT chemin
+ * d'écriture (Server Action présente ou future) hérite de la garde, pas seulement
+ * l'action d'aujourd'hui. Non-énumérant.
+ */
+export class CategorieNonAutoriseeError extends Error {
+  readonly code = "CATEGORY_NOT_AUTHORIZED";
+  constructor() {
+    super("Action non autorisée.");
+    this.name = "CategorieNonAutoriseeError";
+  }
+}
+
+/**
+ * Exige le rôle ADMIN pour muter le référentiel. La LECTURE (listerCategories)
+ * reste ouverte à tous les membres : les pickers de ventilation en ont besoin
+ * (la saisie de splits demeure ouverte, seule l'administration est restreinte).
+ */
+function exigerAdminReferentiel(ctx: WorkspaceContext): void {
+  if (ctx.role !== "ADMIN") {
+    throw new CategorieNonAutoriseeError();
+  }
+}
+
+/**
  * Liste les catégories ACTIVES du workspace (les archivées sont masquées des
  * pickers). Scopé par la RLS au workspace courant. Triées par nom.
  */
@@ -441,6 +504,7 @@ export async function creerCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   input: { name: string; parentId: string | null },
 ): Promise<{ categoryId: string }> {
+  exigerAdminReferentiel(ctx);
   const inserted = await tx
     .insert(categories)
     .values({
@@ -461,6 +525,9 @@ export async function renommerCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   input: { categoryId: string; name: string },
 ): Promise<void> {
+  // Rôle AVANT existence : un non-ADMIN obtient « non autorisé » même sur une
+  // catégorie inexistante → pas d'oracle d'existence (règle 3).
+  exigerAdminReferentiel(ctx);
   const maj = await tx
     .update(categories)
     .set({ name: input.name })
@@ -488,6 +555,8 @@ export async function archiverCategorie<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   categoryId: string,
 ): Promise<void> {
+  // Rôle AVANT existence (cf. renommerCategorie) — pas d'oracle d'existence.
+  exigerAdminReferentiel(ctx);
   const maj = await tx
     .update(categories)
     .set({ isActive: false })

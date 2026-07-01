@@ -35,6 +35,7 @@ import type {
 import type { CategorieUI, SplitUI } from "@/components/ui/category";
 
 import {
+  creerCategorieAction,
   listerCategoriesAction,
   listerSplitsAction,
   listerTransactionsAction,
@@ -71,12 +72,23 @@ export default async function PageTransactions() {
     isActive: c.isActive,
   }));
 
+  // Nom affiché du compte porteur DANS LA TABLE : on privilégie le NOM DE BANQUE
+  // (`institutionName`, déjà fourni par `listerComptes` via la connexion) plutôt
+  // que le libellé interne `accountName` (souvent générique, « Main Operating
+  // Account » à l'identique sur tous les comptes). Repli sur `accountName` si la
+  // banque est inconnue, pour ne jamais afficher de vide.
+  const nomCompte = (c: (typeof comptes)[number]) =>
+    c.institutionName ?? c.accountName;
+  // Le FILTRE, lui, porte les deux champs : la toolbar groupe par institution
+  // (<optgroup>) et affiche l'accountName dedans — l'institution n'est donc plus
+  // répétée N fois. (Distinct du nom de la table ci-dessus, volontairement.)
   const comptesFiltre = comptes.map((c) => ({
     bankAccountId: c.bankAccountId,
-    nom: c.accountName,
+    accountName: c.accountName,
+    institutionName: c.institutionName,
   }));
   const nomParCompte = new Map(
-    comptes.map((c) => [c.bankAccountId, c.accountName]),
+    comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
   );
   const aucuneBanque = comptes.length === 0;
 
@@ -106,6 +118,13 @@ export default async function PageTransactions() {
     ? versPageUI(premiere.data, nomParCompte)
     : { lignes: [], curseurSuivant: null };
 
+  // Création rapide depuis le picker : une catégorie créée ainsi est une Nature
+  // (parentId null). Adapte la signature `(name) → action({name, parentId})`.
+  async function creerCategorieNature(name: string) {
+    "use server";
+    return creerCategorieAction({ name, parentId: null });
+  }
+
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
       <div className="mb-6">
@@ -122,6 +141,7 @@ export default async function PageTransactions() {
         comptes={comptesFiltre}
         actions={actionsTransactions}
         remplacerSplits={remplacerSplitsAction}
+        creerCategorie={creerCategorieNature}
         aucuneBanque={aucuneBanque}
       />
     </main>

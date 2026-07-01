@@ -101,6 +101,8 @@ export const identite: RepositoryIdentite = {
   enregistrerTentativeIp: (ip, succeeded) =>
     obtenirIdentite().enregistrerTentativeIp(ip, succeeded),
   membershipsDe: (userId) => obtenirIdentite().membershipsDe(userId),
+  membershipParDefaut: (userId) =>
+    obtenirIdentite().membershipParDefaut(userId),
   membershipsAvecNom: (userId) =>
     obtenirIdentite().membershipsAvecNom(userId),
 };
@@ -124,17 +126,37 @@ export {
 // hors contexte.
 export {
   listerComptes,
+  comptesParEntite,
+  listerEntitesVisibles,
   soldeConsolideCourant,
+  soldesCourantsParDevise,
   courbeTresorerie,
   syntheseMois,
+  syntheseMoisParDevise,
+  syntheseParMois,
+  grilleMois,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 export type {
   CompteConnecte,
+  EntiteVisible,
   PointCourbe,
+  SoldeParDevise,
   SyntheseMois,
+  SyntheseMoisDevise,
+  SyntheseMensuelle,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
+
+// Insights dérivés (TECH-API-INSIGHTS, Voie A) : cashflow & vendors dérivés de
+// transactions_cache. Même frontière que le dashboard — ré-exportés ici pour que
+// la page RSC les appelle DANS withWorkspace(tx) sans importer
+// @/server/repositories/* directement (no-restricted-imports, règle 2).
+export {
+  cashflowParDevise,
+  vendorsParConcentration,
+  InsightsParamsInvalidesError,
+} from "@/server/repositories/insights";
 
 // Catégorisation manuelle + ventilation (Pilier 1). Ré-exporté pour que les
 // Server Actions (à venir) l'appellent DANS withWorkspace(tx) sans importer
@@ -149,8 +171,10 @@ export {
   renommerCategorie,
   archiverCategorie,
   VentilationDepasseError,
+  CategorieDupliqueeError,
   TransactionIntrouvableError,
   CategorieIntrouvableError,
+  CategorieNonAutoriseeError,
 } from "@/server/repositories/categorisation";
 export type {
   RefTransaction,
@@ -171,3 +195,71 @@ export type {
   TransactionLigne,
   PageTransactions,
 } from "@/server/repositories/transactions";
+
+// Gestion des Entités (Option B, L3) : référentiel d'entités + sas d'assignation +
+// périmètre Vision Entité (member_entity_scopes). Même frontière P0-a : les Server
+// Actions de admin/entites/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement. Garde ADMIN portée par le repository.
+export {
+  listerEntites,
+  listerScopesMembre,
+  listerMembresWorkspace,
+  creerEntite,
+  renommerEntite,
+  archiverEntite,
+  assignerCompteEntite,
+  assignerPartieEntite,
+  definirScopesMembre,
+  EntiteNonAutoriseError,
+  EntiteIntrouvableError,
+  CompteIntrouvableError,
+  PartieIntrouvableError,
+  EntiteNomDupliqueError,
+  MembreNonScopableError,
+} from "@/server/repositories/entites";
+export type { EntiteLue, MembreScope } from "@/server/repositories/entites";
+
+// Périmètre fin par membre (user_scopes, L6a) : octroi / révocation ADMIN-only de la
+// maille party/compte qui pilote account_scope. Même frontière P0-a : les Server
+// Actions de admin/perimetres/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement. Garde ADMIN portée par le repository (la RLS
+// tenant ne borne PAS le rôle → la garde applicative EST la sécurité). On n'ajoute ici
+// que les NOUVEAUX symboles : CompteIntrouvableError / MembreNonScopableError /
+// PartieIntrouvableError sont déjà exportés ci-dessus (mêmes erreurs, définies dans le
+// repo entités et réutilisées par user-scopes — pas de classe homonyme dupliquée).
+export {
+  listerScopesFinsMembre,
+  definirScopesFinsMembre,
+  octroyerScopeFin,
+  revoquerScopeFin,
+  ScopeFinNonAutoriseError,
+  CibleScopeInvalideError,
+} from "@/server/repositories/user-scopes";
+export type {
+  ScopeFinMembre,
+  ScopesFinsAPoser,
+  CibleScopeFin,
+} from "@/server/repositories/user-scopes";
+
+// Moteur de règles de catégorisation : référentiel de règles + service
+// d'application (appliquerRegles crée des splits source='RULE' pour les
+// transactions non catégorisées qui matchent). Même frontière P0-a : les Server
+// Actions de regles/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement.
+export {
+  listerRegles,
+  creerRegle,
+  modifierRegle,
+  archiverRegle,
+  reordonnerRegles,
+  appliquerRegles,
+  RegleIntrouvableError,
+  RegleNonAutoriseeError,
+  OrdreReglesInvalideError,
+} from "@/server/repositories/regles-categorisation";
+export type {
+  RegleLue,
+  RegleACreer,
+  RegleAModifier,
+  ResultatApplication,
+} from "@/server/repositories/regles-categorisation";

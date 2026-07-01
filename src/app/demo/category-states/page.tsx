@@ -44,6 +44,9 @@ export default function CategoryStatesDemoPage() {
   const [selectionnee, setSelectionnee] = useState<string | null>("cat-charges-elec");
   const [managerOuvert, setManagerOuvert] = useState(false);
   const [splitOuvert, setSplitOuvert] = useState(false);
+  // État local pour la section CategoryPicker (la création y ajoute une catégorie).
+  const [categoriesDemo, setCategoriesDemo] =
+    useState<CategorieUI[]>(CATEGORIES_DEMO);
 
   return (
     <div className="min-h-screen bg-surface-page">
@@ -91,16 +94,26 @@ export default function CategoryStatesDemoPage() {
             Sélectionnée :{" "}
             <CategoryBadge
               name={
-                CATEGORIES_DEMO.find((c) => c.id === selectionnee)?.name ?? "—"
+                categoriesDemo.find((c) => c.id === selectionnee)?.name ?? "—"
               }
               colorKey={selectionnee ?? "none"}
               size="sm"
             />
           </p>
           <CategoryPicker
-            categories={CATEGORIES_DEMO}
+            categories={categoriesDemo}
             selectedId={selectionnee}
             onSelect={setSelectionnee}
+            onCreate={async (name) => {
+              // Stub démo : fabrique un id local et l'ajoute à la liste pour que
+              // la nouvelle catégorie apparaisse et soit sélectionnable.
+              const categoryId = `cat-demo-${Date.now()}`;
+              setCategoriesDemo((prev) => [
+                ...prev,
+                { id: categoryId, name: name.trim(), parentId: null, isActive: true },
+              ]);
+              return { ok: true, data: { categoryId } };
+            }}
           />
         </section>
 
@@ -171,6 +184,9 @@ export default function CategoryStatesDemoPage() {
               },
             ]}
             onReplace={async () => ({ ok: true, data: undefined })}
+            onCreateCategorie={(name) =>
+              ACTIONS_STUB.creerCategorie({ name, parentId: null })
+            }
           />
         </section>
       </main>

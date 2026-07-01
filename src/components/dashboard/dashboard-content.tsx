@@ -14,38 +14,74 @@
  */
 import type {
   CompteConnecte,
-  PointCourbe,
-  SyntheseMois,
+  SoldeParDevise,
+  SyntheseMensuelle,
+  SyntheseMoisDevise,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
+import type {
+  ConcentrationVendors,
+  PointCashflow,
+} from "@/server/insights/types";
+import type { WorkspaceRole } from "@/server/db/schema";
 
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
+import { formaterFraicheurRelative } from "@/lib/format-date";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
-import { CashflowMainChart } from "@/components/dashboard/cashflow-main-chart";
+import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
+import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
+import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
+import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
 export interface DonneesDashboard {
   comptes: CompteConnecte[];
-  soldeConsolide: string;
-  courbe: PointCourbe[];
-  syntheseMois: SyntheseMois;
+  /** Solde Total = soldes courants par devise (une ligne par devise, jamais d'addition cross-devise). */
+  soldesParDevise: SoldeParDevise[];
+  /** Flux net mensuel (entrées − sorties), UNE devise (base_currency), dérivé des transactions. */
+  flux: PointCashflow[];
+  /** Synthèse du mois courant VENTILÉE PAR DEVISE (jamais d'addition cross-devise). */
+  synthesesMois: SyntheseMoisDevise[];
+  /** Concentration des contreparties (top postes, par défaut dépenses). */
+  topVendors: ConcentrationVendors;
+  /** Série entrées/sorties des N derniers mois (tendance), à plat par (mois, devise). */
+  serieMensuelle: SyntheseMensuelle[];
+  /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
+  grilleMensuelle: string[];
   transactionsRecentes: TransactionRecente[];
 }
 
 export function DashboardContent({
   donnees,
   devise = "MUR",
+  mois,
+  role,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
+  /** Mois courant "YYYY-MM" (Maurice) — libellé des cartes de synthèse. */
+  mois: string;
+  /** Rôle résolu serveur — gate le bouton « Synchroniser » du side-panel (confort UI). */
+  role: WorkspaceRole;
 }) {
-  const { comptes, soldeConsolide, courbe, syntheseMois, transactionsRecentes } =
-    donnees;
+  const {
+    comptes,
+    soldesParDevise,
+    synthesesMois,
+    topVendors,
+    serieMensuelle,
+    grilleMensuelle,
+    transactionsRecentes,
+  } = donnees;
+  // NB : `donnees.flux` n'est PLUS déstructuré ici — la courbe ne le consomme plus
+  // (elle dérive de la série mensuelle projetée, cf. FluxTresorerieCard). Le champ reste
+  // néanmoins un discriminant vivant de l'état d'onboarding, lu par `choisirEtatDashboard`
+  // (partiel vs complet) via l'objet `donnees` complet ci-dessous.
 
   // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
   // (état "vide" ; "partiel"/"complet" montent le shell ci-dessous — chaque zone
@@ -60,19 +96,25 @@ export function DashboardContent({
 
   // Sinon : comptes connectés → on monte le shell complet. Chaque zone gère son
   // propre vide (PARTIEL) sans masquer le solde déjà disponible.
-  const dateSolde = courbe.length
-    ? jourMoisCourt(courbe[courbe.length - 1].date)
-    : jourMoisCourt(dernierSync(comptes));
+  // Fraîcheur (§3.7 / DR-F3) : on qualifie l'âge du SOLDE COURANT via la synchro la
+  // plus récente (`lastSyncedAt`), JAMAIS via le dernier point de courbe (EOD).
+  const synchro = synchroLaPlusRecente(comptes);
+  const fraicheur = synchro
+    ? formaterFraicheurRelative(synchro.lastSyncedAt)
+    : null;
 
   return (
     <DashboardShell
       aside={
         <>
           <SidePanelKpi
-            soldeConsolide={soldeConsolide}
-            syntheseMois={syntheseMois}
+            soldesParDevise={soldesParDevise}
+            synthesesMois={synthesesMois}
+            mois={mois}
             devise={devise}
-            dateSolde={dateSolde}
+            fraicheur={fraicheur}
+            compteLabel={synchro?.compteLabel}
+            role={role}
           />
           {/* Pile aside : SOLDE → DÉTAILS (SidePanelKpi) → COMPTES CONNECTÉS. */}
           <ConnectedAccountsCard comptes={comptes} />
@@ -80,8 +122,41 @@ export function DashboardContent({
       }
     >
       <div className="flex flex-col gap-6">
-        {/* Ancre : courbe (gère son propre état partiel si courbe vide). */}
-        <CashflowMainChart points={courbe} devise={devise} />
+        {/* Toolbar contextuelle (UI_GUIDELINES §1.1, h-10) posée SUR le fond de page
+            (sans carte) : sépare l'ancre du chrome et donne de l'air en tête de zone.
+            À gauche le titre de section ; la droite est RÉSERVÉE aux futurs filtres
+            (sélecteur de période L8c) — non construits ici. Le toggle Barres/Courbe vit
+            dans l'en-tête de la carte d'ancre (il pilote cette carte). */}
+        <div className="flex h-10 items-center justify-between">
+          <h1 className="text-base font-semibold text-text">Trésorerie</h1>
+        </div>
+
+        {/* Ancre : FLUX net mensuel — carte unifiée avec toggle Barres/Courbe (L8a).
+            Les deux vues partagent les séries déjà chargées par la page (zéro fetch).
+            Chaque vue gère son propre état partiel/vide. */}
+        <FluxTresorerieCard
+          serieMensuelle={serieMensuelle}
+          grilleMensuelle={grilleMensuelle}
+          devise={devise}
+        />
+
+        {/* Vision Entrées / Sorties du mois (demande métier), VENTILÉE PAR DEVISE —
+            au-dessus de la table. */}
+        <CashFlowSummary
+          synthesesMois={synthesesMois}
+          mois={mois}
+          devise={devise}
+        />
+
+        {/* Top contreparties (concentration des postes, dérivé de la Voie A). */}
+        <TopVendorsCard concentration={topVendors} />
+
+        {/* Tendance : entrées/sorties des N derniers mois (barres + tableau). */}
+        <MonthlyCashflow
+          serie={serieMensuelle}
+          grille={grilleMensuelle}
+          devise={devise}
+        />
 
         {/* Table : vide par section si pas encore de transactions. */}
         {transactionsRecentes.length > 0 ? (
@@ -91,7 +166,7 @@ export function DashboardContent({
           />
         ) : (
           <StateCard>
-            <h2 className="mb-2 text-sm font-semibold text-text">
+            <h2 className="mb-2 text-base font-semibold text-text">
               Transactions récentes
             </h2>
             <p className="text-sm text-text-muted">
@@ -105,18 +180,24 @@ export function DashboardContent({
   );
 }
 
-/** Dernière date de sync parmi les comptes (fallback pour la méta solde). */
-function dernierSync(comptes: CompteConnecte[]): string {
-  const dates = comptes
-    .map((c) => c.lastSyncedAt)
-    .filter((d): d is Date => d != null)
-    .sort((a, b) => b.getTime() - a.getTime());
-  const d = dates[0] ?? new Date();
-  return d.toISOString().slice(0, 10);
-}
-
-/** "2026-06-12" → "12/06". Présentationnel. */
-function jourMoisCourt(date: string): string {
-  const [, mois, jour] = date.split("-");
-  return `${jour}/${mois}`;
+/**
+ * Compte dont la synchro est la plus récente (pour la fraîcheur du solde §3.7).
+ * Retourne la `Date` BRUTE de `lastSyncedAt` (pas une chaîne : le calcul de delta
+ * vit dans `formaterFraicheurRelative`) + un label lisible pour le tooltip.
+ * `null` si aucun compte n'a jamais été synchronisé.
+ */
+function synchroLaPlusRecente(
+  comptes: CompteConnecte[],
+): { lastSyncedAt: Date; compteLabel: string } | null {
+  const synchronises = comptes.filter(
+    (c): c is CompteConnecte & { lastSyncedAt: Date } => c.lastSyncedAt != null,
+  );
+  if (synchronises.length === 0) return null;
+  const recent = synchronises.reduce((a, b) =>
+    b.lastSyncedAt.getTime() > a.lastSyncedAt.getTime() ? b : a,
+  );
+  return {
+    lastSyncedAt: recent.lastSyncedAt,
+    compteLabel: recent.institutionName ?? recent.accountName,
+  };
 }

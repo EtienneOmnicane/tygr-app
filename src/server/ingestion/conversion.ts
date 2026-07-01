@@ -7,7 +7,7 @@
  *   (Number(x)*100 perd des centimes). Le signe vient de CreditDebitIndicator,
  *   pas du montant (toujours positif côté OBIE).
  * - E20 (date comptable Maurice) : `transaction_date` dérive de `BookingDateTime`
- *   converti en `Asia/Port_Louis`. Une transaction à 22h UTC tombe le lendemain
+ *   converti en `Indian/Mauritius`. Une transaction à 22h UTC tombe le lendemain
  *   à Maurice. On NE compare jamais une date « nue » sans poser le fuseau.
  */
 import { OmniFiInvalidResponseError } from "@/server/omnifi";
@@ -19,14 +19,30 @@ const DECALAGE_MAURICE_MIN = 4 * 60;
  * Normalise un montant décimal OBIE en chaîne `numeric(15,2)` canonique.
  * Manipulation de chaîne uniquement (règle 8). Rejette tout format inattendu
  * avec une erreur nommée — pas de coercition silencieuse.
+ *
+ * L'API renvoie des montants à 4 décimales (« 750.0000 », convention OBIE/minor
+ * units étendue) alors que la colonne est `numeric(15,2)`. On accepte donc un
+ * nombre arbitraire de décimales, MAIS on n'en garde que 2 : les décimales au-delà
+ * de la 2e DOIVENT être des zéros (sinon ce serait une perte de centimes), sans
+ * quoi on lève une erreur nommée plutôt que d'arrondir en silence (décision PO
+ * 2026-06-19 : pas d'arrondi caché sur des montants bancaires, règle 8). « 750.0000 »
+ * → « 750.00 » (zéro perte) ; « 12.3456 » → rejet bruyant.
  */
 export function normaliserMontant(montant: string): string {
-  if (typeof montant !== "string" || !/^\d{1,13}(\.\d{1,2})?$/.test(montant.trim())) {
+  const t = typeof montant === "string" ? montant.trim() : "";
+  if (!/^\d{1,13}(\.\d+)?$/.test(t)) {
     throw new OmniFiInvalidResponseError(
-      `montant OBIE non conforme (attendu décimal positif ≤2 décimales)`,
+      `montant OBIE non conforme (attendu décimal positif)`,
     );
   }
-  const [entier, decimales = ""] = montant.trim().split(".");
+  const [entier, decimales = ""] = t.split(".");
+  // Décimales au-delà de la 2e : tolérées UNIQUEMENT si nulles (pas de perte).
+  const surplus = decimales.slice(2);
+  if (surplus.length > 0 && /[^0]/.test(surplus)) {
+    throw new OmniFiInvalidResponseError(
+      `montant OBIE à >2 décimales significatives (perte de précision refusée)`,
+    );
+  }
   const cents = decimales.padEnd(2, "0").slice(0, 2);
   // Retire les zéros de tête superflus sans vider l'entier.
   const entierNorm = entier.replace(/^0+(?=\d)/, "");
@@ -35,7 +51,7 @@ export function normaliserMontant(montant: string): string {
 
 /**
  * Dérive la date comptable Maurice (YYYY-MM-DD) d'un `BookingDateTime` OBIE
- * (ISO 8601, UTC ou avec offset). E20 : conversion EXPLICITE vers Asia/Port_Louis.
+ * (ISO 8601, UTC ou avec offset). E20 : conversion EXPLICITE vers Indian/Mauritius.
  * On calcule en arithmétique d'epoch (pas de comparaison de date nue).
  */
 export function deriverDateComptableMaurice(bookingDateTime: string): string {
@@ -61,4 +77,22 @@ export function validerCreditDebit(valeur: string): "Credit" | "Debit" {
     );
   }
   return valeur;
+}
+
+/** Longueur max du nom d'institution persisté (= varchar de `bank_connections.institution_name`). */
+export const INSTITUTION_NAME_MAX = 140;
+
+/**
+ * Normalise le nom d'institution remonté par l'API (`OmniFiConnection.InstitutionName`)
+ * avant persistance. C'est une string libre amont (non contractuelle) : on est défensif.
+ * - absente / vide après trim → `null` (la colonne est nullable, l'UI dégrade) ;
+ * - trim des espaces de bord ;
+ * - tronquée à `INSTITUTION_NAME_MAX` pour ne jamais dépasser la colonne (sinon
+ *   l'insert échouerait et ferait planter toute la synchro pour un simple libellé).
+ */
+export function normaliserNomInstitution(valeur: string | null | undefined): string | null {
+  if (typeof valeur !== "string") return null;
+  const trim = valeur.trim();
+  if (trim.length === 0) return null;
+  return trim.length > INSTITUTION_NAME_MAX ? trim.slice(0, INSTITUTION_NAME_MAX) : trim;
 }

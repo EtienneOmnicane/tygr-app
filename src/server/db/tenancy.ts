@@ -15,16 +15,38 @@
  * sans dupliquer le contrat. L'instance applicative est exportée par
  * src/db/index.ts sous la signature du plan : withWorkspace(session, fn).
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
-import { workspaceMembers, type WorkspaceRole } from "@/server/db/schema";
+import {
+  accountPartyRole,
+  bankAccounts,
+  memberEntityScopes,
+  userScopes,
+  workspaceMembers,
+  type WorkspaceRole,
+} from "@/server/db/schema";
 
 export const workspaceSessionSchema = z
   .object({
     userId: z.string().uuid(),
     activeWorkspaceId: z.string().uuid(),
+    /**
+     * Filtre d'AFFICHAGE optionnel (L5, plan §C) — sélecteur UI « afficher
+     * seulement ces comptes ». Liste d'UUID de comptes. C'est une INTENTION
+     * d'affichage NON FIABLE, jamais une autorité : le résolveur l'INTERSECTE
+     * avec le DROIT résolu (account_scope) avant de poser le GUC view_filter, si
+     * bien qu'il ne peut que RÉTRÉCIR la vue (jamais l'élargir). Validé en UUID
+     * pour qu'une valeur malformée échoue tôt (INVALID_SESSION), mais même une
+     * liste de comptes d'un autre tenant est INOFFENSIVE (l'intersection avec le
+     * DROIT la vide, et tenant_isolation borne déjà au tenant). Absent/vide ⇒ le
+     * GUC n'est PAS posé ⇒ la clause view_filter des policies court-circuite
+     * (voit tout le DROIT). NE confère JAMAIS d'accès — à distinguer
+     * d'`accountScope`, qui n'est volontairement PAS un champ de session (un
+     * scope forgé est rejeté : il ne vient QUE du contexte serveur).
+     */
+    viewFilter: z.array(z.string().uuid()).optional(),
   })
   .strict();
 
@@ -79,10 +101,65 @@ export type WorkspaceTx<TDb extends AnyPgDatabase> = Parameters<
   Parameters<TDb["transaction"]>[0]
 >[0];
 
+/**
+ * Périmètre entité (étage 2) du membre pour la session courante. LISIBLE par les
+ * repositories qui veulent le connaître — mais ce n'est JAMAIS la source de
+ * l'autorité : l'autorité est la policy RLS `entity_scope` sur bank_accounts,
+ * pilotée par le GUC posé ci-dessous. Ce champ ne sert qu'à informer l'UI / des
+ * agrégats, jamais à décider d'un accès en aval (plan §2.4).
+ *
+ * - `{ mode: "GLOBALE" }`   : aucune ligne member_entity_scopes → voit tout le
+ *                             tenant (Vision Globale). Le GUC n'est PAS posé.
+ * - `{ mode: "ENTITES" }`   : ≥1 ligne → périmètre borné. Le GUC porte le CSV des
+ *                             entityIds ; la RLS masque tout compte hors liste
+ *                             (et tout compte entity_id IS NULL).
+ */
+export type ScopeEntite =
+  | { mode: "GLOBALE" }
+  | { mode: "ENTITES"; entityIds: string[] };
+
+/**
+ * Périmètre COMPTE (étage 2, maille fine — L4, plan §1.3 / §3.2). Comme
+ * `ScopeEntite`, c'est un champ LISIBLE non-autoritaire (l'autorité est la policy
+ * RLS `account_scope` sur bank_accounts, pilotée par le GUC posé ci-dessous). Le
+ * DROIT est l'ensemble (dédupliqué) des comptes autorisés, résolu serveur depuis
+ * `user_scopes` (parties + comptes directs) ∪ `member_entity_scopes` (axe BU) —
+ * JAMAIS d'un paramètre client.
+ *
+ * - `{ mode: "GLOBALE" }`   : AUCUNE ligne de scope (ni user_scopes ni
+ *                             member_entity_scopes) → voit tout le tenant. Le GUC
+ *                             account_scope n'est PAS posé.
+ * - `{ mode: "COMPTES" }`   : ≥1 ligne de scope. `accountIds` = le DROIT résolu.
+ *                             • non vide → GUC = CSV des UUID ; la RLS masque tout
+ *                               compte hors liste.
+ *                             • VIDE (≥1 scope mais 0 compte résolu : party
+ *                               archivée, comptes purgés) → GUC = sentinelle
+ *                               UUID-nul (DÉCISION 1) ; la RLS ne laisse passer
+ *                               AUCUN compte (fail-closed). « périmètre vide »
+ *                               n'est JAMAIS « voir tout ».
+ */
+export type ScopeCompte =
+  | { mode: "GLOBALE" }
+  | { mode: "COMPTES"; accountIds: string[] };
+
+/**
+ * Sentinelle « périmètre vide » (DÉCISION 1, L4). Un membre AYANT des scopes mais
+ * dont le DROIT résout à ∅ NE doit PAS retomber en Vision Globale (fuite « vide →
+ * tout » du plan §3.2). On pose alors ce GUC : un UUID nul qui (a) caste proprement
+ * via `::uuid[]` (≠ chaîne vide, qui ferait lever `''::uuid` et casserait TOUTES les
+ * requêtes), et (b) ne matche JAMAIS un `bank_accounts.id` réel (gen_random_uuid()
+ * ne produit pas l'UUID nul) → la policy renvoie 0 ligne. JAMAIS poser '' ici.
+ */
+const SENTINELLE_PERIMETRE_VIDE = "00000000-0000-0000-0000-000000000000";
+
 export interface WorkspaceContext {
   role: WorkspaceRole;
   workspaceId: string;
   userId: string;
+  /** Étage 2 — axe BU (lisible, non-autoritaire — l'autorité est la RLS). */
+  entityScope: ScopeEntite;
+  /** Étage 2 — maille compte (lisible, non-autoritaire — l'autorité est la RLS). */
+  accountScope: ScopeCompte;
 }
 
 /**
@@ -148,10 +225,205 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
         throw new WorkspaceAccessDeniedError();
       }
 
+      // ══ ÉTAGE 2 — périmètre intra-groupe (deux GUC : entity_scope + account_scope)
+      // Posé ICI, APRÈS la re-validation de la membership : on ne calcule un scope
+      // que pour un (userId, activeWorkspaceId) confirmé membre. TOUTES les valeurs
+      // dérivent EXCLUSIVEMENT des tables de droits (member_entity_scopes,
+      // user_scopes) — JAMAIS d'un paramètre client (anti-élargissement, plan §3.4).
+      // Les lectures passent par `tx` qui porte déjà app.current_workspace_id (RLS
+      // tenant active) ; on AJOUTE partout un filtre explicite workspace_id = ctx
+      // (défense en profondeur).
+      //
+      // ⚠️ ORDRE (point dur L4 « auto-référence », plan §1.e) : on RÉSOUT d'abord le
+      // DROIT (comptes autorisés) en lisant account_party_role + bank_accounts, PUIS
+      // on pose entity_scope ET account_scope. On lit donc bank_accounts AVANT que
+      // le moindre GUC d'étage 2 ne soit posé : la résolution voit l'état tenant
+      // BRUT (non filtré par entity_scope), sans interaction parasite — la voie la
+      // plus sûre (le DROIT ne doit pas dépendre de l'ordre de pose des policies).
+      //
+      // ⚠️ COEXISTENCE entity_scope × account_scope (corrige une formulation
+      // trompeuse, cross-review L4) : les DEUX policies RESTRICTIVE restent posées
+      // (voie i du plan) et se combinent en AND — account_scope ne « subsume » PAS
+      // entity_scope. Le résolveur UNIFIE bien les axes EN UNE LISTE côté
+      // account_scope (4b traduit l'entité en comptes), mais entity_scope demeure
+      // actif en parallèle. Pour un membre à DOUBLE AXE (≥1 member_entity_scopes ET
+      // ≥1 user_scopes), l'AND ⟹ l'INTERSECTION, pas l'union attendue : un compte
+      // légitimement octroyé par party mais dont l'entité est HORS du scope BU du
+      // membre devient INVISIBLE pour lui. C'est un déni d'accès FAIL-CLOSED
+      // (sous-ensemble du droit → AUCUNE fuite, jamais d'IDOR), mais une dette
+      // FONCTIONNELLE (TODOS ENTITY×ACCOUNT-DOUBLE-AXIS, P2). Elle se DISSOUT au
+      // retrait d'entity_scope en L9 (ou en interdisant le double octroi côté UI).
+
+      // (1) Axe BU — member_entity_scopes (lu une seule fois ; réutilisé pour les
+      //     deux GUC). Sémantique entity_scope (0008/0014) : 0 ligne = Vision
+      //     Globale (GUC non posé) ; ≥1 ligne = CSV d'entity_id.
+      const scopesBu = await tx
+        .select({ entityId: memberEntityScopes.entityId })
+        .from(memberEntityScopes)
+        .where(
+          and(
+            eq(memberEntityScopes.userId, userId),
+            eq(memberEntityScopes.workspaceId, activeWorkspaceId),
+          ),
+        );
+      const entityIds = scopesBu.map((s) => s.entityId);
+
+      // (2) Maille fine — user_scopes du membre (cible PARTY xor COMPTE, CHECK en
+      //     base). On sépare les deux familles ; chaque ligne porte exactement l'une.
+      const scopesFins = await tx
+        .select({
+          partyId: userScopes.partyId,
+          bankAccountId: userScopes.bankAccountId,
+        })
+        .from(userScopes)
+        .where(
+          and(
+            eq(userScopes.userId, userId),
+            eq(userScopes.workspaceId, activeWorkspaceId),
+          ),
+        );
+      const partyIds = scopesFins
+        .map((s) => s.partyId)
+        .filter((p): p is string => p !== null);
+      const comptesDirects = scopesFins
+        .map((s) => s.bankAccountId)
+        .filter((c): c is string => c !== null);
+
+      // (3) DÉCISION 1 cas (a) — AUCUNE ligne de scope (ni BU ni fine) → Vision
+      //     Globale : on ne pose NI entity_scope NI account_scope (les policies
+      //     RESTRICTIVE court-circuitent sur nullif(...) IS NULL → tout le tenant).
+      //     C'est aussi le chemin de l'INGESTION (Vision Globale) — DÉCISION 3 :
+      //     account_scope FOR ALL n'est pas posé → INSERT/UPDATE passent inchangés.
+      let entityScope: ScopeEntite = { mode: "GLOBALE" };
+      let accountScope: ScopeCompte = { mode: "GLOBALE" };
+
+      if (entityIds.length > 0 || scopesFins.length > 0) {
+        // (4) RÉSOLUTION DU DROIT (comptes autorisés) = comptes des parties ∪
+        //     comptes directs ∪ comptes de l'axe BU. Lectures sous tenant_isolation
+        //     SEUL (aucun GUC d'étage 2 encore posé — cf. note ORDRE ci-dessus).
+        const accountsAutorises = new Set<string>(comptesDirects);
+
+        // 4a. Comptes des parties autorisées (jointure party→comptes via
+        //     account_party_role). Filtre workspace_id explicite (défense en
+        //     profondeur) + inArray PARAMÉTRÉ (zéro interpolation, règle 2).
+        if (partyIds.length > 0) {
+          const lignes = await tx
+            .select({ bankAccountId: accountPartyRole.bankAccountId })
+            .from(accountPartyRole)
+            .where(
+              and(
+                eq(accountPartyRole.workspaceId, activeWorkspaceId),
+                inArray(accountPartyRole.partyId, partyIds),
+              ),
+            );
+          for (const l of lignes) accountsAutorises.add(l.bankAccountId);
+        }
+
+        // 4b. Comptes de l'axe BU (member_entity_scopes → bank_accounts.entity_id).
+        //     Traduit l'axe entité en comptes pour UNIFIER le DROIT en une seule
+        //     maille (compte), conformément à la décision §1.3 du plan.
+        if (entityIds.length > 0) {
+          const lignes = await tx
+            .select({ id: bankAccounts.id })
+            .from(bankAccounts)
+            .where(
+              and(
+                eq(bankAccounts.workspaceId, activeWorkspaceId),
+                inArray(bankAccounts.entityId, entityIds),
+              ),
+            );
+          for (const l of lignes) accountsAutorises.add(l.id);
+        }
+
+        // (5) Pose entity_scope (inchangé fonctionnellement vs L3, seul l'ORDRE de
+        //     pose a bougé — après la résolution). GUC = CSV des entity_id.
+        if (entityIds.length > 0) {
+          const csvEntites = entityIds.join(",");
+          await tx.execute(
+            sql`select set_config('app.current_entity_scope', ${csvEntites}, true)`,
+          );
+          entityScope = { mode: "ENTITES", entityIds };
+        }
+
+        // (6) Pose account_scope (DÉCISION 1, cas (b)/(c)). set_config PARAMÉTRÉ ;
+        //     les UUID sont LUS EN BASE (typés uuid) — pas d'entrée client.
+        const accountIds = [...accountsAutorises];
+        if (accountIds.length > 0) {
+          // cas (c) : DROIT non vide → CSV des comptes autorisés.
+          const csvComptes = accountIds.join(",");
+          await tx.execute(
+            sql`select set_config('app.current_account_scope', ${csvComptes}, true)`,
+          );
+        } else {
+          // cas (b) : ≥1 ligne de scope mais DROIT = ∅ (party archivée / comptes
+          //   purgés) → SENTINELLE UUID-nul (JAMAIS ''). La policy renvoie 0 ligne
+          //   (fail-closed) : « périmètre vide » n'est PAS « voir tout ».
+          await tx.execute(
+            sql`select set_config('app.current_account_scope', ${SENTINELLE_PERIMETRE_VIDE}, true)`,
+          );
+        }
+        accountScope = { mode: "COMPTES", accountIds };
+      }
+
+      // ══ VIEW_FILTER (L5, plan §C / §D) — INTERSECTION SERVEUR, posée APRÈS le
+      // DROIT account_scope. `viewFilter` est l'INTENTION d'affichage du client
+      // (sélecteur UI) : on la fait passer par le GUC app.current_view_filter, que
+      // la 2e clause AND des policies account_scope (0016 + 0017) consomme. Comme
+      // c'est une 2e RESTRICTIVE conjuguée au DROIT (account_scope), le filtre ne
+      // peut QUE RÉTRÉCIR la vue — JAMAIS l'élargir. INVARIANT NON NÉGOCIABLE :
+      // on ne pose JAMAIS le filtre client seul, JAMAIS DROIT ∪ filtre.
+      //
+      // Logique (les 3 cas C.2) :
+      //   • viewFilter absent/vide  → on ne pose PAS le GUC (court-circuit
+      //     nullif(...) IS NULL = TRUE → la clause view_filter est neutre, on voit
+      //     tout le DROIT). Pas de filtrage demandé = pas de restriction ajoutée.
+      //   • mode GLOBALE + filtre   → le filtre TEL QUEL (le DROIT est « tout le
+      //     tenant », donc DROIT ∩ filtre = filtre). tenant_isolation borne déjà au
+      //     tenant : un compte d'un autre tenant dans le filtre ne matche aucune
+      //     ligne (inoffensif). C'est le seul cas où le filtre passe sans
+      //     intersection ensembliste explicite — mais il ne confère AUCUN accès
+      //     hors tenant.
+      //   • mode COMPTES (DROIT fini) → INTERSECTION STRICTE DROIT ∩ filtre. Si
+      //     elle est VIDE (le client demande des comptes hors de son droit) →
+      //     SENTINELLE UUID-nul (0 ligne), JAMAIS '' ni « tout ». Le filtre ne peut
+      //     pas faire apparaître un compte hors du DROIT.
+      // set_config PARAMÉTRÉ (zéro interpolation de chaîne, règle 2).
+      const viewFilter = parsed.data.viewFilter;
+      if (viewFilter && viewFilter.length > 0) {
+        if (accountScope.mode === "GLOBALE") {
+          // DROIT = tout le tenant → DROIT ∩ filtre = filtre (borné au tenant par
+          // tenant_isolation). On pose le filtre tel quel.
+          const csvFiltre = viewFilter.join(",");
+          await tx.execute(
+            sql`select set_config('app.current_view_filter', ${csvFiltre}, true)`,
+          );
+        } else {
+          // DROIT fini → intersection ensembliste stricte (jamais l'union).
+          const droit = new Set(accountScope.accountIds);
+          const intersection = viewFilter.filter((c) => droit.has(c));
+          if (intersection.length > 0) {
+            const csvInter = intersection.join(",");
+            await tx.execute(
+              sql`select set_config('app.current_view_filter', ${csvInter}, true)`,
+            );
+          } else {
+            // Intersection vide : le client a demandé des comptes hors de son
+            // DROIT → on rétrécit à RIEN (sentinelle UUID-nul). PAS « voir tout »,
+            // PAS d'erreur (un filtre hors droit n'est pas une faute, juste 0 ligne).
+            await tx.execute(
+              sql`select set_config('app.current_view_filter', ${SENTINELLE_PERIMETRE_VIDE}, true)`,
+            );
+          }
+        }
+      }
+      // (viewFilter absent/vide : GUC NON posé — clause view_filter neutre.)
+
       return fn(tx as WorkspaceTx<TDb>, {
         role: membership[0].role as WorkspaceRole,
         workspaceId: activeWorkspaceId,
         userId,
+        entityScope,
+        accountScope,
       });
     });
   };

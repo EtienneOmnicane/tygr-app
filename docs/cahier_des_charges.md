@@ -221,9 +221,9 @@ Ce module gère le typage sémantique des flux comptables bruts.
 
 * **Fuseau** : le système opère à l'Île Maurice (**MUT, UTC+4**, sans heure d'été).
   Tous les timestamps en base sont `TIMESTAMPTZ` stockés en **UTC** ; la conversion
-  `Asia/Port_Louis` est **explicite dans le code** pour tout calcul de clôture
+  `Indian/Mauritius` est **explicite dans le code** pour tout calcul de clôture
   (date comptable, bornes de période, soldes EOD, courbe 90j). `transaction_date`
-  dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'` (E20) — une transaction
+  dérive de `BookingDateTime AT TIME ZONE 'Indian/Mauritius'` (E20) — une transaction
   à 22h UTC tombe le lendemain à Maurice.
 * **Multi-devise first (MUR, USD, EUR)** : le modèle ne suppose jamais le mono-MUR.
   Toute table de montant porte sa devise ; la conversion vers la `base_currency` du

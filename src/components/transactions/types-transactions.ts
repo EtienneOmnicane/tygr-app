@@ -30,6 +30,30 @@ import type { ResultatAction, SplitUI } from "@/components/ui/category";
 export type StatutCategorisation = "non_categorise" | "partiel" | "complet";
 
 /**
+ * Fiabilité AMONT de la classification automatique d'Omni-FI (concept B — DISTINCT de
+ * la ventilation manuelle TYGR, concept A porté par `statutCategorisation`). Libellé
+ * ordinal NORMALISÉ par l'adaptateur depuis la chaîne brute persistée (toute valeur
+ * inattendue → `null`, l'UI ne voit jamais de chaîne libre). `null` = fiabilité non
+ * remontée (ligne pré-migration 0012 ou API muette) ⇒ aucun indice affiché.
+ *
+ * ⚠️ `"Low"` est le DÉFAUT du serializer Omni-FI : présent sur les lignes NON enrichies.
+ * Il ne déclenche PAS à lui seul le badge « À vérifier » — la règle d'affichage (module
+ * `regle-fiabilite`) le croise avec la présence d'une catégorie pour éviter le bruit.
+ */
+export type NiveauFiabilite = "High" | "Medium" | "Low";
+
+/**
+ * Sous-source amont de la classification (concept C — doc API « Priorité de
+ * classification » : `USER_RULE > SYSTEM_RULE > ML_FALLBACK`). NORMALISÉE par
+ * l'adaptateur, `null` si inconnue/non remontée.
+ *
+ * ⚠️ `USER_RULE` = règle définie DANS Omni-FI, JAMAIS la saisie/ventilation manuelle
+ * d'un utilisateur TYGR (qui est le concept A). Le libellé d'infobulle dit « règle
+ * Omni-FI », jamais « par l'utilisateur » tout court (qui prêterait à confusion).
+ */
+export type SourceClassification = "USER_RULE" | "SYSTEM_RULE" | "ML_FALLBACK";
+
+/**
  * Une ligne de la liste des transactions (DTO d'affichage). Miroir enrichi de
  * `TransactionRecente` (dashboard) + le résumé de ventilation (B2).
  */
@@ -38,8 +62,34 @@ export interface TransactionListItem {
   transactionId: string;
   /** Date comptable Maurice YYYY-MM-DD (E20). */
   transactionDate: string;
-  /** Libellé d'affichage : `cleanLabel ?? bankLabelRaw`. JAMAIS en log/télémétrie (PII). */
+  /**
+   * Libellé d'affichage résolu (`cleanLabel`, sinon `bankLabelRaw`, sinon repli
+   * générique). Sert notamment à l'`aria-label` de la ligne, qui ne doit jamais
+   * être vide. JAMAIS en log/télémétrie. Le RENDU visuel passe par `cleanLabel` +
+   * `bankLabelRaw` (pour distinguer marchand / brut / repli) — `label` reste plat.
+   */
   label: string;
+  /**
+   * Marchand normalisé Omni-FI BRUT (`null` si l'enrichissement ne l'a pas résolu).
+   * Pilote le rendu : non-null ⇒ marchand en `text-text` ; null ⇒ on tente le repli
+   * `bankLabelRaw` avant le générique. JAMAIS loggé.
+   */
+  cleanLabel: string | null;
+  /**
+   * Libellé brut bancaire (OBIE TransactionInformation), `null` si absent. REPLI
+   * d'affichage quand `cleanLabel` est null (décision produit 2026-06-23 : montrer
+   * le narratif brut plutôt qu'un « Opération bancaire » générique). Rendu atténué
+   * pour le distinguer d'un marchand propre. JAMAIS loggé.
+   */
+  bankLabelRaw: string | null;
+  /**
+   * Catégorie OBIE de la banque (`primaryCategory`), DÉJÀ traduite en français par
+   * l'adaptateur (`categorieFr`). Affichée en sous-texte du libellé. `null` si la
+   * catégorie est absente ou non cartographiée (l'adaptateur n'affiche alors rien —
+   * il ne fabrique pas un « Non catégorisé » qui se confondrait avec le statut de
+   * ventilation). NB : distinct de `statutCategorisation` (ventilation MANUELLE).
+   */
+  categorieBanque: string | null;
   /** Nom du compte porteur (sous-texte de la ligne). */
   compteNom: string;
   /** Montant ABSOLU, chaîne décimale > 0 (le signe est porté par `sens`). */
@@ -59,6 +109,17 @@ export interface TransactionListItem {
   categorie: { id: string; name: string } | null;
   /** Nombre de catégories distinctes ventilées (0, 1, ou N). Décide le rendu du badge. */
   nbCategories: number;
+  /**
+   * Fiabilité AMONT de la classification Omni-FI (concept B). `null` si non remontée.
+   * Sert le badge « À vérifier » (via `regle-fiabilite`), JAMAIS le statut de
+   * ventilation manuelle (concept A, ci-dessus). Cf. {@link NiveauFiabilite}.
+   */
+  niveauFiabilite: NiveauFiabilite | null;
+  /**
+   * Sous-source amont de la classification (concept C). `null` si inconnue. Pilote
+   * l'icône de source (⚙ règle / 🤖 ML) + son infobulle. Cf. {@link SourceClassification}.
+   */
+  sourceClassification: SourceClassification | null;
 }
 
 /**
@@ -73,12 +134,19 @@ export type CurseurTransactions = string;
  * Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ».
  * NB : pas de filtre `sens` (Entrées/Sorties) — non supporté par le schéma de
  * lecture Backend v1 ; le filtrer côté client casserait la pagination (TX-FILTRE1).
+ * Les BORNES DE DATE (`dateDebut`/`dateFin`), elles, SONT supportées serveur (WHERE
+ * `gte/lte` sur `transaction_date`) : exposées ici, elles partent au WHERE via
+ * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
  */
 export interface FiltresTransactions {
   /** Restreindre à un compte connecté. */
   bankAccountId?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
+  /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */
+  dateDebut?: string;
+  /** Borne INCLUSE de fin (date comptable Maurice, `YYYY-MM-DD`). */
+  dateFin?: string;
 }
 
 /** Une page de résultats (B1). `curseurSuivant` null = dernière page. */

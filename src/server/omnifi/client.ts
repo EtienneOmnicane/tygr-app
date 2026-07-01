@@ -48,7 +48,7 @@ import type {
   OmniFiSyncJobAccountsData,
   OmniFiAccountsData,
   OmniFiTransactionsSummaryData,
-  OmniFiTransactionsSyncData,
+  OmniFiTransactionsData,
   OmniFiMfaResendData,
   OmniFiMfaInputData,
   BankCredentials,
@@ -260,7 +260,7 @@ export class OmniFiClient {
     pagination: { page?: number; pageSize?: number } = {},
   ): Promise<OmniFiEnveloppe<OmniFiConnectionsData>> {
     return this.requete<OmniFiConnectionsData>("/connections", {
-      query: { clientUserId, page: pagination.page, pageSize: pagination.pageSize },
+      query: { client_user_id: clientUserId, page: pagination.page, pageSize: pagination.pageSize },
     });
   }
 
@@ -285,22 +285,32 @@ export class OmniFiClient {
   }
 
   /**
-   * GET /accounts/{AccountId}/transactions/sync — sync incrémental par curseur.
-   * Omettre `cursor` pour l'historique complet ; relancer tant que HasMore=true
-   * avec le NextCursor renvoyé (docs § Transactions). La boucle d'itération vit
-   * côté ingestion (PR 2) : ce client expose une page à la fois.
-   * Pagination par curseur (≠ Links/Meta) → on renvoie directement le Data.
+   * GET /accounts/{AccountId}/transactions — liste paginée par PAGE (contrat réel
+   * déployé, aligné OBIE ; confirmé Omni-FI 2026-06-19). Renvoie l'enveloppe
+   * complète `{ Data: { Transaction[] }, Links, Meta }` : l'appelant (ingestion)
+   * itère via `Links.Next` / `Meta.TotalPages` (cf. `historiqueSoldes`,
+   * `listerConnexions`). `pageSize` défaut amont = 20.
+   *
+   * Remplace l'ancien `/transactions/sync` par curseur (Added/Modified/Removed/
+   * NextCursor/HasMore), qui est une extension future NON déployée — cf.
+   * OMNIFI_API_FEEDBACK.md §10. Pas de delta incrémental : on relit la liste
+   * complète, l'upsert idempotent (clé `omnifi_account_id`) absorbe les doublons.
    */
-  async syncTransactions(
+  listerTransactionsPage(
     accountId: string,
     clientUserId: string,
-    options: { cursor?: string; count?: number } = {},
-  ): Promise<OmniFiTransactionsSyncData> {
-    const enveloppe = await this.requete<OmniFiTransactionsSyncData>(
-      `/accounts/${encodeURIComponent(accountId)}/transactions/sync`,
-      { query: { clientUserId, cursor: options.cursor, count: options.count } },
+    pagination: { page?: number; pageSize?: number } = {},
+  ): Promise<OmniFiEnveloppe<OmniFiTransactionsData>> {
+    return this.requete<OmniFiTransactionsData>(
+      `/accounts/${encodeURIComponent(accountId)}/transactions`,
+      {
+        query: {
+          client_user_id: clientUserId,
+          page: pagination.page,
+          pageSize: pagination.pageSize,
+        },
+      },
     );
-    return enveloppe.Data;
   }
 
   /**
@@ -313,9 +323,56 @@ export class OmniFiClient {
   ): Promise<OmniFiTransactionsSummaryData> {
     const enveloppe = await this.requete<OmniFiTransactionsSummaryData>(
       `/accounts/${encodeURIComponent(accountId)}/transactions/summary`,
-      { query: { clientUserId, ...bornes } },
+      { query: { client_user_id: clientUserId, ...bornes } },
     );
     return enveloppe.Data;
+  }
+
+  /**
+   * [SERVEUR/ApiKey] POST /sync/{ConnectionId} — DÉCLENCHE un scraping/sync RÉEL
+   * d'une connexion (vs `GET /connections` qui ne fait que RELIRE le cache amont).
+   * Contrat confirmé empiriquement (scripts/diag-sync.ts, sandbox) : `HTTP 201`
+   * `{ JobId, Status: "PENDING", IsManual: true }` ; le job peut passer à COMPLETED
+   * quasi-instantanément (cf. attendreFinSync : 1er poll immédiat).
+   *
+   * `client_user_id` en SNAKE_CASE (frontière B2B) — la doc de cet endpoint écrit
+   * `clientUserId`, mais l'amont lit la query en snake_case partout (un camelCase
+   * est ignoré → 403) ; on aligne sur le reste de l'intégration.
+   *
+   * Mapping d'erreurs (erreurs.ts, non avalées) à interpréter par l'appelant :
+   *  - 429 → OmniFiApiError.estRateLimit (rate-limit « 1 sync / 15 min ») ; combiner
+   *    avec `NextSyncAvailableAt` d'une lecture amont pour NE PAS provoquer ce 429 ;
+   *  - 400 (obieCode « sync already running » / BAD_REQUEST) → un job tourne déjà :
+   *    l'appelant récupère le JobId courant via `getLatestSyncJob` plutôt que de
+   *    re-déclencher.
+   */
+  async declencherSync(
+    connectionId: string,
+    clientUserId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/${encodeURIComponent(connectionId)}`,
+      { method: "POST", auth: authApiKey(), query: { client_user_id: clientUserId } },
+    );
+    return env.Data;
+  }
+
+  /**
+   * [SERVEUR/ApiKey] GET /sync/{ConnectionId}/latest-job — état du DERNIER job de
+   * sync d'une connexion. Deux usages : récupérer le `JobId` d'un sync déjà en cours
+   * (après un 400 « sync already running » sur declencherSync), et lire
+   * `NextSyncAvailableAt` en amont pour décider s'il faut déclencher (garde
+   * anti-429). Renvoie le SyncJob complet (mêmes champs que getSyncJobServeur).
+   */
+  async getLatestSyncJob(
+    connectionId: string,
+    clientUserId: string,
+  ): Promise<OmniFiSyncJob> {
+    const env = await this.requete<OmniFiSyncJob>(
+      `/sync/${encodeURIComponent(connectionId)}/latest-job`,
+      { auth: authApiKey(), query: { client_user_id: clientUserId } },
+    );
+    return env.Data;
   }
 
   /* ---------------------------------------------------------------- */
@@ -412,7 +469,7 @@ export class OmniFiClient {
   ): Promise<OmniFiSyncJob> {
     const env = await this.requete<OmniFiSyncJob>(
       `/sync/job/${encodeURIComponent(jobId)}`,
-      { auth: authApiKey(), query: { clientUserId } },
+      { auth: authApiKey(), query: { client_user_id: clientUserId } },
     );
     return env.Data;
   }
@@ -507,7 +564,7 @@ export class OmniFiClient {
       auth: authApiKey(),
       query: {
         connectionId,
-        clientUserId,
+        client_user_id: clientUserId,
         page: pagination.page,
         pageSize: pagination.pageSize,
       },

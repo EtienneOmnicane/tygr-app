@@ -5,14 +5,19 @@
  *
  * Sémantique (§3.1) : Credit → `inflow` (vert, +), Debit → `outflow` (rouge, −).
  * La couleur ne porte QUE sur la donnée. `cleanLabel` peut être null (PII jamais
- * affichée, bank_label_raw exclu côté service) → fallback neutre.
+ * affichée, bank_label_raw exclu côté service) → repli typographié discret via
+ * `LibelleTransaction` (partagé avec la page /transactions).
  *
  * Liste vide gérée par le parent (empty state) ; ici on suppose ≥ 1 ligne.
  */
 import type { TransactionRecente } from "@/server/repositories/dashboard";
 
 import { formatMontant } from "@/lib/format-montant";
+import { formaterDateComptable } from "@/lib/format-date";
+import { categorieFr } from "@/lib/categories-fr";
 import { StateCard } from "@/components/dashboard/states/primitives";
+import { FlowTag } from "@/components/transactions/flow-tag";
+import { LibelleTransaction } from "@/components/transactions/libelle-transaction";
 
 export function TransactionsTable({
   transactions,
@@ -23,7 +28,7 @@ export function TransactionsTable({
 }) {
   return (
     <StateCard>
-      <h2 className="mb-4 text-sm font-semibold text-text">
+      <h2 className="mb-4 text-base font-semibold text-text">
         Transactions récentes
       </h2>
 
@@ -45,20 +50,31 @@ export function TransactionsTable({
               className="grid grid-cols-[88px_1fr_140px_140px] items-center gap-4 py-3"
             >
               <span className="text-xs tabular-nums text-text-muted">
-                {jourMois(t.transactionDate)}
+                {formaterDateComptable(t.transactionDate)}
               </span>
-              <span className="truncate text-sm text-text">
-                {t.cleanLabel ?? "Opération bancaire"}
-              </span>
+              {/* cascade={false} : le dashboard garde le rendu HISTORIQUE marchand →
+                  repli (sa colonne Catégorie est dédiée et fixe → l'anti-doublon de
+                  /transactions n'y est pas transposable ; et son DTO ne porte pas
+                  encore le brut). Alignement futur = dette TECH-DASHBOARD-CASCADE. */}
+              <LibelleTransaction
+                cleanLabel={t.cleanLabel}
+                cascade={false}
+                className="truncate text-sm"
+              />
               <span className="truncate text-xs text-text-muted">
-                {t.primaryCategory ?? "Non catégorisé"}
+                {categorieFr(t.primaryCategory)}
               </span>
-              <span
-                className={`text-right text-sm font-semibold tabular-nums ${
-                  sortie ? "text-outflow-700" : "text-inflow-700"
-                }`}
-              >
-                {formatMontant(montantSigne, devise, { signeExplicite: true })}
+              <span className="text-right">
+                <span
+                  className={`block text-sm font-semibold tabular-nums ${
+                    sortie ? "text-outflow-700" : "text-inflow-700"
+                  }`}
+                >
+                  {formatMontant(montantSigne, devise, { signeExplicite: true })}
+                </span>
+                <span className="mt-1 flex justify-end">
+                  <FlowTag sens={t.creditDebit} />
+                </span>
               </span>
             </div>
           );
@@ -72,15 +88,4 @@ export function TransactionsTable({
 function depouiller(montant: string): string {
   const t = montant.trim();
   return t.startsWith("-") ? t.slice(1) : t;
-}
-
-/** "2026-06-11" → "11 juin". Présentationnel. */
-function jourMois(date: string): string {
-  const [, mois, jour] = date.split("-");
-  const noms = [
-    "janv.", "févr.", "mars", "avr.", "mai", "juin",
-    "juil.", "août", "sept.", "oct.", "nov.", "déc.",
-  ];
-  const idx = Number(mois) - 1;
-  return idx >= 0 && idx < 12 ? `${Number(jour)} ${noms[idx]}` : date;
 }

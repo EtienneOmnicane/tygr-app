@@ -24,7 +24,9 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   ajouterSplit,
   archiverCategorie,
+  CategorieDupliqueeError,
   CategorieIntrouvableError,
+  CategorieNonAutoriseeError,
   creerCategorie,
   listerCategories,
   listerSplits,
@@ -41,15 +43,20 @@ const withWorkspace = createWithWorkspace(db);
 
 const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const ALICE = "11111111-1111-4111-8111-111111111111";
-const BOB = "22222222-2222-4222-8222-222222222222";
+const ALICE = "11111111-1111-4111-8111-111111111111"; // MANAGER de A
+const BOB = "22222222-2222-4222-8222-222222222222"; // MANAGER de B
+const ADELE = "44444444-4444-4444-8444-444444444444"; // ADMIN de A (CRUD référentiel)
+const VICTOR = "33333333-3333-4333-8333-333333333333"; // VIEWER de A
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
 const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
+const sessionAdmin = { userId: ADELE, activeWorkspaceId: WS_A };
+const sessionViewer = { userId: VICTOR, activeWorkspaceId: WS_A };
 
 // Données fixes par workspace.
 const TXN_A = "eeee1111-eeee-4eee-8eee-eeeeeeeeeeee";
 const TXN_B = "eeee2222-eeee-4eee-8eee-eeeeeeeeeeee";
 const CAT_A = "aaaacccc-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const CAT_A2 = "aaaadddd-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // 2e catégorie de WS_A (cas de contrôle doublon)
 const CAT_B = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 beforeAll(async () => {
@@ -67,9 +74,11 @@ beforeAll(async () => {
     insert into workspaces (id,name,kind,omnifi_client_user_id) values
       ('${WS_A}','BU A','INTERNAL_BU','eu-a'), ('${WS_B}','BU B','INTERNAL_BU','eu-b');
     insert into users (id,email,full_name) values
-      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob');
+      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob'),
+      ('${ADELE}','ad@g.mu','Adele'), ('${VICTOR}','v@g.mu','Victor');
     insert into workspace_members (user_id,workspace_id,role) values
-      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER');
+      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER'),
+      ('${ADELE}','${WS_A}','ADMIN'), ('${VICTOR}','${WS_A}','VIEWER');
     insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,created_by) values
       ('cccc0001-cccc-4ccc-8ccc-cccccccccccc','${WS_A}','c-a','mcb','${ALICE}'),
       ('cccc0002-cccc-4ccc-8ccc-cccccccccccc','${WS_B}','c-b','mcb','${BOB}');
@@ -80,7 +89,7 @@ beforeAll(async () => {
       ('${TXN_A}','${WS_A}','dddd0001-dddd-4ddd-8ddd-dddddddddddd','t-a','2026-03-15','2026-03-15T08:00:00Z','-1000.00','MUR','Debit','x'),
       ('${TXN_B}','${WS_B}','dddd0002-dddd-4ddd-8ddd-dddddddddddd','t-b','2026-03-15','2026-03-15T08:00:00Z','-1000.00','MUR','Debit','y');
     insert into categories (id,workspace_id,name) values
-      ('${CAT_A}','${WS_A}','Fournisseurs'), ('${CAT_B}','${WS_B}','Loyer');
+      ('${CAT_A}','${WS_A}','Fournisseurs'), ('${CAT_A2}','${WS_A}','Salaires'), ('${CAT_B}','${WS_B}','Loyer');
   `);
 
   await client.exec(
@@ -245,7 +254,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     const r = await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [
         { categoryId: CAT_A, amount: "700.00" },
-        { categoryId: CAT_A, amount: "300.00" },
+        { categoryId: CAT_A2, amount: "300.00" },
       ]),
     );
     expect(r.remplaces).toBe(2);
@@ -261,7 +270,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
       withWorkspace(sessionA, (tx, ctx) =>
         remplacerSplits(tx, ctx, refA, [
           { categoryId: CAT_A, amount: "900.00" },
-          { categoryId: CAT_A, amount: "200.00" }, // 1100 > 1000
+          { categoryId: CAT_A2, amount: "200.00" }, // 1100 > 1000
         ]),
       ),
     ).rejects.toBeInstanceOf(VentilationDepasseError);
@@ -280,6 +289,72 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     expect(splits).toHaveLength(0);
   });
 
+  // ── TX-QA-SPLIT-DOUBLON1 : deux parts sur la MÊME catégorie interdites ──────
+  it("REFUSE deux splits sur la MÊME catégorie (CategorieDupliqueeError)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "600.00" },
+          { categoryId: CAT_A, amount: "400.00" }, // même catégorie → rejet
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+  });
+
+  it("accepte deux splits sur des catégories DISTINCTES (contrôle)", async () => {
+    const r = await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "600.00" },
+        { categoryId: CAT_A2, amount: "400.00" }, // catégories distinctes → OK
+      ]),
+    );
+    expect(r.remplaces).toBe(2);
+  });
+
+  it("ORDRE VERROUILLÉ : doublon PRIME sur la somme (900+200 sur CAT_A → CategorieDupliquee, PAS VentilationDepasse)", async () => {
+    // Un payload viole LES DEUX règles : somme 1100 > 1000 (dépassement) ET même
+    // catégorie deux fois (doublon). La garde de doublon est placée AVANT le bloc
+    // somme → c'est CategorieDupliqueeError qui doit être levée. Ce test verrouille
+    // l'ordre : quiconque inverserait les gardes le casserait.
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "900.00" },
+          { categoryId: CAT_A, amount: "200.00" },
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+  });
+
+  it("non-régression atomicité : un rejet de doublon laisse l'état d'AVANT intact", async () => {
+    // Pose un état valide (distinct), puis tente un remplacement en doublon : la
+    // garde lève AVANT le DELETE (l.1bis, avant somme et avant DELETE) → rien n'a
+    // bougé (aucun split supprimé ni inséré).
+    await withWorkspace(sessionA, (tx, ctx) =>
+      remplacerSplits(tx, ctx, refA, [
+        { categoryId: CAT_A, amount: "600.00" },
+        { categoryId: CAT_A2, amount: "400.00" },
+      ]),
+    );
+    const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(avant).toHaveLength(2);
+
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        remplacerSplits(tx, ctx, refA, [
+          { categoryId: CAT_A, amount: "100.00" },
+          { categoryId: CAT_A, amount: "100.00" }, // doublon
+        ]),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDupliqueeError);
+
+    // L'état d'AVANT est intact (600 + 400 sur CAT_A/CAT_A2).
+    const apres = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
+    expect(apres).toHaveLength(2);
+    expect(apres.every((s) => s.amount === "600.00" || s.amount === "400.00")).toBe(true);
+    expect(apres.some((s) => s.amount === "100.00")).toBe(false);
+  });
+
   it("ROLLBACK si l'échec survient APRÈS le DELETE (FK invalide sur le 2e INSERT)", async () => {
     // Cas le plus dangereux (relevé en cross-review) : la somme passe la
     // validation (le DELETE s'exécute), le 1er INSERT réussit, puis le 2e viole
@@ -288,7 +363,7 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
     await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [
         { categoryId: CAT_A, amount: "600.00" },
-        { categoryId: CAT_A, amount: "400.00" },
+        { categoryId: CAT_A2, amount: "400.00" },
       ]),
     );
     const avant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
@@ -327,20 +402,62 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
   });
 });
 
-describe("CRUD référentiel de catégories", () => {
-  it("creerCategorie crée une Nature, listerCategories la renvoie", async () => {
-    const r = await withWorkspace(sessionA, (tx, ctx) =>
+describe("CRUD référentiel de catégories — réservé ADMIN (décision PO 2026-06-22)", () => {
+  it("ADMIN : creerCategorie crée une Nature, listerCategories la renvoie", async () => {
+    const r = await withWorkspace(sessionAdmin, (tx, ctx) =>
       creerCategorie(tx, ctx, { name: "Salaires", parentId: null }),
     );
     expect(r.categoryId).toBeTruthy();
+    // listerCategories reste ouvert à tous (lecture pour les pickers) : un membre
+    // simple voit la catégorie créée.
     const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
     expect(cats.some((c) => c.name === "Salaires")).toBe(true);
   });
 
-  it("creerCategorie avec parentId d'un AUTRE workspace → rejeté (FK composite)", async () => {
+  it("MANAGER ne peut PAS créer de catégorie (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Interdit", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("VIEWER ne peut PAS créer de catégorie (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionViewer, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Interdit2", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("MANAGER ne peut PAS renommer ni archiver (CategorieNonAutorisee)", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        renommerCategorie(tx, ctx, { categoryId: CAT_A, name: "Renommé" }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A)),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("rôle vérifié AVANT existence : MANAGER visant une catégorie inexistante → NonAutorisee (pas d'oracle)", async () => {
+    // Un non-ADMIN n'apprend même pas si la catégorie existe : la garde de rôle
+    // précède le check d'existence (anti-oracle, règle 3).
+    await expect(
+      withWorkspace(sessionA, (tx, ctx) =>
+        renommerCategorie(tx, ctx, {
+          categoryId: "99999999-9999-4999-8999-999999999999",
+          name: "X",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+  });
+
+  it("ADMIN : creerCategorie avec parentId d'un AUTRE workspace → rejeté (FK composite)", async () => {
     let thrown: unknown = null;
     try {
-      await withWorkspace(sessionA, (tx, ctx) =>
+      await withWorkspace(sessionAdmin, (tx, ctx) =>
         creerCategorie(tx, ctx, { name: "Sous-cat", parentId: CAT_B }),
       );
     } catch (e) {
@@ -349,23 +466,27 @@ describe("CRUD référentiel de catégories", () => {
     expect(thrown, "parentId cross-workspace doit être rejeté").not.toBeNull();
   });
 
-  it("renommerCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+  it("ADMIN : renommerCategorie d'un autre workspace → CategorieIntrouvable (RLS, pas NonAutorisee)", async () => {
+    // Adèle EST ADMIN → passe la garde de rôle ; c'est la RLS qui masque CAT_B
+    // (autre tenant) → introuvable. Prouve que la garde de rôle ne court-circuite
+    // pas l'isolation tenant (les deux barrières coexistent).
     await expect(
-      withWorkspace(sessionA, (tx, ctx) =>
+      withWorkspace(sessionAdmin, (tx, ctx) =>
         renommerCategorie(tx, ctx, { categoryId: CAT_B, name: "Hack" }),
       ),
     ).rejects.toBeInstanceOf(CategorieIntrouvableError);
   });
 
-  it("archiverCategorie masque la catégorie mais PRÉSERVE les splits existants", async () => {
-    // CAT_A est utilisée par des splits (recréés ci-dessous). On l'archive.
+  it("ADMIN : archiverCategorie masque la catégorie mais PRÉSERVE les splits existants", async () => {
+    // Le split est posé via la VENTILATION (ouverte à tous → Alice/MANAGER) ;
+    // l'archivage est une mutation du référentiel → ADMIN (Adèle).
     await withWorkspace(sessionA, (tx, ctx) =>
       remplacerSplits(tx, ctx, refA, [{ categoryId: CAT_A, amount: "500.00" }]),
     );
     const splitsAvant = await withWorkspace(sessionA, (tx, ctx) => listerSplits(tx, ctx, refA));
     expect(splitsAvant).toHaveLength(1);
 
-    await withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A));
+    await withWorkspace(sessionAdmin, (tx, ctx) => archiverCategorie(tx, ctx, CAT_A));
 
     // La catégorie a disparu des pickers…
     const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
@@ -376,9 +497,47 @@ describe("CRUD référentiel de catégories", () => {
     expect(splitsApres[0].categoryId).toBe(CAT_A);
   });
 
-  it("archiverCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
+  it("ADMIN : archiverCategorie d'un autre workspace → CategorieIntrouvable (RLS)", async () => {
     await expect(
-      withWorkspace(sessionA, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
+      withWorkspace(sessionAdmin, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
     ).rejects.toBeInstanceOf(CategorieIntrouvableError);
+  });
+});
+
+// ── Garde-fou L7a : la suite tourne-t-elle vraiment sous tygr_app ? ───────────
+// Sans cette précondition, un `set role tygr_app` régressé ferait tourner la suite
+// sous l'owner (RLS ignorée) en passant au vert silencieusement (faux-vert).
+describe("préconditions", () => {
+  it("0. les requêtes tournent sous tygr_app, pas sous l'owner (sinon la RLS est ignorée)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const res = await client.query<{ who: string }>("select current_user as who");
+    expect(res.rows[0].who).toBe("tygr_app");
+  });
+});
+
+// Contre-preuve R1 : prouve POURQUOI le rôle non-owner est vital. Sous l'owner la
+// frontière tenant ne filtre pas ; sous tygr_app elle filtre. Si l'app pointait sur
+// l'owner (RLS contournée), R1a casserait — l'angle mort devient bloquant.
+describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () => {
+  afterAll(async () => {
+    // Restaure l'invariant pour toute exécution ultérieure : rôle applicatif.
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("R1a. sous l'owner, un SELECT sans contexte voit l'AUTRE tenant (RLS ignorée)", async () => {
+    await client.exec(`reset role;`);
+    const res = await client.query<{ workspace_id: string }>(
+      "select workspace_id from workspace_members",
+    );
+    expect(res.rows.some((r) => r.workspace_id === WS_B)).toBe(true);
+  });
+
+  it("R1b. sous tygr_app, le contexte A ne voit JAMAIS le tenant B (la RLS filtre)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const vus = await withWorkspace(sessionA, (tx) =>
+      tx.select().from(schema.workspaceMembers),
+    );
+    expect(vus.every((r) => r.workspaceId === WS_A)).toBe(true);
+    expect(vus.some((r) => r.workspaceId === WS_B)).toBe(false);
   });
 });

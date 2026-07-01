@@ -18,7 +18,17 @@ import { notFound, redirect, unstable_rethrow } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { signOut } from "@/server/auth/config";
-import { identite, schema, withWorkspace } from "@/server/db";
+import {
+  identite,
+  listerComptes,
+  listerEntitesVisibles,
+  schema,
+  withWorkspace,
+} from "@/server/db";
+import type {
+  CompteConnecte,
+  EntiteVisible,
+} from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 import {
   AucunWorkspaceActifError,
@@ -82,13 +92,28 @@ export default async function WorkspaceLayout({
   // Next 16.2 ; cf. TODOS). On gère donc l'incident dans le layout lui-même
   // plutôt que de propager. FAIL-CLOSED conservé : aucune session n'est servie.
   let contexte:
-    | { role: WorkspaceRole; workspaceId: string; workspaceNom: string }
+    | {
+        role: WorkspaceRole;
+        workspaceId: string;
+        workspaceNom: string;
+        comptes: CompteConnecte[];
+        entites: EntiteVisible[];
+      }
     | null = null;
   let userId: string | null = null;
+  // viewFilter courant (L8b-1) : INTENTION de périmètre portée par la session,
+  // passée au header pour que le sélecteur affiche l'état actif (comptes cochés).
+  // Absent/null ⇒ « Groupe ». Lecture seule (pas une autorité — la RLS décide).
+  let viewFilterActif: string[] | null = null;
   try {
     const session = await exigerSessionWorkspace();
     userId = session.userId;
-    contexte = await withWorkspace(session, async (tx, ctx) => {
+    viewFilterActif = session.viewFilter ?? null;
+
+    // (1) CONTEXTE du chrome (role + nom du workspace). On garde la SESSION
+    //     COMPLÈTE : le nom du workspace est indifférent au view_filter (il ne lit
+    //     aucun bank_accounts scopé), donc le filtre éventuel est sans effet ici.
+    const contexteChrome = await withWorkspace(session, async (tx, ctx) => {
       const lignes = await tx
         .select({ name: schema.workspaces.name })
         .from(schema.workspaces)
@@ -100,6 +125,36 @@ export default async function WorkspaceLayout({
         workspaceNom: lignes[0]?.name ?? "—",
       };
     });
+
+    // (2) Liste qui ALIMENTE le sélecteur de périmètre : elle doit refléter le
+    //     DROIT COMPLET du membre, JAMAIS le view_filter — sinon, une fois un
+    //     filtre appliqué, listerComptes (SELECT bank_accounts, soumis à la clause
+    //     AND view_filter de la policy account_scope, 0016/0017) ne renverrait que
+    //     les comptes filtrés → le sélecteur s'auto-amputerait et on ne pourrait
+    //     plus ré-élargir (bug L8b-1). On lit donc dans une transaction SÉPARÉE
+    //     avec une session SANS viewFilter (mêmes 2 champs que le callback jwt,
+    //     config.ts:145-151) → le GUC app.current_view_filter n'est PAS posé →
+    //     clause view_filter neutre. account_scope / entity_scope / tenant_isolation
+    //     restent posés (sécurité INCHANGÉE) → la liste = exactement le droit du
+    //     membre, ni plus, ni moins. Transaction distincte = GUC en SET LOCAL, donc
+    //     aucune interférence avec la lecture filtrée des cartes (page.tsx).
+    const comptes = await withWorkspace(
+      { userId: session.userId, activeWorkspaceId: session.activeWorkspaceId },
+      (tx) => listerComptes(tx),
+    );
+
+    // (3) Entités VISIBLES qui peuplent l'onglet « Par entité » du sélecteur (L8b-2).
+    //     MÊME exigence que (2) : session SANS viewFilter (droit complet) pour que la
+    //     liste d'entités reste COMPLÈTE même quand un filtre est actif — sinon elle
+    //     s'auto-amputerait après filtrage (leçon #143) et on ne pourrait plus
+    //     ré-élargir vers une autre entité. Transaction distincte (SET LOCAL) → aucune
+    //     interférence avec les lectures filtrées des cartes (page.tsx).
+    const entites = await withWorkspace(
+      { userId: session.userId, activeWorkspaceId: session.activeWorkspaceId },
+      (tx) => listerEntitesVisibles(tx),
+    );
+
+    contexte = { ...contexteChrome, comptes, entites };
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
@@ -130,6 +185,9 @@ export default async function WorkspaceLayout({
         workspaceNom={contexte.workspaceNom}
         role={contexte.role}
         memberships={memberships}
+        comptes={contexte.comptes}
+        entites={contexte.entites}
+        viewFilterActif={viewFilterActif}
         onDeconnexion={deconnecter}
       />
       {children}

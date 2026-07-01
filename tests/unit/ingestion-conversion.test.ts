@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriverDateComptableMaurice,
+  INSTITUTION_NAME_MAX,
   normaliserMontant,
+  normaliserNomInstitution,
   validerCreditDebit,
 } from "@/server/ingestion/conversion";
 import { OmniFiInvalidResponseError } from "@/server/omnifi";
@@ -19,14 +21,28 @@ describe("normaliserMontant (règle 8 — sans float)", () => {
     expect(normaliserMontant("9999999999999.99")).toBe("9999999999999.99");
   });
 
+  it("accepte les décimales >2 SI elles sont nulles (format API 4 décimales)", () => {
+    // L'API Omni-FI renvoie « 750.0000 » : décimales 3-4 nulles → zéro perte.
+    expect(normaliserMontant("750.0000")).toBe("750.00");
+    expect(normaliserMontant("65000.0000")).toBe("65000.00");
+    expect(normaliserMontant("0.5000")).toBe("0.50");
+    expect(normaliserMontant("12.340")).toBe("12.34");
+  });
+
+  it("rejette >2 décimales SIGNIFICATIVES (pas d'arrondi caché, règle 8)", () => {
+    for (const perte of ["1.234", "12.3456", "0.001", "5.005"]) {
+      expect(() => normaliserMontant(perte)).toThrow(OmniFiInvalidResponseError);
+    }
+  });
+
   it("rejette les formes non conformes (pas de coercition silencieuse)", () => {
-    for (const mauvais of ["", "-5.00", "1.234", "abc", "1,50", "1e3", " "]) {
+    for (const mauvais of ["", "-5.00", "abc", "1,50", "1e3", " "]) {
       expect(() => normaliserMontant(mauvais)).toThrow(OmniFiInvalidResponseError);
     }
   });
 });
 
-describe("deriverDateComptableMaurice (E20 — Asia/Port_Louis, UTC+4)", () => {
+describe("deriverDateComptableMaurice (E20 — Indian/Mauritius, UTC+4)", () => {
   it("une transaction à 22h UTC tombe le LENDEMAIN à Maurice", () => {
     // 2026-06-10T22:00:00Z + 4h = 2026-06-11T02:00 Maurice
     expect(deriverDateComptableMaurice("2026-06-10T22:00:00Z")).toBe("2026-06-11");
@@ -53,5 +69,34 @@ describe("validerCreditDebit", () => {
     expect(validerCreditDebit("Credit")).toBe("Credit");
     expect(validerCreditDebit("Debit")).toBe("Debit");
     expect(() => validerCreditDebit("Other")).toThrow(OmniFiInvalidResponseError);
+  });
+});
+
+describe("normaliserNomInstitution (DASH-INST1 — string libre amont, défensif)", () => {
+  it("conserve un nom normal", () => {
+    expect(normaliserNomInstitution("Absa Internet Banking")).toBe("Absa Internet Banking");
+  });
+
+  it("trim les espaces de bord", () => {
+    expect(normaliserNomInstitution("  MCB  ")).toBe("MCB");
+  });
+
+  it("absent / vide / blanc → null (colonne nullable, l'UI dégrade)", () => {
+    expect(normaliserNomInstitution(null)).toBeNull();
+    expect(normaliserNomInstitution(undefined)).toBeNull();
+    expect(normaliserNomInstitution("")).toBeNull();
+    expect(normaliserNomInstitution("   ")).toBeNull();
+  });
+
+  it("non-string (réponse amont inattendue) → null sans throw", () => {
+    expect(normaliserNomInstitution(42 as never)).toBeNull();
+    expect(normaliserNomInstitution({} as never)).toBeNull();
+  });
+
+  it("tronque au-delà de la longueur de colonne (jamais d'insert qui dépasse)", () => {
+    const long = "X".repeat(INSTITUTION_NAME_MAX + 50);
+    const out = normaliserNomInstitution(long);
+    expect(out).not.toBeNull();
+    expect(out!.length).toBe(INSTITUTION_NAME_MAX);
   });
 });

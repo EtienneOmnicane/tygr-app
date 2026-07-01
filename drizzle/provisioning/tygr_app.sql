@@ -72,7 +72,37 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --      - bank_connections           : déconnexion d'une banque (cascade vers bank_accounts)
 --      - bank_accounts              : cascade depuis bank_connections / dé-rattachement
 --      - categories                 : référentiel éditable (Pilier 1)
+--      - categorization_rules        : règles de catégorisation éditables (config
+--                                     workspace, NON append-only — l'app archive
+--                                     via is_active, mais le DELETE physique d'une
+--                                     règle obsolète est légitime ; FK composite
+--                                     vers categories en ON DELETE no action)
 --      - transaction_categorizations: splits éditables (correction de catégorie, Pilier 1)
+--      - entities                   : référentiel d'entités (BU) éditable (archivage
+--                                     logique is_active ; un DELETE physique reste
+--                                     possible pour une entité JAMAIS référencée —
+--                                     les FK composites en ON DELETE RESTRICT
+--                                     protègent celles qui le sont)
+--      - member_entity_scopes       : table de DROITS (Vision Entité, N:N) éditable —
+--                                     révoquer/réattribuer un périmètre = DELETE
+--                                     légitime ; NON append-only
+--      - parties                    : référentiel des entités légales Omni-FI
+--                                     (PartyId), éditable/archivable (is_active ;
+--                                     un DELETE physique reste possible pour une
+--                                     party JAMAIS référencée — FK composites en
+--                                     ON DELETE RESTRICT protègent celles qui le
+--                                     sont). NON append-only.
+--      - account_party_role         : table de LIAISON détention compte↔party (N-N) —
+--                                     ré-attribuer/retirer une détention = DELETE
+--                                     légitime ; reçoit aussi la cascade depuis
+--                                     bank_accounts (compte supprimé → rôle supprimé).
+--                                     NON append-only.
+--      - user_scopes                : table de DROITS (périmètre party/compte par
+--                                     membre, L2) — révoquer/réattribuer un octroi =
+--                                     DELETE légitime ; reçoit aussi les cascades depuis
+--                                     workspace_members (membre retiré → octrois purgés)
+--                                     et bank_accounts (compte supprimé → octroi purgé).
+--                                     NON append-only.
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
@@ -105,7 +135,13 @@ BEGIN
     'bank_connections',
     'bank_accounts',
     'categories',
-    'transaction_categorizations'
+    'categorization_rules',
+    'transaction_categorizations',
+    'entities',
+    'member_entity_scopes',
+    'parties',
+    'account_party_role',
+    'user_scopes'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN

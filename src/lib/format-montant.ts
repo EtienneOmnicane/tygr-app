@@ -9,9 +9,26 @@
  *
  * L'UI affiche, ne recalcule rien : toute somme/différence est déjà faite côté
  * SQL (les services renvoient solde/variation prêts).
+ *
+ * Devise (décision audit ergonomie 2026-06-22) : symbole en PRÉFIXE pour les
+ * devises connues (MUR→Rs, USD→$, EUR→€), séparé du montant par une espace fine
+ * insécable — il ne se coupe JAMAIS du chiffre. Devise inconnue → repli code ISO
+ * en SUFFIXE. Devise vide ("") → montant nu (aucun symbole, aucune espace
+ * parasite), pour les contextes de saisie qui veulent juste le corps formaté.
  */
 
 const ESPACE_FINE = " "; // espace fine insécable — séparateur de milliers FR
+
+/**
+ * Devises affichées en PRÉFIXE symbolique (usage mauricien + benchmark FYGR).
+ * `Rs` pour la roupie : à Maurice le symbole précède le montant. Toute devise
+ * HORS de cette table retombe sur son code ISO en SUFFIXE (repli).
+ */
+const SYMBOLES_PREFIXE: Record<string, string> = {
+  MUR: "Rs",
+  USD: "$",
+  EUR: "€",
+};
 
 /** Découpe une chaîne décimale signée en { signe, entier, decimales }. */
 function decomposer(montant: string): {
@@ -36,9 +53,12 @@ function grouperMilliers(entier: string): string {
 }
 
 /**
- * Formate un montant pour l'affichage : "7 691 000,00 MUR".
+ * Formate un montant pour l'affichage : "Rs 7 691 000,00" (devise connue,
+ * préfixe), "1 200,00 ZAR" (devise inconnue, repli suffixe ISO), "42,00"
+ * (devise vide → montant nu).
  * @param montant chaîne décimale (peut être négative)
- * @param devise code ISO (MUR/USD/EUR) — affiché en suffixe
+ * @param devise code ISO (MUR/USD/EUR → symbole préfixe ; autre → suffixe ;
+ *   "" → aucun)
  * @param opts.signeExplicite force un "+" devant les positifs (KPI entrées)
  */
 export function formatMontant(
@@ -49,8 +69,29 @@ export function formatMontant(
   const { negatif, entier, decimales } = decomposer(montant);
   const corps = `${grouperMilliers(entier)},${decimales}`;
   const estZero = entier === "0" && decimales === "00";
-  const signe = negatif ? "−" : opts.signeExplicite && !estZero ? "+" : "";
-  return `${signe}${corps}${ESPACE_FINE}${devise}`;
+  // Zéro n'a JAMAIS de signe (règle « zéro = Rs 0,00 sans signe ») — y compris
+  // un zéro signé "-0.00" (sortie FX / arrondi) : on neutralise le − ET le +.
+  const signe = estZero ? "" : negatif ? "−" : opts.signeExplicite ? "+" : "";
+  const nombre = `${signe}${corps}`;
+
+  const code = devise.trim();
+  if (code === "") return nombre; // montant nu, aucune espace parasite
+  const symbole = SYMBOLES_PREFIXE[code.toUpperCase()];
+  // Le symbole/code est séparé du chiffre par une espace fine INSÉCABLE : il ne
+  // se retrouve jamais coupé du montant en fin de ligne (contre les troncatures).
+  return symbole
+    ? `${symbole}${ESPACE_FINE}${nombre}` // devise connue → préfixe symbolique
+    : `${nombre}${ESPACE_FINE}${code}`; // repli → code ISO en suffixe
+}
+
+/**
+ * Symbole de préfixe d'une devise connue (`MUR`→`Rs`, `USD`→`$`, `EUR`→`€`), ou
+ * `null` si inconnue (repli ISO suffixe). Sert à l'affichage multi-devises qui
+ * sépare le symbole du corps numérique pour ALIGNER les virgules décimales —
+ * source unique de la table (pas de duplication dans un composant).
+ */
+export function symbolePrefixe(devise: string): string | null {
+  return SYMBOLES_PREFIXE[devise.trim().toUpperCase()] ?? null;
 }
 
 /** Vrai si le montant décimal est négatif (sortie). Test sur la chaîne. */

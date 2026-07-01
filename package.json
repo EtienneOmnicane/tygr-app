@@ -4,15 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "start:sandbox": "bash scripts/dev-server.sh sandbox",
+    "start:prod": "bash scripts/dev-server.sh prod",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
     "test": "vitest run",
+    "test:isolation": "vitest run tests/isolation",
     "db:generate": "drizzle-kit generate",
     "db:provision": "node scripts/provision.mjs",
-    "seed:admin": "node scripts/seed-admin.mjs"
+    "db:baseline": "node scripts/baseline-migrations.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:backfill-auto-categorized": "node scripts/backfill-auto-categorized.mjs",
+    "seed:admin": "node scripts/seed-admin.mjs",
+    "seed:categories": "node scripts/seed-categories.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

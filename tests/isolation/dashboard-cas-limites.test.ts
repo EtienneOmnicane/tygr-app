@@ -17,6 +17,7 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   courbeTresorerie,
   soldeConsolideCourant,
+  soldesCourantsParDevise,
   syntheseMois,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
@@ -150,6 +151,39 @@ describe("syntheseMois — cas limites", () => {
   });
 });
 
+describe("soldesCourantsParDevise — multi-devises (DASH-INST1 / solde courant)", () => {
+  // Données propres à ce describe : on pose des current_balance (les comptes du
+  // setup n'en ont pas) + un 3e compte USD pour prouver le GROUP BY devise. On
+  // insère hors RLS (reset role), comme le test « borne haute exclusive ».
+  const ACC_USD = "cccc3333-cccc-4ccc-8ccc-cccccccccccc";
+  beforeAll(async () => {
+    await client.exec(`reset role;`);
+    await client.exec(`
+      update bank_accounts set current_balance = '7074400.00' where id = '${ACC1}';
+      update bank_accounts set current_balance = '1000000.00' where id = '${ACC2}';
+      insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected) values
+        ('${ACC_USD}','${WS}','${CONN}','oa-usd','Compte USD','USD','179200.00',true);
+    `);
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("somme par devise, jamais d'addition cross-devise (MUR + USD séparés)", async () => {
+    const soldes = await withWorkspace(session, (tx) => soldesCourantsParDevise(tx));
+    // MUR = 7074400 + 1000000 = 8074400 ; USD = 179200. Ordonné par devise (MUR<USD).
+    expect(soldes).toEqual([
+      { currency: "MUR", total: "8074400.00" },
+      { currency: "USD", total: "179200.00" },
+    ]);
+  });
+
+  it("ne dépend PAS de balance_history (source = current_balance)", async () => {
+    // balance_history du WS ne contient que du MUR ; le compte USD n'y est pas, et
+    // il ressort quand même → preuve que la source est bien bank_accounts.
+    const soldes = await withWorkspace(session, (tx) => soldesCourantsParDevise(tx));
+    expect(soldes.some((s) => s.currency === "USD" && s.total === "179200.00")).toBe(true);
+  });
+});
+
 describe("transactionsRecentes — cas limites", () => {
   it("respecte la limite et le tri date desc ; exclut les tombstones", async () => {
     const r = await withWorkspace(session, (tx) => transactionsRecentes(tx, 2));
@@ -162,5 +196,22 @@ describe("transactionsRecentes — cas limites", () => {
   it("limite 0 → liste vide", async () => {
     const r = await withWorkspace(session, (tx) => transactionsRecentes(tx, 0));
     expect(r).toEqual([]);
+  });
+});
+
+// ── Garde-fou L7a : la suite tourne-t-elle vraiment sous tygr_app ? ───────────
+// Sans cette précondition, un `set role tygr_app` régressé ferait tourner la suite
+// sous l'owner (RLS ignorée) en passant au vert silencieusement (faux-vert). Le test
+// pose lui-même le rôle (auto-suffisant, indépendant de l'ordre des autres cas).
+//
+// PAS de contre-preuve R1 ici : cette suite ne seede qu'UN SEUL tenant (WS) — il n'y a
+// aucune donnée d'un autre tenant pour bâtir un contraste « l'owner voit l'autre, pas
+// tygr_app » honnête. Un R1 fabriqué serait trompeur (règle 3). La frontière tenant
+// cross-workspace est prouvée par les suites multi-tenant (workspace/dashboard-isolation).
+describe("préconditions", () => {
+  it("0. les requêtes tournent sous tygr_app, pas sous l'owner (sinon la RLS est ignorée)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const res = await client.query<{ who: string }>("select current_user as who");
+    expect(res.rows[0].who).toBe("tygr_app");
   });
 });

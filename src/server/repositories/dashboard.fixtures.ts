@@ -26,6 +26,7 @@ export const FIXTURE_COMPTES: CompteConnecte[] = [
   {
     bankAccountId: "demo-acc-mcb-4521",
     accountName: "MCB — Compte courant business",
+    institutionName: "The Mauritius Commercial Bank",
     currency: "MUR",
     currentBalance: "5230000.00",
     lastSyncedAt: new Date("2026-06-12T08:00:00Z"),
@@ -33,6 +34,7 @@ export const FIXTURE_COMPTES: CompteConnecte[] = [
   {
     bankAccountId: "demo-acc-sbm-0937",
     accountName: "SBM — Compte opérations",
+    institutionName: "State Bank of Mauritius",
     currency: "MUR",
     currentBalance: "2461000.00",
     lastSyncedAt: new Date("2026-06-12T07:00:00Z"),
@@ -81,6 +83,8 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     cleanLabel: "Beachcomber Resorts",
     primaryCategory: "Income",
     subCategory: "Client Payments",
+    isAutoCategorized: true,
+    categorySource: "OMNIFI",
     bankAccountId: "demo-acc-sbm-0937",
   },
   {
@@ -92,6 +96,8 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     cleanLabel: "Ciel Textile",
     primaryCategory: "Income",
     subCategory: "Client Payments",
+    isAutoCategorized: true,
+    categorySource: "OMNIFI",
     bankAccountId: "demo-acc-sbm-0937",
   },
   {
@@ -103,6 +109,8 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     cleanLabel: "CEB",
     primaryCategory: "Utilities",
     subCategory: "Electricity",
+    isAutoCategorized: true,
+    categorySource: "OMNIFI",
     bankAccountId: "demo-acc-mcb-4521",
   },
   {
@@ -114,6 +122,8 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     cleanLabel: "Ebène Cybercity",
     primaryCategory: "Rent",
     subCategory: "Office Rent",
+    isAutoCategorized: true,
+    categorySource: "OMNIFI",
     bankAccountId: "demo-acc-mcb-4521",
   },
 ];

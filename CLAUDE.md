@@ -22,10 +22,10 @@ Règle stricte, non négociable :
 - **Le système opère à l'Île Maurice (MUT, UTC+4).** Aucun changement d'heure d'été.
 - **Tous les timestamps en base sont `TIMESTAMPTZ` stockés en UTC.** Jamais de
   `timestamp` sans fuseau, jamais d'heure locale persistée.
-- **La conversion `Asia/Port_Louis` est EXPLICITE dans le code** pour tout calcul de
+- **La conversion `Indian/Mauritius` est EXPLICITE dans le code** pour tout calcul de
   clôture (date comptable d'une transaction, bornes de période, agrégats EOD, courbe
   90j). Une transaction à 22h UTC tombe le lendemain à Maurice : `transaction_date`
-  dérive de `BookingDateTime AT TIME ZONE 'Asia/Port_Louis'` (E20). Interdit de
+  dérive de `BookingDateTime AT TIME ZONE 'Indian/Mauritius'` (E20). Interdit de
   comparer des dates « nues » sans avoir posé le fuseau.
 - **Multi-devise first (MUR, USD, EUR).** Le modèle ne suppose jamais le mono-MUR :
   toute table portant un montant porte sa devise ; les corporates mauriciens tiennent
@@ -100,6 +100,69 @@ la 2nde voie) :
 Corollaire de gouvernance : ces deux invariants relèvent de l'isolation tenant /
 append-only → **dette INTERDITE** (règle 9). Toute nouvelle table financière
 append-only DOIT poser son trigger `BEFORE DELETE` et rester hors liste blanche.
+
+## Entités multi-tenant (Option B — entités sous le Workspace, 2026-06-22)
+
+> Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Cette section
+> décrit l'invariant cible ; l'implémentation suit (lots L1→L5 du plan).
+
+Le Workspace = un GROUPE (« Omnicane »), pas une entité. Les ENTITÉS (BU) sont un
+niveau SOUS le workspace (`entities` + `bank_accounts.entity_id`), JAMAIS une frontière
+de tenant. Raison métier non négociable : **1 credential bancaire = comptes de N
+entités** (une connexion remonte d'un coup les comptes de plusieurs BU). L'Option A
+(entité = workspace isolé) polluerait un workspace avec les comptes d'autres entités à
+l'ingestion.
+
+DEUX étages d'isolation, à ne JAMAIS confondre ni inverser :
+- **Étage 1 — TENANT (dur)** : RLS `workspace_id` (POLITIQUE_TENANT). Anti-IDOR
+  cross-client. INCHANGÉ par le multi-entités. Fuite ici = cross-client (critique).
+- **Étage 2 — ENTITÉ (scopé)** : policy RLS `entity_scope` **AS RESTRICTIVE FOR ALL**
+  (USING + WITH CHECK, migration 0009 ; était FOR SELECT en 0008) sur `bank_accounts` via
+  le GUC `app.current_entity_scope` (posé par `withWorkspace` depuis `member_entity_scopes`,
+  JAMAIS un paramètre client). RESTRICTIVE ⇒ se combine en **AND** avec `tenant_isolation`
+  (PERMISSIVE) — une PERMISSIVE s'OR'erait et ne filtrerait rien. « Vision Entité » = GUC =
+  CSV d'entités ; « Vision Globale » = GUC vide = tout le tenant. La policy borne lecture
+  ET écriture : USING (SELECT/UPDATE/DELETE) interdit de cibler un compte hors scope ;
+  WITH CHECK (INSERT/UPDATE) interdit d'INSÉRER ou de DÉPLACER un compte hors scope.
+  Transactions/soldes héritent du scope par JOINTURE sur bank_accounts (pas de duplication
+  d'entity_id sur l'append-only) — d'où la règle « jamais de lecture des tables filles sans
+  joindre bank_accounts » (ENTITY-READ-JOIN1). Fuite ici = intra-groupe (grave, pas
+  cross-client) — mais traitée comme un gate bloquant.
+
+Invariants :
+- `entity_id` vit UNIQUEMENT sur `bank_accounts` (NULLABLE = « non assigné »). Ne JAMAIS
+  dénormaliser entity_id dans transactions_cache/balance_history (append-only/partitionné
+  + réassignation ne doit pas réécrire l'historique).
+- FK composites scopées workspace OBLIGATOIRES (pattern `categories`) :
+  `bank_accounts(entity_id, workspace_id) → entities(id, workspace_id)` et
+  `member_entity_scopes(entity_id, workspace_id) → entities`. Cible : `entities
+  UNIQUE(id, workspace_id)`. ON DELETE RESTRICT vers les entités (jamais cascade) ;
+  l'app archive (is_active=false). Cascade légitime uniquement
+  `member_entity_scopes(user_id, ws) → workspace_members` (purge des droits).
+- Un compte `entity_id IS NULL` est INVISIBLE en Vision Entité (fail-closed) ; seul
+  l'ADMIN (Vision Globale) le voit, dans le sas. L'ingestion ne pose jamais entity_id
+  automatiquement ; l'upsert de re-sync ne réécrase JAMAIS un entity_id déjà assigné.
+- Vision Entité / Globale : `member_entity_scopes` (N:N user↔entity). AUCUNE ligne =
+  Vision Globale. Le scope se résout depuis le CONTEXTE, jamais d'un paramètre client.
+- Pas de nouveau rôle au MVP : Vision Entité = membre scopé (pas un rôle). Gestion
+  entités/scopes/assignation = ADMIN-only. ⚠️ Deux gardes COMPLÉMENTAIRES, à ne pas
+  confondre : (1) la policy `entity_scope` FOR ALL borne l'écriture au **périmètre entité**
+  (structurel, fail-closed, ignore le rôle) ; (2) la garde **applicative** `ctx.role ===
+  "ADMIN"` réserve l'assignation `compte → entité` à l'ADMIN. La RLS ne connaît pas le rôle :
+  un membre MANAGER non scopé (Vision Globale) passe la policy mais doit être bloqué côté
+  Server Action par la garde de rôle. Ne JAMAIS exposer un chemin d'assignation sans CETTE
+  garde applicative en plus de la RLS.
+- Écriture bornée (ENTITY-WRITE-SCOPE1) : en Vision Globale (GUC vide) tout passe — l'ingestion
+  (`upsertCompte`, INSERT `entity_id` NULL) tourne en Vision Globale (gardée `peutModifier`).
+  Un membre SCOPÉ ne peut créer/déplacer un compte que DANS son périmètre ; un INSERT
+  `entity_id=NULL` sous Vision Entité est refusé (fail-closed voulu — un membre borné ne
+  crée pas de comptes non-assignés).
+- Omni-FI « Parties » volontairement IGNORÉES au MVP : assignation MANUELLE côté TYGR
+  (sas). Pré-remplissage via PartyId = dette P2 (ENTITY-PARTY1), PAS une dette d'isolation.
+- Provisioning : `entities` et `member_entity_scopes` dans la liste blanche DELETE de
+  `tygr_app.sql` (éditables, NON append-only). Ne JAMAIS y ajouter une table append-only.
+- Le filtre de périmètre vit dans la RLS (fail-closed), JAMAIS dans le .tsx : un oubli de
+  WHERE entity_id ne doit pas pouvoir créer une fuite intra-groupe.
 
 ## Tribal Knowledge & Quality Gates
 
@@ -198,6 +261,47 @@ Livrés dans le MÊME PR, sinon le PR est incomplet :
 - Driver DB : connexion via Pool/WebSocket ou TCP en mode transaction UNIQUEMENT
   (`SET LOCAL` exige des transactions multi-statements) — le mode HTTP de
   `@neondatabase/serverless` est interdit pour les requêtes applicatives (E16).
+
+#### Formatage des données financières (figé 2026-06-22, audit ergonomie soldes)
+- **Source UNIQUE de formatage** : `src/lib/format-montant.ts` (montants) et
+  `src/lib/format-date.ts` (dates). **INTERDIT** de redéfinir un formateur local
+  (noms de mois en dur, découpe ad-hoc de `YYYY-MM-DD`, groupement de milliers maison)
+  dans un composant — toute date/montant d'affichage passe par ces deux modules. Dette
+  C8 (3 formateurs de date parallèles) tuée par cette règle ; toute réintroduction est
+  un défaut de revue (règle 6).
+- **Devise = PRÉFIXE symbolique** : `Rs` (MUR), `$` (USD), `€` (EUR), séparé du montant
+  par une **espace fine insécable** (U+202F). Devise inconnue → **repli** code ISO en
+  suffixe. Le symbole/code ne se coupe JAMAIS du chiffre (insécable).
+- **Jamais de float** (rappel règle 8) : formatage sur la **chaîne** décimale, y compris
+  à l'affichage (`decomposer`/`grouperMilliers`) — `parseFloat` perd des centimes.
+- **Séparateurs FR** : milliers = espace fine insécable ; décimale = virgule ; signe
+  négatif = U+2212 `−` (pas le trait d'union) ; `+` explicite optionnel pour les KPI
+  entrées/variation ; zéro = `Rs 0,00` (sans signe).
+- **Un montant ne se `truncate` JAMAIS** : sa colonne est dimensionnée (`tabular-nums`,
+  `whitespace-nowrap`, largeur calibrée au plus grand montant plausible). Seuls les
+  **libellés** (nom de compte, catégorie) peuvent tronquer — jamais les chiffres clés.
+- **Multi-devises** : une ligne par devise, **jamais d'addition cross-devise** ; mono →
+  gros montant 28px/700 ; multi → pile égalitaire, **virgules décimales alignées**. Pas
+  de conversion FX d'affichage sans taux annoté (cf. Localisation).
+- **Fraîcheur du solde courant** : pastille `success` <6h / `warning` <24h / `danger`
+  ≥24h (UI_GUIDELINES §3.7) sur `lastSyncedAt`. **JAMAIS** « au JJ/MM » dérivé d'un EOD
+  de courbe pour un solde COURANT (anti-pattern DR-F3 : confond solde instantané et
+  clôture journalière). La date du dernier point de courbe reste sur la courbe.
+
+#### Intégration UI (Tailwind + tokens — « gstack » n'est PAS un design system)
+- **Le design system = `docs/UI_GUIDELINES.md` + tokens `src/app/globals.css`** (Tailwind
+  custom). **`gstack` est l'outillage CLI** (skills `/browse`, `/qa`, `/design-review`,
+  navigateur headless) — il sert au **Visual QA (Gate 4)**, à la capture d'états et au
+  dogfooding, **jamais au rendu**. Ne pas planifier ni coder contre des « primitives
+  gstack » : elles n'existent pas. Le rendu = classes Tailwind + tokens sémantiques.
+- **Aucune couleur en dur** : toujours un token sémantique (`ink`, `primary`, `accent`,
+  `inflow`/`outflow`, `surface-*`, `text-*`, `danger`/`success`/`warning`). Vert/rouge
+  réservés à la **donnée** ; les erreurs système portent fond + icône + message (≠ sortie).
+- **Composants d'affichage purs** : zéro fetch, zéro état interne, handlers en props
+  optionnelles inertes ; le conteneur (RSC/feature) décide quel état monter. Réutiliser
+  les primitives existantes (`StateCard`, `states/primitives.tsx`) — pas de carte ad-hoc.
+- **Responsive header** : **condenser** sous le breakpoint (menu/icône), **JAMAIS
+  `flex-wrap`** sur le header (cause des sauts de ligne disgracieux).
 
 ### 9. CI/CD & dette technique
 - Pipeline canonique (à créer, ordre non négociable) : lint → typecheck
@@ -359,6 +463,12 @@ commit, le Human-in-the-Loop garde la PR et le déploiement.
 
 ## Dev local — stack de validation (2026-06-12)
 
+> 🚀 **Lancer l'app (sandbox OU vraie donnée prod)** : `npm run start:sandbox` /
+> `npm run start:prod` (script `scripts/dev-server.sh`, guide
+> `docs/DEMARRAGE-SANDBOX-PROD.md`). Le script rallume Docker, charge le bon `.env`/
+> `.env.prod`, force HTTPS + `OMNIFI_ENV` cohérent. La création initiale de la stack
+> (réseau + conteneurs) reste à faire une fois, ci-dessous.
+
 Le driver applicatif est Neon Serverless (WebSocket, E16) : un Postgres local nu ne
 suffit pas. Stack de validation reproductible (conteneurs dédiés, réseau isolé
 `tygr_validation`, AUCUN lien avec d'autres stacks Docker de la machine) :
@@ -369,9 +479,33 @@ docker run -d --name tygr_postgres --network tygr_validation \
   -e POSTGRES_USER=tygr_owner -e POSTGRES_PASSWORD=… -e POSTGRES_DB=tygr postgres:16-alpine
 docker run -d --name tygr_wsproxy --network tygr_validation -p 127.0.0.1:5433:80 \
   -e ALLOW_ADDR_REGEX='^tygr_postgres:5432$' ghcr.io/neondatabase/wsproxy:latest
-# migrations : psql dans le conteneur (sed 's/--> statement-breakpoint//g' …)
-# rôle applicatif : CREATE ROLE tygr_app LOGIN + GRANT (hors migrations à ce jour — voir TODOS)
 ```
+
+### Séquence d'initialisation (ordre NON négociable — garanties RLS)
+
+Une fois les conteneurs en ligne, provisionner la base en 3 étapes. Toujours
+charger le `.env` avec `--env-file=.env` : les scripts `npm run db:*` nus NE
+chargent PAS le `.env` et plantent sur `DATABASE_URL_ADMIN`.
+
+```bash
+# 1. crée le rôle applicatif tygr_app (idempotent)
+node --env-file=.env scripts/provision.mjs
+# 2. applique les schémas Drizzle (tables fraîches)
+node --env-file=.env scripts/migrate.mjs
+# 3. RE-provision : applique la liste blanche des GRANT (dont DELETE) sur les tables fraîchement créées
+node --env-file=.env scripts/provision.mjs
+```
+
+> ⚠️ **Règle C4 — `provision.mjs` crée le rôle SANS mot de passe.** À ce stade
+> `tygr_app` existe mais a `rolcanlogin=false` : tout accès applicatif (qui passe
+> par `DATABASE_URL` = `tygr_app`) échoue à l'authentification, alors même que
+> provision et migrations « passent » (eux tournent en `tygr_owner` via
+> `DATABASE_URL_ADMIN`). Étape OBLIGATOIRE pour débloquer l'accès, hors script et
+> jamais commitée :
+>
+> ```bash
+> ALTER ROLE tygr_app LOGIN PASSWORD '<mot de passe de DATABASE_URL>';
+> ```
 
 `.env` local : `NEON_WSPROXY_LOCAL="localhost:5433"` (active le câblage wsproxy
 dev-only de `src/db/index.ts` et `scripts/seed-admin.mjs` — variable INTERDITE en
@@ -401,3 +535,17 @@ Key routing rules:
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
 - Author a backlog-ready spec/issue → invoke /spec
+
+## Politique de branches (actée 2026-06-18)
+
+- **`main`** = Production stable (protégée, source de vérité).
+- **`staging`** = Pré-production / recette : environnement d'intégration continue où l'on fusionne et teste les grosses fonctionnalités (ex. intégration Omni-FI) **avant** de promouvoir vers `main`.
+- **Les nouvelles fonctionnalités partent de `main`** : on crée chaque branche de feature/fix depuis `main` à jour (`git pull origin main`), puis on la propose en PR (vers `staging` pour recette, ou directement vers `main` selon le flux).
+- **Dossier de travail exclusif** : toutes les commandes (Git, Node, etc.) s'exécutent dans `tygr-app/`, jamais à la racine `Desktop/TYGR`.
+- Hygiène : ne supprimer une branche distante que si `git branch -r --merged origin/main` la confirme fusionnée. Créer les branches d'infra (ex. `staging`) depuis un **clone propre** du remote.
+
+### Autorisation de merge (Human-in-the-Loop nuancé, actée 2026-06-18)
+
+- **Auto-merge autorisé** (l'agent peut merger lui-même via `gh`, en son nom, après Quality Gate vert) **UNIQUEMENT** pour les PR **non applicatives** : documentation, `chore/`, notes, configuration éditoriale — rien qui change le comportement du produit.
+- **Human-in-the-Loop reste ABSOLU** pour tout le reste : code métier, infrastructure, sécurité, base de données (typiquement `feat/`, `fix/`, `refactor/`, migrations, RLS, Server Actions). Pour ces PR, l'agent **s'arrête à la PR poussée** et attend la validation + le merge **manuel** de l'humain.
+- En cas de doute sur la catégorie d'une PR (mixte docs + code, ou portée ambiguë) : traiter comme **applicative** → ne pas auto-merger.

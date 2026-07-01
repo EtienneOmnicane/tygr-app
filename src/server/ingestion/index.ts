@@ -1,7 +1,7 @@
 /**
  * Point d'entrée d'ingestion Omni-FI (PR 2). Surface livrée : persistance d'une
  * connexion/d'un compte, et synchronisation COMPLÈTE d'un compte connu
- * (transactions par curseur + soldes EOD). Tout accès données passe par
+ * (transactions par PAGE + soldes EOD). Tout accès données passe par
  * `executer` = withWorkspace(session, fn) (règle 2) : le workspace_id vient du
  * contexte, jamais d'un paramètre. Pas de PII en log (règle 8).
  *
@@ -16,7 +16,7 @@
 import type { OmniFiClient, OmniFiConnection } from "@/server/omnifi";
 import type { ExecuterWorkspace } from "@/server/db/tenancy";
 
-import { normaliserMontant } from "./conversion";
+import { normaliserMontant, normaliserNomInstitution } from "./conversion";
 import { synchroniserCompte, type ResultatSync } from "./orchestrateur";
 import {
   upsertConnexion,
@@ -53,6 +53,7 @@ export async function ingererConnexions(
       upsertConnexion(tx, ctx, {
         omnifiConnectionId: conn.ConnectionId,
         institutionId: conn.InstitutionId,
+        institutionName: normaliserNomInstitution(conn.InstitutionName),
         status: conn.Status,
         nextSyncAvailableAt: conn.NextSyncAvailableAt
           ? new Date(conn.NextSyncAvailableAt)
@@ -64,8 +65,9 @@ export async function ingererConnexions(
 }
 
 /**
- * Synchronise UN compte déjà rattaché : transactions (curseur, Q3/Q4) + soldes
- * EOD (page-based, suit Links.Next). Composable depuis un cron/route.
+ * Synchronise UN compte déjà rattaché : transactions (par PAGE, suit Links.Next/
+ * Meta.TotalPages) + soldes EOD (par page également). Composable depuis un cron/
+ * route. Pas de curseur : chaque sync relit la liste complète (upsert idempotent).
  */
 export async function synchroniserCompteComplet(
   client: OmniFiClient,
@@ -74,9 +76,8 @@ export async function synchroniserCompteComplet(
     omnifiAccountId: string;
     bankAccountId: string;
     clientUserId: string;
-    curseurInitial: string | null;
     fenetreSoldes?: { fromStatementDateTime?: string; toStatementDateTime?: string };
-    count?: number;
+    pageSize?: number;
     maintenant?: () => Date;
   },
 ): Promise<{ sync: ResultatSync; soldes: number }> {
