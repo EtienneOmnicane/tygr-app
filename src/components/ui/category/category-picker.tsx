@@ -317,7 +317,7 @@ function CreationCategorie({
           }}
           placeholder="Nom de la catégorie"
           aria-label="Nom de la nouvelle catégorie"
-          className="h-9 flex-1 rounded-control border border-line bg-surface-inset px-3
+          className="h-9 min-w-0 flex-1 rounded-control border border-line bg-surface-inset px-3
             text-sm text-text placeholder:text-text-faint focus:border-primary
             focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-48"
         />
@@ -325,7 +325,7 @@ function CreationCategorie({
           type="button"
           onClick={() => void soumettre()}
           disabled={nom.trim() === "" || enCours}
-          className="inline-flex h-9 cursor-pointer items-center justify-center rounded-control bg-primary
+          className="inline-flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-control bg-primary
             px-3 text-sm font-semibold text-text-onink transition-colors hover:bg-primary-600
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
             disabled:cursor-not-allowed disabled:opacity-48"
@@ -336,7 +336,7 @@ function CreationCategorie({
           type="button"
           onClick={annuler}
           disabled={enCours}
-          className="inline-flex h-9 cursor-pointer items-center justify-center rounded-control px-2 text-sm
+          className="inline-flex h-9 shrink-0 cursor-pointer items-center justify-center rounded-control px-2 text-sm
             font-medium text-text-muted transition-colors hover:text-text
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
             disabled:cursor-not-allowed disabled:opacity-48"
