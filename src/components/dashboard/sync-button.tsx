@@ -42,6 +42,7 @@ type Retour = {
   erreur: string | null;
   succes: string | null;
   reparation?: Array<{ connectionId: string; jobId: string }>;
+  aReconnecter?: Array<{ connectionId: string }>;
 };
 
 export function SyncButton({ role }: { role: WorkspaceRole }) {
@@ -80,6 +81,9 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
 
   // Une réparation MFA a-t-elle été demandée par le re-sync ?
   const aReparer = (retour?.reparation?.length ?? 0) > 0;
+  // Une banque a-t-elle un accès désaligné (403) → à RECONNECTER ? Distinct de la
+  // réparation MFA : ici on relance un parcours de connexion complet depuis /banques.
+  const aReconnecter = (retour?.aReconnecter?.length ?? 0) > 0;
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -122,7 +126,21 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
         </p>
       )}
 
-      {!retour?.erreur && !aReparer && retour?.succes && (
+      {!retour?.erreur && aReconnecter && (
+        <p role="status" className="text-right text-xs text-text-muted">
+          L’accès d’une banque n’est plus valide.{" "}
+          <Link
+            href="/banques"
+            className="font-semibold text-primary underline-offset-2 hover:underline
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+              focus-visible:ring-offset-2 rounded-[2px]"
+          >
+            Reconnecter cette banque
+          </Link>
+        </p>
+      )}
+
+      {!retour?.erreur && !aReparer && !aReconnecter && retour?.succes && (
         <p role="status" className="text-right text-xs text-success">
           Comptes à jour.
         </p>

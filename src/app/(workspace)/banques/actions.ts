@@ -65,6 +65,17 @@ export interface EtatFinalisation {
    * cooldown.
    */
   rateLimited?: Array<{ connectionId: string; nextSyncAt: string | null }>;
+  /**
+   * Connexions dont l'EndUser/credential est DÉSALIGNÉ côté Omni-FI (403
+   * `PUBLIC_TOKEN_CLIENT_MISMATCH`) : le lien banque n'est plus rattachable à ce
+   * workspace. DISTINCT d'un échec générique (`echecs`) et de la réparation MFA
+   * (`reparation`) : ici la synchro « réussit » en apparence mais ne remonte plus
+   * rien — l'utilisateur doit RECONNECTER la banque (nouveau parcours de connexion).
+   * L'UI affiche une invite dédiée « Reconnecter cette banque ». Absent/omis quand
+   * aucune connexion n'est concernée. Non-énumérant : identifiant opaque Omni-FI
+   * uniquement (ni libellé bancaire ni token).
+   */
+  aReconnecter?: Array<{ connectionId: string }>;
 }
 
 const MESSAGE_REFUS = "Action non autorisée.";
@@ -240,7 +251,10 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     // la MÊME unité (banque) et ne se contredisent jamais — éviter « 1 compte sur 1 banque »
     // + « 1 banque a échoué » (constat cross-review : comptes ≠ banques). Le nombre de
     // comptes/transactions reste un détail secondaire cohérent.
-    const banquesOk = r.connexions - r.echecs;
+    // « À jour » exclut AUSSI les banques désalignées (`aReconnecter`) : elles n'ont
+    // rien remonté (comptes silencieusement vides côté Omni-FI), donc les compter
+    // comme à jour serait exactement le bug qu'on corrige. Unité BANQUE conservée.
+    const banquesOk = r.connexions - r.echecs - r.aReconnecter.length;
     let base = `Synchronisation effectuée — ${banquesOk} banque(s) à jour, ${r.comptesRattaches} compte(s) mis à jour.`;
     if (r.transactionsImportees > 0) {
       base += ` ${r.transactionsImportees} transaction(s) importée(s).`;
@@ -250,6 +264,12 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     // plus). Distinct du cooldown (pas une erreur) et de la réparation (action requise).
     if (r.echecs > 0) {
       base += ` ${r.echecs} banque(s) n'ont pas pu être synchronisées — réessayez plus tard.`;
+    }
+    // DÉSALIGNEMENT ENDUSER (403) : état ACTIONNABLE distinct — on le DIT clairement et on
+    // remonte le signal structuré pour que l'UI propose « Reconnecter cette banque ». Sans
+    // ça, l'utilisateur voyait des comptes vides avec un last_synced_at frais (incident prod).
+    if (r.aReconnecter.length > 0) {
+      base += ` ${r.aReconnecter.length} banque(s) doivent être reconnectées — leur accès n'est plus valide.`;
     }
     // Cooldown : information, pas erreur. On indique le délai si on connaît la date la
     // plus proche (sinon mention générique). L'UI peut afficher un compte à rebours.
@@ -267,6 +287,9 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       succes: base,
       ...(r.aReparer.length > 0 ? { reparation: r.aReparer } : {}),
       ...(r.rateLimited.length > 0 ? { rateLimited: r.rateLimited } : {}),
+      ...(r.aReconnecter.length > 0
+        ? { aReconnecter: r.aReconnecter.map((c) => ({ connectionId: c.connectionId })) }
+        : {}),
     };
   } catch (erreur) {
     return {

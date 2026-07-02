@@ -28,6 +28,15 @@ export interface ConnexionAReparer {
   jobId: string;
 }
 
+/**
+ * Une connexion à RECONNECTER (signal `aReconnecter` : 403 désalignement EndUser). À
+ * la différence de `ConnexionAReparer`, il n'y a PAS de `jobId` : l'accès n'est plus
+ * valide, on relance un parcours de connexion complet (pas une reprise MFA/REPAIR).
+ */
+export interface ConnexionAReconnecter {
+  connectionId: string;
+}
+
 export function WidgetFeedback({
   erreurDemarrage,
   erreurFinalisation,
@@ -36,6 +45,7 @@ export function WidgetFeedback({
   reparation,
   onReconnecter,
   reparationEnCours,
+  aReconnecter,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
@@ -55,6 +65,12 @@ export function WidgetFeedback({
   onReconnecter?: (connexion: ConnexionAReparer) => void;
   /** `true` pendant l'ouverture d'une réparation : désactive les boutons (anti-double-clic). */
   reparationEnCours?: boolean;
+  /**
+   * Connexions dont l'accès est DÉSALIGNÉ (403) : à reconnecter par un NOUVEAU parcours
+   * de connexion (pas de REPAIR — aucun jobId). On affiche une invite dédiée pointant
+   * vers le bouton « Connecter une banque ». Vide/absent = aucune invite.
+   */
+  aReconnecter?: ConnexionAReconnecter[];
 }) {
   return (
     <>
@@ -120,6 +136,18 @@ export function WidgetFeedback({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* DÉSALIGNEMENT ENDUSER (403) : l'accès de la banque n'est plus valide. À la
+          différence de la réparation MFA, il n'y a pas de reprise possible — l'utilisateur
+          doit REFAIRE une connexion via « Connecter une banque » ci-dessus. On l'énonce
+          clairement (role=status, jamais un rouge de donnée §3.4) sans nommer la banque. */}
+      {aReconnecter && aReconnecter.length > 0 && (
+        <p role="status" className="text-sm text-text-muted">
+          {aReconnecter.length === 1
+            ? "L’accès d’une banque n’est plus valide : reconnectez-la via « Connecter une banque » ci-dessus."
+            : `L’accès de ${aReconnecter.length} banque(s) n’est plus valide : reconnectez-les via « Connecter une banque » ci-dessus.`}
+        </p>
       )}
     </>
   );

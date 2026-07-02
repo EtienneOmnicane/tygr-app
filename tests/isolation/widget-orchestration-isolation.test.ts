@@ -945,6 +945,58 @@ describe("synchroniserConnexionsDepuisOmnifi — FAIL-SOFT par connexion + agré
     expect(accs.length).toBe(2);
   });
 
+  it("403 désalignement EndUser (PUBLIC_TOKEN_CLIENT_MISMATCH) sur 1 connexion → bucket aReconnecter, PAS echecs, les autres continuent", async () => {
+    // Incident prod : un 403 (EndUser/credential désaligné) était avalé en échec
+    // silencieux → comptes vides + last_synced_at frais. On PROUVE qu'il atterrit
+    // désormais dans `aReconnecter` (état actionnable dédié), qu'il n'est PAS compté
+    // en `echecs`/`echecsDetail`, et qu'il n'interrompt PAS les autres connexions.
+    const ids = ["rc-A", "rc-403", "rc-C"];
+    for (const id of ids) await semerConnexionEnBase(id, `oa-${id}`); // périmètre LOT 1
+    const c = clientSyncAvecUnEchec(
+      ids,
+      "rc-403",
+      new OmniFiApiError(403, "PUBLIC_TOKEN_CLIENT_MISMATCH", []),
+    );
+
+    // (a) NE throw PAS : les autres connexions ne sont pas abandonnées.
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+
+    expect(r.connexions).toBe(3);
+    // (b) Le 403 va dans le bucket DÉDIÉ, avec code/status/obieCode sûrs — jamais en générique.
+    expect(r.aReconnecter).toEqual([
+      {
+        connectionId: "rc-403",
+        code: "OMNIFI_API_ERROR",
+        status: 403,
+        obieCode: "PUBLIC_TOKEN_CLIENT_MISMATCH",
+      },
+    ]);
+    // Il n'est PAS compté comme un échec générique (le cœur du correctif).
+    expect(r.echecs).toBe(0);
+    expect(r.echecsDetail).toEqual([]);
+    // Les 2 connexions saines ont bien été rattachées (le 403 échoue AVANT persistance).
+    expect(r.comptesRattaches).toBe(2);
+    // La connexion 403 a bien été tentée (preuve qu'on n'a pas court-circuité la boucle).
+    expect(c.listerComptesConnexion).toHaveBeenCalledWith("rc-403", "enduser-a", expect.anything());
+    const accs = await withWorkspace({ userId: ADMIN_A, activeWorkspaceId: WS_A }, async (tx) =>
+      (await tx.select().from(bankAccounts)).filter((a) => ["oa-rc-A", "oa-rc-C"].includes(a.omnifiAccountId)),
+    );
+    expect(accs.length).toBe(2);
+  });
+
+  it("403 SANS obieCode → toujours routé en aReconnecter (le status 403 est le discriminant)", async () => {
+    // L'enveloppe OBIE peut ne pas porter d'obieCode : le status 403 seul suffit à
+    // classer la connexion en « à reconnecter » (jamais en échec générique silencieux).
+    await semerConnexionEnBase("rc-noc", "oa-rc-noc");
+    const c = clientSyncAvecUnEchec(["rc-noc"], "rc-noc", new OmniFiApiError(403, null, []));
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.aReconnecter).toEqual([
+      { connectionId: "rc-noc", code: "OMNIFI_API_ERROR", status: 403, obieCode: null },
+    ]);
+    expect(r.echecs).toBe(0);
+    expect(r.echecsDetail).toEqual([]);
+  });
+
   it("une erreur NON-OmniFiApiError (ex. panne DB) est aussi fail-soft (code machine, sans status)", async () => {
     const ids = ["fs2-OK", "fs2-KO"];
     for (const id of ids) await semerConnexionEnBase(id, `oa-${id}`); // périmètre LOT 1
