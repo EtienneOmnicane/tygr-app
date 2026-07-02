@@ -25,14 +25,29 @@ import {
   type DonneesDashboard,
 } from "@/components/dashboard/dashboard-content";
 
-type EtatDemo = "succes" | "un-mois" | "partiel" | "vide";
+type EtatDemo = "succes" | "multi-devise" | "un-mois" | "partiel" | "vide";
 type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "succes", label: "Succès" },
+  { id: "multi-devise", label: "Multi-devise (5)" },
   { id: "un-mois", label: "1 mois peuplé (fix courbe)" },
   { id: "partiel", label: "Partiel (post-onboarding)" },
   { id: "vide", label: "Vide" },
+];
+
+/**
+ * Cas 5 devises (UI-SOLDE-MULTIDEVISE-POLISH1) : mélange devises À symbole
+ * (EUR/MUR/USD) et SANS symbole (GBP/ZAR) pour capturer la pile unifiée —
+ * indicateur toujours à gauche, décimales toutes alignées, zéro suffixe ISO.
+ * Surcharge locale de `soldesParDevise` : la fixture partagée reste intacte.
+ */
+const DEMO_SOLDES_CINQ_DEVISES: DonneesDashboard["soldesParDevise"] = [
+  { currency: "EUR", total: "128450.75" },
+  { currency: "GBP", total: "349.20" },
+  { currency: "MUR", total: "7691000.00" },
+  { currency: "USD", total: "179200.00" },
+  { currency: "ZAR", total: "1204360.50" },
 ];
 
 const ONGLETS_FRAICHEUR: Array<{ id: FraicheurDemo; label: string; heures: number }> = [
@@ -63,11 +78,13 @@ export default function DashboardPreviewPage() {
     const base =
       etat === "succes"
         ? DEMO_DASHBOARD
-        : etat === "un-mois"
-          ? DEMO_DASHBOARD_UN_MOIS
-          : etat === "partiel"
-            ? DEMO_DASHBOARD_PARTIEL
-            : DEMO_DASHBOARD_VIDE;
+        : etat === "multi-devise"
+          ? { ...DEMO_DASHBOARD, soldesParDevise: DEMO_SOLDES_CINQ_DEVISES }
+          : etat === "un-mois"
+            ? DEMO_DASHBOARD_UN_MOIS
+            : etat === "partiel"
+              ? DEMO_DASHBOARD_PARTIEL
+              : DEMO_DASHBOARD_VIDE;
     // L'état « vide » n'a pas de compte → la fraîcheur n'a pas d'effet (pas de pastille).
     return etat === "vide" ? base : avecFraicheur(base, heures);
   }, [etat, fraicheur]);

@@ -94,6 +94,36 @@ export function symbolePrefixe(devise: string): string | null {
   return SYMBOLES_PREFIXE[devise.trim().toUpperCase()] ?? null;
 }
 
+/**
+ * Indicateur de devise à poser À GAUCHE d'un montant nu, format UNIFIÉ : le
+ * symbole si la devise est connue (`Rs`/`$`/`€`), SINON le code ISO en majuscules
+ * (`GBP`, `ZAR`) — plus jamais de code en suffixe inline. `null` pour une devise
+ * vide (contexte de saisie qui n'affiche aucun indicateur).
+ *
+ * Contrat de la pile multi-devise (UI-SOLDE-MULTIDEVISE-POLISH1) : l'indicateur
+ * occupe une colonne gauche de largeur `auto`, le montant nu la colonne droite
+ * `tabular-nums` — les virgules décimales s'alignent quelle que soit la devise.
+ */
+export function indicateurDevise(devise: string): string | null {
+  const code = devise.trim();
+  if (code === "") return null;
+  return SYMBOLES_PREFIXE[code.toUpperCase()] ?? code.toUpperCase();
+}
+
+/**
+ * Corps numérique NU d'un montant (« 7 691 000,00 », « −384 250,00 », « +25,50 »),
+ * sans aucun indicateur de devise ni espace parasite. Remplace proprement le hack
+ * `formatMontant(x, "")` : délègue au formateur partagé avec devise vide, donc
+ * signe typographique, zéro-sans-signe, groupement FR et anti-float restent
+ * garantis par une SEULE implémentation. Se pose à droite d'`indicateurDevise`.
+ */
+export function montantNu(
+  montant: string,
+  opts: { signeExplicite?: boolean } = {},
+): string {
+  return formatMontant(montant, "", opts);
+}
+
 /** Vrai si le montant décimal est négatif (sortie). Test sur la chaîne. */
 export function estNegatif(montant: string): boolean {
   return montant.trim().startsWith("-");

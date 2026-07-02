@@ -10,7 +10,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { estNegatif, estZero, formatMontant } from "@/lib/format-montant";
+import {
+  estNegatif,
+  estZero,
+  formatMontant,
+  indicateurDevise,
+  montantNu,
+} from "@/lib/format-montant";
 
 const NB = " "; // espace fine insécable
 
@@ -76,6 +82,58 @@ describe("formatMontant — bornes financières (anti-float, signe, zéro)", () 
 
   it("gère les petits montants sous 1000 sans séparateur", () => {
     expect(formatMontant("42.00", "MUR")).toBe(`Rs${NB}42,00`);
+  });
+});
+
+describe("indicateurDevise — étiquette de gauche unifiée (UI-SOLDE-MULTIDEVISE-POLISH1)", () => {
+  it("devise connue → SYMBOLE (Rs/$/€)", () => {
+    expect(indicateurDevise("MUR")).toBe("Rs");
+    expect(indicateurDevise("USD")).toBe("$");
+    expect(indicateurDevise("EUR")).toBe("€");
+  });
+
+  it("devise SANS symbole → CODE ISO en majuscules (plus de suffixe inline)", () => {
+    expect(indicateurDevise("GBP")).toBe("GBP");
+    expect(indicateurDevise("ZAR")).toBe("ZAR");
+  });
+
+  it("normalise la casse et l'espace autour du code", () => {
+    expect(indicateurDevise("mur")).toBe("Rs");
+    expect(indicateurDevise("  gbp  ")).toBe("GBP");
+  });
+
+  it("devise vide → null (aucun indicateur, contexte de saisie)", () => {
+    expect(indicateurDevise("")).toBeNull();
+    expect(indicateurDevise("   ")).toBeNull();
+  });
+});
+
+describe("montantNu — corps sans indicateur, décimales alignables", () => {
+  it("montant nu, aucune espace parasite ni symbole", () => {
+    expect(montantNu("7691000.00")).toBe(`7${NB}691${NB}000,00`);
+  });
+
+  it("cas ZÉRO → « 0,00 » sans signe", () => {
+    expect(montantNu("0")).toBe("0,00");
+    expect(montantNu("-0.00")).toBe("0,00");
+  });
+
+  it("préserve le signe typographique moins (négatif)", () => {
+    expect(montantNu("-384250.00")).toBe(`−384${NB}250,00`);
+  });
+
+  it("relaie signeExplicite (+ sur positif non nul)", () => {
+    expect(montantNu("25500.00", { signeExplicite: true })).toBe(
+      `+25${NB}500,00`,
+    );
+    // ...mais jamais de + sur zéro.
+    expect(montantNu("0", { signeExplicite: true })).toBe("0,00");
+  });
+
+  it("identique à formatMontant(_, \"\") — délégation, zéro divergence", () => {
+    for (const v of ["7691000.00", "-384250.00", "0", "-0.00", "42.5"]) {
+      expect(montantNu(v)).toBe(formatMontant(v, ""));
+    }
   });
 });
 
