@@ -49,6 +49,33 @@ recon/plan).
   side-panel (distinct du graphe). Niveau classes Tailwind a priori. **Déclencheur** : ce
   chantier polish dashboard v2.
 
+- [ ] **UI-SOLDE-MULTIDEVISE-POLISH1 (P2, effort S-M — Front) — la pile « SOLDES PAR
+  DEVISE » mélange deux formats et casse l'alignement des décimales.** Constaté sur prod
+  réelle (2026-07-02, 5 devises : EUR/GBP/MUR/USD/ZAR). Composant `SoldesMultiDevises`
+  (`src/components/dashboard/side-panel-kpi.tsx`). Défauts OBJECTIVÉS : (1) deux formats
+  coexistent — les devises à symbole connu (EUR €, MUR Rs, USD $) rendent le symbole en
+  COLONNE GAUCHE + montant nu à droite, tandis que les devises SANS symbole (GBP, ZAR)
+  n'ont AUCUN symbole gauche et collent le code ISO en SUFFIXE (« 349,20 GBP », « 583,52
+  ZAR ») → colonne gauche en dents de scie (2 lignes vides), deux layouts entrelacés ;
+  (2) l'alignement des décimales §7-1 est CASSÉ pour les lignes à suffixe : le code ISO
+  inline pousse le nombre à gauche, donc « 349,20 » / « 583,52 » ne s'alignent pas sur
+  « 774 022,60 » / « 221 862 968,24 » / « 177 427,99 » — l'invariant même pour lequel la
+  grille `[auto_1fr]` existe ; (3) devise de base (MUR/Rs) pas en tête (ordre arbitraire) ;
+  (4) pas de rythme/séparation entre lignes. CAUSE : `symbolePrefixe` renvoie un symbole
+  pour certaines devises et rien pour d'autres → repli `formatMontant(total, currency)`
+  (suffixe ISO) pour les inconnues, d'où le mélange. PISTE FIX : UN seul format —
+  indicateur de devise TOUJOURS en colonne gauche (symbole si connu, SINON le code ISO),
+  montant TOUJOURS « nombre nu » aligné à droite, décimales alignées, jamais de suffixe
+  inline → €/GBP/Rs/$/ZAR tous à gauche, tous les nombres alignés. ⚠️ Unifier DU MÊME
+  COUP mono (`SoldeMonoDevise`) et multi sur le MÊME helper « nombre nu » ET la MÊME
+  logique d'indicateur gauche (absorbe la micro-dette P3 déjà notée : rendu identique
+  garanti du même montant ; aujourd'hui le mono d'une devise sans symbole afficherait le
+  suffixe ISO, incohérent avec le € mono). ⚠️ NE PAS casser le groupement U+202F ni
+  `tabular-nums` ; le « nombre nu » = `formatMontant(total, "")` aujourd'hui (hack chaîne
+  vide) → préférer un vrai helper partagé ; ne pas changer le comportement global de
+  `format-montant.ts` sans vérifier les autres appelants. Isolation : aucune (rendu).
+  **Déclencheur** : cette passe QA sur données réelles multi-devises.
+
 - [ ] **UI-FLUX-HOOK-MIGRATION1 (P3, effort ~0,2 j, NON bloquant) — une seule implémentation
   du ResizeObserver.** La courbe (`flux-chart-trace.tsx`) garde son `ResizeObserver` INLINE ;
   les barres utilisent le hook extrait `use-dimensions-svg.ts` (#147). Migrer la courbe vers
@@ -136,6 +163,16 @@ option « Groupe » mise en évidence). Dette UI ouverte par ce chantier :
   dizaines de comptes / plusieurs banques (retour terrain « la liste est trop
   longue »). Tant que les workspaces restent à faible volume, la liste plate suffit.
 
+> **RÉVISION UI-PERIMETRE-ACCORDEON1 (clawdy 2026-07-02, données prod réelles)** : l'axe
+> de groupement passe de banque→comptes à **Groupe→Entité→comptes** (accordéon, tri-state
+> par entité ET par Groupe : tout / partiel / rien). Même mécanique tri-state que la
+> version banque, axe différent — cohérent avec UI-ACCOUNTS-ACCORDEON-ENTITE1
+> (organisation entity-first). Le sélecteur (`src/components/shell/perimetre-switcher.tsx`)
+> est aujourd'hui une liste PLATE ; cible = accordéon par entité, l'option « Groupe »
+> restant le niveau haut (tout le périmètre). MÊME DÉPENDANCE : entités peuplées
+> (ENTITY-PARTY1) + ENTITY-UI1. Cette entrée ABSORBE la remarque « sélection des entités
+> par groupe » — pas de ticket séparé. Cross-ref PERIMETRE-ENTITE-DERIVE1.
+
 - [ ] **PERIMETRE-ENTITE-DERIVE1 (P2, effort ~1 j) — le filtre « par entité » dérive
   si l'ADMIN réassigne un compte.** L'axe Entité du sélecteur (L8b-2, stratégie a) pose
   dans le token la **liste des `bankAccountId` de l'entité à l'instant T** (le token ne
@@ -165,8 +202,12 @@ clés, pas de l'hôte — confirmé tuteur). Branche `feat/verrou-prod-hote-part
   durable. Résolution : base Neon dédiée + pipeline `provision → migrate → deploy`, et ne
   jamais conserver de vraie donnée sur un poste. Effort : ~0,5j (infra base) hors code app.
 
-- [ ] **PROD-ENDUSER1 (P1, déclencheur : avant le 1er parcours « connecter une banque »
+- [x] **PROD-ENDUSER1 (P1, déclencheur : avant le 1er parcours « connecter une banque »
   en prod) — créer + inscrire l'EndUser de production. 🚧 BLOQUÉ côté Omni-FI (2026-06-26).**
+  ✅ **RÉSOLU 2026-07-02** : connexions bancaires RÉELLES établies en environnement prod
+  (77 comptes découverts, soldes multi-devises remontés) → le `401 Invalid client
+  credentials` est LEVÉ, les clés prod sont désormais reconnues. La bascule vraie-donnée
+  est opérationnelle. (Reste historique du blocage ci-dessous pour trace.)
   L'annuaire des EndUsers Omni-FI est rattaché aux CLÉS : l'EndUser sandbox actuel est
   inconnu des clés prod (`link-token` échouerait). Étapes : `POST /clients/end-users` avec
   les clés prod → écrire la valeur reçue dans `workspaces.omnifi_client_user_id` (UPDATE ;
@@ -466,15 +507,39 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   aussi l'affirmation « masque déjà en lecture par jointure » d'ENTITY-WRITE-SCOPE1 :
   vraie pour les repos QUI joignent, à généraliser par cette dette.
 
-- [ ] **ENTITY-PARTY1 (P2) — pré-remplir le sas d'assignation via les « Parties » Omni-FI** —
-  Effort M, gardien Backend. Ouvert 2026-06-22. La doc API expose `GET
+- [ ] **ENTITY-PARTY1 (P2) — pré-remplir la CRÉATION d'entités + l'assignation via les
+  « Parties » Omni-FI, dès la phase 1 du widget** — Effort M, gardien Backend. Ouvert
+  2026-06-22, **précisé 2026-07-02 (retour terrain prod réelle)**. La doc API expose `GET
   /parties/{PartyId}/accounts` + `OBReadAccount6.PartyId/PartyName/OwnershipType`
-  (entités légales API). Décision PO : assignation `compte → entité` MANUELLE au MVP
-  (découplée d'une garantie sandbox non vérifiée — même classe de piège que les
-  hypothèses d'unicité `omnifi_account_id`). Cette dette = persister `party_id`/
-  `party_name` à l'ingestion pour **pré-proposer** un regroupement au sas, sans en faire
-  l'autorité. **Déclencheur** : retour terrain « trop de saisie manuelle » **ET** preuve
-  sandbox que les Parties sont fiablement peuplées. **NON une dette d'isolation.**
+  (entités légales API). `party_id`/`party_name` sont **DÉJÀ persistés** à l'ingestion
+  (`ingererPartiesDesComptes`, tables `parties` + `account_party_role`) — le socle existe.
+  Ce qui manque = le **pont `Party` → `entities` + `bank_accounts.entity_id`** :
+    1. À la **phase 1 du widget** (récupération entités/comptes à l'ouverture, événements
+       `sync.retrieving_parties`/`sync.parties_retrieved`), DÉRIVER une entité candidate
+       par `PartyName` distinct et PRÉ-COCHER le rattachement des comptes de cette party.
+    2. Décision PO (2026-07-02, question tranchée) : **PRÉ-REMPLIR + VALIDATION ADMIN**,
+       PAS de création/assignation automatique. Le widget PROPOSE ; l'ADMIN confirme dans
+       le sas (`/admin/entites`) avant que `entity_id` soit posé.
+  ⚠️ **FRONTIÈRE D'ISOLATION — NON NÉGOCIABLE** : l'ingestion NE crée JAMAIS d'entité ni
+  ne pose `entity_id` sans le pas de validation ADMIN (invariant CLAUDE.md « l'ingestion ne
+  pose jamais entity_id automatiquement » + « l'upsert de re-sync ne réécrase JAMAIS un
+  entity_id assigné »). Raison : 1 credential = comptes de N entités → faire autorité du
+  découpage amont = **fuite intra-groupe** (compte visible par le mauvais Financial
+  Manager). La party Omni-FI est un INDICE de pré-remplissage, jamais l'autorité.
+  **Déclencheur** : retour terrain « trop de saisie manuelle » (✅ CONSTATÉ 2026-07-02 :
+  77 comptes prod à assigner à la main après reset) **ET** preuve que les Parties sont
+  fiablement peuplées en prod → **✅ PROUVÉ 2026-07-02 sur la donnée prod RÉELLE** :
+  `28 parties`, **100 % nommées** (ex. `OMNICANE THERMAL ENERGY`, `OMNICANE LIMITED`,
+  `AIRPORT HOTEL LTD`, `MERIDIS LIMITED`, `TROPICAL CUBES`…), **77 liens** `account_party_role`
+  (chaque compte rattaché à sa party), `entity_id` encore à 0 (pont non câblé). Recon :
+  `SELECT p.name, count(apr.bank_account_id) FROM parties p LEFT JOIN account_party_role
+  apr ON apr.party_id=p.id GROUP BY p.name`. NB : `parties.entity_id` existe DÉJÀ dans le
+  schéma (colonne présente) → le pont est structurellement prêt, il reste à l'alimenter via
+  le sas validé. Les deux déclencheurs sont donc levés — dette **mûre pour planification**.
+  **NON une dette d'isolation** (le
+  pré-remplissage ne relâche aucune garantie ; c'est la création AUTO qui en serait une,
+  et elle est écartée). Voir aussi [[PERIMETRE-ENTITE-DERIVE1]] (péremption du libellé si
+  réassignation ultérieure).
 
 - [x] **ENTITY-WRITE-SCOPE1 (P1, BLOQUANTE avant prod Vision Entité) — l'étage 2 ne borne PAS l'ÉCRITURE** —
   ✅ **RÉSOLU 2026-06-22 (PR `fix/entity-write-scope`)**. Migration `0009_entity-write-scope.sql` :
@@ -885,6 +950,22 @@ Reste deux dettes à la frontière Backend :
 - Note : afficher la banque PAR LIGNE de transaction (table dashboard 4 colonnes serrées)
   a été ÉCARTÉ — la provenance vit dans la carte comptes (plus lisible), et `TransactionRecente`
   ne porte pas le nom (que `bankAccountId`). À rouvrir avec DASH-INST1 si besoin produit.
+- [ ] **UI-ACCOUNTS-ACCORDEON-ENTITE1 (P2, effort M — Front, DÉPEND d'ENTITY-PARTY1) —
+  la carte « Comptes connectés » est trop longue (77 comptes réels → scroll massif) ;
+  la grouper en ACCORDÉON PAR ENTITÉ (repliable) et afficher le nom d'ENTITÉ.** Composant
+  `src/components/dashboard/connected-accounts-card.tsx`. ⚠️ **DÉPENDANCE DURE** :
+  grouper/nommer par entité EXIGE `bank_accounts.entity_id` peuplé → c'est exactement
+  **ENTITY-PARTY1** (pont Party→entities→entity_id). Tant que les comptes sont
+  `entity_id=NULL`, rien à grouper. DOWNSTREAM d'ENTITY-PARTY1 (+ ENTITY-UI1 pour
+  créer/assigner, + QA-ENTITES-CREATION-UI1). ⚠️ **DÉCISION PRODUIT** (ne pas trancher en
+  silence) : DASH-INST1 / DR-F2 / TX-PROVENANCE2 exposaient le nom de la BANQUE
+  (`institutionName`) ; ici clawdy veut le nom d'ENTITÉ. Reco archi (clawdy 2026-07-02) :
+  entête d'accordéon = ENTITÉ, mais garder la BANQUE en secondaire par ligne (sinon on
+  perd « ce compte est chez MCB vs Absa »). Recoupe UI-PERIMETRE-ACCORDEON1 (même
+  mécanique accordéon) mais AXE et composant différents. Isolation : rendu seulement, mais
+  le groupement doit rester borné au scope entité du membre (RLS + jointure #83 /
+  ENTITY-READ-JOIN1) — jamais d'entête d'entité hors scope. **Déclencheur** : ENTITY-PARTY1
+  livrée ; le scroll est déjà là (77 comptes réels en prod).
 
 ### Solde Total dérivé des soldes courants, par devise (2026-06-19)
 
