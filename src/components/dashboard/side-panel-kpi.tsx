@@ -29,7 +29,7 @@ import type { Fraicheur } from "@/lib/format-date";
 import type { WorkspaceRole } from "@/server/db/schema";
 
 import { replierSynthesesMois } from "@/lib/synthese-mois";
-import { formatMontant, symbolePrefixe } from "@/lib/format-montant";
+import { formatMontant, indicateurDevise, montantNu } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
@@ -165,62 +165,48 @@ export function SidePanelKpi({
 /**
  * Solde MONO-devise : gros montant d'ancrage (28px/700, « trésorerie en 3 s »).
  *
- * Respiration devise↔chiffre (UI-SOLDE-CARD-POLISH1) : à 28px, l'espace fine
- * insécable U+202F de `formatMontant` est optiquement quasi nulle → « Rs » paraît
- * collé au montant. On sépare donc localement le symbole du corps (comme le rendu
- * multi-devise), avec un `gap-2` visible, SANS toucher au formateur partagé.
- * L'insécabilité est préservée : symbole et corps vivent dans le MÊME flex nowrap,
- * la devise ne peut jamais finir seule en bout de ligne. Repli : devise sans symbole
- * préfixe (code ISO en suffixe) → `formatMontant` complet, tel quel.
+ * Format UNIFIÉ avec le multi-devise (UI-SOLDE-MULTIDEVISE-POLISH1) : indicateur
+ * de devise TOUJOURS à gauche (`indicateurDevise` = symbole si connu, SINON code
+ * ISO), montant NU à droite (`montantNu`). Grille `[auto_1fr]` identique au multi
+ * → mono et multi partagent exactement la même géométrie. `whitespace-nowrap` :
+ * l'indicateur ne peut jamais finir seul en bout de ligne (insécabilité préservée
+ * sans dépendre de l'espace fine, optiquement nulle à 28px).
  */
 function SoldeMonoDevise({ ligne }: { ligne: SoldeParDevise }) {
-  const symbole = symbolePrefixe(ligne.currency);
+  const indicateur = indicateurDevise(ligne.currency);
   const classesMontant =
     "text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary";
-  return symbole ? (
-    <p className="mt-4 flex items-baseline gap-2 whitespace-nowrap">
-      <span className={`${classesMontant} shrink-0`}>{symbole}</span>
-      <span className={classesMontant}>{formatMontant(ligne.total, "")}</span>
-    </p>
-  ) : (
-    // Devise inconnue : le code ISO va en suffixe (repli formateur), rendu tel quel.
-    <p className={`mt-4 whitespace-nowrap ${classesMontant}`}>
-      {formatMontant(ligne.total, ligne.currency)}
-    </p>
+  return (
+    <div className="mt-4 grid grid-cols-[auto_1fr] items-baseline gap-x-2 whitespace-nowrap">
+      <span className={`${classesMontant} shrink-0`}>{indicateur}</span>
+      <span className={`${classesMontant} text-right`}>
+        {montantNu(ligne.total)}
+      </span>
+    </div>
   );
 }
 
 /**
- * Pile multi-devises à DÉCIMALES ALIGNÉES (§7-1). Grille 2 colonnes : symbole
- * (gauche, largeur auto) + montant NU aligné à droite (`tabular-nums` →
- * les virgules s'empilent). Repli : devise inconnue (pas de symbole préfixe) →
- * `formatMontant` complet (code ISO en suffixe), pas d'alignement forcé.
+ * Pile multi-devises à DÉCIMALES ALIGNÉES (§7-1). Format UNIFIÉ, une seule
+ * géométrie pour TOUTES les devises (UI-SOLDE-MULTIDEVISE-POLISH1) : colonne
+ * gauche = indicateur (`indicateurDevise` = symbole si connu, SINON code ISO —
+ * plus de dents de scie ni de suffixe inline) ; colonne droite = montant NU
+ * aligné à droite (`tabular-nums` → les virgules s'empilent). Grille `[auto_1fr]`
+ * conservée. L'ordre suit `soldesParDevise` (serveur) — pas de tri d'affichage.
  */
 function SoldesMultiDevises({ lignes }: { lignes: SoldeParDevise[] }) {
   return (
     <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
-      {lignes.map((s) => {
-        const symbole = symbolePrefixe(s.currency);
-        return symbole ? (
-          <div key={s.currency} className="contents">
-            <span className="text-xl font-bold leading-tight text-primary">
-              {symbole}
-            </span>
-            <span className="text-right text-xl font-bold leading-tight tracking-tight tabular-nums text-primary">
-              {formatMontant(s.total, "")}
-            </span>
-          </div>
-        ) : (
-          // Devise inconnue : on ne sépare pas (le code ISO va en suffixe) ;
-          // le montant occupe les 2 colonnes, toujours aligné à droite.
-          <span
-            key={s.currency}
-            className="col-span-2 text-right text-xl font-bold leading-tight tracking-tight tabular-nums text-primary"
-          >
-            {formatMontant(s.total, s.currency)}
+      {lignes.map((s) => (
+        <div key={s.currency} className="contents">
+          <span className="text-xl font-bold leading-tight text-primary">
+            {indicateurDevise(s.currency)}
           </span>
-        );
-      })}
+          <span className="text-right text-xl font-bold leading-tight tracking-tight tabular-nums text-primary">
+            {montantNu(s.total)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
