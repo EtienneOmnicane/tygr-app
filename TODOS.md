@@ -42,7 +42,7 @@ recon/plan).
   (seed réparé en #146) et ajuster la constante si besoin. **Déclencheur** : QA visuel sur
   données denses (ce chantier polish dashboard v2).
 
-- [ ] **UI-SOLDE-CARD-POLISH1 (P2, effort ~0,25 j) — carte SOLDE mal espacée.** « Rs » collé
+- [x] **UI-SOLDE-CARD-POLISH1 (P2, effort ~0,25 j) — carte SOLDE mal espacée.** ✅ LIVRÉ (PR #160). « Rs » collé
   au montant (manque de respiration devise↔chiffre — vérifier que l'espace fine insécable
   U+202F de `format-montant.ts` est bien rendue, sinon ajuster l'espacement de la carte) ;
   bloc « il y a Xh » / « Synchroniser » mal aligné/rangé à droite. Composant carte solde du
