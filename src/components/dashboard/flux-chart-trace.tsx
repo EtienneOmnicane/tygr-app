@@ -27,6 +27,7 @@ import { formatMontant, estNegatif } from "@/lib/format-montant";
 import { formaterMoisAnnee } from "@/lib/format-date";
 import { StateIllustration } from "@/components/dashboard/states/primitives";
 import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
+import { echelleNice } from "@/components/dashboard/echelle-nice";
 
 // Géométrie du viewBox (unités SVG). La HAUTEUR est fixe ; la LARGEUR `vbW` est
 // DÉRIVÉE de la taille rendue réelle (ResizeObserver, cf. `Trace`) pour que 1 unité
@@ -137,14 +138,19 @@ function Trace({
     return () => obs.disconnect();
   }, []);
 
-  // Bornes Y (géométrie). Le domaine inclut TOUJOURS 0 (le net traverse zéro) et
-  // s'élargit légèrement pour ne pas coller aux bords.
+  // Bornes Y (géométrie). Le domaine inclut TOUJOURS 0 (le net traverse zéro) —
+  // invariant préservé. Chaque moitié (haut/bas) est arrondie séparément au palier
+  // « nice » le plus proche (echelleNice) : un gros mois n'écrase plus les petits et
+  // l'axe porte des paliers ronds (0 / 500k / 1M…). Le padding ad-hoc *0.1 disparaît :
+  // les paliers arrondis donnent déjà de l'air aux bords, pas besoin de marge en plus.
   const valeurs = points.map((p) => valeurGeo(p.net));
-  const min = Math.min(0, ...valeurs);
-  const max = Math.max(0, ...valeurs);
-  const etendue = max - min || 1; // évite la division par zéro (série plate à 0)
-  const yMin = min - etendue * 0.1;
-  const yMax = max + etendue * 0.1;
+  const hautNice = echelleNice(Math.max(0, ...valeurs));
+  const basNice = -echelleNice(Math.abs(Math.min(0, ...valeurs)));
+  const yMax = hautNice;
+  // Garde anti-domaine-nul (sécurité : avec echelleNice, hautNice ≥ 1 et basNice ≤ -1
+  // dès qu'une seule valeur existe, donc yMax === yMin ne devrait normalement jamais
+  // se produire — conservé par prudence pour ne jamais diviser par zéro dans `y(v)`).
+  const yMin = yMax === basNice ? basNice - 1 : basNice;
 
   const x = (i: number) =>
     PAD_L +
