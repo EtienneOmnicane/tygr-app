@@ -79,14 +79,19 @@ export function SidePanelKpi({
       {/* Carte SOLDE (§1.3) : une ligne par devise. Mono → gros montant ;
           multi → pile égalitaire à décimales alignées (§7-1). */}
       <StateCard>
-        <div className="flex items-start justify-between gap-2">
-          <span className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+        {/* Cluster label ↔ méta+actions. `items-start` : le label (11px) s'aligne
+            sur la 1re ligne du cluster droit (pastille). Rythme label→montant = 16px
+            (mt-4), échelle canonique 4px. */}
+        <div className="flex items-start justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
             {monoDevise ? "Solde" : "Soldes par devise"}
           </span>
-          {/* Pastille de fraîcheur + bouton « Synchroniser » (L8a) groupés à droite :
-              on rafraîchit la donnée là où on en lit l'âge. Le bouton gère son propre
-              gating (VIEWER inerte) et son feedback inline. */}
-          <div className="flex flex-col items-end gap-1.5">
+          {/* Pastille de fraîcheur + bouton « Synchroniser » (L8a) empilés à droite :
+              on rafraîchit la donnée là où on en lit l'âge. Ce conteneur cadence
+              pastille ↔ bloc bouton (8px) ; `SyncButton` gère en interne son propre
+              empilement bouton ↔ feedback inline. Alignés à droite (`items-end`) pour
+              ne pas concurrencer le montant qui suit. */}
+          <div className="flex flex-col items-end gap-2">
             {fraicheur && (
               <BalanceFreshnessPill
                 fraicheur={fraicheur}
@@ -98,9 +103,7 @@ export function SidePanelKpi({
         </div>
 
         {monoDevise ? (
-          <p className="mt-4 text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary">
-            {formatMontant(lignesSolde[0].total, lignesSolde[0].currency)}
-          </p>
+          <SoldeMonoDevise ligne={lignesSolde[0]} />
         ) : (
           <SoldesMultiDevises lignes={lignesSolde} />
         )}
@@ -156,6 +159,34 @@ export function SidePanelKpi({
         </div>
       </StateCard>
     </>
+  );
+}
+
+/**
+ * Solde MONO-devise : gros montant d'ancrage (28px/700, « trésorerie en 3 s »).
+ *
+ * Respiration devise↔chiffre (UI-SOLDE-CARD-POLISH1) : à 28px, l'espace fine
+ * insécable U+202F de `formatMontant` est optiquement quasi nulle → « Rs » paraît
+ * collé au montant. On sépare donc localement le symbole du corps (comme le rendu
+ * multi-devise), avec un `gap-2` visible, SANS toucher au formateur partagé.
+ * L'insécabilité est préservée : symbole et corps vivent dans le MÊME flex nowrap,
+ * la devise ne peut jamais finir seule en bout de ligne. Repli : devise sans symbole
+ * préfixe (code ISO en suffixe) → `formatMontant` complet, tel quel.
+ */
+function SoldeMonoDevise({ ligne }: { ligne: SoldeParDevise }) {
+  const symbole = symbolePrefixe(ligne.currency);
+  const classesMontant =
+    "text-[28px] font-bold leading-tight tracking-tight tabular-nums text-primary";
+  return symbole ? (
+    <p className="mt-4 flex items-baseline gap-2 whitespace-nowrap">
+      <span className={`${classesMontant} shrink-0`}>{symbole}</span>
+      <span className={classesMontant}>{formatMontant(ligne.total, "")}</span>
+    </p>
+  ) : (
+    // Devise inconnue : le code ISO va en suffixe (repli formateur), rendu tel quel.
+    <p className={`mt-4 whitespace-nowrap ${classesMontant}`}>
+      {formatMontant(ligne.total, ligne.currency)}
+    </p>
   );
 }
 
