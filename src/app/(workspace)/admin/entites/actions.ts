@@ -90,6 +90,26 @@ const definirScopesSchema = z
   })
   .strict();
 
+/**
+ * Confirmation d'une PROPOSITION Party→entité (ENTITY-PARTY1, sas ADMIN).
+ * Deux cibles mutuellement exclusives :
+ *  - `entityId` fourni → on rattache à une entité EXISTANTE (pas de création) ;
+ *  - `entityId` absent + `nouvelleEntiteName` fourni → on CRÉE l'entité puis on rattache.
+ * `bankAccountIds` = comptes de la party à assigner (0..N ; bornés anti-abus).
+ * `partyId` = la party dont on pose parties.entity_id (rattachement BU).
+ */
+const confirmerPropositionSchema = z
+  .object({
+    partyId: z.string().uuid(),
+    entityId: z.string().uuid().nullable(),
+    nouvelleEntiteName: z.string().trim().min(1).max(120).nullable(),
+    bankAccountIds: z.array(z.string().uuid()).max(500),
+  })
+  .strict()
+  .refine((d) => d.entityId !== null || d.nouvelleEntiteName !== null, {
+    message: "Cible d'entité manquante",
+  });
+
 /* ------------------------------------------------------------------ */
 /* Mapping commun des erreurs nommées → message UI générique           */
 /* ------------------------------------------------------------------ */
@@ -288,5 +308,76 @@ export async function definirScopesAction(
       parsed.data.entityIds.length === 0
         ? "Périmètre défini : Vision Globale (toutes entités)."
         : `Périmètre défini : ${parsed.data.entityIds.length} entité(s).`,
+  };
+}
+
+/**
+ * Confirme une proposition Party→entité (ENTITY-PARTY1, décision PO 2026-07-02 :
+ * PRÉ-REMPLISSAGE + VALIDATION ADMIN). C'est le SEUL chemin qui pose enfin les
+ * entity_id dérivés d'une party — et il est explicite, ADMIN-only, et jamais
+ * automatique (l'ingestion n'a rien posé). Séquence, TOUTE dans une seule
+ * transaction withWorkspace (atomicité : si une assignation échoue, rien n'est posé) :
+ *   1. cible d'entité : soit une entité existante (`entityId`), soit on la CRÉE via
+ *      `creerEntite` (gate ADMIN + FK composite) à partir du PartyName proposé ;
+ *   2. `assignerPartieEntite` : pose parties.entity_id (rattachement BU) ;
+ *   3. `assignerCompteEntite` pour CHAQUE compte de la party : pose bank_accounts.entity_id.
+ *
+ * Toutes les écritures passent par les GATES existantes (garde ADMIN dans le repo,
+ * RLS tenant + entity_scope, FK composites) — on ne réimplémente aucun contrôle ici.
+ * Un re-sync ultérieur ne réécrasera PAS ces entity_id (invariant du schéma :
+ * upsertCompte/upsertPartieEtRole omettent entity_id de leur ON CONFLICT).
+ */
+export async function confirmerPropositionAction(
+  _etat: EtatAction,
+  formData: FormData,
+): Promise<EtatAction> {
+  const session = await exigerSessionWorkspace();
+  const rawEntity = formData.get("entityId");
+  const rawName = formData.get("nouvelleEntiteName");
+  const parsed = confirmerPropositionSchema.safeParse({
+    partyId: formData.get("partyId"),
+    entityId: rawEntity ? String(rawEntity) : null,
+    nouvelleEntiteName: rawName ? String(rawName) : null,
+    bankAccountIds: formData.getAll("bankAccountIds").map((v) => String(v)),
+  });
+  if (!parsed.success) return { erreur: MESSAGE_INVALIDE, succes: null };
+
+  let nomEntite = "";
+  try {
+    await withWorkspace(session, async (tx, ctx) => {
+      // 1. Résoudre la cible : entité existante ou création.
+      let entityId = parsed.data.entityId;
+      if (entityId === null) {
+        // nouvelleEntiteName est garanti non-null par le refine du schéma.
+        const cree = await creerEntite(tx, ctx, {
+          name: parsed.data.nouvelleEntiteName as string,
+        });
+        entityId = cree.entityId;
+        nomEntite = parsed.data.nouvelleEntiteName as string;
+      }
+
+      // 2. Rattacher la party (parties.entity_id) via la gate dédiée.
+      await assignerPartieEntite(tx, ctx, {
+        partyId: parsed.data.partyId,
+        entityId,
+      });
+
+      // 3. Assigner chaque compte de la party (bank_accounts.entity_id) via la gate.
+      for (const bankAccountId of parsed.data.bankAccountIds) {
+        await assignerCompteEntite(tx, ctx, { bankAccountId, entityId });
+      }
+    });
+  } catch (e) {
+    const m = mapErreur(e);
+    if (m) return m;
+    throw e;
+  }
+
+  const nbComptes = parsed.data.bankAccountIds.length;
+  return {
+    erreur: null,
+    succes: nomEntite
+      ? `Entité « ${nomEntite} » créée et ${nbComptes} compte(s) rattaché(s).`
+      : `Proposition confirmée : ${nbComptes} compte(s) rattaché(s).`,
   };
 }
