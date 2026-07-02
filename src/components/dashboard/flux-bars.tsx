@@ -28,6 +28,7 @@ import {
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
+import { echelleNice } from "@/components/dashboard/echelle-nice";
 import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
 import { useDimensionsSvg } from "@/components/dashboard/use-dimensions-svg";
 
@@ -46,8 +47,13 @@ export function FluxBarres({
   devise: string;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
-  const max = maxFenetre(mois);
-  const aucunMouvement = max === 0;
+  // Le max BRUT pilote la détection « aucun mouvement » (0 = fenêtre vide) ; le max
+  // « nice » (toujours ≥ 1, jamais 0) sert UNIQUEMENT à l'échelle du rendu des barres
+  // non-vides — sans cette séparation, une fenêtre vide afficherait des barres à
+  // plat au lieu du message neutre (echelleNice(0) = 1 ≠ 0).
+  const maxBrut = maxFenetre(mois);
+  const aucunMouvement = maxBrut === 0;
+  const max = echelleNice(maxBrut);
   const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
 
   if (aucunMouvement) {
