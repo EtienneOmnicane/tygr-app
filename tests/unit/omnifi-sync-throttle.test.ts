@@ -85,3 +85,60 @@ describe("declencherEtAttendre — throttle amont", () => {
     ).rejects.toBe(erreur);
   });
 });
+
+describe("declencherEtAttendre — conflit « sync already running »", () => {
+  it("400 conflitSyncEnCours → POLL le job en cours jusqu'à COMPLETED → DECLENCHE (pas de throw)", async () => {
+    // Régression prod 2026-07-03 : un job de scrape tourne encore (reconnexion widget) et
+    // Omni-FI répond 400 « Sync already running: <id> ». Ce 400 est classé au bord client en
+    // conflitSyncEnCours=true → declencherEtAttendre doit aller POLLER le job en cours au lieu
+    // d'abandonner la connexion en échec dur (ce qui jetait le scrape qui peuple les données).
+    const erreur = new OmniFiApiError(400, "400 BadRequest", [{ errorCode: "BAD_REQUEST" }], null, true);
+    const declencherSync = vi.fn().mockRejectedValue(erreur);
+    const getLatestSyncJob = vi.fn().mockResolvedValue({ JobId: "job-en-cours", Status: "IN_PROGRESS" });
+    // attendreFinSync poll via getSyncJobServeur ; 1er tour SANS sleep → COMPLETED immédiat.
+    const getSyncJobServeur = vi.fn().mockResolvedValue({
+      JobId: "job-en-cours",
+      Status: "COMPLETED",
+      PersistenceStats: { TransactionsCreated: 3, TransactionsUpdated: 0, TransactionsDuplicated: 0 },
+    });
+    const client = { declencherSync, getLatestSyncJob, getSyncJobServeur } as unknown as OmniFiClient;
+
+    const issue = await declencherEtAttendre(client, CONNECTION_ID, CLIENT_USER_ID, null);
+
+    // On a pris la branche « already running » : lu le job en cours puis pollé jusqu'à COMPLETED.
+    expect(getLatestSyncJob).toHaveBeenCalledTimes(1);
+    expect(getSyncJobServeur).toHaveBeenCalledWith("job-en-cours", CLIENT_USER_ID);
+    // On N'a PAS re-déclenché un nouveau sync (un seul appel, celui qui a échoué)…
+    expect(declencherSync).toHaveBeenCalledTimes(1);
+    // …et le job en cours est mené à terme → la lecture peut suivre (DECLENCHE, pas un throw).
+    expect(issue).toEqual({ kind: "DECLENCHE" });
+  });
+
+  it("400 conflitSyncEnCours mais latest-job déjà TERMINAL → SKIP_FAILED (STALE_LATEST_JOB), pas de throw", async () => {
+    // Défense en profondeur : si le « dernier job » est un vieux COMPLETED, ce n'est pas un
+    // sync EN COURS → on ne conclut pas DECLENCHE à tort, on compte un échec doux.
+    const erreur = new OmniFiApiError(400, "400 BadRequest", [{ errorCode: "BAD_REQUEST" }], null, true);
+    const declencherSync = vi.fn().mockRejectedValue(erreur);
+    const getLatestSyncJob = vi.fn().mockResolvedValue({ JobId: "vieux-job", Status: "COMPLETED" });
+    const client = { declencherSync, getLatestSyncJob } as unknown as OmniFiClient;
+
+    const issue = await declencherEtAttendre(client, CONNECTION_ID, CLIENT_USER_ID, null);
+
+    expect(issue).toEqual({ kind: "SKIP_FAILED", errorType: "STALE_LATEST_JOB" });
+    expect(getLatestSyncJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("400 SANS conflitSyncEnCours (false) → reste un échec DUR (throw), ne poll pas latest-job", async () => {
+    // Contrôle : le flag pilote seul la branche. Un 400 conflitSyncEnCours=false ne doit
+    // JAMAIS aller poller le dernier job (sinon faux positif « sync effectué »).
+    const erreur = new OmniFiApiError(400, "400 BadRequest", [{ errorCode: "BAD_REQUEST" }], null, false);
+    const declencherSync = vi.fn().mockRejectedValue(erreur);
+    const getLatestSyncJob = vi.fn(); // ne doit PAS être appelé
+    const client = { declencherSync, getLatestSyncJob } as unknown as OmniFiClient;
+
+    await expect(
+      declencherEtAttendre(client, CONNECTION_ID, CLIENT_USER_ID, null),
+    ).rejects.toBe(erreur);
+    expect(getLatestSyncJob).not.toHaveBeenCalled();
+  });
+});

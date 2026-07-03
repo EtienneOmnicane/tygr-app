@@ -638,13 +638,15 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
 
   it("400 'sync already running' → poll le job EN COURS (latest-job non terminal), pas de re-trigger", async () => {
     // Un job tourne déjà côté Omni-FI : declencherSync renvoie 400 « already running ».
-    // On récupère le JobId courant et on poll dessus (latest-job STARTED → puis le
-    // polling le verra terminal), sans re-déclencher.
+    // En prod l'obieCode est le générique « 400 BadRequest » — le signal exploitable est
+    // le booléen `conflitSyncEnCours` (5e arg), classé au bord CLIENT à partir du Message
+    // OBIE (« Sync already running: <id> », jamais exposé — règle 8). On récupère le JobId
+    // courant et on poll dessus (latest-job STARTED → terminal), sans re-déclencher.
     await semerConnexionEnBase("conn-run", "oa-run"); // périmètre LOT 1 : connue en base
     const c = clientFactice({
       connections: [{ ConnectionId: "conn-run", InstitutionId: "mcb", InstitutionName: "MCB", Status: "active" }],
       accounts: [{ AccountId: "oa-run", Status: "Enabled", Currency: "MUR", PartyName: "Cpt" }],
-      declencherSyncErreur: new OmniFiApiError(400, "400 sync already running", []),
+      declencherSyncErreur: new OmniFiApiError(400, "400 BadRequest", [], null, true),
       latestSyncJob: { JobId: "job-running", Status: "STARTED", NextSyncAvailableAt: null },
       // Le polling de job-running aboutit à COMPLETED.
       syncJob: { JobId: "job-running", Status: "COMPLETED", PersistenceStats: { TransactionsCreated: 0 } },

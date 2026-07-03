@@ -132,6 +132,31 @@ function extraireDetails(
   return { obieCode: erreur.Code ?? null, details };
 }
 
+/**
+ * Ce 400 est-il le conflit « un sync tourne DÉJÀ » ? Le signal ne vit QUE dans le
+ * MESSAGE OBIE (« Sync already running: <jobId> ») — l'obieCode (`Code`) est le
+ * générique « 400 BadRequest », inutilisable, et l'`ErrorCode` machine est un
+ * « BAD_REQUEST » tout aussi générique (constat prod 2026-07-03). On lit donc le
+ * Message ICI, au seul bord où il est disponible, pour en dériver un booléen : le
+ * Message brut n'est ni stocké ni exposé (règle 8, PII possible). Motif tolérant,
+ * insensible à la casse, restreint aux 400 (jamais un autre statut).
+ */
+function estConflitSyncEnCours(
+  status: number,
+  erreur: OmniFiEnveloppeErreur | null,
+): boolean {
+  if (status !== 400 || !erreur) return false;
+  const messages = [erreur.Message, ...(erreur.Errors ?? []).map((e) => e.Message)]
+    .filter((m): m is string => Boolean(m))
+    .join(" ")
+    .toLowerCase();
+  return (
+    messages.includes("already running") ||
+    messages.includes("in progress") ||
+    messages.includes("sync already")
+  );
+}
+
 export class OmniFiClient {
   private readonly fetch: typeof fetch;
   private readonly genererInteractionId: () => string;
@@ -211,7 +236,17 @@ export class OmniFiClient {
         reponse.status === 429
           ? parseRetryAfter(reponse.headers.get("Retry-After"), Date.now())
           : null;
-      throw new OmniFiApiError(reponse.status, obieCode, details, retryAfter);
+      // Classe le 400 « sync already running » en booléen sûr (le Message OBIE ne
+      // sort jamais d'ici — règle 8). Permet à declencherEtAttendre d'aller poller
+      // le job en cours plutôt que d'échouer en dur.
+      const conflitSyncEnCours = estConflitSyncEnCours(reponse.status, enveloppeErreur);
+      throw new OmniFiApiError(
+        reponse.status,
+        obieCode,
+        details,
+        retryAfter,
+        conflitSyncEnCours,
+      );
     }
 
     let enveloppe: OmniFiEnveloppe<TData>;
@@ -342,9 +377,10 @@ export class OmniFiClient {
    * Mapping d'erreurs (erreurs.ts, non avalées) à interpréter par l'appelant :
    *  - 429 → OmniFiApiError.estRateLimit (rate-limit « 1 sync / 15 min ») ; combiner
    *    avec `NextSyncAvailableAt` d'une lecture amont pour NE PAS provoquer ce 429 ;
-   *  - 400 (obieCode « sync already running » / BAD_REQUEST) → un job tourne déjà :
-   *    l'appelant récupère le JobId courant via `getLatestSyncJob` plutôt que de
-   *    re-déclencher.
+   *  - 400 avec `OmniFiApiError.conflitSyncEnCours` (signal dérivé du MESSAGE OBIE
+   *    « Sync already running: <id> » — l'obieCode/ErrorCode sont des « 400 BadRequest »/
+   *    « BAD_REQUEST » génériques, inexploitables) → un job tourne déjà : l'appelant
+   *    récupère le JobId courant via `getLatestSyncJob` plutôt que de re-déclencher.
    */
   async declencherSync(
     connectionId: string,

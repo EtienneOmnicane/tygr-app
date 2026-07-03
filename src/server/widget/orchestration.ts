@@ -597,19 +597,6 @@ function cooldownActif(nextSyncAvailableAt: string | null | undefined): boolean 
 }
 
 /**
- * Un 400 de declencherSync signale-t-il « un sync tourne DÉJÀ » (vs un 400 d'une
- * autre cause) ? On reconnaît le motif sur l'obieCode/Message OBIE de façon tolérante
- * (l'amont n'a pas de code machine stable documenté pour ce cas) : « already running »
- * ou « in progress », insensible à la casse. Un obieCode absent ⇒ false (on ne part PAS
- * poller le dernier job sur un 400 ambigu — fail-safe contre le faux « sync effectué »).
- */
-function estSyncDejaEnCours(obieCode: string | null): boolean {
-  if (!obieCode) return false;
-  const c = obieCode.toLowerCase();
-  return c.includes("already running") || c.includes("in progress") || c.includes("running");
-}
-
-/**
  * Cette erreur est-elle un THROTTLE amont (« 1 sync / 15 min ») ? On la reconnaît par
  * DEUX voies, car Omni-FI ne renvoie pas toujours un 429 propre :
  *   - `estRateLimit` (HTTP 429) — cas nominal documenté ;
@@ -674,15 +661,19 @@ export async function declencherEtAttendre(
       return { kind: "RATE_LIMITED", nextSyncAt: next };
     }
     // 400 « sync already running » UNIQUEMENT : un job tourne déjà → on récupère SON
-    // JobId et on poll dessus (idempotence côté user). On RESTREINT à ce motif (obieCode)
-    // : sans ce filtre, un 400 d'une AUTRE cause (param rejeté, connexion en mauvais
+    // JobId et on poll dessus (idempotence côté user). Le signal est le booléen
+    // `conflitSyncEnCours`, classé au bord CLIENT à partir du MESSAGE OBIE (« Sync
+    // already running: <jobId> ») — l'obieCode/ErrorCode sont des « 400 BadRequest »/
+    // « BAD_REQUEST » génériques, inexploitables (constat prod 2026-07-03 : c'est ce
+    // qui faisait tomber ce 400 en échec dur → connexion abandonnée). On RESTREINT à
+    // ce motif : sans lui, un 400 d'une AUTRE cause (param rejeté, connexion en mauvais
     // état) partirait poller le dernier job — souvent un vieux COMPLETED — et conclurait
-    // à tort « sync effectué » (faux positif silencieux, constat de revue). Tout autre
-    // 400 remonte comme une erreur dure (cf. throw final).
+    // à tort « sync effectué » (faux positif silencieux). Tout autre 400 remonte comme
+    // une erreur dure (cf. throw final).
     if (
       erreur instanceof OmniFiApiError &&
       erreur.status === 400 &&
-      estSyncDejaEnCours(erreur.obieCode)
+      erreur.conflitSyncEnCours
     ) {
       const latest = await client.getLatestSyncJob(connectionId, clientUserId);
       if (!latest.JobId) return { kind: "SKIP_FAILED", errorType: "NO_JOB_ID" };
