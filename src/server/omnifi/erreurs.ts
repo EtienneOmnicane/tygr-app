@@ -74,6 +74,15 @@ export class OmniFiApiError extends OmniFiError {
     readonly details: OmniFiErreurDetail[],
     /** Présent uniquement sur 429 (docs § 429 : header Retry-After). */
     readonly retryAfterSeconds: number | null = null,
+    /**
+     * VRAI ssi ce 400 est le conflit « un sync tourne DÉJÀ » (message OBIE
+     * « Sync already running: <jobId> »). Ce signal ne vit QUE dans le Message OBIE
+     * (pas de code machine stable) : il est classé au bord CLIENT en un booléen, car
+     * le Message brut n'est jamais stocké ni exposé (règle 8 — il peut porter de la
+     * PII). L'appelant (declencherEtAttendre) s'en sert pour aller POLLER le job en
+     * cours au lieu d'abandonner la connexion en échec dur.
+     */
+    readonly conflitSyncEnCours: boolean = false,
   ) {
     super(`Omni-FI a répondu ${status}${obieCode ? ` (${obieCode})` : ""}`);
   }

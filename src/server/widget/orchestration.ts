@@ -597,16 +597,34 @@ function cooldownActif(nextSyncAvailableAt: string | null | undefined): boolean 
 }
 
 /**
- * Un 400 de declencherSync signale-t-il « un sync tourne DÉJÀ » (vs un 400 d'une
- * autre cause) ? On reconnaît le motif sur l'obieCode/Message OBIE de façon tolérante
- * (l'amont n'a pas de code machine stable documenté pour ce cas) : « already running »
- * ou « in progress », insensible à la casse. Un obieCode absent ⇒ false (on ne part PAS
- * poller le dernier job sur un 400 ambigu — fail-safe contre le faux « sync effectué »).
+ * Cette erreur est-elle un THROTTLE amont (« 1 sync / 15 min ») ? On la reconnaît par
+ * DEUX voies, car Omni-FI ne renvoie pas toujours un 429 propre :
+ *   - `estRateLimit` (HTTP 429) — cas nominal documenté ;
+ *   - `details[].errorCode === "RATE_LIMIT_EXCEEDED"` — cas OBSERVÉ en prod (2026-07-02) :
+ *     l'amont renvoie un **400 générique** (`obieCode` = « 400 BadRequest », donc inutile),
+ *     mais l'enveloppe OBIE porte bien le code machine `RATE_LIMIT_EXCEEDED` dans `Errors[]`.
+ * Sans cette 2e voie, ce 400 tombait sur le `throw` final → échec DUR → connexion
+ * abandonnée, `marquerSynchronise` jamais atteint (bug de remédiation, pas de la cause).
+ * `obieCode` n'est PAS utilisé ici : il est générique/non fiable (constat de revue).
  */
-function estSyncDejaEnCours(obieCode: string | null): boolean {
-  if (!obieCode) return false;
-  const c = obieCode.toLowerCase();
-  return c.includes("already running") || c.includes("in progress") || c.includes("running");
+function estThrottleAmont(erreur: unknown): erreur is OmniFiApiError {
+  return (
+    erreur instanceof OmniFiApiError &&
+    (erreur.estRateLimit ||
+      erreur.details.some((d) => d.errorCode === "RATE_LIMIT_EXCEEDED"))
+  );
+}
+
+/**
+ * `nextSyncAt` (ISO 8601) déduit du `retryAfterSeconds` d'un throttle, quand l'amont le
+ * fournit (uniquement sur 429, cf. erreurs.ts). Null si absent/non positif — l'appelant
+ * retombe alors sur `nextSyncDepuisLatest`.
+ */
+function nextSyncApresRetryAfter(retryAfterSeconds: number | null): string | null {
+  if (retryAfterSeconds === null || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return null;
+  }
+  return new Date(Date.now() + retryAfterSeconds * 1000).toISOString();
 }
 
 /**
@@ -614,7 +632,7 @@ function estSyncDejaEnCours(obieCode: string | null): boolean {
  * puis attend le job. Ne LIT PAS les transactions (la lecture existante suit selon
  * l'issue). Centralise toute la gestion 429/400-concurrent/OTP/FAILED.
  */
-async function declencherEtAttendre(
+export async function declencherEtAttendre(
   client: OmniFiClient,
   connectionId: string,
   clientUserId: string,
@@ -632,22 +650,30 @@ async function declencherEtAttendre(
   try {
     job = await client.declencherSync(connectionId, clientUserId);
   } catch (erreur) {
-    if (erreur instanceof OmniFiApiError && erreur.estRateLimit) {
-      // 429 malgré la garde (course / cooldown non remonté par GET /connections) :
-      // on relit `latest-job` pour exposer le délai, sans re-déclencher.
-      const next = await nextSyncDepuisLatest(client, connectionId, clientUserId);
+    if (estThrottleAmont(erreur)) {
+      // Throttle amont malgré la garde (course / cooldown non remonté par GET /connections,
+      // OU 400 générique portant RATE_LIMIT_EXCEEDED — cas prod 2026-07-02) : on NE re-déclenche
+      // PAS. On expose le délai — de préférence via `retryAfterSeconds` (429), sinon en relisant
+      // `latest-job`. Traité en RATE_LIMITED (soft, lecture du cache), jamais en échec dur.
+      const next =
+        nextSyncApresRetryAfter(erreur.retryAfterSeconds) ??
+        (await nextSyncDepuisLatest(client, connectionId, clientUserId));
       return { kind: "RATE_LIMITED", nextSyncAt: next };
     }
     // 400 « sync already running » UNIQUEMENT : un job tourne déjà → on récupère SON
-    // JobId et on poll dessus (idempotence côté user). On RESTREINT à ce motif (obieCode)
-    // : sans ce filtre, un 400 d'une AUTRE cause (param rejeté, connexion en mauvais
+    // JobId et on poll dessus (idempotence côté user). Le signal est le booléen
+    // `conflitSyncEnCours`, classé au bord CLIENT à partir du MESSAGE OBIE (« Sync
+    // already running: <jobId> ») — l'obieCode/ErrorCode sont des « 400 BadRequest »/
+    // « BAD_REQUEST » génériques, inexploitables (constat prod 2026-07-03 : c'est ce
+    // qui faisait tomber ce 400 en échec dur → connexion abandonnée). On RESTREINT à
+    // ce motif : sans lui, un 400 d'une AUTRE cause (param rejeté, connexion en mauvais
     // état) partirait poller le dernier job — souvent un vieux COMPLETED — et conclurait
-    // à tort « sync effectué » (faux positif silencieux, constat de revue). Tout autre
-    // 400 remonte comme une erreur dure (cf. throw final).
+    // à tort « sync effectué » (faux positif silencieux). Tout autre 400 remonte comme
+    // une erreur dure (cf. throw final).
     if (
       erreur instanceof OmniFiApiError &&
       erreur.status === 400 &&
-      estSyncDejaEnCours(erreur.obieCode)
+      erreur.conflitSyncEnCours
     ) {
       const latest = await client.getLatestSyncJob(connectionId, clientUserId);
       if (!latest.JobId) return { kind: "SKIP_FAILED", errorType: "NO_JOB_ID" };
@@ -733,6 +759,8 @@ export interface ResultatSynchronisation {
     code: string;
     status?: number;
     obieCode?: string | null;
+    /** Codes machine OBIE (`Errors[].ErrorCode`, non-PII) si présents — ex. RATE_LIMIT_EXCEEDED. */
+    errorCodes?: string[];
   }>;
 }
 
@@ -967,6 +995,7 @@ function detailErreurSure(erreur: unknown): {
   code: string;
   status?: number;
   obieCode?: string | null;
+  errorCodes?: string[];
 } {
   const code =
     erreur instanceof Error && "code" in erreur && typeof erreur.code === "string"
@@ -975,7 +1004,16 @@ function detailErreurSure(erreur: unknown): {
         ? erreur.name
         : "UNKNOWN";
   if (erreur instanceof OmniFiApiError) {
-    return { code, status: erreur.status, obieCode: erreur.obieCode };
+    // `obieCode` est souvent générique (« 400 BadRequest ») : on expose EN PLUS les codes
+    // machine OBIE (`Errors[].ErrorCode`, non-PII) pour l'observabilité — c'est ce qui
+    // aurait rendu le throttle-en-400 visible du premier coup (constat 2026-07-02).
+    const errorCodes = erreur.details.map((d) => d.errorCode).filter(Boolean);
+    return {
+      code,
+      status: erreur.status,
+      obieCode: erreur.obieCode,
+      ...(errorCodes.length > 0 ? { errorCodes } : {}),
+    };
   }
   return { code };
 }

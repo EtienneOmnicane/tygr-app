@@ -429,20 +429,56 @@ describe("déclenchement de sync (POST /sync/{id}, GET .../latest-job)", () => {
     expect(erreur.retryAfterSeconds).toBe(900);
   });
 
-  it("declencherSync 400 'sync already running' → OmniFiApiError status 400 (job déjà en cours)", async () => {
+  it("declencherSync 400 'sync already running' → OmniFiApiError.conflitSyncEnCours (job déjà en cours)", async () => {
+    // Cas EXACT prod 2026-07-03 : le Code/ErrorCode sont génériques (« 400 BadRequest » /
+    // « BAD_REQUEST »), le SEUL signal exploitable est le Message OBIE. Le client le
+    // classe en booléen au bord (le Message brut ne sort jamais — règle 8, PII possible).
     const fetchMock = vi.fn().mockResolvedValue(
       reponseJson(
-        { Code: "BAD_REQUEST", Message: "sync already running" },
+        {
+          Code: "400 BadRequest",
+          Message: "Sync already running: 53ad009b-8873-4681-8682-06f65180d757",
+          Errors: [{ ErrorCode: "BAD_REQUEST" }],
+        },
         { status: 400 },
       ),
     );
     const client = creerClient(fetchMock as unknown as typeof fetch);
 
-    const erreur = await client.declencherSync("conn-1", CLIENT_USER_ID).catch((e) => e);
+    const erreur = (await client
+      .declencherSync("conn-1", CLIENT_USER_ID)
+      .catch((e) => e)) as OmniFiApiError;
 
     expect(erreur).toBeInstanceOf(OmniFiApiError);
     expect(erreur.status).toBe(400);
-    expect(erreur.obieCode).toBe("BAD_REQUEST");
+    expect(erreur.conflitSyncEnCours).toBe(true);
+    // Le Message brut (potentiellement PII) n'est JAMAIS exposé sur l'erreur — seul le
+    // booléen sûr en est dérivé.
+    expect(JSON.stringify(erreur)).not.toContain("53ad009b");
+  });
+
+  it("declencherSync 400 générique (autre cause) → conflitSyncEnCours = false (pas d'avalage)", async () => {
+    // Garde-fou : un 400 hors « already running » NE doit PAS être classé conflit, sinon
+    // declencherEtAttendre irait poller un vieux job et conclurait « sync effectué » à tort.
+    const fetchMock = vi.fn().mockResolvedValue(
+      reponseJson(
+        {
+          Code: "400 BadRequest",
+          Message: "Validation failed",
+          Errors: [{ ErrorCode: "INVALID_PARAMETER", Path: "$.InstitutionId" }],
+        },
+        { status: 400 },
+      ),
+    );
+    const client = creerClient(fetchMock as unknown as typeof fetch);
+
+    const erreur = (await client
+      .declencherSync("conn-1", CLIENT_USER_ID)
+      .catch((e) => e)) as OmniFiApiError;
+
+    expect(erreur).toBeInstanceOf(OmniFiApiError);
+    expect(erreur.status).toBe(400);
+    expect(erreur.conflitSyncEnCours).toBe(false);
   });
 
   it("getLatestSyncJob GET l'URL latest-job snake_case et renvoie le SyncJob (Data)", async () => {
