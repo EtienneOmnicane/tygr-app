@@ -27,6 +27,7 @@ import {
 import {
   listerEntites,
   listerMembresWorkspace,
+  listerPropositionsPartyEntite,
   withWorkspace,
 } from "@/server/db";
 
@@ -35,6 +36,11 @@ import {
   type EntiteVue,
   type MembreVue,
 } from "./assignation-entites";
+import {
+  PropositionsPartyEntite,
+  type EntiteCible,
+  type PropositionVue,
+} from "./propositions";
 
 export const metadata = { title: "Entités — TYGR" };
 
@@ -61,8 +67,13 @@ export default async function PageEntites() {
     // Une seule requête jointe : membres du workspace + scopeInitial de chacun
     // (plus de boucle N+1 ni de mock). Le contrat MembreScope mappe MembreVue.
     const membres: MembreVue[] = await listerMembresWorkspace(tx, ctx);
+    // Sas ENTITY-PARTY1 : propositions Party→entité dérivées des parties persistées.
+    const propositions: PropositionVue[] = await listerPropositionsPartyEntite(
+      tx,
+      ctx,
+    );
 
-    return { entites, membres };
+    return { entites, membres, propositions };
   });
 
   if (donnees === null) {
@@ -75,15 +86,41 @@ export default async function PageEntites() {
     .filter((e) => e.isActive)
     .map((e) => ({ id: e.id, nom: e.name, code: e.code }));
 
+  // Cibles d'entité pour le sas de propositions (entités actives, mêmes que pickers).
+  const entitesCibles: EntiteCible[] = entitesActives.map((e) => ({
+    id: e.id,
+    nom: e.nom,
+  }));
+
   return (
     <main className="flex flex-1 justify-center p-6">
-      <div className="w-full max-w-3xl">
-        <h1 className="mb-1 text-lg font-semibold">Assignation des entités</h1>
-        <p className="mb-6 text-sm text-text-muted">
-          Définissez le périmètre de chaque membre : accès à l’ensemble du groupe
-          (Vision Globale) ou restreint à certaines entités (Vision Entité).
-        </p>
-        <AssignationEntites entites={entitesActives} membres={donnees.membres} />
+      <div className="flex w-full max-w-3xl flex-col gap-10">
+        <section>
+          <h1 className="mb-1 text-lg font-semibold">
+            Propositions d’entités (Parties Omni-FI)
+          </h1>
+          <p className="mb-6 text-sm text-text-muted">
+            Chaque proposition est dérivée d’une « Party » Omni-FI. Rien n’est
+            enregistré tant que vous n’avez pas confirmé : créez l’entité proposée
+            ou choisissez-en une existante, puis rattachez ses comptes.
+          </p>
+          <PropositionsPartyEntite
+            propositions={donnees.propositions}
+            entites={entitesCibles}
+          />
+        </section>
+
+        <section>
+          <h2 className="mb-1 text-lg font-semibold">Assignation des entités</h2>
+          <p className="mb-6 text-sm text-text-muted">
+            Définissez le périmètre de chaque membre : accès à l’ensemble du groupe
+            (Vision Globale) ou restreint à certaines entités (Vision Entité).
+          </p>
+          <AssignationEntites
+            entites={entitesActives}
+            membres={donnees.membres}
+          />
+        </section>
       </div>
     </main>
   );

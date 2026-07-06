@@ -204,6 +204,7 @@ export {
   listerEntites,
   listerScopesMembre,
   listerMembresWorkspace,
+  listerPropositionsPartyEntite,
   creerEntite,
   renommerEntite,
   archiverEntite,
@@ -217,7 +218,12 @@ export {
   EntiteNomDupliqueError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
-export type { EntiteLue, MembreScope } from "@/server/repositories/entites";
+export type {
+  EntiteLue,
+  MembreScope,
+  PropositionEntite,
+  CompteDeProposition,
+} from "@/server/repositories/entites";
 
 // Périmètre fin par membre (user_scopes, L6a) : octroi / révocation ADMIN-only de la
 // maille party/compte qui pilote account_scope. Même frontière P0-a : les Server

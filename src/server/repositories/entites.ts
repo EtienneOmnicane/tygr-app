@@ -25,6 +25,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
+  accountPartyRole,
   bankAccounts,
   entities,
   memberEntityScopes,
@@ -121,6 +122,39 @@ export interface MembreScope {
   role: WorkspaceRole;
   /** entityIds du périmètre du membre ; [] = Vision Globale. */
   scopeInitial: string[];
+}
+
+/** Un compte bancaire porté par une proposition (projection scopée workspace). */
+export interface CompteDeProposition {
+  bankAccountId: string;
+  accountName: string;
+  currency: string;
+  /** entity_id ACTUEL du compte (null = non assigné). Sert au bilan « déjà assigné ». */
+  entityIdActuel: string | null;
+}
+
+/**
+ * Proposition de rattachement dérivée d'une Party Omni-FI persistée (ENTITY-PARTY1).
+ * PRÉ-REMPLISSAGE, PAS une décision : c'est l'ADMIN qui confirme dans le sas avant
+ * qu'aucun entity_id ne soit posé. Une proposition = une PARTY distincte du workspace
+ * courant (une party = un PartyName Omni-FI ; on ne fusionne PAS deux parties homonymes
+ * — la clé métier reste la party, pas le libellé, pour rester déterministe et scopé).
+ *
+ * `entiteExistanteId` : si une entité ACTIVE porte déjà EXACTEMENT ce nom, on la
+ * propose comme cible (pas de doublon d'entité) ; sinon null → l'ADMIN créera l'entité
+ * au moment de confirmer. `entiteDejaRattachee` reflète parties.entity_id (déjà posé à
+ * la main). Le Front n'a AUCUNE logique de décision : il affiche + envoie la confirmation.
+ */
+export interface PropositionEntite {
+  partyId: string;
+  /** PartyName Omni-FI (peut être null à la source → proposition « sans nom »). */
+  partyName: string | null;
+  /** entity_id déjà rattaché à la party (null = non rattachée). */
+  entiteDejaRattacheeId: string | null;
+  /** id d'une entité ACTIVE homonyme si elle existe déjà dans le workspace, sinon null. */
+  entiteExistanteId: string | null;
+  /** Comptes de cette party (via account_party_role), scopés workspace + entité. */
+  comptes: CompteDeProposition[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -259,6 +293,109 @@ export async function listerMembresWorkspace<TDb extends AnyPgDatabase>(
     email: l.email,
     role: l.role as WorkspaceRole,
     scopeInitial: l.scopeInitial,
+  }));
+}
+
+/**
+ * PONT Party → entité en PRÉ-REMPLISSAGE (ENTITY-PARTY1, décision PO 2026-07-02).
+ * Surface, pour le workspace COURANT, les PROPOSITIONS de rattachement dérivées des
+ * Parties Omni-FI DÉJÀ persistées à l'ingestion (`parties` + `account_party_role`).
+ * C'est la donnée qui alimente le sas de validation ADMIN : chaque party y devient un
+ * candidat (nom d'entité proposé = PartyName), avec la liste de SES comptes, un drapeau
+ * « une entité homonyme existe déjà » et le rattachement éventuel déjà posé. AUCUNE
+ * écriture ici (lecture pure) ; c'est `confirmerPropositionAction` qui, sur décision
+ * ADMIN, posera entity_id via les gates existantes.
+ *
+ * ⚠️ ISOLATION — deux étages, jamais contournés :
+ *  - Étage 1 (tenant) : `parties`, `account_party_role`, `bank_accounts` sont sous
+ *    `tenant_isolation` ; `tx` porte app.current_workspace_id → seules les lignes du
+ *    tenant courant remontent. On AJOUTE des filtres explicites workspace_id = ctx
+ *    (défense en profondeur ; la RLS suffirait).
+ *  - Étage 2 (entité, ENTITY-READ-JOIN1) : la liste des comptes passe par un
+ *    INNER JOIN sur `bank_accounts`, JAMAIS par une lecture directe de la table de
+ *    liaison — la policy `entity_scope` de bank_accounts mord ainsi PAR HÉRITAGE de
+ *    jointure. Un compte hors périmètre ne peut donc pas fuiter dans une proposition.
+ *    (En pratique cette fonction est ADMIN-only = Vision Globale, mais le join reste
+ *    obligatoire : on ne relâche jamais la règle de scoping par jointure.)
+ *
+ * ADMIN-only (le sas d'assignation est réservé à l'ADMIN, cf. reste du repo). Parties
+ * INACTIVES exclues. Tri déterministe par PartyName puis id (UI ordonnée, stable).
+ */
+export async function listerPropositionsPartyEntite<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+): Promise<PropositionEntite[]> {
+  exigerAdmin(ctx);
+
+  // 1. Parties actives du workspace courant (candidats). LEFT JOIN sur une entité
+  //    ACTIVE HOMONYME (même workspace, même name) pour proposer une cible existante
+  //    plutôt que d'en recréer une. Scopé RLS + filtre explicite (défense en profondeur).
+  const partiesLignes = await tx
+    .select({
+      partyId: parties.id,
+      partyName: parties.name,
+      entiteDejaRattacheeId: parties.entityId,
+      entiteExistanteId: entities.id,
+    })
+    .from(parties)
+    .leftJoin(
+      entities,
+      and(
+        eq(entities.workspaceId, ctx.workspaceId),
+        eq(entities.name, parties.name),
+        eq(entities.isActive, true),
+      ),
+    )
+    .where(
+      and(eq(parties.workspaceId, ctx.workspaceId), eq(parties.isActive, true)),
+    )
+    .orderBy(parties.name, parties.id);
+
+  if (partiesLignes.length === 0) return [];
+
+  // 2. Comptes de ces parties, via account_party_role ⋈ bank_accounts
+  //    (ENTITY-READ-JOIN1 : le scope entité mord par la JOINTURE sur bank_accounts,
+  //    jamais par une lecture directe de la liaison). Scopé RLS + filtre explicite.
+  const comptesLignes = await tx
+    .select({
+      partyId: accountPartyRole.partyId,
+      bankAccountId: bankAccounts.id,
+      accountName: bankAccounts.accountName,
+      currency: bankAccounts.currency,
+      entityIdActuel: bankAccounts.entityId,
+    })
+    .from(accountPartyRole)
+    .innerJoin(
+      bankAccounts,
+      and(
+        eq(bankAccounts.id, accountPartyRole.bankAccountId),
+        eq(bankAccounts.workspaceId, ctx.workspaceId),
+      ),
+    )
+    .where(eq(accountPartyRole.workspaceId, ctx.workspaceId))
+    .orderBy(bankAccounts.accountName, bankAccounts.id);
+
+  // 3. Regroupe les comptes par party (en mémoire — petits volumes : ~28 parties,
+  //    ~77 liens en prod). Aucune donnée hors scope ne peut atteindre ce Map (les
+  //    deux requêtes sont bornées workspace + RLS + join bank_accounts).
+  const comptesParParty = new Map<string, CompteDeProposition[]>();
+  for (const c of comptesLignes) {
+    const liste = comptesParParty.get(c.partyId) ?? [];
+    liste.push({
+      bankAccountId: c.bankAccountId,
+      accountName: c.accountName,
+      currency: c.currency,
+      entityIdActuel: c.entityIdActuel,
+    });
+    comptesParParty.set(c.partyId, liste);
+  }
+
+  return partiesLignes.map((p) => ({
+    partyId: p.partyId,
+    partyName: p.partyName,
+    entiteDejaRattacheeId: p.entiteDejaRattacheeId,
+    entiteExistanteId: p.entiteExistanteId,
+    comptes: comptesParParty.get(p.partyId) ?? [],
   }));
 }
 
