@@ -374,13 +374,47 @@ logout → `/login` et accès direct post-logout re-redirigé.
   Trois écrans nommés comme des listes ne montrent que des actions, jamais l'état :
   (a) **`/banques`** (« Banques connectées ») n'affiche **aucune** des 12 banques
   connectées (seulement « + Connecter une banque » / « Synchroniser ») → impossible de
-  voir ni déconnecter une connexion ; (b) **`/admin/membres`** (« Membres du workspace »)
-  n'affiche que le **formulaire de création**, pas la liste des membres (or
-  `listerMembresWorkspace` existe déjà, cf. mémoire `ui-admin-entites-maquette`) ;
+  voir ni déconnecter une connexion ; ~~(b) **`/admin/membres`**~~ **✅ LIVRÉ** (chantier
+  `feat/membres-creation-scopes`, 2026-07-06 : la liste des membres — nom/email/rôle/
+  périmètre — est rendue sous le formulaire via `listerMembresWorkspace`) ;
   (c) **`/admin/entites`** liste bien les membres mais pas les entités (cf.
-  QA-ENTITES-CREATION-UI1). **À faire** : rendre l'état à côté de l'action (liste des
-  connexions bancaires avec déconnexion ; liste des membres avec rôle). **Déclencheur** :
-  prochaine itération admin / gestion des connexions. **Effort** : M.
+  QA-ENTITES-CREATION-UI1). **À faire (reste)** : (a) liste des connexions bancaires avec
+  déconnexion. **Déclencheur** : prochaine itération admin / gestion des connexions.
+  **Effort** : M (S depuis que (b) est fait).
+
+### Provisioning membres — dettes ouvertes après feat/membres-creation-scopes (2026-07-06)
+
+Chantier « créer un membre + assigner ses entités à la création » livré : formulaire
+avec cases entités (Vision Globale / Vision Entité), chaînage atomique
+`creerMembreAvecScopes` (création + `definirScopesMembre` dans une seule tx, rollback
+total sur entité cross-tenant), liste des membres, message email-existant véridique.
+Deux dettes tracées ci-dessous (aucune ne touche l'isolation/append-only/montants →
+autorisées, règle 9).
+
+- [ ] **AUTH-MDP-TEMPO1 (P1, effort M) — flux « mot de passe temporaire » absent.**
+  L'ADMIN fixe le mot de passe initial du membre à la création (`provisionnerMembre`),
+  mais **rien** n'oblige le membre à le changer : pas de colonne `must_change_password`,
+  pas de gate au premier login, **aucune page self-service de changement de mot de passe**
+  (seul `scripts/reset-password.mjs`, dev-local). Conséquence : l'ADMIN connaît
+  indéfiniment le mot de passe de chaque membre qu'il crée. **À faire** : migration expand
+  (`users.must_change_password boolean default false`), pose du flag à la création, gate
+  au login (rediriger vers un écran de changement tant que le flag est vrai), page + Server
+  Action de changement de mot de passe (argon2 côté action, garde session). **Déclencheur** :
+  premier onboarding de membres réels hors équipe fondatrice (aujourd'hui : seul l'ADMIN
+  seed existe). Réfère `PLAN-membres-creation-scopes.md` §6.
+
+- [ ] **PROV-EMAIL-EXISTANT1 (P2, effort S) — durcir la réutilisation d'utilisateur par
+  email (léger oracle d'énumération cross-tenant).** `creerUtilisateurEtRattacher` réutilise
+  un utilisateur existant par email sur TOUTE la table `users` (hors RLS), y compris un
+  utilisateur d'un AUTRE workspace, et le message de succès distingue désormais « créé » de
+  « utilisateur existant rattaché » (fix véridique voulu, morceau 3). Un ADMIN peut donc
+  déduire qu'un email est déjà un utilisateur TYGR ailleurs. Surface ADMIN-only, risque
+  faible, **comportement anti-écrasement conservé** (le mot de passe d'un user existant
+  n'est jamais réécrit). **À faire si durcissement** : soit refuser de rattacher un
+  utilisateur qui n'est pas déjà membre du workspace courant (casse les users multi-espaces
+  légitimes — à peser), soit uniformiser le message (ne plus distinguer créé/existant).
+  **Déclencheur** : arrivée de clients multi-tenant réels (aujourd'hui : un seul groupe
+  Omnicane). Réfère `PLAN-membres-creation-scopes.md` §6.
 
 - [ ] **QA-NAV-PLACEHOLDERS1 (P2) — Graphiques & Échéances : sections vides au message
   trompeur + incohérence placeholder.** `/graphiques` et `/echeances` sont des

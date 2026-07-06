@@ -1,15 +1,29 @@
 "use client";
 
 /**
- * Formulaire de provisioning ADMIN (Epic 2 L3). États : erreur (champs/refus,
- * message générique) et succès (toast inline). Tokens UI_GUIDELINES §2.3.
+ * Formulaire de provisioning ADMIN (Epic 2 L3 + assignation d'entités à la création).
+ * États : erreur (champs/refus, message générique) et succès (toast inline). Le
+ * périmètre entité est optionnel : Vision Globale (aucune case) par défaut, ou Vision
+ * Entité restreinte à un sous-ensemble. Les entités cochées sont postées en champs
+ * cachés `entityIds` → l'action les chaîne dans la même transaction. Tokens
+ * UI_GUIDELINES §2.3. Pas de dépendance externe (règle 9) : micro-helper `cn` local.
  */
+import { useState } from "react";
 import { useActionState } from "react";
 
-import {
-  provisionnerMembre,
-  type EtatProvisioning,
-} from "./actions";
+import { provisionnerMembre, type EtatProvisioning } from "./actions";
+
+/** Entité assignable (projection minimale — pas de couplage au composant entités). */
+export interface EntiteOption {
+  id: string;
+  nom: string;
+  code: string | null;
+}
+
+/** Concatène des classes en ignorant les valeurs falsy. Pas de clsx (règle 9). */
+function cn(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(" ");
+}
 
 const ETAT_INITIAL: EtatProvisioning = { erreur: null, succes: null };
 
@@ -18,11 +32,33 @@ const champClass =
   "placeholder:text-text-faint focus:outline-none focus:border-primary " +
   "focus:ring-2 focus:ring-primary/30 disabled:opacity-48";
 
-export function FormulaireProvisioning() {
+export function FormulaireProvisioning({
+  entites,
+}: {
+  entites: EntiteOption[];
+}) {
   const [etat, action, enCours] = useActionState(
     provisionnerMembre,
     ETAT_INITIAL,
   );
+
+  // Périmètre : GLOBALE (défaut) ou ENTITE. La sélection est mémorisée même si on
+  // repasse en Globale (confort de saisie).
+  const [mode, setMode] = useState<"GLOBALE" | "ENTITE">("GLOBALE");
+  const [selection, setSelection] = useState<string[]>([]);
+
+  const sansEntite = entites.length === 0;
+  const estGlobale = mode === "GLOBALE" || sansEntite;
+  // Champs cachés réellement envoyés (convention serveur : Globale ⇒ []).
+  const entityIdsAEnvoyer = estGlobale ? [] : selection;
+  // Garde-fou produit : mode ENTITE sans aucune case → envoyer [] rouvrirait tout.
+  const entiteSansCase = mode === "ENTITE" && !sansEntite && selection.length === 0;
+
+  function toggleEntite(id: string) {
+    setSelection((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
 
   return (
     <form action={action} className="flex flex-col gap-4">
@@ -64,6 +100,104 @@ export function FormulaireProvisioning() {
         </select>
       </label>
 
+      {/* Périmètre entité (optionnel) ------------------------------------------- */}
+      <fieldset className="flex flex-col gap-2.5 border-t border-line pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <legend className="text-sm font-medium">Périmètre</legend>
+          {!sansEntite && (
+            <div
+              role="radiogroup"
+              aria-label="Périmètre du membre"
+              className="flex rounded-control border border-line p-0.5 text-xs"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={estGlobale}
+                disabled={enCours}
+                onClick={() => setMode("GLOBALE")}
+                className={cn(
+                  "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                  estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
+                )}
+              >
+                Vision Globale
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!estGlobale}
+                disabled={enCours}
+                onClick={() => setMode("ENTITE")}
+                className={cn(
+                  "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                  !estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
+                )}
+              >
+                Vision Entité
+              </button>
+            </div>
+          )}
+        </div>
+
+        <p className={cn("text-xs", entiteSansCase ? "text-danger" : "text-text-muted")}>
+          {sansEntite
+            ? "Aucune entité — le membre aura une Vision Globale (accès à tout le groupe)."
+            : estGlobale
+              ? "Accès à l’ensemble du groupe (toutes les entités)."
+              : entiteSansCase
+                ? "Sélectionnez au moins une entité, ou repassez en Vision Globale."
+                : `Vision restreinte à ${selection.length} entité${selection.length > 1 ? "s" : ""}.`}
+        </p>
+
+        {!sansEntite && (
+          <div
+            className={cn(
+              "grid grid-cols-1 gap-2 sm:grid-cols-2",
+              estGlobale && "pointer-events-none opacity-60",
+            )}
+          >
+            {entites.map((entite) => {
+              const cochee = estGlobale || selection.includes(entite.id);
+              return (
+                <label
+                  key={entite.id}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-sm transition-colors",
+                    estGlobale
+                      ? "cursor-not-allowed border-line bg-surface-inset"
+                      : cochee
+                        ? "border-primary bg-primary/5"
+                        : "border-line hover:border-primary/50",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cochee}
+                    disabled={estGlobale || enCours}
+                    onChange={() => toggleEntite(entite.id)}
+                    className="size-4 shrink-0 accent-primary"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{entite.nom}</span>
+                  {entite.code && (
+                    <span className="shrink-0 text-[11px] font-medium text-text-faint">
+                      {entite.code}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Champs cachés : un input par entité réellement envoyée → getAll("entityIds"). */}
+        {entityIdsAEnvoyer.map((id) => (
+          <input key={id} type="hidden" name="entityIds" value={id} />
+        ))}
+      </fieldset>
+
       {etat.erreur !== null && (
         <p role="alert" className="text-xs text-danger">
           {etat.erreur}
@@ -77,7 +211,7 @@ export function FormulaireProvisioning() {
 
       <button
         type="submit"
-        disabled={enCours}
+        disabled={enCours || entiteSansCase}
         className="mt-2 flex h-10 items-center justify-center gap-2 rounded-control
           bg-primary text-sm font-semibold text-white transition-colors
           hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary

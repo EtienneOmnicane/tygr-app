@@ -115,8 +115,14 @@ export { schema };
 // ctx) — ce n'est pas un accès DB hors contexte.
 export {
   creerUtilisateurEtRattacher,
+  creerMembreAvecScopes,
   ProvisioningNonAutoriseError,
   RoleInvalideError,
+} from "@/server/repositories/provisioning";
+export type {
+  NouvelUtilisateur,
+  ResultatRattachement,
+  ResultatProvisioningMembre,
 } from "@/server/repositories/provisioning";
 
 // Services de lecture du dashboard (Epic 3 — FEAT-3.1) : ré-exportés ici pour
