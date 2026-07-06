@@ -104,6 +104,16 @@ export default function BanqueConnexionDemoPage() {
             reparationEnCours
           />
         </Bloc>
+
+        <Bloc
+          titre="7. Désalignement EndUser (403) — « Reconnecter cette banque »"
+          description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n'est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l'utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
+        >
+          <WidgetFeedback
+            succes="Synchronisation effectuée — 1 banque(s) à jour, 2 compte(s) mis à jour. 1 banque(s) doivent être reconnectées — leur accès n'est plus valide."
+            aReconnecter={[{ connectionId: "cx_demo_403" }]}
+          />
+        </Bloc>
       </main>
     </div>
   );

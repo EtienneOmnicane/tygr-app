@@ -762,6 +762,50 @@ export interface ResultatSynchronisation {
     /** Codes machine OBIE (`Errors[].ErrorCode`, non-PII) si présents — ex. RATE_LIMIT_EXCEEDED. */
     errorCodes?: string[];
   }>;
+  /**
+   * Connexions dont l'EndUser/credential est DÉSALIGNÉ côté Omni-FI : l'appel
+   * per-connexion a répondu HTTP 403 (obieCode `PUBLIC_TOKEN_CLIENT_MISMATCH`),
+   * signe que le lien banque n'est plus rattachable à ce ClientUserId (incident
+   * prod : comptes silencieusement vides avec un `last_synced_at` frais). Ce n'est
+   * PAS un échec « dur » générique (donc HORS `echecsDetail`/`echecs`) : c'est un
+   * état ACTIONNABLE distinct — l'UI doit proposer « Reconnecter cette banque »
+   * (rouvrir le widget natif). Non-énumérant : identifiant opaque + code/status/
+   * obieCode sûrs uniquement (règle 8 : jamais de libellé bancaire ni de Message
+   * OBIE brut). Vide = aucun cas.
+   */
+  aReconnecter: Array<{
+    connectionId: string;
+    code: string;
+    status: number;
+    obieCode: string | null;
+  }>;
+}
+
+/**
+ * obieCode Omni-FI signalant un désalignement EndUser/credential (le lien banque
+ * échangé ne correspond plus au ClientUserId courant). Code MACHINE stable, jamais
+ * un libellé à parser (règle 3). Cf. l'entête de ce module (§ Sécurité).
+ */
+const OBIE_DESALIGNEMENT_ENDUSER = "PUBLIC_TOKEN_CLIENT_MISMATCH";
+
+/**
+ * Vrai ssi l'erreur est le désalignement EndUser/credential : `OmniFiApiError` en
+ * HTTP 403. On PRIORISE l'obieCode `PUBLIC_TOKEN_CLIENT_MISMATCH` quand l'enveloppe
+ * OBIE le porte, mais le status 403 reste le DISCRIMINANT robuste et suffisant
+ * (l'obieCode peut être absent). Codes machine uniquement (règle 3 : jamais de
+ * parsing de message). Séparé du fail-soft générique : ce cas alimente
+ * `aReconnecter`, pas `echecsDetail`.
+ */
+function estDesalignementEndUser(erreur: unknown): erreur is OmniFiApiError {
+  // Discriminant final : le status 403 (l'obieCode peut manquer). L'obieCode
+  // `PUBLIC_TOKEN_CLIENT_MISMATCH` est la signature exacte attendue (voir constante) ;
+  // un 403 sans obieCode, ou avec un autre code d'accès, reste un désalignement d'accès
+  // que l'utilisateur résout par une reconnexion — on le route au même endroit.
+  return (
+    erreur instanceof OmniFiApiError &&
+    erreur.status === 403 &&
+    (erreur.obieCode === OBIE_DESALIGNEMENT_ENDUSER || erreur.obieCode !== "")
+  );
 }
 
 /**
@@ -851,6 +895,7 @@ export async function synchroniserConnexionsDepuisOmnifi(
   const aReparer: Array<{ connectionId: string; jobId: string }> = [];
   const rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }> = [];
   const echecsDetail: ResultatSynchronisation["echecsDetail"] = [];
+  const aReconnecter: ResultatSynchronisation["aReconnecter"] = [];
 
   for (const cx of connexionsATraiter) {
     // FAIL-SOFT PAR CONNEXION : tout le corps de traitement d'UNE connexion est
@@ -955,6 +1000,35 @@ export async function synchroniserConnexionsDepuisOmnifi(
       ) {
         throw erreur;
       }
+      // DÉSALIGNEMENT ENDUSER (403 PUBLIC_TOKEN_CLIENT_MISMATCH) : PAS un échec dur
+      // générique. Le credential de CETTE banque n'est plus rattachable au ClientUserId
+      // courant ; Omni-FI renvoie 403 et notre code, jusqu'ici, l'avalait en échec
+      // silencieux → l'utilisateur voyait des comptes vides avec un last_synced_at frais
+      // (incident prod). On le route vers un bucket DÉDIÉ, ACTIONNABLE : l'UI proposera
+      // « Reconnecter cette banque » (rouvrir le widget natif). On le sort AVANT le
+      // fail-soft générique pour qu'il ne soit ni compté en `echecs` ni fondu dans
+      // `echecsDetail`. Détail SÛR uniquement (règle 8) ; on ne `continue` pas
+      // explicitement — le catch termine déjà l'itération de cette connexion.
+      if (estDesalignementEndUser(erreur)) {
+        aReconnecter.push({
+          connectionId: cx.ConnectionId,
+          code: erreur.code,
+          status: erreur.status,
+          obieCode: erreur.obieCode,
+        });
+        // Observabilité dédiée : événement DISTINCT du fail-soft générique (jamais de
+        // PII ; connectionId = UUID opaque Omni-FI, status/obieCode sûrs).
+        console.warn(
+          JSON.stringify({
+            evt: "omnifi_sync_connexion_a_reconnecter",
+            connectionId: cx.ConnectionId,
+            code: erreur.code,
+            status: erreur.status,
+            obieCode: erreur.obieCode,
+          }),
+        );
+        continue;
+      }
       // Échec dur de CETTE connexion : compté une fois, jamais propagé (les autres
       // connexions et le `return` final sont préservés). Détail SÛR uniquement.
       const detail = detailErreurSure(erreur);
@@ -983,6 +1057,7 @@ export async function synchroniserConnexionsDepuisOmnifi(
     rateLimited,
     echecs: echecsDetail.length,
     echecsDetail,
+    aReconnecter,
   };
 }
 

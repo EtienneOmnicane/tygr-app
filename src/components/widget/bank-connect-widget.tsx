@@ -51,6 +51,7 @@ import {
   ROUTE_DASHBOARD,
   WidgetFeedback,
   type ConnexionAReparer,
+  type ConnexionAReconnecter,
 } from "./widget-feedback";
 
 const ETAT_DEMARRAGE: EtatDemarrage = { erreur: null, linkToken: null };
@@ -109,6 +110,9 @@ export function BankConnectWidget({
   // Connexions à RÉPARER (signal serveur). Les boutons « Reconnecter » s'affichent
   // tant qu'une connexion y figure ; on la retire quand sa réparation a abouti.
   const [reparation, setReparation] = useState<ConnexionAReparer[]>([]);
+  // Connexions à RECONNECTER (signal serveur `aReconnecter` : 403 désalignement). Pas
+  // de REPAIR possible (aucun jobId) → l'invite pointe vers « Connecter une banque ».
+  const [aReconnecter, setAReconnecter] = useState<ConnexionAReconnecter[]>([]);
   // Réparation EN COURS : token REPAIR obtenu + connexion ciblée → monte le launcher.
   // `null` = aucune réparation ouverte. Mutuellement exclusif avec l'onboarding.
   const [repair, setRepair] = useState<{ connectionId: string; token: string } | null>(
@@ -129,6 +133,7 @@ export function BankConnectWidget({
         await finaliserConnexionDropinAction(publicTokens);
       setFinalisation(r);
       setReparation(r.reparation ?? []);
+      setAReconnecter(r.aReconnecter ?? []);
       // Succès COMPLET → on emmène l'utilisateur voir ses comptes sur le Dashboard.
       // Garde stricte : SEULEMENT si le serveur confirme `complet === true`. En
       // succès partiel (ou flag pas encore exposé) on reste ici pour afficher
@@ -152,6 +157,8 @@ export function BankConnectWidget({
       // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
       // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
       setReparation(r.reparation ?? []);
+      // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
+      setAReconnecter(r.aReconnecter ?? []);
     });
   }
 
@@ -301,6 +308,7 @@ export function BankConnectWidget({
         reparation={reparation}
         onReconnecter={lancerReparation}
         reparationEnCours={repairEnCours || Boolean(repair)}
+        aReconnecter={aReconnecter}
       />
     </div>
   );
