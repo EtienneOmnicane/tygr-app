@@ -18,6 +18,8 @@
 import argon2 from "argon2";
 import { neonConfig, Pool } from "@neondatabase/serverless";
 
+import { seederCategoriesDansTransaction } from "./seed-categories-lib.mjs";
+
 const EMAIL_ADMIN = "enardou@omni-fi.co";
 const NOM_ADMIN = "Administrateur TYGR";
 const WORKSPACE_NOM = "Omni-FI HQ";
@@ -115,7 +117,18 @@ try {
     [userId, workspaceId],
   );
 
+  // 4. Référentiel de catégories (QA-ONBOARD-CATEG1) : un workspace naît
+  //    UTILISABLE (le picker de ventilation n'est jamais vide). MÊME transaction
+  //    que workspace + membership (tout-ou-rien) ; idempotent (déjà pourvu ⇒
+  //    no-op, jamais de doublon au re-run).
+  const nbCategories = await seederCategoriesDansTransaction(client, workspaceId);
+
   await client.query("COMMIT");
+  console.log(
+    nbCategories > 0
+      ? `Référentiel de catégories injecté (${nbCategories} catégories).`
+      : "Référentiel de catégories déjà présent — inchangé.",
+  );
   console.log("Seed terminé : ADMIN rattaché à « Omni-FI HQ ».");
 } catch (erreur) {
   await client.query("ROLLBACK");

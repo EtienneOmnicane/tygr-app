@@ -69,6 +69,7 @@ export function SplitAllocationModal({
   onReplace,
   onSaved,
   onCreateCategorie,
+  onImportStandard,
 }: {
   open: boolean;
   onClose: () => void;
@@ -101,6 +102,15 @@ export function SplitAllocationModal({
   onCreateCategorie?: (
     name: string,
   ) => Promise<ResultatAction<{ categoryId: string }>>;
+  /**
+   * Importe le référentiel STANDARD depuis le picker VIDE (QA-ONBOARD-CATEG1).
+   * Optionnel (réservé ADMIN, câblé par le conteneur) : absent → pas de CTA
+   * d'import. Au succès, les catégories renvoyées sont fusionnées localement
+   * (affichage immédiat), comme pour `onCreateCategorie`.
+   */
+  onImportStandard?: () => Promise<
+    ResultatAction<{ imported: number; categories: CategorieUI[] }>
+  >;
 }) {
   // État LOCAL des lignes (édition optimiste). Initialisé depuis les splits existants.
   const [lignes, setLignes] = useState<LigneAllocation[]>(() =>
@@ -123,6 +133,33 @@ export function SplitAllocationModal({
   const categoriesLocales = useMemo(
     () => [...categories, ...categoriesCreees],
     [categories, categoriesCreees],
+  );
+
+  // CTA « Importer les catégories standard » (picker vide) : appelle l'action
+  // ADMIN puis FUSIONNE les catégories renvoyées dans l'état local (affichage
+  // immédiat), même stratégie que `onCreateCategorie`. Dédoublonné par id pour
+  // rester sûr en cas de re-clic (import idempotent → renvoie la liste existante).
+  const importerStandard = useMemo(
+    () =>
+      onImportStandard
+        ? async () => {
+            const res = await onImportStandard();
+            if (res.ok) {
+              setCategoriesCreees((prev) => {
+                const connues = new Set([
+                  ...categories.map((c) => c.id),
+                  ...prev.map((c) => c.id),
+                ]);
+                const fraiches = res.data.categories.filter(
+                  (c) => !connues.has(c.id),
+                );
+                return [...prev, ...fraiches];
+              });
+            }
+            return res;
+          }
+        : undefined,
+    [onImportStandard, categories],
   );
 
   const resteLabelId = useId();
@@ -385,6 +422,7 @@ export function SplitAllocationModal({
                               }
                             : undefined
                         }
+                        onImportStandard={importerStandard}
                       />
                     </div>
                   )}

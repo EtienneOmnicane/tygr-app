@@ -1,19 +1,22 @@
 /**
- * Suite isolation — Seed du référentiel de catégories (scripts/seed-categories.mjs).
+ * Suite isolation — Seed du référentiel de catégories (QA-ONBOARD-CATEG1).
  *
- * Le seed est un script owner-role (DATABASE_URL_ADMIN) : ce test exerce sa LOGIQUE
- * DATA (le même pattern d'INSERT, le même référentiel importé) sous Postgres réel
+ * Le seed CLI est owner-role (DATABASE_URL_ADMIN) : ce test exerce la FONCTION
+ * RÉELLE partagée (scripts/seed-categories-lib.mjs — celle qu'appellent
+ * seed-admin.mjs, seed-omnifi-demo.ts et seed-categories.mjs) sous Postgres réel
  * (PGlite) + migrations + provisioning RÉELS, et prouve :
  *   - FORCE RLS : sous app.current_workspace_id posé (owner), l'INSERT passe le WITH
  *     CHECK tenant_isolation ; chaque catégorie naît dans le BON workspace ;
  *   - hiérarchie : Natures (parent_id NULL) + Sous-natures rattachées via la FK
  *     COMPOSITE (parent_id, workspace_id) — un parent d'un autre tenant serait rejeté ;
  *   - idempotence : le garde « ≥1 catégorie ⇒ skip » empêche tout doublon au re-run ;
+ *   - tout-ou-rien : la variante « dans la transaction de l'appelant » (chemin
+ *     seed-admin) est annulée par un ROLLBACK appelant (jamais de référentiel partiel) ;
  *   - tenant-scopé : sous le rôle applicatif tygr_app (RLS), `listerCategories` ne
  *     remonte QUE le référentiel du workspace courant (pas de fuite cross-tenant).
  *
- * On importe le RÉFÉRENTIEL réel (scripts/categories-referentiel.mjs) : une seule
- * source de vérité script/test (pas de dérive — CLAUDE.md règle 9).
+ * On importe le RÉFÉRENTIEL réel (src/lib/categories-referentiel.mjs) ET la lib
+ * réelle : une seule source de vérité script/app/test (pas de dérive — règle 9).
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -24,11 +27,20 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
-import { listerCategories } from "@/server/repositories/categorisation";
+import {
+  archiverCategorie,
+  CategorieNonAutoriseeError,
+  importerReferentielCategories,
+  listerCategories,
+} from "@/server/repositories/categorisation";
 import {
   NB_CATEGORIES_REFERENTIEL,
   REFERENTIEL_CATEGORIES,
-} from "../../scripts/categories-referentiel.mjs";
+} from "@/lib/categories-referentiel.mjs";
+import {
+  seederCategoriesDansTransaction,
+  seederCategoriesWorkspace,
+} from "../../scripts/seed-categories-lib.mjs";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -36,62 +48,34 @@ const withWorkspace = createWithWorkspace(db);
 
 const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+/** Workspace CTA (import applicatif) — CAROL est ADMIN. */
+const WS_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+/** Workspace SANS membre : sert la contre-preuve rollback (chemin seed-admin). */
+const WS_D = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+/** Workspace CTA non-admin — EVE est MANAGER (preuve du refus de rôle). */
+const WS_E = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const ALICE = "11111111-1111-4111-8111-111111111111";
 const BOB = "22222222-2222-4222-8222-222222222222";
+const CAROL = "c0000000-cccc-4ccc-8ccc-cccccccccccc";
+const EVE = "e0000000-eeee-4eee-8eee-eeeeeeeeeeee";
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
 const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
+/** ADMIN de WS_C — autorisé à importer le référentiel via le CTA. */
+const sessionCarol = { userId: CAROL, activeWorkspaceId: WS_C };
+/** MANAGER de WS_E — doit être REFUSÉ par la garde de rôle du CTA. */
+const sessionEve = { userId: EVE, activeWorkspaceId: WS_E };
 
 /**
- * Réplique de la boucle de seed PAR WORKSPACE de scripts/seed-categories.mjs, sous le
- * rôle OWNER (le test n'a pas encore `set role tygr_app` quand on l'appelle, comme le
- * script tourne sous DATABASE_URL_ADMIN). Pose le GUC tenant, applique le garde
- * d'idempotence, insère Natures puis Sous-natures. Retourne le nb de catégories
- * insérées (0 si workspace déjà pourvu) — exactement la sémantique du script.
+ * Seed d'un workspace = LA FONCTION RÉELLE des scripts (seed-categories-lib.mjs),
+ * importée telle quelle — plus de réplique locale : ce que la CI prouve est
+ * exactement ce que seed-admin / seed-omnifi-demo / seed-categories exécutent
+ * (zéro dérive script/test, CLAUDE.md règle 9). Exécutée sous OWNER, comme les
+ * scripts (DATABASE_URL_ADMIN) : PGlite tourne en superuser (BYPASSRLS) — le
+ * garde d'idempotence de la lib filtre EXPLICITEMENT sur workspace_id, il reste
+ * donc correct même quand la RLS ne borne pas la lecture.
  */
-async function seederWorkspace(workspaceId: string): Promise<number> {
-  await client.query("begin");
-  try {
-    await client.query(
-      "select set_config('app.current_workspace_id', $1, true)",
-      [workspaceId],
-    );
-    // Filtre EXPLICITE workspace_id (comme le seeder corrigé) : robuste même sous
-    // un rôle BYPASSRLS — PGlite tourne en superuser `postgres` (BYPASSRLS), donc
-    // un garde reposant sur la seule RLS verrait les autres tenants → faux skip.
-    const deja = await client.query(
-      "select 1 from categories where workspace_id = $1 limit 1",
-      [workspaceId],
-    );
-    if (deja.rows.length > 0) {
-      await client.query("commit");
-      return 0; // idempotence : workspace déjà pourvu → no-op
-    }
-
-    let insere = 0;
-    for (const groupe of REFERENTIEL_CATEGORIES) {
-      const nat = await client.query<{ id: string }>(
-        `insert into categories (workspace_id, name, parent_id)
-         values ($1, $2, null) returning id`,
-        [workspaceId, groupe.nature],
-      );
-      const parentId = nat.rows[0].id;
-      insere += 1;
-      for (const sous of groupe.sousNatures) {
-        await client.query(
-          `insert into categories (workspace_id, name, parent_id)
-           values ($1, $2, $3)`,
-          [workspaceId, sous, parentId],
-        );
-        insere += 1;
-      }
-    }
-    await client.query("commit");
-    return insere;
-  } catch (e) {
-    await client.query("rollback");
-    throw e;
-  }
-}
+const seederWorkspace = (workspaceId: string): Promise<number> =>
+  seederCategoriesWorkspace(client, workspaceId);
 
 beforeAll(async () => {
   const migrationsDir = path.join(process.cwd(), "drizzle", "migrations");
@@ -104,14 +88,21 @@ beforeAll(async () => {
     }
   }
 
-  // Seed (owner) : 2 workspaces + 1 membre MANAGER chacun (pour relire via RLS).
+  // Seed (owner) : workspaces + membres. WS_A/WS_B = MANAGER (relecture RLS) ;
+  // WS_C = CAROL ADMIN (CTA autorisé) ; WS_E = EVE MANAGER (CTA refusé) ;
+  // WS_D = sans membre (contre-preuve rollback, chemin seed-admin).
   await client.exec(`
     insert into workspaces (id,name,kind,omnifi_client_user_id) values
-      ('${WS_A}','Omnicane','INTERNAL_BU','eu-a'), ('${WS_B}','Autre Groupe','INTERNAL_BU','eu-b');
+      ('${WS_A}','Omnicane','INTERNAL_BU','eu-a'), ('${WS_B}','Autre Groupe','INTERNAL_BU','eu-b'),
+      ('${WS_C}','CTA Admin','INTERNAL_BU','eu-c'),
+      ('${WS_D}','Rollback BU','INTERNAL_BU','eu-d'),
+      ('${WS_E}','CTA Manager','INTERNAL_BU','eu-e');
     insert into users (id,email,full_name) values
-      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob');
+      ('${ALICE}','a@g.mu','Alice'), ('${BOB}','b@g.mu','Bob'),
+      ('${CAROL}','c@g.mu','Carol'), ('${EVE}','e@g.mu','Eve');
     insert into workspace_members (user_id,workspace_id,role) values
-      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER');
+      ('${ALICE}','${WS_A}','MANAGER'), ('${BOB}','${WS_B}','MANAGER'),
+      ('${CAROL}','${WS_C}','ADMIN'), ('${EVE}','${WS_E}','MANAGER');
   `);
 
   await client.exec(
@@ -186,6 +177,21 @@ describe("seed catégories — injection sous FORCE RLS (owner + GUC tenant)", (
     );
     expect(total.rows[0].n).toBe(NB_CATEGORIES_REFERENTIEL); // inchangé
   });
+
+  it("3bis. TOUT-OU-RIEN : la variante « dans la transaction de l'appelant » est annulée par son ROLLBACK (chemin seed-admin)", async () => {
+    // seed-admin.mjs appelle seederCategoriesDansTransaction DANS sa transaction
+    // globale : si le seed admin échoue APRÈS l'étape catégories, le rollback
+    // appelant ne doit laisser AUCUNE catégorie (jamais de référentiel partiel).
+    await client.query("begin");
+    const n = await seederCategoriesDansTransaction(client, WS_D);
+    expect(n).toBe(NB_CATEGORIES_REFERENTIEL); // visibles DANS la transaction…
+    await client.query("rollback");
+
+    const total = await client.query<{ n: number }>(
+      `select count(*)::int as n from categories where workspace_id = '${WS_D}'`,
+    );
+    expect(total.rows[0].n).toBe(0); // …et AUCUNE persistée après rollback.
+  });
 });
 
 describe("seed catégories — tenant-scopé (lecture applicative sous tygr_app/RLS)", () => {
@@ -220,6 +226,99 @@ describe("seed catégories — tenant-scopé (lecture applicative sous tygr_app/
     } finally {
       await client.exec(`reset role;`);
     }
+  });
+});
+
+// ── CTA in-app « Importer les catégories standard » (QA-ONBOARD-CATEG1) ────────
+// Le pendant APPLICATIF du seed : importerReferentielCategories tourne sous le rôle
+// tygr_app (RLS active), pas owner. Prouve : (5) un ADMIN importe le référentiel
+// complet et récupère la liste fraîche ; (6) idempotent (re-clic = no-op, liste
+// inchangée) ; (7) un non-ADMIN (MANAGER) est REFUSÉ par la garde de rôle SANS
+// effet de bord ; (8) l'import est intra-tenant (aucune fuite cross-workspace).
+describe("CTA « Importer les catégories standard » — importerReferentielCategories (applicatif, RLS)", () => {
+  afterAll(async () => {
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("5. ADMIN importe le référentiel complet dans un workspace vierge (sous tygr_app/RLS)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const r = await withWorkspace(sessionCarol, (tx, ctx) =>
+      importerReferentielCategories(tx, ctx),
+    );
+    expect(r.imported).toBe(NB_CATEGORIES_REFERENTIEL);
+    // La liste FRAÎCHE renvoyée = tout le référentiel actif (pour peupler le picker).
+    expect(r.categories).toHaveLength(NB_CATEGORIES_REFERENTIEL);
+    const naturesC = r.categories
+      .filter((c) => c.parentId === null)
+      .map((c) => c.name);
+    expect(naturesC.sort()).toEqual(
+      REFERENTIEL_CATEGORIES.map((g) => g.nature).sort(),
+    );
+  });
+
+  it("6. IDEMPOTENT : ré-importer (ADMIN) est un no-op (imported=0, liste inchangée)", async () => {
+    await client.exec(`set role tygr_app;`);
+    const r = await withWorkspace(sessionCarol, (tx, ctx) =>
+      importerReferentielCategories(tx, ctx),
+    );
+    expect(r.imported).toBe(0); // déjà pourvu → aucun INSERT
+    expect(r.categories).toHaveLength(NB_CATEGORIES_REFERENTIEL); // liste réelle quand même
+
+    // Aucun doublon persistant : le compte total reste le référentiel exact.
+    const cats = await withWorkspace(sessionCarol, (tx, ctx) =>
+      listerCategories(tx, ctx),
+    );
+    expect(cats).toHaveLength(NB_CATEGORIES_REFERENTIEL);
+  });
+
+  it("7. NON-ADMIN (MANAGER) REFUSÉ : CategorieNonAutoriseeError, aucune catégorie créée", async () => {
+    await client.exec(`set role tygr_app;`);
+    await expect(
+      withWorkspace(sessionEve, (tx, ctx) =>
+        importerReferentielCategories(tx, ctx),
+      ),
+    ).rejects.toBeInstanceOf(CategorieNonAutoriseeError);
+
+    // Effet de bord NUL : le workspace d'EVE reste VIERGE (la garde de rôle
+    // s'exécute AVANT le verrou et le moindre INSERT).
+    const cats = await withWorkspace(sessionEve, (tx, ctx) =>
+      listerCategories(tx, ctx),
+    );
+    expect(cats).toHaveLength(0);
+  });
+
+  it("8. INTRA-TENANT : l'import de WS_C n'a rien écrit dans un autre workspace (WS_E toujours vierge)", async () => {
+    // WS_C a été peuplé (test 5) ; WS_E n'a jamais eu d'import RÉUSSI (refus test 7).
+    // Preuve d'isolation : le seed applicatif est borné au workspace du contexte.
+    await client.exec(`set role tygr_app;`);
+    const catsE = await withWorkspace(sessionEve, (tx, ctx) =>
+      listerCategories(tx, ctx),
+    );
+    expect(catsE).toHaveLength(0);
+  });
+
+  it("9. dégénéré « tout archivé » : le garde compte les ARCHIVÉES → no-op (pas de doublon), liste active vide", async () => {
+    await client.exec(`set role tygr_app;`);
+    // Archive TOUT le référentiel de WS_C (ADMIN) → 0 active mais ≥1 archivée.
+    await withWorkspace(sessionCarol, async (tx, ctx) => {
+      const actives = await listerCategories(tx, ctx);
+      for (const c of actives) await archiverCategorie(tx, ctx, c.id);
+    });
+    const apres = await withWorkspace(sessionCarol, (tx, ctx) =>
+      listerCategories(tx, ctx),
+    );
+    expect(apres).toHaveLength(0); // plus aucune ACTIVE
+
+    // Ré-import : le garde d'idempotence compte AUSSI les archivées → no-op. Ce
+    // qui ÉVITE une violation d'unicité (ré-insérer « Revenus » heurterait la
+    // ligne archivée du même nom) : imported=0, aucune exception, liste active
+    // vide. C'est CE résultat (imported=0 && categories=[]) qui pilote le message
+    // informatif du CTA côté UI (pas de clic dans le vide).
+    const r = await withWorkspace(sessionCarol, (tx, ctx) =>
+      importerReferentielCategories(tx, ctx),
+    );
+    expect(r.imported).toBe(0);
+    expect(r.categories).toHaveLength(0);
   });
 });
 

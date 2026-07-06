@@ -170,6 +170,7 @@ export {
   creerCategorie,
   renommerCategorie,
   archiverCategorie,
+  importerReferentielCategories,
   VentilationDepasseError,
   CategorieDupliqueeError,
   TransactionIntrouvableError,
@@ -182,6 +183,7 @@ export type {
   SplitLu,
   SplitCible,
   CategorieLue,
+  ImportReferentiel,
 } from "@/server/repositories/categorisation";
 
 // Lecture paginée des transactions + résumé de ventilation (B1-B3, page

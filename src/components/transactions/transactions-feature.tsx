@@ -50,6 +50,7 @@ export function TransactionsFeature({
   actions,
   remplacerSplits,
   creerCategorie,
+  importerCategoriesStandard,
   /** Y a-t-il au moins une banque connectée ? (oriente l'Empty State.) */
   aucuneBanque,
 }: {
@@ -73,6 +74,14 @@ export function TransactionsFeature({
   creerCategorie?: (
     name: string,
   ) => Promise<ResultatAction<{ categoryId: string }>>;
+  /**
+   * Importe le référentiel STANDARD depuis le picker VIDE (QA-ONBOARD-CATEG1).
+   * Optionnel et réservé ADMIN : la page ne passe la closure QUE si l'utilisateur
+   * est admin (règle D2) — absent ⇒ pas de CTA d'import dans le picker.
+   */
+  importerCategoriesStandard?: () => Promise<
+    ResultatAction<{ imported: number; categories: CategorieUI[] }>
+  >;
   aucuneBanque: boolean;
 }) {
   const [lignes, setLignes] = useState<TransactionListItem[]>(initial.lignes);
@@ -294,6 +303,7 @@ export function TransactionsFeature({
           }
           onSaved={apresSauvegarde}
           onCreateCategorie={creerCategorie}
+          onImportStandard={importerCategoriesStandard}
         />
       )}
     </div>

@@ -294,19 +294,20 @@ immédiatement, pas consigné). Preuves runtime : POST de ventilation `200` → 
 « Complet » ; règle créée `200` + « Ré-analyser » a recatégorisé 7 transactions ;
 logout → `/login` et accès direct post-logout re-redirigé.
 
-- [ ] **QA-ONBOARD-CATEG1 (P1, point d'ONBOARDING — premier utilisateur) — seeder les
-  catégories par défaut à la création d'un workspace.** Constaté : le picker de
-  ventilation affiche « Aucune catégorie ne correspond » sur un champ **vide** — le
-  workspace de démo n'a **aucune** catégorie (`scripts/seed-categories.mjs` jamais lancé
-  dessus). La fonction centrale (catégoriser / ventiler) est donc **inutilisable** tant
-  que l'utilisateur n'a pas créé une catégorie à la main via « + Ajouter une catégorie ».
-  Le référentiel existe (`scripts/categories-referentiel.mjs`, 28 catégories) et le seed
-  est idempotent, mais **rien ne le déclenche** à la création de workspace (vérifié :
-  aucun appel de seed dans `src/server/`). **À faire** : seeder le référentiel
-  automatiquement à la provision d'un nouveau workspace (ou exposer un CTA « Importer les
-  catégories standard » dans le picker vide). **Déclencheur** : tout onboarding d'un
-  workspace réel (démo Omnicane comprise). **Effort** : S (le seed et le référentiel
-  existent déjà ; reste à le câbler au cycle de vie workspace). Cf. mémoire
+- [x] **QA-ONBOARD-CATEG1 (P1, point d'ONBOARDING — premier utilisateur) — seeder les
+  catégories par défaut à la création d'un workspace.** ✅ RÉSOLU 2026-07-06 (branche
+  `feat/onboard-seed-categories`, en attente de revue/merge). Constaté : le picker de
+  ventilation affichait « Aucune catégorie ne correspond » sur un champ **vide** — un
+  workspace neuf n'avait **aucune** catégorie et rien ne déclenchait le seed à sa création.
+  **Livré, deux volets** : (A) `scripts/seed-admin.mjs` et `scripts/seed-omnifi-demo.ts`
+  sèment le référentiel à la création du workspace, via une lib partagée
+  `scripts/seed-categories-lib.mjs` (idempotente, verrou consultatif) ; le référentiel a
+  été déplacé `scripts/categories-referentiel.mjs` → `src/lib/categories-referentiel.mjs`
+  (importable côté app). (B) CTA « Importer les catégories standard » dans le picker vide
+  → Server Action `importerCategoriesStandardAction` → repository
+  `importerReferentielCategories` (sous `withWorkspace`, garde ADMIN, RLS). Preuves :
+  `tests/isolation/seed-categories-isolation.test.ts` (9 cas : seed CLI, tout-ou-rien,
+  CTA admin/idempotence/refus non-admin/intra-tenant/tout-archivé). Cf. mémoire
   `seed-categories-commande-locale`.
 
 - [ ] **QA-RESPONSIVE-SHELL1 (P1, point de DÉPLOIEMENT si usage tablette/mobile attendu) —
