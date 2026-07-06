@@ -93,7 +93,10 @@ export async function upsertConnexion<TDb extends AnyPgDatabase>(
       createdBy: ctx.userId,
     })
     .onConflictDoUpdate({
-      target: bankConnections.omnifiConnectionId,
+      // Inférence sur la contrainte COMPOSITE scopée tenant (0018). En lock-step avec
+      // le schéma : ON CONFLICT (cols) exige une UNIQUE portant EXACTEMENT ces colonnes
+      // → ne tourne que si bank_connections_workspace_omnifi_connection_unique existe.
+      target: [bankConnections.workspaceId, bankConnections.omnifiConnectionId],
       set: {
         // On rafraîchit le nom à chaque ingestion (l'institution peut être
         // renommée amont, ou la 1re ingestion l'avait laissé NULL).
@@ -129,7 +132,8 @@ export async function upsertCompte<TDb extends AnyPgDatabase>(
       isSelected: c.isSelected,
     })
     .onConflictDoUpdate({
-      target: bankAccounts.omnifiAccountId,
+      // Inférence sur la contrainte COMPOSITE scopée tenant (0018) — cf. upsertConnexion.
+      target: [bankAccounts.workspaceId, bankAccounts.omnifiAccountId],
       set: {
         // Un compte re-découvert via une AUTRE connexion suit la connexion la plus
         // récente (la sandbox renvoie les mêmes AccountId sur chaque reconnexion ;
@@ -202,7 +206,13 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
         isRemoved: t.isRemoved,
       })
       .onConflictDoUpdate({
-        target: [transactionsCache.omnifiTxnId, transactionsCache.transactionDate],
+        // Inférence sur la contrainte COMPOSITE scopée tenant (0018). transaction_date
+        // reste dans la clé (partition key). Cf. upsertConnexion pour la règle lock-step.
+        target: [
+          transactionsCache.workspaceId,
+          transactionsCache.omnifiTxnId,
+          transactionsCache.transactionDate,
+        ],
         set: {
           amount: t.amount,
           currency: t.currency,

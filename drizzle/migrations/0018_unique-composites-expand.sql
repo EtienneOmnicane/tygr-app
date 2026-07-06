@@ -1,0 +1,3 @@
+ALTER TABLE "bank_accounts" ADD CONSTRAINT "bank_accounts_workspace_omnifi_account_unique" UNIQUE("workspace_id","omnifi_account_id");--> statement-breakpoint
+ALTER TABLE "bank_connections" ADD CONSTRAINT "bank_connections_workspace_omnifi_connection_unique" UNIQUE("workspace_id","omnifi_connection_id");--> statement-breakpoint
+ALTER TABLE "transactions_cache" ADD CONSTRAINT "transactions_cache_workspace_omnifi_txn_unique" UNIQUE("workspace_id","omnifi_txn_id","transaction_date");

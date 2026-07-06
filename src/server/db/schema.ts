@@ -229,11 +229,19 @@ export const bankConnections = pgTable(
       .references(() => workspaces.id),
     /**
      * `ConnectionId` Omni-FI permanent (obtenu via link-exchange).
-     * HYPOTHÈSE (cross-review PR-W4, 2026-06-15) : Omni-FI garantit l'unicité
-     * d'un ConnectionId par ClientUserId (= workspace). Sous cette hypothèse, la
-     * contrainte UNIQUE globale est sûre. Si elle est FAUSSE (un même
-     * omnifi_connection_id partageable entre 2 workspaces), une migration
-     * composite UNIQUE(workspace_id, omnifi_connection_id) sera nécessaire.
+     * DURCISSEMENT (fix/unique-composites, PLAN-unique-composites.md) : l'HYPOTHÈSE
+     * d'unicité GLOBALE (cross-review PR-W4, 2026-06-15) est ABANDONNÉE — on ne parie
+     * plus qu'Omni-FI garantit un ConnectionId unique ENTRE workspaces. L'unicité est
+     * désormais SCOPÉE tenant via bank_connections_workspace_omnifi_connection_unique
+     * (composite, callback de table). Le `.unique()` inline (UNIQUE globale) est
+     * CONSERVÉ transitoirement pendant la fenêtre EXPAND (migration 0018,
+     * backward-compat N-1) ; il sera retiré au CONTRACT (migration 0019, release
+     * suivante — lot L4). Même patron que parties_workspace_omnifi_party_unique.
+     * ⚠️ COROLLAIRE CONTRACT (garde-fou WEBHOOK-TENANT-FIRST1, TODOS) : une fois la
+     * globale retirée, omnifi_connection_id n'est PLUS unique globalement → tout futur
+     * résolveur webhook (/api/webhooks/omnifi, inexistant aujourd'hui) DOIT résoudre le
+     * TENANT d'abord (ClientUserId→workspace, unique global conservé) PUIS la connexion
+     * DANS ce workspace — JAMAIS par omnifi_connection_id seul (sinon routage cross-tenant).
      */
     omnifiConnectionId: varchar("omnifi_connection_id", { length: 64 })
       .notNull()
@@ -259,6 +267,16 @@ export const bankConnections = pgTable(
       .defaultNow(),
   },
   (t) => [
+    // DURCISSEMENT (0018, EXPAND) : unicité de l'omnifi_connection_id SCOPÉE tenant
+    // — remplace (à terme) l'UNIQUE globale (cf. commentaire de colonne + patron
+    // parties_workspace_omnifi_party_unique). workspace_id EN TÊTE : colonne meneuse
+    // de l'index, sert aussi les scans WHERE workspace_id = ?. L'ordre des colonnes
+    // est sans effet sur l'inférence ON CONFLICT (Postgres matche l'ENSEMBLE) mais
+    // décisif pour l'efficacité de l'index. La globale coexiste jusqu'au CONTRACT (0019).
+    unique("bank_connections_workspace_omnifi_connection_unique").on(
+      t.workspaceId,
+      t.omnifiConnectionId,
+    ),
     index("bank_connections_workspace_id_idx").on(t.workspaceId),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
@@ -276,9 +294,12 @@ export const bankAccounts = pgTable(
       .notNull()
       .references(() => bankConnections.id, { onDelete: "cascade" }),
     /**
-     * HYPOTHÈSE (cross-review PR-W4, 2026-06-15) : un omnifi_account_id est unique
-     * par ClientUserId (= workspace) côté Omni-FI → UNIQUE globale sûre. Si faux,
-     * migration composite UNIQUE(workspace_id, omnifi_account_id) requise.
+     * DURCISSEMENT (fix/unique-composites, PLAN-unique-composites.md) : l'HYPOTHÈSE
+     * d'unicité GLOBALE (cross-review PR-W4, 2026-06-15) est ABANDONNÉE. L'unicité de
+     * l'omnifi_account_id est désormais SCOPÉE tenant via
+     * bank_accounts_workspace_omnifi_account_unique (composite, callback de table). Le
+     * `.unique()` inline (UNIQUE globale) est CONSERVÉ pendant l'EXPAND (migration 0018,
+     * backward-compat N-1), retiré au CONTRACT (migration 0019 — lot L4).
      */
     omnifiAccountId: varchar("omnifi_account_id", { length: 64 })
       .notNull()
@@ -312,6 +333,15 @@ export const bankAccounts = pgTable(
   (t) => [
     index("bank_accounts_workspace_id_idx").on(t.workspaceId),
     index("bank_accounts_connection_id_idx").on(t.connectionId),
+    // DURCISSEMENT (0018, EXPAND) : unicité de l'omnifi_account_id SCOPÉE tenant —
+    // remplace (à terme) l'UNIQUE globale (cf. commentaire de colonne). workspace_id
+    // EN TÊTE (colonne meneuse). La globale coexiste jusqu'au CONTRACT (0019). À ne pas
+    // confondre avec bank_accounts_id_workspace_unique (ci-dessous, cible des FK
+    // composites sur l'id SURROGATE) : ici la clé NATURELLE Omni-FI, l'axe d'idempotence.
+    unique("bank_accounts_workspace_omnifi_account_unique").on(
+      t.workspaceId,
+      t.omnifiAccountId,
+    ),
     // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées workspace qui
     // pointent vers un compte (account_party_role, user_scopes type ACCOUNT —
     // PLAN-architecture-multi-tenant-omnicane.md L0). Permet d'exiger en base qu'une
@@ -425,6 +455,17 @@ export const transactionsCache = pgTable(
   (t) => [
     // La clé de partition doit appartenir à la PK et aux contraintes uniques.
     primaryKey({ columns: [t.id, t.transactionDate] }),
+    // DURCISSEMENT (0018, EXPAND) : unicité SCOPÉE tenant. workspace_id EN TÊTE ;
+    // transaction_date CONSERVÉE (obligatoire : clé de partition — toute UNIQUE d'une
+    // table partitionnée DOIT la contenir). Remplace (à terme) la non-scopée ci-dessous,
+    // gardée jusqu'au CONTRACT (0019, lot L4). Sur table partitionnée, l'ADD CONSTRAINT
+    // crée un index partitionné parent + un index enfant par partition (héritage DDL,
+    // distinct de la RLS qui, elle, se répète par partition — cf. 0003).
+    unique("transactions_cache_workspace_omnifi_txn_unique").on(
+      t.workspaceId,
+      t.omnifiTxnId,
+      t.transactionDate,
+    ),
     unique("transactions_cache_omnifi_txn_unique").on(
       t.omnifiTxnId,
       t.transactionDate,
