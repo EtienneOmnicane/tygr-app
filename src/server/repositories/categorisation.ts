@@ -26,6 +26,13 @@ import {
 } from "@/server/db/schema";
 import type { CategorizationSource } from "@/server/db/schema";
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
+// Référentiel STANDARD + clé de verrou partagés avec le seed CLI
+// (scripts/seed-categories-lib.mjs) et le test d'isolation — source de vérité
+// UNIQUE (QA-ONBOARD-CATEG1, règle 9 : pas de dérive script/app/test).
+import {
+  PREFIXE_VERROU_SEED_CATEGORIES,
+  REFERENTIEL_CATEGORIES,
+} from "@/lib/categories-referentiel.mjs";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
@@ -571,4 +578,91 @@ export async function archiverCategorie<TDb extends AnyPgDatabase>(
   if (maj.length === 0) {
     throw new CategorieIntrouvableError();
   }
+}
+
+/** Résultat de l'import du référentiel standard (CTA d'onboarding). */
+export interface ImportReferentiel {
+  /** Catégories effectivement INSÉRÉES (0 = workspace déjà pourvu, no-op). */
+  imported: number;
+  /** État FRAIS des catégories actives du workspace (pour rafraîchir les pickers). */
+  categories: CategorieLue[];
+}
+
+/**
+ * Importe le RÉFÉRENTIEL STANDARD de catégories dans le workspace courant
+ * (QA-ONBOARD-CATEG1, CTA « Importer les catégories standard » du picker vide).
+ * ADMIN-only, comme tout le CRUD du référentiel (exigerAdminReferentiel) : seul
+ * un ADMIN seede la taxonomie. La RLS borne le TENANT ; cette garde borne le
+ * RÔLE (défense en profondeur — la RLS ne connaît pas le rôle).
+ *
+ * IDEMPOTENT : ne fait rien si le workspace a DÉJÀ ≥1 catégorie (active OU
+ * archivée) — jamais de doublon, même en re-clic. Renvoie TOUJOURS l'état frais
+ * des catégories actives (que l'import ait inséré ou trouvé un référentiel déjà
+ * présent) pour que l'UI se rafraîchisse dans les deux cas.
+ *
+ * MÊME référentiel, MÊME clé de verrou consultatif et MÊME garde d'idempotence
+ * que le seed CLI (scripts/seed-categories-lib.mjs) : un CTA et un
+ * `npm run seed:categories` concurrents sur le même workspace se SÉRIALISENT sur
+ * le verrou, le second retombant sur « déjà pourvu ». Le verrou est
+ * indispensable car UNIQUE(workspace_id, name, parent_id) ne protège PAS les
+ * Natures (parent_id NULL → NULLs distincts en SQL) : sans lui, deux imports
+ * concurrents créeraient des Natures en double.
+ */
+export async function importerReferentielCategories<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+): Promise<ImportReferentiel> {
+  // Rôle AVANT tout accès : un non-ADMIN est refusé sans effet de bord (le
+  // verrou et l'INSERT ne sont jamais atteints). Non-énumérant.
+  exigerAdminReferentiel(ctx);
+
+  // Verrou consultatif TRANSACTIONNEL — clé = hash(PREFIXE + workspace_id),
+  // MÊME préfixe partagé et MÊME calcul que seed-categories-lib.mjs : sérialise
+  // CTA×CTA et CTA×seed CLI sur ce workspace. Le workspace_id vient du CONTEXTE
+  // serveur (jamais du client) ; on pré-concatène en JS et on passe UNE chaîne
+  // PARAMÉTRÉE (drizzle la lie en $1 — zéro interpolation, règle 2).
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${PREFIXE_VERROU_SEED_CATEGORIES + ctx.workspaceId}, 0))`,
+  );
+
+  // Idempotence : ≥1 catégorie (active OU archivée) ⇒ no-op. Filtre EXPLICITE
+  // workspace_id (défense en profondeur, en plus de la RLS tenant).
+  const existantes = await tx
+    .select({ id: categories.id })
+    .from(categories)
+    .where(eq(categories.workspaceId, ctx.workspaceId))
+    .limit(1);
+
+  let imported = 0;
+  if (existantes.length === 0) {
+    for (const groupe of REFERENTIEL_CATEGORIES) {
+      // 1. Nature (parent_id NULL). Le WITH CHECK RLS garantit le bon workspace.
+      const nature = await tx
+        .insert(categories)
+        .values({
+          workspaceId: ctx.workspaceId,
+          name: groupe.nature,
+          parentId: null,
+        })
+        .returning({ id: categories.id });
+      imported += 1;
+
+      // 2. Sous-natures rattachées à la Nature DU MÊME workspace : la FK
+      //    composite (parent_id, workspace_id) → (id, workspace_id) l'exige.
+      for (const sous of groupe.sousNatures) {
+        await tx.insert(categories).values({
+          workspaceId: ctx.workspaceId,
+          name: sous,
+          parentId: nature[0].id,
+        });
+        imported += 1;
+      }
+    }
+  }
+
+  // État FRAIS (actives, triées) — que l'import ait inséré ou trouvé un
+  // référentiel déjà présent (course sérialisée par le verrou), l'UI reçoit la
+  // liste réelle et peut peupler ses pickers immédiatement.
+  const liste = await listerCategories(tx, ctx);
+  return { imported, categories: liste };
 }

@@ -42,6 +42,7 @@ import {
   VentilationDepasseError,
   archiverCategorie,
   creerCategorie,
+  importerReferentielCategories,
   listerCategories,
   listerSplits,
   listerTransactions,
@@ -243,6 +244,28 @@ export async function creerCategorieAction(input: {
     return { ok: true, data: r };
   } catch (erreur) {
     return echec(erreur, session.activeWorkspaceId, "creer-categorie");
+  }
+}
+
+/**
+ * Importe le référentiel STANDARD de catégories dans le workspace courant
+ * (QA-ONBOARD-CATEG1) — CTA d'onboarding du picker vide. ADMIN uniquement (garde
+ * portée par le repository, sous la transaction où le rôle est re-résolu →
+ * fail-closed). Idempotent : re-clic = no-op (imported:0) + liste inchangée.
+ * Renvoie la liste FRAÎCHE des catégories pour que le picker se peuple aussitôt.
+ */
+export async function importerCategoriesStandardAction(): Promise<
+  ResultatAction<{ imported: number; categories: CategorieDTO[] }>
+> {
+  const session = await exigerSessionWorkspace();
+  try {
+    const r = await withWorkspace(session, (tx, ctx) =>
+      importerReferentielCategories(tx, ctx),
+    );
+    // CategorieLue et CategorieDTO ont la même forme ; on relaie tel quel.
+    return { ok: true, data: { imported: r.imported, categories: r.categories } };
+  } catch (erreur) {
+    return echec(erreur, session.activeWorkspaceId, "importer-categories-standard");
   }
 }
 

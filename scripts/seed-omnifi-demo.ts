@@ -31,6 +31,8 @@ import {
 } from "@/server/ingestion";
 import { upsertCompte } from "@/server/repositories/ingestion";
 
+import { seederCategoriesWorkspace } from "./seed-categories-lib.mjs";
+
 /* ---- Câblage Neon (identique aux autres scripts dev) ---- */
 if (typeof WebSocket !== "undefined") neonConfig.webSocketConstructor = WebSocket;
 if (process.env.NEON_WSPROXY_LOCAL) {
@@ -111,6 +113,14 @@ async function main() {
       `insert into workspace_members (user_id, workspace_id, role)
        values ($1, $2, 'ADMIN') on conflict do nothing`,
       [adminUserId, workspaceId],
+    );
+    // Référentiel de catégories (QA-ONBOARD-CATEG1) : le workspace démo naît
+    // avec ses catégories standard (idempotent — re-run sans doublon).
+    const nbCategories = await seederCategoriesWorkspace(ac, workspaceId);
+    console.log(
+      nbCategories > 0
+        ? `Référentiel de catégories injecté (${nbCategories} catégories).`
+        : "Référentiel de catégories déjà présent — inchangé.",
     );
   } finally {
     ac.release();

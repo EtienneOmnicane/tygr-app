@@ -26,16 +26,18 @@ import {
   exigerSessionWorkspace,
   NonAuthentifieError,
 } from "@/server/auth/session";
+import { peutAdministrer } from "@/lib/permissions";
 
 import { TransactionsFeature } from "@/components/transactions";
 import type {
   ActionsTransactions,
   PageTransactions,
 } from "@/components/transactions/types-transactions";
-import type { CategorieUI, SplitUI } from "@/components/ui/category";
+import type { CategorieUI, ResultatAction, SplitUI } from "@/components/ui/category";
 
 import {
   creerCategorieAction,
+  importerCategoriesStandardAction,
   listerCategoriesAction,
   listerSplitsAction,
   listerTransactionsAction,
@@ -59,10 +61,15 @@ export default async function PageTransactions() {
     throw erreur;
   }
 
-  // Données serveur : catégories (modale), comptes (filtre + résolution compteNom).
-  const [categoriesDTO, comptes] = await Promise.all([
+  // Données serveur : catégories (modale), comptes (filtre + résolution compteNom),
+  // rôle (gating UI du CTA d'import — la garde de fond reste serveur). Comptes +
+  // rôle en UN SEUL withWorkspace (le rôle est re-résolu dans le même contexte).
+  const [categoriesDTO, { comptes, role }] = await Promise.all([
     listerCategoriesAction(),
-    withWorkspace(session, (tx) => listerComptes(tx)),
+    withWorkspace(session, async (tx, ctx) => ({
+      comptes: await listerComptes(tx),
+      role: ctx.role,
+    })),
   ]);
 
   const categories: CategorieUI[] = categoriesDTO.map((c) => ({
@@ -125,6 +132,31 @@ export default async function PageTransactions() {
     return creerCategorieAction({ name, parentId: null });
   }
 
+  // CTA d'onboarding « Importer les catégories standard » (QA-ONBOARD-CATEG1) :
+  // seed du référentiel depuis le picker vide. Adapte le DTO serveur au contrat UI
+  // (CategorieUI). Réservé ADMIN — la closure n'est passée QUE si peutAdministrer
+  // (règle D2 : surface admin ABSENTE du DOM pour un non-admin, pas juste grisée) ;
+  // la garde de fond (repository) reste souveraine dans tous les cas.
+  async function importerCategoriesStandard(): Promise<
+    ResultatAction<{ imported: number; categories: CategorieUI[] }>
+  > {
+    "use server";
+    const res = await importerCategoriesStandardAction();
+    if (!res.ok) return res;
+    return {
+      ok: true,
+      data: {
+        imported: res.data.imported,
+        categories: res.data.categories.map((c) => ({
+          id: c.id,
+          name: c.name,
+          parentId: c.parentId,
+          isActive: c.isActive,
+        })),
+      },
+    };
+  }
+
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
       <div className="mb-6">
@@ -142,6 +174,9 @@ export default async function PageTransactions() {
         actions={actionsTransactions}
         remplacerSplits={remplacerSplitsAction}
         creerCategorie={creerCategorieNature}
+        importerCategoriesStandard={
+          peutAdministrer(role) ? importerCategoriesStandard : undefined
+        }
         aucuneBanque={aucuneBanque}
       />
     </main>

@@ -40,6 +40,14 @@ const ACTIONS_STUB: ActionsReferentielCategories = {
   archiverCategorie: async () => ({ ok: true, data: undefined }),
 };
 
+// Sous-ensemble « importé » simulé pour la démo du picker VIDE (QA-ONBOARD-CATEG1).
+const REFERENTIEL_IMPORTE_DEMO: CategorieUI[] = [
+  { id: "cat-imp-revenus", name: "Revenus", parentId: null, isActive: true },
+  { id: "cat-imp-ventes", name: "Ventes", parentId: "cat-imp-revenus", isActive: true },
+  { id: "cat-imp-charges", name: "Charges d’exploitation", parentId: null, isActive: true },
+  { id: "cat-imp-loyer", name: "Loyer", parentId: "cat-imp-charges", isActive: true },
+];
+
 export default function CategoryStatesDemoPage() {
   const [selectionnee, setSelectionnee] = useState<string | null>("cat-charges-elec");
   const [managerOuvert, setManagerOuvert] = useState(false);
@@ -47,6 +55,10 @@ export default function CategoryStatesDemoPage() {
   // État local pour la section CategoryPicker (la création y ajoute une catégorie).
   const [categoriesDemo, setCategoriesDemo] =
     useState<CategorieUI[]>(CATEGORIES_DEMO);
+  // État local pour la section « picker VIDE + import standard » : démarre à zéro,
+  // l'import stub injecte le référentiel (comme le fait le conteneur réel).
+  const [categoriesVides, setCategoriesVides] = useState<CategorieUI[]>([]);
+  const [selectionVide, setSelectionVide] = useState<string | null>(null);
 
   return (
     <div className="min-h-screen bg-surface-page">
@@ -113,6 +125,35 @@ export default function CategoryStatesDemoPage() {
                 { id: categoryId, name: name.trim(), parentId: null, isActive: true },
               ]);
               return { ok: true, data: { categoryId } };
+            }}
+          />
+        </section>
+
+        {/* 2bis. CategoryPicker VIDE — CTA « Importer les catégories standard » */}
+        <section className="rounded-card bg-surface-card p-6 shadow-card">
+          <h2 className="mb-4 text-base font-semibold text-text">
+            CategoryPicker — état vide (import du référentiel standard)
+          </h2>
+          <p className="mb-4 max-w-2xl text-sm text-text-muted">
+            Onboarding (QA-ONBOARD-CATEG1) : un workspace neuf n’a aucune
+            catégorie. Le picker propose l’import du référentiel standard (CTA
+            réservé ADMIN côté serveur). Après import, les catégories
+            apparaissent et le CTA disparaît.
+          </p>
+          <CategoryPicker
+            categories={categoriesVides}
+            selectedId={selectionVide}
+            onSelect={setSelectionVide}
+            onImportStandard={async () => {
+              // Stub démo : simule le seed serveur en injectant le référentiel.
+              setCategoriesVides(REFERENTIEL_IMPORTE_DEMO);
+              return {
+                ok: true,
+                data: {
+                  imported: REFERENTIEL_IMPORTE_DEMO.length,
+                  categories: REFERENTIEL_IMPORTE_DEMO,
+                },
+              };
             }}
           />
         </section>

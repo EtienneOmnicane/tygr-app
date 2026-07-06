@@ -51,6 +51,7 @@ export function CategoryPicker({
   onSelect,
   onClose,
   onCreate,
+  onImportStandard,
   placeholder = "Rechercher une catégorie…",
 }: {
   /** Référentiel (à plat). Le composant regroupe en Nature/Sous-nature. */
@@ -70,6 +71,14 @@ export function CategoryPicker({
    * nouvelle catégorie est immédiatement sélectionnée.
    */
   onCreate?: (name: string) => Promise<ResultatAction<{ categoryId: string }>>;
+  /**
+   * Importe le RÉFÉRENTIEL STANDARD (QA-ONBOARD-CATEG1) quand le picker est VIDE
+   * (aucune catégorie du tout). Absent → pas de CTA (le conteneur ne le passe
+   * qu'aux ADMIN). Au succès, le conteneur réinjecte les catégories via `categories`.
+   */
+  onImportStandard?: () => Promise<
+    ResultatAction<{ imported: number; categories: CategorieUI[] }>
+  >;
   placeholder?: string;
 }) {
   const [recherche, setRecherche] = useState("");
@@ -123,6 +132,14 @@ export function CategoryPicker({
 
   const groupes = useMemo(() => grouperParNature(filtrees), [filtrees]);
   const aucunResultat = filtrees.length === 0;
+  // Référentiel VIDE (aucune catégorie active) ≠ recherche sans résultat : seul
+  // le 1er cas propose l'import standard (onboarding). On compte sur `categories`
+  // BRUT (avant filtre de recherche) pour ne pas confondre « rien » et « rien qui
+  // matche la recherche ».
+  const referentielVide = useMemo(
+    () => categories.filter((c) => c.isActive).length === 0,
+    [categories],
+  );
 
   return (
     <div
@@ -146,9 +163,16 @@ export function CategoryPicker({
 
       <div role="listbox" className="max-h-72 overflow-y-auto pb-1" aria-label="Catégories">
         {aucunResultat ? (
-          <p className="px-2 py-6 text-center text-sm text-text-muted">
-            Aucune catégorie ne correspond.
-          </p>
+          referentielVide && onImportStandard ? (
+            // Picker VIDE + capacité d'import (ADMIN) : CTA d'onboarding.
+            <ImportCategoriesStandard onImport={onImportStandard} />
+          ) : (
+            <p className="px-2 py-6 text-center text-sm text-text-muted">
+              {referentielVide
+                ? "Aucune catégorie pour l’instant."
+                : "Aucune catégorie ne correspond."}
+            </p>
+          )
         ) : (
           groupes.map(({ nature, sousNatures }) => (
             <div key={nature.id} className="mb-1">
@@ -183,6 +207,83 @@ export function CategoryPicker({
             onClose?.();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * État VIDE du picker (aucune catégorie) avec CTA d'onboarding « Importer les
+ * catégories standard » (QA-ONBOARD-CATEG1). Rendu uniquement quand le conteneur
+ * fournit `onImport` (réservé ADMIN). Suit UI_GUIDELINES §4.4 (empty state :
+ * message `text-muted` + UN CTA) : ici un bouton `primary` (l'action d'amorçage)
+ * plutôt qu'un lien, pour guider fortement le premier parcours. L'erreur porte
+ * fond/texte `danger` + `role="alert"` (jamais un rouge muet). Au succès, le
+ * conteneur réinjecte les catégories (props) → ce bloc disparaît de lui-même.
+ */
+function ImportCategoriesStandard({
+  onImport,
+}: {
+  onImport: () => Promise<ResultatAction<{ imported: number; categories: CategorieUI[] }>>;
+}) {
+  const [enCours, setEnCours] = useState(false);
+  const [erreur, setErreur] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  async function importer() {
+    if (enCours) return;
+    setEnCours(true);
+    setErreur(null);
+    setInfo(null);
+    try {
+      const res = await onImport();
+      if (!res.ok) {
+        setErreur(res.message);
+      } else if (res.data.imported === 0 && res.data.categories.length === 0) {
+        // Cas dégénéré : le workspace a des catégories ARCHIVÉES (le serveur les
+        // compte → import no-op) mais AUCUNE active à afficher. Sans ce message,
+        // le CTA resterait sans effet visible (règle 3 : pas de silence). On
+        // informe plutôt que de laisser l'utilisateur cliquer dans le vide.
+        setInfo(
+          "Des catégories existent déjà mais sont archivées. Réactivez-les depuis la gestion des catégories.",
+        );
+      }
+      // Succès avec insertion : rien à faire ici — le conteneur pousse les
+      // catégories via `categories`, ce bloc se démonte (referentielVide → faux).
+    } catch {
+      setErreur("L’import a échoué. Réessayez.");
+    } finally {
+      setEnCours(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-3 px-3 py-6 text-center">
+      <p className="text-sm text-text-muted">
+        Aucune catégorie pour l’instant. Importez le référentiel standard pour
+        commencer à ventiler vos opérations.
+      </p>
+      <button
+        type="button"
+        onClick={() => void importer()}
+        disabled={enCours}
+        className="inline-flex h-9 cursor-pointer items-center justify-center rounded-control
+          bg-primary px-4 text-sm font-semibold text-text-onink transition-colors
+          hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+          focus-visible:ring-primary focus-visible:ring-offset-2
+          disabled:cursor-not-allowed disabled:opacity-48"
+      >
+        {enCours ? "Import en cours…" : "Importer les catégories standard"}
+      </button>
+      {info && (
+        <p role="status" className="text-xs text-text-muted">
+          {info}
+        </p>
+      )}
+      {erreur && (
+        <p role="alert" className="text-xs text-danger">
+          {erreur}
+        </p>
       )}
     </div>
   );
