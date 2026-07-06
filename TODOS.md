@@ -1381,13 +1381,36 @@ Audit OWASP contexte frais. **Aucun bloquant.** Corrigés dans PR-W4 : 3.1
 vide). Différés / décisions :
 
 - [ ] **1.1 (P1) — Contraintes UNIQUE globales `omnifi_connection_id` /
-  `omnifi_account_id` (non scopées workspace)** — Hypothèse : Omni-FI garantit
-  l'unicité par ClientUserId (workspace). Si cette hypothèse est fausse, une
-  migration composite UNIQUE(workspace_id, id) sera nécessaire. Documenté dans
-  `schema.ts` au-dessus des contraintes. Décision (2026-06-15) : PAS de migration
-  avant la démo (pas de risque opérationnel à la veille) ; à confirmer auprès
-  d'Omni-FI puis durcir si besoin. La RLS empêche toute fuite de lecture ; le
-  risque résiduel est un oracle/déni de rattachement en cas de collision.
+  `omnifi_account_id` / `(omnifi_txn_id, transaction_date)` (non scopées workspace)** —
+  ⚠️ **EN COURS — 2 PRs zéro-fenêtre (expand/contract), PLAN-unique-composites.md.**
+  L'hypothèse « unicité globale garantie par Omni-FI » est ABANDONNÉE (durcissement
+  défensif, on ne parie plus dessus). Risque réel : couplage de disponibilité + oracle
+  cross-tenant (DoS d'ingestion si collision d'id entre 2 tenants), PAS une fuite (la RLS
+  tient — l'upsert échoue, il ne lit pas).
+  - **EXPAND LIVRÉ** (`fix/unique-composites`, 2026-07-06, lots L1→L3) : migration `0018`
+    ajoute les 3 composites `UNIQUE(workspace_id, …)` (bank_connections / bank_accounts /
+    transactions_cache) ; les 3 `onConflictDoUpdate` d'`ingestion.ts` infèrent dessus en
+    lock-step ; suite `tests/isolation/unique-composites-isolation.test.ts` (idempotence
+    intra-tenant + pin transitoire ; verte, ROUGE sans 0018 = preuve d'inversion). Les
+    globales sont CONSERVÉES pendant l'expand (backward-compat N-1). Lint/tsc/test/build verts.
+  - [ ] **RESTE — CONTRACT (PR2, lot L4, migration `0019`)** — Effort S. `DROP` des 3
+    globales (`bank_connections_omnifi_connection_id_unique`,
+    `bank_accounts_omnifi_account_id_unique`, `transactions_cache_omnifi_txn_unique`) +
+    **inversion des cas C4a/b/c** (la collision cross-tenant, aujourd'hui `rejects.toThrow`,
+    devient un succès + « chaque tenant voit sa ligne »). **Déclencheur (arbitrage C du
+    plan)** : AVANT l'onboarding du 2ᵉ tenant réel (ou prochaine passe anti-dette), ET
+    seulement APRÈS que l'expand soit déployé & vérifié en prod (le code composite doit être
+    la version N-1 pour que 0019 soit backward-compat — §5.3, sinon le N-1 mono-colonne
+    plante l'ingestion pendant la fenêtre).
+- [ ] **WEBHOOK-TENANT-FIRST1 (P1) — garde-fou du futur résolveur `/api/webhooks/omnifi`** —
+  Effort S. **Déclencheur : création de la route webhook** (inexistante aujourd'hui —
+  `src/app/api/` = auth uniquement). Corollaire du contract 1.1/L4 : une fois les globales
+  droppées, `omnifi_connection_id` n'est plus unique GLOBALEMENT → un lookup webhook par ce
+  SEUL champ pourrait matcher N workspaces (routage cross-tenant). RÈGLE À GRAVER dans le
+  futur plan webhook : résoudre le TENANT d'abord (`ClientUserId`→workspace, unique global
+  CONSERVÉ) PUIS la connexion DANS ce workspace — JAMAIS `omnifi_connection_id` seul. Déjà
+  posé en commentaire de colonne (`schema.ts`, `omnifiConnectionId`). Aucun code à écrire
+  maintenant (anti-scope-creep).
 - [ ] **3.1 résolu / suivi** — `APP_ALLOWED_ORIGINS` doit être renseigné en env
   (sinon fail-closed : aucune connexion widget possible). À documenter au déploiement.
 - [x] **5.3 (P2) — RÉSOLU 2026-06-16** — stub supprimé, vrai package `@omni-fi/react-link`
@@ -1463,6 +1486,8 @@ Audit OWASP/IDOR contexte frais sur les Server Actions démarrer/finaliser.
   fait échouer la finalisation (DoS, PAS IDOR silencieux — la RLS masque la ligne
   étrangère). Durcir en contraintes composites. Touche le schéma → migration
   dédiée + cross-review schéma. Lié à la dette #5 (FK composites). À FUSIONNER avec 1.1.
+  **→ TRAITÉ SOUS 1.1** : EXPAND livré (`fix/unique-composites`, 2026-07-06) ; reste le
+  CONTRACT (PR2). Ne pas ouvrir de chantier séparé — suivre 1.1.
 - [x] **3.1 — `redirectOrigin` non allowlisté** —
   ✅ RÉSOLU (vérifié 2026-06-26 ; doublon de l'entrée « 3.1 résolu / suivi » plus haut).
   L'allowlist serveur existe : `src/server/widget/redirect-origin.ts`
