@@ -59,8 +59,8 @@ export function FormulaireConnexion() {
         type="submit"
         disabled={enCours}
         className="mt-2 flex h-10 items-center justify-center gap-2 rounded-control
-          bg-primary text-sm font-semibold text-white transition-colors
-          hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary
+          bg-ink text-sm font-semibold text-text-onink transition-colors
+          hover:bg-ink-700 focus:outline-none focus:ring-2 focus:ring-primary
           focus:ring-offset-2 disabled:opacity-48"
       >
         {enCours && (

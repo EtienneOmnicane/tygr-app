@@ -40,7 +40,8 @@ import {
   WorkspaceAccessDeniedError,
 } from "@/server/db/tenancy";
 
-import { AppHeader } from "@/components/shell/app-header";
+import { AppSidebar } from "@/components/shell/app-sidebar";
+import { AppTopbar } from "@/components/shell/app-topbar";
 import { AppErrorState } from "@/components/ui/states";
 
 async function deconnecter() {
@@ -179,18 +180,23 @@ export default async function WorkspaceLayout({
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface-page">
-      <AppHeader
+    <div className="flex min-h-screen bg-surface-page">
+      <AppSidebar
         workspaceId={contexte.workspaceId}
         workspaceNom={contexte.workspaceNom}
         role={contexte.role}
         memberships={memberships}
-        comptes={contexte.comptes}
-        entites={contexte.entites}
-        viewFilterActif={viewFilterActif}
         onDeconnexion={deconnecter}
       />
-      {children}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <AppTopbar
+          role={contexte.role}
+          comptes={contexte.comptes}
+          entites={contexte.entites}
+          viewFilterActif={viewFilterActif}
+        />
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
     </div>
   );
 }

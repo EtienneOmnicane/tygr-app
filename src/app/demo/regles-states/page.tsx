@@ -91,7 +91,7 @@ export default function ReglesStatesDemoPage() {
   return (
     <div className="min-h-screen bg-surface-page">
       <header className="flex h-16 items-center gap-4 bg-ink px-6 text-text-onink">
-        <span className="text-lg font-bold tracking-tight">TYGR</span>
+        <span className="text-lg font-bold tracking-tight">Dodo</span>
         <span className="rounded-full bg-surface-inset px-3 py-1 text-xs font-medium text-ink">
           Démo · Règles (édition + priorité)
         </span>

@@ -40,7 +40,7 @@ import {
   reordonnerReglesAction,
 } from "./actions";
 
-export const metadata = { title: "Règles — TYGR" };
+export const metadata = { title: "Règles — Dodo" };
 
 export default async function PageRegles() {
   let session;

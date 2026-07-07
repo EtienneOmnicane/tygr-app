@@ -15,7 +15,7 @@ import { identite } from "@/server/db";
 
 import { ListeWorkspaces } from "./liste-workspaces";
 
-export const metadata = { title: "Choisir un workspace — TYGR" };
+export const metadata = { title: "Choisir un workspace — Dodo" };
 
 export default async function PageSelection() {
   const session = await auth();
@@ -34,7 +34,7 @@ export default async function PageSelection() {
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-md rounded-card bg-surface-card p-8 shadow-card">
         <h1 className="text-lg font-semibold">
-          TYGR<span className="text-accent">.</span>
+          Dodo<span className="text-accent">.</span>
         </h1>
         <p className="mt-1 mb-6 text-sm text-text-muted">
           Choisissez l&apos;espace de trésorerie à consulter.

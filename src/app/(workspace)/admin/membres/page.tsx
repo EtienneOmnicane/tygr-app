@@ -24,7 +24,7 @@ import {
 } from "./formulaire-provisioning";
 import { ListeMembres, type MembreLigne } from "./liste-membres";
 
-export const metadata = { title: "Membres — TYGR" };
+export const metadata = { title: "Membres — Dodo" };
 
 export default async function PageMembres() {
   let session;

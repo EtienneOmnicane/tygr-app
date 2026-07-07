@@ -111,6 +111,25 @@ export function indicateurDevise(devise: string): string | null {
 }
 
 /**
+ * Nom LISIBLE d'une devise (label des cartes de solde de la refonte Dodo :
+ * « Roupie mauricienne », « Dollar américain »…). Centralisé ICI (source unique
+ * des concernes d'AFFICHAGE de devise, à côté d'`indicateurDevise`) pour ne pas
+ * réintroduire un dictionnaire ad-hoc dans un composant. Devise inconnue → repli
+ * sur le code ISO en majuscules ; devise vide → chaîne vide.
+ */
+const NOMS_DEVISE: Record<string, string> = {
+  MUR: "Roupie mauricienne",
+  USD: "Dollar américain",
+  EUR: "Euro",
+};
+
+export function nomDevise(devise: string): string {
+  const code = devise.trim().toUpperCase();
+  if (code === "") return "";
+  return NOMS_DEVISE[code] ?? code;
+}
+
+/**
  * Corps numérique NU d'un montant (« 7 691 000,00 », « −384 250,00 », « +25,50 »),
  * sans aucun indicateur de devise ni espace parasite. Remplace proprement le hack
  * `formatMontant(x, "")` : délègue au formateur partagé avec devise vide, donc

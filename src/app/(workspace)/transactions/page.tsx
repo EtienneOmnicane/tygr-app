@@ -45,7 +45,7 @@ import {
 } from "./actions";
 import { versInputBackend, versPageUI } from "./adapter";
 
-export const metadata = { title: "Transactions — TYGR" };
+export const metadata = { title: "Transactions — Dodo" };
 
 export default async function PageTransactions() {
   let session;

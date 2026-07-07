@@ -1,11 +1,11 @@
-# TYGR — UI Guidelines (Design System exécutable)
+# Dodo — UI Guidelines (Design System exécutable)
 
 **Source** : benchmark exhaustif FYGR (45 captures, `docs/benchmarks/fygr/`, juin 2026),
 mappé sur la navigation principale (Dashboard, Graphiques, Échéances, Transactions,
 Catégories, Profil).
 **Posture** : *extraire et adapter* — les patterns structurels, la densité et la
 sémantique sont repris fidèlement (conventions de catégorie validées par le marché) ;
-l'identité de marque (palette primaire, accent, typographies) est propre à TYGR.
+l'identité de marque (palette Dodo, accent, typographies) est propre à Dodo.
 **Chose mémorable** : **clarté financière** — "j'ai compris ma trésorerie en 3 secondes".
 Chaque règle ci-dessous sert cette impression ; ce qui ne la sert pas est coupé.
 **Stack cible** : Tailwind CSS + shadcn/ui + Tremor. Ce document est la source de
@@ -23,50 +23,50 @@ règles et des tokens.
 ```js
 // tailwind.config.ts — extend.colors (référence, à recopier tel quel)
 colors: {
-  ink: {                       // marque TYGR — bleu encre, plus sombre que FYGR
-    DEFAULT: '#0F1E3D',        // header, segmented actif, onboarding chip
-    700: '#1B2D55',            // hover header items, boutons sombres
+  ink: {                       // marque Dodo — Island Night (bleu nuit profond)
+    DEFAULT: '#0C1633',        // navbar latérale, segmented actif, onboarding chip
+    700: '#1B2A55',            // hover items, boutons sombres
   },
-  primary: {                   // actions principales
-    DEFAULT: '#2447D6',        // boutons primaires, liens d'action, focus ring
-    600: '#1D3AB8',            // hover
-    50:  '#EEF2FF',            // fonds sélection (item actif de dropdown, pill)
+  primary: {                   // actions principales — Lagoon Blue
+    DEFAULT: '#2C5FE8',        // boutons primaires, liens d'action, focus ring
+    600: '#1E46C4',            // hover
+    50:  '#E8EEFF',            // fonds sélection (item actif de dropdown, pill)
   },
-  accent: {                    // signature TYGR — ambre tigre, JAMAIS pour la donnée
-    DEFAULT: '#F59E0B',        // soulignement nav active, progress onboarding, focus marque
+  accent: {                    // signature Dodo — Native Amber, JAMAIS pour la donnée
+    DEFAULT: '#DFA218',        // soulignement nav active, progress onboarding, focus marque
   },
-  inflow: {                    // Entrées — vert, réservé à la donnée financière
-    DEFAULT: '#16A34A',        // montants, icônes, barres de graphe
-    700: '#15803D',            // texte sur fond clair (AA)
-    bg:  '#E7F6EC',            // pastille icône, badge
+  inflow: {                    // Entrées — Morne Green, réservé à la donnée financière
+    DEFAULT: '#157A4A',        // montants, icônes, barres de graphe
+    700: '#0F5C37',            // texte sur fond clair (AA)
+    bg:  '#E4EFE6',            // pastille icône, badge
   },
-  outflow: {                   // Sorties — rouge, réservé à la donnée financière
-    DEFAULT: '#DC2626',        // montants, icônes, barres de graphe
-    700: '#B91C1C',            // texte sur fond clair (AA)
-    bg:  '#FDEAEA',            // pastille icône, badge
+  outflow: {                   // Sorties — rouge corail, réservé à la donnée financière
+    DEFAULT: '#BF3B2F',        // montants, icônes, barres de graphe
+    700: '#9C2F25',            // texte sur fond clair (AA)
+    bg:  '#F6E4DF',            // pastille icône, badge
   },
-  danger:  { DEFAULT: '#B42318', bg: '#FEF3F2' },  // erreurs système (≠ sorties : toujours icône + contexte)
-  success: { DEFAULT: '#079455', bg: '#ECFDF3' },  // confirmations, toasts succès, coches
-  warning: { DEFAULT: '#B54708', bg: '#FFFAEB' },  // fraîcheur ambre, états partiels
+  danger:  { DEFAULT: '#BF3B2F', bg: '#F6E4DF' },  // erreurs système (≠ sorties : toujours icône + contexte)
+  success: { DEFAULT: '#1D9E55', bg: '#E4EFE6' },  // confirmations, toasts succès, coches
+  warning: { DEFAULT: '#8A6108', bg: '#F7E8C3' },  // fraîcheur ambre, états partiels
   surface: {
-    page:  '#F3F5FA',          // fond de page (bleu-gris très clair, repris FYGR)
+    page:  '#F5F2E9',          // fond de page — Reef White (sable très clair)
     card:  '#FFFFFF',          // cartes
-    inset: '#F2F4F8',          // inputs, pills de filtre, cellule éditable
-    forecast: '#F6F8FB',       // fond des colonnes/zones PRÉVISIONNEL (§3.5)
+    inset: '#F0ECDF',          // inputs, pills de filtre, cellule éditable
+    forecast: '#EFEBDD',       // fond des colonnes/zones PRÉVISIONNEL (§3.5)
   },
-  line: { DEFAULT: '#E6EAF2', strong: '#CBD2E0' }, // séparateurs, bordures
+  line: { DEFAULT: '#E8E3D5', strong: '#D8D2C2' }, // séparateurs, bordures (sable)
   text: {
-    DEFAULT: '#101828',        // texte principal
-    muted:  '#667085',         // labels, méta, en-têtes de table
-    faint:  '#98A2B3',         // placeholders, désactivé, valeurs prévisionnelles
-    onink:  '#FFFFFF',         // texte sur header ink
+    DEFAULT: '#0C1633',        // texte principal (Island Night)
+    muted:  '#5C6274',         // labels, méta, en-têtes de table
+    faint:  '#8A8F9F',         // placeholders, désactivé, valeurs prévisionnelles
+    onink:  '#FFFFFF',         // texte sur navbar ink
     oninkMuted: 'rgba(255,255,255,0.64)', // items nav inactifs
   },
   chart: {
-    position: '#2447D6',       // ligne de position de trésorerie
-    positionFill: '#DCE6FB',   // aire sous la courbe (réalisé)
+    position: '#2C5FE8',       // ligne de position de trésorerie (Lagoon Blue)
+    positionFill: '#D8E4FB',   // aire sous la courbe (réalisé)
     forecastFill: '#EDF2FB',   // aire prévisionnelle (plus claire)
-    threshold: '#DC2626',      // ligne de seuil/zéro (continue, 1.5px)
+    threshold: '#BF3B2F',      // ligne de seuil/zéro (continue, 1.5px)
     donut: '#5BA8D9',          // séries neutres d'analyse (non sémantiques)
   },
 }
@@ -76,21 +76,23 @@ colors: {
 // Rayons, ombres, espacement
 borderRadius: { card: '12px', control: '8px', modal: '16px', pill: '9999px' }
 boxShadow: {
-  card:    '0 1px 2px rgba(16,24,40,0.05)',                  // cartes — JAMAIS plus
-  popover: '0 12px 24px -6px rgba(16,24,40,0.16)',           // dropdowns, popovers
-  modal:   '0 24px 48px -12px rgba(16,24,40,0.24)',
+  card:    '0 1px 2px rgba(12,22,51,0.05)',                  // cartes — JAMAIS plus
+  popover: '0 12px 24px -6px rgba(12,22,51,0.16)',           // dropdowns, popovers
+  modal:   '0 24px 48px -12px rgba(12,22,51,0.24)',
 }
 // Échelle d'espacement : base 4px. Valeurs canoniques : 4/8/12/16/24/32.
 ```
 
 **Typographies.**
-- UI & display : **Instrument Sans** (400/500/600/700). Pas d'Inter/Roboto/system-ui.
-- Montants & tables : **Geist** avec `font-variant-numeric: tabular-nums` —
-  obligatoire sur TOUT montant, axe de graphe et cellule numérique (alignement
-  vertical des chiffres = clarté financière).
+- UI & display : **Red Hat Display** (400/500/600/700), variable `--font-red-hat`.
+  Pas d'Inter/Roboto/system-ui.
+- Montants & tables : **Red Hat Display** avec `font-variant-numeric: tabular-nums`
+  (tnum supporté) — obligatoire sur TOUT montant, axe de graphe et cellule numérique
+  (alignement vertical des chiffres = clarté financière). Police unifiée UI/montants :
+  plus de couple display/chiffres séparé.
 - Monospace (réservé aux identifiants techniques, ex. HMAC tronqué du panneau
-  audit) : **JetBrains Mono**.
-- Chargement : `next/font` locales, `display: swap`.
+  audit) : **Geist Mono**, variable `--font-mono`.
+- Chargement : `next/font` (Google), `display: swap`.
 
 ---
 
@@ -101,7 +103,7 @@ boxShadow: {
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ HEADER ink (h-16, full-bleed) :                                              │
-│  logo TYGR · [sélecteur workspace + refresh] · nav (active: souligné accent) │
+│  logo Dodo · [sélecteur workspace + refresh] · nav (active: souligné accent) │
 │  · avatar · (badge DEMO si workspace démo — non fermable)                    │
 ├────────────────┬─────────────────────────────────────────────────────────────┤
 │ SIDE-PANEL     │  ZONE DE DONNÉES (scrollable, min-w-0)                      │

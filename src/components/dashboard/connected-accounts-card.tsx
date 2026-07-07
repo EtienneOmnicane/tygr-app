@@ -3,7 +3,8 @@
  * bancaire relié avec sa PROVENANCE (banque) + son libellé et son solde courant —
  * parité avec le benchmark FYGR. Présentationnel pur : reçoit les comptes résolus.
  *
- * Ordre dans la pile aside : SOLDE (SidePanelKpi) → DÉTAILS → COMPTES CONNECTÉS.
+ * Emplacement (refonte Dodo) : colonne droite du dashboard (1fr), empilée SOUS la
+ * carte « Synthèse du mois », à droite de la courbe de flux — comble l'espace résiduel.
  *
  * GROUPEMENT PAR TITULAIRE (PLAN-bandeau-titulaire-accordeon.md, D4/D7) : les
  * comptes sont regroupés par party Omni-FI (`grouperParTitulaire`) en accordéon

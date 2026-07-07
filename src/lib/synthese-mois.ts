@@ -1,7 +1,7 @@
 /**
  * Repli d'affichage pour la synthèse mensuelle VENTILÉE PAR DEVISE
- * (`syntheseMoisParDevise`). Source UNIQUE partagée par `CashFlowSummary` et
- * `SidePanelKpi` (pas de duplication de la règle de repli — règle 6/9).
+ * (`syntheseMoisParDevise`). Source UNIQUE consommée par `CashFlowSummary`
+ * (pas de duplication de la règle de repli — règle 6/9).
  *
  * Le service renvoie une ligne par devise présente sur le mois, et un TABLEAU VIDE
  * quand le mois n'a aucune transaction. L'UI ne doit jamais montrer une carte vide :
@@ -9,7 +9,7 @@
  * de 0 cross-devise ni de conversion FX (CLAUDE.md règle 8 / DASH-FX1) : le repli est
  * un SEUL bloc, dans la devise de base, uniquement quand il n'y a STRICTEMENT rien.
  *
- * Tri stable par code devise (affichage déterministe, comme les soldes du side-panel).
+ * Tri stable par code devise (affichage déterministe, comme les soldes par devise).
  */
 import type { SyntheseMoisDevise } from "@/server/repositories/dashboard";
 
