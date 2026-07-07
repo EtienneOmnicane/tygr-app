@@ -30,7 +30,11 @@ import {
   definirPerimetreEntite,
   type EtatPerimetre,
 } from "@/app/(workspace)/actions";
-import { grouperParTitulaire } from "@/lib/grouper-titulaire";
+import {
+  basculerGroupe,
+  etatSelectionGroupe,
+  grouperParTitulaire,
+} from "@/lib/grouper-titulaire";
 import type {
   CompteConnecte,
   EntiteVisible,
@@ -241,15 +245,31 @@ export function PerimetreSwitcher({
     );
   }, [comptes, recherche]);
 
-  // Groupement par TITULAIRE (D6) — sous-en-têtes PUREMENT VISUELS dans la
-  // listbox « Par compte » : la sélection reste per-compte, les inputs postés
-  // (bankAccountId) sont INCHANGÉS, aucun nouvel axe serveur. Recalculé sur la
-  // liste FILTRÉE (la recherche peut vider un groupe → son en-tête disparaît).
-  // < 2 groupes → liste plate historique (repli, pas d'en-tête superflu).
+  // Groupement par TITULAIRE (D6/S1) dans la listbox « Par compte » : accordéon
+  // CONTRÔLÉ React (pas de <details> natif ici — une checkbox contrôlée dans un
+  // <summary> entrerait en conflit d'événements avec le toggle). La sélection
+  // reste per-compte, les inputs postés (bankAccountId) sont INCHANGÉS, aucun
+  // nouvel axe serveur. Recalculé sur la liste FILTRÉE (la recherche peut vider
+  // un groupe → il disparaît). < 2 groupes → liste plate historique (repli).
   const groupesTitulaire = useMemo(
     () => grouperParTitulaire(comptesFiltres),
     [comptesFiltres],
   );
+
+  // Volets ouverts (clé = holderId ?? "non-regroupe"). REPLIÉS par défaut (S1) ;
+  // pendant une RECHERCHE active, tous les groupes s'affichent DÉPLIÉS (les
+  // correspondances doivent être visibles sans clic) sans écraser cet état.
+  const [groupesOuverts, setGroupesOuverts] = useState<Set<string>>(new Set());
+  const rechercheActive = recherche.trim().length > 0;
+
+  function basculerOuverture(cle: string) {
+    setGroupesOuverts((prev) => {
+      const next = new Set(prev);
+      if (next.has(cle)) next.delete(cle);
+      else next.add(cle);
+      return next;
+    });
+  }
 
   const entitesFiltrees = useMemo(() => {
     const q = recherche.trim().toLocaleLowerCase("fr");
@@ -401,25 +421,70 @@ export function PerimetreSwitcher({
                   /* Repli mono-groupe : liste plate historique, aucun en-tête. */
                   comptesFiltres.map((c) => optionCompte(c, coches, basculer))
                 ) : (
-                  /* Sous-en-têtes TITULAIRE (D6) — non cliquables, purement
-                     visuels. Les options restent per-compte (sélection et
-                     inputs postés inchangés) ; « Non regroupé » en dernier. */
+                  /* Accordéon TITULAIRE (S1/S2) — en-tête de groupe = [checkbox
+                     tri-état] [chevron + nom] [N comptes]. La case de groupe est
+                     du CONFORT (règle 2) : basculerGroupe ne coche QUE des ids du
+                     groupe (périmètre RLS) ; les inputs postés restent les
+                     bankAccountId de `coches`, inchangés. Compteur only — jamais
+                     de solde agrégé (règle 8). « Non regroupé » en dernier. */
                   groupesTitulaire.map((groupe) => {
                     const titre = groupe.holderName ?? "Non regroupé";
+                    const cle = groupe.holderId ?? "non-regroupe";
+                    const ouvert = rechercheActive || groupesOuverts.has(cle);
+                    const etat = etatSelectionGroupe(groupe.comptes, coches);
+                    const nb = groupe.comptes.length;
                     return (
-                      <div
-                        key={groupe.holderId ?? "non-regroupe"}
-                        role="group"
-                        aria-label={titre}
-                      >
-                        <div
-                          aria-hidden
-                          className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase
-                            tracking-[0.08em] text-text-muted"
-                        >
-                          {titre}
+                      <div key={cle} role="group" aria-label={titre}>
+                        <div className="flex items-center gap-2 px-2 py-1.5">
+                          {/* Tri-état natif : indeterminate posé par ref (pas un
+                              attribut HTML). Pas de `name` → jamais posté. */}
+                          <input
+                            type="checkbox"
+                            checked={etat === "tous"}
+                            ref={(el) => {
+                              if (el) el.indeterminate = etat === "partiel";
+                            }}
+                            onChange={() =>
+                              setCoches((prev) => basculerGroupe(prev, groupe.comptes))
+                            }
+                            aria-label={`Tout cocher — ${titre}`}
+                            className="h-4 w-4 shrink-0 cursor-pointer accent-primary
+                              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => basculerOuverture(cle)}
+                            aria-expanded={ouvert}
+                            className="flex min-w-0 flex-1 items-center gap-2 rounded-control
+                              text-left focus:outline-none focus-visible:ring-2
+                              focus-visible:ring-primary"
+                          >
+                            <span
+                              aria-hidden
+                              className={cn(
+                                "shrink-0 text-[10px] text-text-muted transition-transform",
+                                ouvert && "rotate-90",
+                              )}
+                            >
+                              ▸
+                            </span>
+                            <span
+                              className="truncate text-[11px] font-semibold uppercase
+                                tracking-[0.08em] text-text-muted"
+                              title={titre}
+                            >
+                              {titre}
+                            </span>
+                          </button>
+                          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-text-muted">
+                            {nb} compte{nb > 1 ? "s" : ""}
+                          </span>
                         </div>
-                        {groupe.comptes.map((c) => optionCompte(c, coches, basculer))}
+                        {ouvert && (
+                          <div className="pl-6">
+                            {groupe.comptes.map((c) => optionCompte(c, coches, basculer))}
+                          </div>
+                        )}
                       </div>
                     );
                   })
