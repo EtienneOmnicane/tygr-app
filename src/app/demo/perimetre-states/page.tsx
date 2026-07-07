@@ -25,6 +25,9 @@ import type {
 
 export const metadata = { title: "Démo — Sélecteur de périmètre" };
 
+// Titulaires (D6) : « Sucre SA » porte 2 comptes, le compte USD reste SANS
+// titulaire → la listbox « Par compte » montre 2 sous-en-têtes (« Sucre SA »
+// puis « Non regroupé » en dernier). Sémantique de sélection inchangée.
 const COMPTES: CompteConnecte[] = [
   {
     bankAccountId: "11111111-1111-4111-8111-111111111111",
@@ -33,6 +36,8 @@ const COMPTES: CompteConnecte[] = [
     currency: "MUR",
     currentBalance: "1250000.00",
     lastSyncedAt: new Date(),
+    holderId: "demo-party-sucre",
+    holderName: "Sucre SA",
   },
   {
     bankAccountId: "22222222-2222-4222-8222-222222222222",
@@ -41,6 +46,8 @@ const COMPTES: CompteConnecte[] = [
     currency: "USD",
     currentBalance: "82000.00",
     lastSyncedAt: new Date(),
+    holderId: null,
+    holderName: null,
   },
   {
     bankAccountId: "33333333-3333-4333-8333-333333333333",
@@ -49,6 +56,8 @@ const COMPTES: CompteConnecte[] = [
     currency: "MUR",
     currentBalance: "540000.00",
     lastSyncedAt: new Date(),
+    holderId: "demo-party-sucre",
+    holderName: "Sucre SA",
   },
 ];
 

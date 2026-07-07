@@ -19,6 +19,12 @@ export const DEMO_MOIS = "2026-06";
  * État SUCCÈS : dashboard complet. Multi-devise (MUR + USD) pour exercer la
  * synthèse ventilée et la pile de soldes ; flux mensuel AVEC un mois NÉGATIF
  * (mai) pour valider la ligne de zéro et l'aire en-dessous.
+ *
+ * TITULAIRES (accordéon L3/L5) : 2 groupes (« Omnicane Energy Ltd » à 2 comptes,
+ * « Omnicane Sugar Estates Ltd » à 1) + 1 compte SANS titulaire (bucket « Non
+ * regroupé » en dernier). Les sommes par devise restent alignées sur
+ * `soldesParDevise` (MUR 5 230 000 + 1 961 000 + 500 000 = 7 691 000 ;
+ * USD 179 200). Le cas MONO-groupe (repli liste plate) vit sur l'état PARTIEL.
  */
 export const DEMO_DASHBOARD: DonneesDashboard = {
   comptes: [
@@ -29,14 +35,39 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       currency: "MUR",
       currentBalance: "5230000.00",
       lastSyncedAt: new Date("2026-06-12T08:00:00Z"),
+      holderId: "demo-party-sugar",
+      holderName: "Omnicane Sugar Estates Ltd",
     },
     {
       bankAccountId: "demo-acc-sbm-0937",
       accountName: "SBM — Compte opérations",
       institutionName: "State Bank of Mauritius",
       currency: "MUR",
-      currentBalance: "2461000.00",
+      currentBalance: "1961000.00",
       lastSyncedAt: new Date("2026-06-12T07:00:00Z"),
+      holderId: "demo-party-energy",
+      holderName: "Omnicane Energy Ltd",
+    },
+    {
+      bankAccountId: "demo-acc-sbm-5512",
+      accountName: "SBM — Compte épargne",
+      institutionName: "State Bank of Mauritius",
+      currency: "MUR",
+      currentBalance: "500000.00",
+      lastSyncedAt: new Date("2026-06-12T07:00:00Z"),
+      holderId: "demo-party-energy",
+      holderName: "Omnicane Energy Ltd",
+    },
+    {
+      bankAccountId: "demo-acc-mcb-usd-8804",
+      accountName: "MCB — Compte USD",
+      institutionName: "The Mauritius Commercial Bank",
+      currency: "USD",
+      currentBalance: "179200.00",
+      lastSyncedAt: new Date("2026-06-12T08:00:00Z"),
+      // Sans titulaire → bucket « Non regroupé » (D7).
+      holderId: null,
+      holderName: null,
     },
   ],
   soldesParDevise: [
@@ -139,9 +170,17 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
  * État PARTIEL (décision revue) : comptes + solde présents, MAIS flux, synthèse,
  * vendors et transactions vides — workspace fraîchement connecté, données pas
  * encore synchronisées. La synthèse vide se replie sur « 0 dans la devise de base ».
+ *
+ * Sert AUSSI de cas MONO-groupe pour l'accordéon titulaire (L5) : titulaires
+ * retirés → tous les comptes tombent dans le même bucket → repli LISTE PLATE
+ * historique (pas d'accordéon à un seul volet).
  */
 export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
-  comptes: DEMO_DASHBOARD.comptes,
+  comptes: DEMO_DASHBOARD.comptes.map((c) => ({
+    ...c,
+    holderId: null,
+    holderName: null,
+  })),
   soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
   flux: [],
   synthesesMois: [],
