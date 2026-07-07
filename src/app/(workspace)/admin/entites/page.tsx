@@ -42,7 +42,7 @@ import {
   type PropositionVue,
 } from "./propositions";
 
-export const metadata = { title: "Entités — TYGR" };
+export const metadata = { title: "Entités — Dodo" };
 
 export default async function PageEntites() {
   let session;

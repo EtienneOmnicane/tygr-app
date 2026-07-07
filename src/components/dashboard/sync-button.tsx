@@ -9,9 +9,9 @@
  * Il EXPOSE sur le dashboard l'action de re-synchro qui n'existait jusque-là que dans
  * le widget de /banques (`bank-connect-widget.tsx`). Il appelle la MÊME action ; il
  * n'y a aucun couplage au widget (le widget n'utilisait son retour que pour rouvrir la
- * MFA, hors de propos ici). Posé à côté de la pastille de fraîcheur du solde
- * (`side-panel-kpi.tsx`, carte SOLDE) : l'utilisateur rafraîchit là où il lit l'âge
- * de la donnée.
+ * MFA, hors de propos ici). Posé dans l'en-tête du dashboard, à côté de la pastille de
+ * fraîcheur du solde (`BalanceFreshnessPill`) : l'utilisateur rafraîchit là où il lit
+ * l'âge de la donnée.
  *
  * Sécurité (rappel) : la VRAIE garde est SERVEUR — `synchroniserConnexionsDepuisOmnifi`
  * refuse un VIEWER en `ConnexionNonAutoriseeError` (orchestration.ts:759, sous le

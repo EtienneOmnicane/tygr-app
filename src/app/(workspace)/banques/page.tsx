@@ -22,7 +22,7 @@ import {
 
 import { BankConnectWidget } from "@/components/widget/bank-connect-widget";
 
-export const metadata = { title: "Connecter une banque — TYGR" };
+export const metadata = { title: "Connecter une banque — Dodo" };
 
 export default async function PageBanques() {
   let session;

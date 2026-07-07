@@ -26,7 +26,7 @@ import {
 
 import { EmptyState } from "@/components/ui/states";
 
-export const metadata = { title: "Graphiques — TYGR" };
+export const metadata = { title: "Graphiques — Dodo" };
 
 export default async function PageGraphiques() {
   let session;

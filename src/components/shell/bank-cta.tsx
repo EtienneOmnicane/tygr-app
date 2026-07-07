@@ -8,18 +8,19 @@
  * l'URL). Ce lien d'action permanent dans le header lève ce point dur.
  *
  * Server component présentationnel : aucune donnée, aucun fetch. Le `role` lui est
- * fourni par `AppHeader` (déjà résolu par le layout via withWorkspace). La frontière
+ * fourni par `AppTopbar` (déjà résolu par le layout via withWorkspace). La frontière
  * d'autorité réelle reste serveur (la page /banques re-gate `peutModifier`) ; ce
  * composant ne fait que TRADUIRE le rôle en capacité UI (cf. lib/permissions).
  *
  * Gating (convention permissions.ts) : « action de modification » →
- *   - MANAGER/ADMIN : lien actif vers /banques.
+ *   - MANAGER/ADMIN : bouton actif vers /banques.
  *   - VIEWER : rendu DÉSACTIVÉ + tooltip (pas caché — seules les surfaces ADMIN se
  *     cachent du DOM ; une action de modif reste visible mais inerte, §gating D2).
  *
- * Palette `onink` (texte clair sur header `ink`), alignée sur les liens « Membres »
- * et « Se déconnecter » du header — PAS `text-primary` (bleu illisible sur ink).
- * L'icône « + » suit le pattern « Lien d'action » du §2.3 (« + Ajouter une facture »).
+ * Refonte Dodo : bouton d'action plein `ink` (le CTA vit désormais dans la topbar
+ * claire `surface-card`, plus sur le header `ink`). VIEWER → même gabarit bouton mais
+ * inerte (`surface-inset` + `text-faint`). L'icône « + » suit le pattern « Lien
+ * d'action » du §2.3 (« + Ajouter une facture »).
  */
 import Link from "next/link";
 
@@ -46,15 +47,16 @@ function IconePlus() {
 const LABEL = "Connecter une banque";
 
 export function BankCtaLink({ role }: { role: WorkspaceRole }) {
-  // VIEWER : visible mais inerte (span aria-disabled + tooltip), même pattern que
-  // le `placeholder` de app-nav.tsx — jamais un <Link> mort.
+  // VIEWER : visible mais inerte (span aria-disabled + tooltip) — jamais un
+  // <Link> mort (§gating D2 : une action de modif reste visible mais inerte).
   if (!peutModifier(role)) {
     return (
       <span
         aria-disabled
         title="Votre rôle (lecture seule) ne permet pas de connecter une banque."
-        className="inline-flex cursor-default items-center gap-1.5 text-sm
-          font-medium text-text-onink/40"
+        className="inline-flex cursor-default items-center gap-1.5 rounded-control
+          bg-surface-inset px-4 py-2 text-sm font-semibold text-text-faint
+          whitespace-nowrap"
       >
         <IconePlus />
         {LABEL}
@@ -65,9 +67,10 @@ export function BankCtaLink({ role }: { role: WorkspaceRole }) {
   return (
     <Link
       href="/banques"
-      className="inline-flex items-center gap-1.5 text-sm font-medium
-        text-text-onink/64 transition-colors hover:text-text-onink
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="inline-flex items-center gap-1.5 rounded-control bg-ink px-4 py-2
+        text-sm font-semibold text-text-onink whitespace-nowrap transition-colors
+        hover:bg-ink-700 focus:outline-none focus-visible:ring-2
+        focus-visible:ring-primary focus-visible:ring-offset-2"
     >
       <IconePlus />
       {LABEL}

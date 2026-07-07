@@ -10,7 +10,7 @@
  *   - N banques cochées (libellé « N comptes »).
  * Le 4e cas (popover ouvert) et le 5e (non-débordement header) se capturent en
  * INTERACTION via le navigateur headless (clic sur le déclencheur) — cf. le
- * scénario Visual QA. Le rôle VIEWER se vérifie sur la démo header-cta (le
+ * scénario Visual QA. Le rôle VIEWER se vérifie sur la démo shell (topbar) (le
  * sélecteur n'est PAS gaté par rôle : confort de lecture pour tous).
  *
  * Le submit « Appliquer » est inerte ici (definirViewFilter exige une session
@@ -115,7 +115,7 @@ export default function DemoPerimetreStates() {
           {/* Mini-header reproduisant le chrome réel (bg-ink h-16, zone ml-auto). */}
           <header className="flex h-16 items-center gap-6 bg-ink px-6 text-text-onink">
             <span className="text-lg font-bold tracking-tight">
-              TYGR<span className="text-accent">.</span>
+              Dodo<span className="text-accent">.</span>
             </span>
             <div className="ml-auto flex items-center gap-3">
               <PerimetreSwitcher

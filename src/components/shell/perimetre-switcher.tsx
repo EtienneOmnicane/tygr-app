@@ -178,7 +178,7 @@ export function PerimetreSwitcher({
   // Sélection locale « Par compte » (cochés). Initialisée UNE fois depuis
   // viewFilterActif ∩ comptes (ids fantômes ignorés). Pas de resynchronisation par
   // effet : après un Appliquer, l'action fait redirect('/') et le conteneur remonte
-  // le composant via une `key` dérivée du périmètre actif (cf. app-header.tsx) → ce
+  // le composant via une `key` dérivée du périmètre actif (cf. app-topbar.tsx) → ce
   // useState repart proprement sur la nouvelle vérité serveur.
   const [coches, setCoches] = useState<Set<string>>(
     () => new Set((viewFilterActif ?? []).filter((id) => idsConnus.has(id))),

@@ -22,7 +22,7 @@ import {
 
 import { EmptyState } from "@/components/ui/states";
 
-export const metadata = { title: "Échéances — TYGR" };
+export const metadata = { title: "Échéances — Dodo" };
 
 export default async function PageEcheances() {
   let session;

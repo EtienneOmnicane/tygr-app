@@ -1,10 +1,22 @@
 /**
- * Assemblage présentationnel du dashboard (UI_GUIDELINES §1.1). Reçoit les
- * sorties des 5 services (ou les fixtures), choisit l'état d'affichage et monte
- * shell + side-panel KPI + courbe (ancre) + table. PUR : aucune donnée fetchée
- * ici, la page (RSC) résout et passe les props.
+ * Assemblage présentationnel du dashboard (UI_GUIDELINES §1.1, refonte Dodo —
+ * maquette Dodo.dc.html). Reçoit les sorties des services (ou les fixtures),
+ * choisit l'état d'affichage et monte la GRILLE du tableau de bord. PUR : aucune
+ * donnée fetchée ici, la page (RSC) résout et passe les props.
  *
- * Logique d'états (décisions revue) :
+ * MISE EN PAGE (refonte Etienne — « plus rangé, plus symétrique ») : on abandonne
+ * le side-panel gauche fixe au profit d'une COLONNE PLEINE LARGEUR empilée, calquée
+ * sur la maquette :
+ *   1. En-tête : titre « Trésorerie » (26px) + sous-titre (période · comptes) ;
+ *      à droite, fraîcheur du solde + bouton « Synchroniser ».
+ *   2. Rangée KPI « Soldes par devise » horizontale (SoldesDevisesRow), carte de
+ *      la devise de base mise en avant (ink).
+ *   3. Grille 2fr/1fr : Flux de trésorerie (ancre) + Synthèse du mois côte à côte.
+ *   4. Comptes connectés en PLEINE LARGEUR.
+ *   5. Features conservées hors maquette (Top contreparties, Évolution mensuelle,
+ *      Transactions récentes), empilées pleine largeur dessous.
+ *
+ * Logique d'états (décisions revue, INCHANGÉE) :
  *   - AUCUN compte connecté            → empty GLOBAL (DashboardEmptyState).
  *   - Comptes présents, données vides  → PARTIEL par section : la courbe affiche
  *     « historique en cours de synchro », la table son propre vide ; les KPI/
@@ -30,7 +42,9 @@ import { formaterFraicheurRelative } from "@/lib/format-date";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
-import { SidePanelKpi } from "@/components/dashboard/side-panel-kpi";
+import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
+import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
+import { SyncButton } from "@/components/dashboard/sync-button";
 import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -94,60 +108,90 @@ export function DashboardContent({
     );
   }
 
-  // Sinon : comptes connectés → on monte le shell complet. Chaque zone gère son
-  // propre vide (PARTIEL) sans masquer le solde déjà disponible.
+  // Sinon : comptes connectés → dashboard PLEINE LARGEUR (grille maquette). Chaque
+  // zone gère son propre vide (PARTIEL) sans masquer le solde déjà disponible.
   // Fraîcheur (§3.7 / DR-F3) : on qualifie l'âge du SOLDE COURANT via la synchro la
   // plus récente (`lastSyncedAt`), JAMAIS via le dernier point de courbe (EOD).
   const synchro = synchroLaPlusRecente(comptes);
   const fraicheur = synchro
     ? formaterFraicheurRelative(synchro.lastSyncedAt)
     : null;
+  // Sous-titre maquette : « N derniers mois · N comptes connectés ». Le nombre de
+  // mois = longueur de la grille d'axe (nbMois du preset) ; on ne recalcule rien.
+  const nbMoisFenetre = grilleMensuelle.length;
+  const nbComptes = comptes.length;
 
   return (
-    <DashboardShell
-      aside={
-        <>
-          <SidePanelKpi
-            soldesParDevise={soldesParDevise}
-            synthesesMois={synthesesMois}
-            mois={mois}
-            devise={devise}
-            fraicheur={fraicheur}
-            compteLabel={synchro?.compteLabel}
-            role={role}
-          />
-          {/* Pile aside : SOLDE → DÉTAILS (SidePanelKpi) → COMPTES CONNECTÉS. */}
-          <ConnectedAccountsCard comptes={comptes} />
-        </>
-      }
-    >
+    <DashboardShell>
       <div className="flex flex-col gap-6">
-        {/* Toolbar contextuelle (UI_GUIDELINES §1.1, h-10) posée SUR le fond de page
-            (sans carte) : sépare l'ancre du chrome et donne de l'air en tête de zone.
-            À gauche le titre de section ; la droite est RÉSERVÉE aux futurs filtres
-            (sélecteur de période L8c) — non construits ici. Le toggle Barres/Courbe vit
-            dans l'en-tête de la carte d'ancre (il pilote cette carte). */}
-        <div className="flex h-10 items-center justify-between">
-          <h1 className="text-base font-semibold text-text">Trésorerie</h1>
+        {/* 1. EN-TÊTE — titre + sous-titre à gauche ; fraîcheur du solde +
+            « Synchroniser » à droite (repris de l'ancienne carte SOLDE : on
+            rafraîchit là où on lit l'âge de la donnée). Pas de flex-wrap sur le
+            titre lui-même ; le cluster droit s'enroule sous lg si nécessaire. */}
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[26px] font-bold leading-tight tracking-tight text-text">
+              Trésorerie
+            </h1>
+            <p className="mt-1 text-sm text-text-muted">
+              {nbMoisFenetre} dernier{nbMoisFenetre > 1 ? "s" : ""} mois ·{" "}
+              {nbComptes} compte{nbComptes > 1 ? "s" : ""} connecté
+              {nbComptes > 1 ? "s" : ""}
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            {fraicheur && (
+              <BalanceFreshnessPill
+                fraicheur={fraicheur}
+                compteLabel={synchro?.compteLabel}
+              />
+            )}
+            <SyncButton role={role} />
+          </div>
+        </header>
+
+        {/* 2. RANGÉE KPI « Soldes par devise » — horizontale (une carte par devise,
+            devise de base en ink). Remplace la carte SOLDE verticale du side-panel. */}
+        <SoldesDevisesRow
+          soldesParDevise={soldesParDevise}
+          comptes={comptes}
+          devise={devise}
+        />
+
+        {/* 3. GRILLE 2fr / 1fr : Flux de trésorerie (ancre, colonne gauche) + pile
+            droite « Synthèse du mois » PUIS « Comptes connectés » (demande Etienne :
+            remonter les comptes dans l'espace résiduel à droite de la courbe — la
+            Synthèse est plus courte que la courbe, la colonne droite restait creuse).
+            lg:grid-cols-3 → col-span-2 (2/3) + col-span-1 (1/3) = 2fr/1fr ; empilé
+            sous lg. */}
+        <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-3">
+          {/* Ancre : FLUX net mensuel — carte unifiée avec toggle Barres/Courbe (L8a).
+              Les deux vues partagent les séries déjà chargées par la page (zéro fetch). */}
+          <div className="lg:col-span-2">
+            <FluxTresorerieCard
+              serieMensuelle={serieMensuelle}
+              grilleMensuelle={grilleMensuelle}
+              devise={devise}
+            />
+          </div>
+          {/* Colonne droite (1fr) : Synthèse du mois PUIS Comptes connectés, empilés,
+              pour occuper la hauteur de la courbe plutôt que de laisser un vide. */}
+          <div className="flex flex-col gap-3.5 lg:col-span-1">
+            {/* Synthèse du mois (Entrées / Sorties / Variation), VENTILÉE PAR DEVISE. */}
+            <CashFlowSummary
+              synthesesMois={synthesesMois}
+              mois={mois}
+              devise={devise}
+            />
+            {/* Comptes connectés — remontés dans la colonne droite (sortis de la
+                pleine largeur) pour combler l'espace à droite de la courbe. La carte
+                reste robuste en colonne étroite : libellés `truncate`, montants
+                `shrink-0 whitespace-nowrap tabular-nums` (jamais tronqués). */}
+            <ConnectedAccountsCard comptes={comptes} />
+          </div>
         </div>
 
-        {/* Ancre : FLUX net mensuel — carte unifiée avec toggle Barres/Courbe (L8a).
-            Les deux vues partagent les séries déjà chargées par la page (zéro fetch).
-            Chaque vue gère son propre état partiel/vide. */}
-        <FluxTresorerieCard
-          serieMensuelle={serieMensuelle}
-          grilleMensuelle={grilleMensuelle}
-          devise={devise}
-        />
-
-        {/* Vision Entrées / Sorties du mois (demande métier), VENTILÉE PAR DEVISE —
-            au-dessus de la table. */}
-        <CashFlowSummary
-          synthesesMois={synthesesMois}
-          mois={mois}
-          devise={devise}
-        />
-
+        {/* 4. FEATURES CONSERVÉES hors maquette, empilées pleine largeur. */}
         {/* Top contreparties (concentration des postes, dérivé de la Voie A). */}
         <TopVendorsCard concentration={topVendors} />
 

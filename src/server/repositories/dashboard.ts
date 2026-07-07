@@ -378,8 +378,8 @@ export async function courbeTresorerie(
  * @deprecated MULTI-DEVISE CASSÉ : cette fonction somme `amount` SANS GROUP BY devise
  * → pour un workspace avec des comptes MUR + USD, elle additionne des roupies et des
  * dollars et l'UI affiche le total dans la base_currency (faux). Conservée le temps que
- * le Front migre les cartes (SidePanelKpi « Détails » + CashFlowSummary) vers
- * `syntheseMoisParDevise` (une ligne par devise). NE PAS l'utiliser dans du code neuf.
+ * le Front migre la carte `CashFlowSummary` vers `syntheseMoisParDevise` (une ligne par
+ * devise). NE PAS l'utiliser dans du code neuf.
  *
  * Synthèse entrées/sorties/variation d'un mois (YYYY-MM). Somme conditionnelle
  * EN SQL sur le sens ; exclut les tombstones. Montants en chaînes.
