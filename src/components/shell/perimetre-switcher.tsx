@@ -30,6 +30,11 @@ import {
   definirPerimetreEntite,
   type EtatPerimetre,
 } from "@/app/(workspace)/actions";
+import {
+  basculerGroupe,
+  etatSelectionGroupe,
+  grouperParTitulaire,
+} from "@/lib/grouper-titulaire";
 import type {
   CompteConnecte,
   EntiteVisible,
@@ -46,6 +51,50 @@ type Onglet = "compte" | "entite";
 /** Libellé court d'un compte pour la liste / le déclencheur (banque · compte). */
 function libelleCompte(c: CompteConnecte): string {
   return c.institutionName ? `${c.institutionName} · ${c.accountName}` : c.accountName;
+}
+
+/**
+ * Option « compte » de la listbox (markup HISTORIQUE, inchangé par le groupement
+ * titulaire — D6) : checkbox per-compte, extraite pour être rendue à l'identique
+ * en liste plate (repli mono-groupe) ET sous un sous-en-tête titulaire.
+ */
+function optionCompte(
+  c: CompteConnecte,
+  coches: Set<string>,
+  basculer: (id: string) => void,
+) {
+  const coche = coches.has(c.bankAccountId);
+  return (
+    <button
+      key={c.bankAccountId}
+      type="button"
+      role="option"
+      aria-selected={coche}
+      onClick={() => basculer(c.bankAccountId)}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+        "text-sm transition-colors focus:outline-none focus-visible:ring-2",
+        "focus-visible:ring-primary",
+        coche ? "bg-primary-50" : "hover:bg-surface-inset",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
+          coche
+            ? "border-primary bg-primary text-text-onink"
+            : "border-line",
+        )}
+      >
+        {coche ? "✓" : ""}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-text">
+        {libelleCompte(c)}
+      </span>
+      <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
+    </button>
+  );
 }
 
 /**
@@ -196,6 +245,37 @@ export function PerimetreSwitcher({
     );
   }, [comptes, recherche]);
 
+  // Groupement par TITULAIRE (D6/S1) dans la listbox « Par compte » : accordéon
+  // CONTRÔLÉ React (pas de <details> natif ici — une checkbox contrôlée dans un
+  // <summary> entrerait en conflit d'événements avec le toggle). La sélection
+  // reste per-compte, les inputs postés (bankAccountId) sont INCHANGÉS, aucun
+  // nouvel axe serveur. Recalculé sur la liste FILTRÉE (la recherche peut vider
+  // un groupe → il disparaît). < 2 groupes → liste plate historique (repli).
+  const groupesTitulaire = useMemo(
+    () => grouperParTitulaire(comptesFiltres),
+    [comptesFiltres],
+  );
+
+  // Volets ouverts (clé = holderId ?? "non-regroupe"). REPLIÉS par défaut (S1) ;
+  // pendant une RECHERCHE active, tous les groupes s'affichent DÉPLIÉS (les
+  // correspondances doivent être visibles sans clic) sans écraser cet état.
+  const [groupesOuverts, setGroupesOuverts] = useState<Set<string>>(new Set());
+  const rechercheActive = recherche.trim().length > 0;
+
+  function basculerOuverture(cle: string) {
+    // Pendant une recherche, l'ouverture est FORCÉE (`|| rechercheActive`) : un
+    // clic chevron n'aurait AUCUN retour visuel mais muterait quand même le Set
+    // → état d'ouverture inversé/corrompu une fois la recherche effacée
+    // (constat cross-review). No-op tant que la recherche est active.
+    if (rechercheActive) return;
+    setGroupesOuverts((prev) => {
+      const next = new Set(prev);
+      if (next.has(cle)) next.delete(cle);
+      else next.add(cle);
+      return next;
+    });
+  }
+
   const entitesFiltrees = useMemo(() => {
     const q = recherche.trim().toLocaleLowerCase("fr");
     if (!q) return entites;
@@ -342,39 +422,82 @@ export function PerimetreSwitcher({
                   <p className="px-2 py-6 text-center text-sm text-text-muted">
                     Aucun compte ne correspond.
                   </p>
+                ) : groupesTitulaire.length < 2 ? (
+                  /* Repli mono-groupe : liste plate historique, aucun en-tête. */
+                  comptesFiltres.map((c) => optionCompte(c, coches, basculer))
                 ) : (
-                  comptesFiltres.map((c) => {
-                    const coche = coches.has(c.bankAccountId);
+                  /* Accordéon TITULAIRE (S1/S2) — en-tête de groupe = [checkbox
+                     tri-état] [chevron + nom] [N comptes]. La case de groupe est
+                     du CONFORT (règle 2) : basculerGroupe ne coche QUE des ids du
+                     groupe (périmètre RLS) ; les inputs postés restent les
+                     bankAccountId de `coches`, inchangés. Compteur only — jamais
+                     de solde agrégé (règle 8). « Non regroupé » en dernier. */
+                  groupesTitulaire.map((groupe) => {
+                    const titre = groupe.holderName ?? "Non regroupé";
+                    const cle = groupe.holderId ?? "non-regroupe";
+                    // `voletOuvert` (PAS `ouvert` : ce nom est déjà pris par
+                    // l'état du popover — shadowing piégeux relevé en revue).
+                    const voletOuvert = rechercheActive || groupesOuverts.has(cle);
+                    // SÉMANTIQUE ASSUMÉE (WYSIWYG, pattern « sélectionner les
+                    // visibles ») : pendant une recherche, tri-état et bascule
+                    // agissent sur les comptes FILTRÉS du groupe — jamais sur
+                    // des comptes invisibles (pas de (dé)sélection surprise).
+                    // Les cochés hors filtre ne sont PAS touchés.
+                    const etat = etatSelectionGroupe(groupe.comptes, coches);
+                    const nb = groupe.comptes.length;
                     return (
-                      <button
-                        key={c.bankAccountId}
-                        type="button"
-                        role="option"
-                        aria-selected={coche}
-                        onClick={() => basculer(c.bankAccountId)}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
-                          "text-sm transition-colors focus:outline-none focus-visible:ring-2",
-                          "focus-visible:ring-primary",
-                          coche ? "bg-primary-50" : "hover:bg-surface-inset",
+                      <div key={cle} role="group" aria-label={titre}>
+                        <div className="flex items-center gap-2 px-2 py-1.5">
+                          {/* Tri-état natif : indeterminate posé par ref (pas un
+                              attribut HTML). Pas de `name` → jamais posté. */}
+                          <input
+                            type="checkbox"
+                            checked={etat === "tous"}
+                            ref={(el) => {
+                              if (el) el.indeterminate = etat === "partiel";
+                            }}
+                            onChange={() =>
+                              setCoches((prev) => basculerGroupe(prev, groupe.comptes))
+                            }
+                            aria-label={`Tout cocher — ${titre}`}
+                            className="h-4 w-4 shrink-0 cursor-pointer accent-primary
+                              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => basculerOuverture(cle)}
+                            aria-expanded={voletOuvert}
+                            className="flex min-w-0 flex-1 items-center gap-2 rounded-control
+                              text-left focus:outline-none focus-visible:ring-2
+                              focus-visible:ring-primary"
+                          >
+                            <span
+                              aria-hidden
+                              className={cn(
+                                "shrink-0 text-[10px] text-text-muted transition-transform",
+                                voletOuvert && "rotate-90",
+                              )}
+                            >
+                              ▸
+                            </span>
+                            <span
+                              className="truncate text-[11px] font-semibold uppercase
+                                tracking-[0.08em] text-text-muted"
+                              title={titre}
+                            >
+                              {titre}
+                            </span>
+                          </button>
+                          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-text-muted">
+                            {nb} compte{nb > 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        {voletOuvert && (
+                          <div className="pl-6">
+                            {groupe.comptes.map((c) => optionCompte(c, coches, basculer))}
+                          </div>
                         )}
-                      >
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
-                            coche
-                              ? "border-primary bg-primary text-text-onink"
-                              : "border-line",
-                          )}
-                        >
-                          {coche ? "✓" : ""}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-text">
-                          {libelleCompte(c)}
-                        </span>
-                        <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
-                      </button>
+                      </div>
                     );
                   })
                 )}

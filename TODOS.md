@@ -5,6 +5,48 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Bandeau/sélecteur par titulaire — dettes ouvertes (2026-07-07)
+
+- [ ] **TITULAIRE-GENERIQUE1 (P2, effort ~15 min) — sentinelle « Account Holder » en
+  dur dans `src/lib/grouper-titulaire.ts` (`NOMS_TITULAIRE_GENERIQUES`).** C'est le
+  `PartyName` PLACEHOLDER d'Omni-FI en sandbox (77/87 comptes) : relégué après les
+  titulaires réellement nommés (S3, PLAN-selecteur-titulaire-accordeon.md) pour ne pas
+  noyer AIRPORT HOTEL/DYOSPOWER/OMNICANE… **Déclencheur** : Omni-FI expose un flag de
+  placeholder, OU la production fournit de vrais `PartyName` (le cas générique
+  disparaît) → retirer la sentinelle et le tri en 3 strates à ce moment-là.
+
+- [ ] **TITULAIRE-A11Y1 (P2, effort ~0,5 j) — pattern ARIA de l'accordéon dans la
+  listbox « Par compte » à valider au lecteur d'écran.** L'en-tête de groupe
+  (checkbox tri-état + bouton chevron `aria-expanded`) vit sous un `role="listbox"`
+  qui n'admet canoniquement que `option`/`group` — certains lecteurs d'écran en mode
+  listbox peuvent sauter ou mal annoncer ces contrôles (constat cross-review
+  2026-07-07, confiance 6/10 ; `aria-label`/`aria-expanded`/focus-visible déjà
+  posés). **Déclencheur** : premier audit accessibilité du produit, OU toute
+  retouche du PerimetreSwitcher — envisager `treegrid` ou sortir l'en-tête de la
+  listbox à ce moment-là.
+
+- [ ] **TITULAIRE-GROUPE-FILTRE1 (P2, décision produit, effort ~0 si statu quo) —
+  sémantique de la case de groupe PENDANT une recherche : à faire trancher par
+  Etienne.** Comportement livré (assumé, pattern « sélectionner les visibles ») :
+  tri-état et bascule agissent sur les comptes FILTRÉS du groupe — décocher un
+  groupe pendant une recherche ne décoche PAS ses comptes cachés (ils restent
+  postés) ; aucun compte invisible n'est jamais (dé)sélectionné par surprise.
+  Alternative (position du réviseur, confiance 6/10) : agir sur le groupe ENTIER
+  même filtré. **Déclencheur** : arbitrage d'Etienne à la revue de la PR — si
+  statu quo, cocher cette entrée ; sinon ~0,25 j (passer les groupes complets au
+  handler).
+
+- [ ] **TITULAIRE-TEST-SCOPE1 (P2, effort ~0,25 j) — couverture de test : lecture
+  titulaire sous `account_scope`/`view_filter` non testée directement.**
+  `tests/isolation/dashboard-titulaire-isolation.test.ts` prouve tenant +
+  `entity_scope`, mais pas le cas « membre scopé par compte/party (GUC
+  `app.current_account_scope`) ou view_filter actif → le titulaire d'un compte
+  masqué reste invisible ». Risque résiduel FAIBLE (même mécanique : policy
+  RESTRICTIVE 0016 sur `bank_accounts`, héritage par la même jointure que le cas
+  entité testé — constat cross-review confiance 5/10). **Déclencheur** : prochaine
+  retouche de `listerComptes` ou de la suite d'isolation titulaire — ajouter le cas
+  à ce moment-là (raccroché au chantier titulaire, feat/bandeau-titulaire-accordeon).
+
 ### Polish dashboard v2 — dettes ouvertes après UI-FLUX-CHART-POLISH (#147 mergée, 2026-06-30)
 
 Chantier graphe de flux livré et mergé (#147 : courbe corrigée — déformation +
