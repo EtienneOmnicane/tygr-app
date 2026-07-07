@@ -23,10 +23,12 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
+  accountPartyRole,
   bankAccounts,
   bankConnections,
   balanceHistory,
   entities,
+  parties,
   transactionsCache,
 } from "@/server/db/schema";
 import type { CategorySource } from "@/server/db/schema";
@@ -47,6 +49,15 @@ export interface CompteConnecte {
   currency: string;
   currentBalance: string | null;
   lastSyncedAt: Date | null;
+  /**
+   * TITULAIRE (Omni-FI Party) — libellé de groupement DISPLAY-ONLY, jamais un
+   * filtre (le périmètre vit dans la RLS). `holderId` = parties.id (clé de groupe
+   * stable), `holderName` = parties.name (PII d'affichage sous RLS : jamais loggé).
+   * null = compte sans party exploitable → bucket « Non regroupé ». Optionnels :
+   * les consommateurs/fixtures qui les ignorent restent valides.
+   */
+  holderId?: string | null;
+  holderName?: string | null;
 }
 
 /**
@@ -143,6 +154,29 @@ export interface TransactionRecente {
 
 /** Comptes connectés (sélectionnés) du workspace — side-panel + en-tête courbe. */
 export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
+  // Titulaire PRIMAIRE du compte (D2 — anti-multiplication de lignes) : un LEFT
+  // JOIN nu sur account_party_role dupliquerait les comptes le jour où un compte
+  // joint porte N parties. DISTINCT ON (bank_account_id) garantit 0/1 titulaire
+  // par compte : is_primary DESC d'abord, puis name/id pour un choix déterministe.
+  // Sécurité : la lecture reste PILOTÉE par bank_accounts (entity/account scope
+  // par jointure — ENTITY-READ-JOIN1) ; parties et account_party_role portent en
+  // plus leur propre tenant_isolation. Aucun workspace_id en paramètre.
+  const titulairePrimaire = tx
+    .selectDistinctOn([accountPartyRole.bankAccountId], {
+      bankAccountId: accountPartyRole.bankAccountId,
+      holderId: parties.id,
+      holderName: parties.name,
+    })
+    .from(accountPartyRole)
+    .innerJoin(parties, eq(accountPartyRole.partyId, parties.id))
+    .orderBy(
+      accountPartyRole.bankAccountId,
+      desc(accountPartyRole.isPrimary),
+      parties.name,
+      parties.id,
+    )
+    .as("titulaire_primaire");
+
   const lignes = await tx
     .select({
       bankAccountId: bankAccounts.id,
@@ -153,9 +187,15 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
       currency: bankAccounts.currency,
       currentBalance: bankAccounts.currentBalance,
       lastSyncedAt: bankAccounts.lastSyncedAt,
+      holderId: titulairePrimaire.holderId,
+      holderName: titulairePrimaire.holderName,
     })
     .from(bankAccounts)
     .innerJoin(bankConnections, eq(bankAccounts.connectionId, bankConnections.id))
+    .leftJoin(
+      titulairePrimaire,
+      eq(bankAccounts.id, titulairePrimaire.bankAccountId),
+    )
     .where(eq(bankAccounts.isSelected, true))
     .orderBy(bankAccounts.accountName);
   return lignes;
