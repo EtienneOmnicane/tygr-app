@@ -61,7 +61,9 @@ export function grouperParTitulaire(
   const groupes = [...parId.values()].sort(
     (a, b) =>
       collator.compare(a.holderName ?? "", b.holderName ?? "") ||
-      (a.holderId ?? "").localeCompare(b.holderId ?? ""),
+      // Tiebreak homonymie par id : comparaison de code units (locale-indépendante,
+      // les ids sont des UUID ASCII) — déterministe sur tout environnement ICU.
+      ((a.holderId ?? "") < (b.holderId ?? "") ? -1 : 1),
   );
   if (sansTitulaire.length > 0) {
     groupes.push({ holderId: null, holderName: null, comptes: sansTitulaire });

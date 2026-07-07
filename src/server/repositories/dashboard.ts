@@ -169,6 +169,9 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
     })
     .from(accountPartyRole)
     .innerJoin(parties, eq(accountPartyRole.partyId, parties.id))
+    // Convention lecture du fichier (cf. entities.isActive plus bas) : une party
+    // ARCHIVÉE ne titre plus de groupe — son compte retombe dans « Non regroupé ».
+    .where(eq(parties.isActive, true))
     .orderBy(
       accountPartyRole.bankAccountId,
       desc(accountPartyRole.isPrimary),

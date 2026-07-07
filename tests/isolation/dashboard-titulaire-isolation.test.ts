@@ -43,9 +43,12 @@ const CONN_B = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACC_A1 = "aaaa1111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 /** Compte A2 : AUCUN rôle party → holder null. Non assigné à une entité (NULL). */
 const ACC_A2 = "aaaa2222-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+/** Compte A3 : sa SEULE party est ARCHIVÉE (is_active=false) → holder null. */
+const ACC_A3 = "aaaa3333-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACC_B = "bbbb2222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PARTY_ALPHA = "1a111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PARTY_BETA = "1b222222-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PARTY_ARCHIVEE = "1d444444-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PARTY_B = "1c333333-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
@@ -84,16 +87,20 @@ beforeAll(async () => {
     insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected, entity_id) values
       ('${ACC_A1}','${WS_A}','${CONN_A}','oa-a1','Compte Alpha','MUR','5000.00',true,'${ENT_A1}'),
       ('${ACC_A2}','${WS_A}','${CONN_A}','oa-a2','Compte Sans Party','MUR','100.00',true,null),
+      ('${ACC_A3}','${WS_A}','${CONN_A}','oa-a3','Compte Party Archivee','MUR','200.00',true,null),
       ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','9999.00',true,null);
-    insert into parties (id, workspace_id, omnifi_party_id, name) values
-      ('${PARTY_ALPHA}','${WS_A}','op-alpha','Holding Alpha'),
-      ('${PARTY_BETA}','${WS_A}','op-beta','Filiale Beta'),
-      ('${PARTY_B}','${WS_B}','op-b','SECRET HOLDER B');
+    insert into parties (id, workspace_id, omnifi_party_id, name, is_active) values
+      ('${PARTY_ALPHA}','${WS_A}','op-alpha','Holding Alpha',true),
+      ('${PARTY_BETA}','${WS_A}','op-beta','Filiale Beta',true),
+      ('${PARTY_ARCHIVEE}','${WS_A}','op-old','Ancienne Holding',false),
+      ('${PARTY_B}','${WS_B}','op-b','SECRET HOLDER B',true);
     -- ACC_A1 porte DEUX rôles (joint) : la primaire « Holding Alpha » doit gagner
-    -- et le compte ne doit sortir qu'UNE fois (D2).
+    -- et le compte ne doit sortir qu'UNE fois (D2). ACC_A3 n'a qu'une party
+    -- ARCHIVÉE → ne titre plus de groupe (holder null, compte toujours listé).
     insert into account_party_role (workspace_id, bank_account_id, party_id, ownership_type, is_primary) values
       ('${WS_A}','${ACC_A1}','${PARTY_BETA}','JOINT_OWNER',false),
       ('${WS_A}','${ACC_A1}','${PARTY_ALPHA}','PRIMARY',true),
+      ('${WS_A}','${ACC_A3}','${PARTY_ARCHIVEE}','PRIMARY',true),
       ('${WS_B}','${ACC_B}','${PARTY_B}','PRIMARY',true);
   `);
 
@@ -120,10 +127,18 @@ describe("listerComptes — titulaire (party primaire)", () => {
     expect(sans?.holderId).toBeNull();
   });
 
+  it("party ARCHIVÉE (is_active=false) : ne titre plus de groupe, le compte reste listé", async () => {
+    const a = await withWorkspace(sessionA, (tx) => listerComptes(tx));
+    const archive = a.find((c) => c.bankAccountId === ACC_A3);
+    expect(archive).toBeDefined(); // display-only : le compte n'est JAMAIS masqué
+    expect(archive?.holderId).toBeNull();
+    expect(archive?.holderName).toBeNull();
+  });
+
   it("D2 : UNE SEULE ligne pour le compte à 2 rôles party, la primaire gagne", async () => {
     const a = await withWorkspace(sessionA, (tx) => listerComptes(tx));
-    // Pas de multiplication : 2 comptes sélectionnés → exactement 2 lignes.
-    expect(a).toHaveLength(2);
+    // Pas de multiplication : 3 comptes sélectionnés → exactement 3 lignes.
+    expect(a).toHaveLength(3);
     const lignesAlpha = a.filter((c) => c.bankAccountId === ACC_A1);
     expect(lignesAlpha).toHaveLength(1);
     // is_primary DESC : « Holding Alpha » (primaire), jamais « Filiale Beta ».
