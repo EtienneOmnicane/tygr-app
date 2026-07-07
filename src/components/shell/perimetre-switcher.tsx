@@ -263,6 +263,11 @@ export function PerimetreSwitcher({
   const rechercheActive = recherche.trim().length > 0;
 
   function basculerOuverture(cle: string) {
+    // Pendant une recherche, l'ouverture est FORCÉE (`|| rechercheActive`) : un
+    // clic chevron n'aurait AUCUN retour visuel mais muterait quand même le Set
+    // → état d'ouverture inversé/corrompu une fois la recherche effacée
+    // (constat cross-review). No-op tant que la recherche est active.
+    if (rechercheActive) return;
     setGroupesOuverts((prev) => {
       const next = new Set(prev);
       if (next.has(cle)) next.delete(cle);
@@ -430,7 +435,14 @@ export function PerimetreSwitcher({
                   groupesTitulaire.map((groupe) => {
                     const titre = groupe.holderName ?? "Non regroupé";
                     const cle = groupe.holderId ?? "non-regroupe";
-                    const ouvert = rechercheActive || groupesOuverts.has(cle);
+                    // `voletOuvert` (PAS `ouvert` : ce nom est déjà pris par
+                    // l'état du popover — shadowing piégeux relevé en revue).
+                    const voletOuvert = rechercheActive || groupesOuverts.has(cle);
+                    // SÉMANTIQUE ASSUMÉE (WYSIWYG, pattern « sélectionner les
+                    // visibles ») : pendant une recherche, tri-état et bascule
+                    // agissent sur les comptes FILTRÉS du groupe — jamais sur
+                    // des comptes invisibles (pas de (dé)sélection surprise).
+                    // Les cochés hors filtre ne sont PAS touchés.
                     const etat = etatSelectionGroupe(groupe.comptes, coches);
                     const nb = groupe.comptes.length;
                     return (
@@ -454,7 +466,7 @@ export function PerimetreSwitcher({
                           <button
                             type="button"
                             onClick={() => basculerOuverture(cle)}
-                            aria-expanded={ouvert}
+                            aria-expanded={voletOuvert}
                             className="flex min-w-0 flex-1 items-center gap-2 rounded-control
                               text-left focus:outline-none focus-visible:ring-2
                               focus-visible:ring-primary"
@@ -463,7 +475,7 @@ export function PerimetreSwitcher({
                               aria-hidden
                               className={cn(
                                 "shrink-0 text-[10px] text-text-muted transition-transform",
-                                ouvert && "rotate-90",
+                                voletOuvert && "rotate-90",
                               )}
                             >
                               ▸
@@ -480,7 +492,7 @@ export function PerimetreSwitcher({
                             {nb} compte{nb > 1 ? "s" : ""}
                           </span>
                         </div>
-                        {ouvert && (
+                        {voletOuvert && (
                           <div className="pl-6">
                             {groupe.comptes.map((c) => optionCompte(c, coches, basculer))}
                           </div>

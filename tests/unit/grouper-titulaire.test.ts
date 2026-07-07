@@ -142,6 +142,16 @@ describe("grouperParTitulaire", () => {
     ]);
   });
 
+  it("S3 : le générique SEUL reste 1 groupe propre (repli plat au consommateur, comme tout mono-groupe)", () => {
+    const mono = grouperParTitulaire([
+      compte("c1", "h-gen", "Account Holder"),
+      compte("c2", "h-gen", "Account Holder"),
+    ]);
+    expect(mono).toHaveLength(1);
+    expect(mono[0].holderName).toBe("Account Holder");
+    expect(mono[0].comptes).toHaveLength(2);
+  });
+
   it("S3 : conservation totale préservée avec générique + nommés + non regroupé", () => {
     const entree = [
       compte("c1", "h-gen", "Account Holder"),
