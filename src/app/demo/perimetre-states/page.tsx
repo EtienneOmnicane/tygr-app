@@ -25,9 +25,11 @@ import type {
 
 export const metadata = { title: "Démo — Sélecteur de périmètre" };
 
-// Titulaires (D6) : « Sucre SA » porte 2 comptes, le compte USD reste SANS
-// titulaire → la listbox « Par compte » montre 2 sous-en-têtes (« Sucre SA »
-// puis « Non regroupé » en dernier). Sémantique de sélection inchangée.
+// Titulaires (D6/S1/S3) : « Sucre SA » porte 2 comptes ; « Account Holder »
+// (placeholder générique Omni-FI) porte 1 compte et doit être RELÉGUÉ après les
+// nommés ; le compte USD reste SANS titulaire → l'accordéon « Par compte »
+// montre 3 volets dans l'ordre : Sucre SA → Account Holder → Non regroupé.
+// Sémantique de sélection inchangée (case de groupe = confort tri-état).
 const COMPTES: CompteConnecte[] = [
   {
     bankAccountId: "11111111-1111-4111-8111-111111111111",
@@ -58,6 +60,17 @@ const COMPTES: CompteConnecte[] = [
     lastSyncedAt: new Date(),
     holderId: "demo-party-sucre",
     holderName: "Sucre SA",
+  },
+  {
+    bankAccountId: "44444444-4444-4444-8444-444444444444",
+    accountName: "Compte opérations",
+    institutionName: "MCB",
+    currency: "MUR",
+    currentBalance: "310000.00",
+    lastSyncedAt: new Date(),
+    // Placeholder générique Omni-FI (S3) : relégué APRÈS les nommés.
+    holderId: "demo-party-generique",
+    holderName: "Account Holder",
   },
 ];
 
