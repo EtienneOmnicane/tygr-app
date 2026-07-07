@@ -24,6 +24,35 @@ export interface GroupeTitulaire {
 const collator = new Intl.Collator("fr");
 
 /**
+ * Libellés de titulaire GÉNÉRIQUES : placeholders amont qui ne portent aucune
+ * identité réelle (`PartyName` par défaut d'Omni-FI en sandbox — 77/87 comptes
+ * chez Etienne). Ils restent des groupes PROPRES (libellé + compteur + sélection)
+ * mais sont RELÉGUÉS après les titulaires réellement nommés (S3), avant « Non
+ * regroupé ». Comparaison sur nom normalisé (trim + minuscules fr).
+ *
+ * ⚠️ Sentinelle en dur — dette TITULAIRE-GENERIQUE1 (P2, TODOS.md) : à retirer
+ * quand Omni-FI exposera un flag de placeholder OU quand la prod fournira de
+ * vrais PartyName (le cas générique disparaît alors).
+ */
+const NOMS_TITULAIRE_GENERIQUES = new Set(["account holder"]);
+
+function estTitulaireGenerique(holderName: string): boolean {
+  return NOMS_TITULAIRE_GENERIQUES.has(
+    holderName.trim().toLocaleLowerCase("fr"),
+  );
+}
+
+/** Tri alpha fr des groupes nommés, homonymie départagée par holderId. */
+function comparerGroupes(a: GroupeTitulaire, b: GroupeTitulaire): number {
+  return (
+    collator.compare(a.holderName ?? "", b.holderName ?? "") ||
+    // Tiebreak homonymie par id : comparaison de code units (locale-indépendante,
+    // les ids sont des UUID ASCII) — déterministe sur tout environnement ICU.
+    ((a.holderId ?? "") < (b.holderId ?? "") ? -1 : 1)
+  );
+}
+
+/**
  * Regroupe les comptes par titulaire. Contrat :
  * - conservation TOTALE : chaque compte apparaît exactement une fois (somme des
  *   groupes = entrée) ;
@@ -31,8 +60,9 @@ const collator = new Intl.Collator("fr");
  * - un compte sans titulaire EXPLOITABLE (holderId null/absent, ou nom vide/blanc
  *   — jamais de « null » brut à l'écran, D7) tombe dans le bucket final
  *   `holderId: null` (« Non regroupé »), TOUJOURS en dernier ;
- * - groupes triés par nom (locale fr), égalité de nom départagée par holderId
- *   (ordre déterministe) ;
+ * - ORDRE (S3) : titulaires réellement nommés (alpha fr) → titulaires GÉNÉRIQUES
+ *   (« Account Holder », alpha fr) → bucket « Non regroupé ». L'égalité de nom
+ *   est départagée par holderId (ordre déterministe) ;
  * - dans un groupe, l'ordre d'entrée des comptes est conservé.
  *
  * Le REPLI mono-groupe (< 2 groupes → liste plate, pas d'accordéon superflu) est
@@ -58,15 +88,65 @@ export function grouperParTitulaire(
     else parId.set(holderId, { holderId, holderName, comptes: [compte] });
   }
 
-  const groupes = [...parId.values()].sort(
-    (a, b) =>
-      collator.compare(a.holderName ?? "", b.holderName ?? "") ||
-      // Tiebreak homonymie par id : comparaison de code units (locale-indépendante,
-      // les ids sont des UUID ASCII) — déterministe sur tout environnement ICU.
-      ((a.holderId ?? "") < (b.holderId ?? "") ? -1 : 1),
-  );
+  const tous = [...parId.values()];
+  const nommes = tous
+    .filter((g) => !estTitulaireGenerique(g.holderName ?? ""))
+    .sort(comparerGroupes);
+  const generiques = tous
+    .filter((g) => estTitulaireGenerique(g.holderName ?? ""))
+    .sort(comparerGroupes);
+
+  const groupes = [...nommes, ...generiques];
   if (sansTitulaire.length > 0) {
     groupes.push({ holderId: null, holderName: null, comptes: sansTitulaire });
   }
   return groupes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sélection de groupe (S2 — case « tout cocher » tri-état)            */
+/* ------------------------------------------------------------------ */
+
+export type EtatSelectionGroupe = "aucun" | "partiel" | "tous";
+
+/**
+ * État de la case de groupe (tri-état S2), dérivé de la sélection courante.
+ * Groupe vide → « aucun » (jamais « tous » : une case cochée sur un groupe sans
+ * compte serait un mensonge). PURE, zéro React.
+ */
+export function etatSelectionGroupe(
+  comptesDuGroupe: CompteConnecte[],
+  coches: ReadonlySet<string>,
+): EtatSelectionGroupe {
+  let n = 0;
+  for (const c of comptesDuGroupe) {
+    if (coches.has(c.bankAccountId)) n += 1;
+  }
+  if (n === 0) return "aucun";
+  return n === comptesDuGroupe.length ? "tous" : "partiel";
+}
+
+/**
+ * Bascule la sélection d'un groupe : « tous » cochés → décoche le groupe ;
+ * « aucun »/« partiel » → coche TOUT le groupe. IMMUTABLE (retourne un NOUVEAU
+ * Set, l'entrée n'est jamais mutée).
+ *
+ * DISPLAY-ONLY (règle 2) : n'ajoute QUE des `bankAccountId` de `comptesDuGroupe`
+ * — lesquels proviennent de `comptes` (la liste scopée RLS du membre). Aucun id
+ * externe ne peut entrer dans la sélection par ce chemin ; le serveur intersecte
+ * de toute façon DROIT ∩ filtre.
+ */
+export function basculerGroupe(
+  coches: ReadonlySet<string>,
+  comptesDuGroupe: CompteConnecte[],
+): Set<string> {
+  const next = new Set(coches);
+  const tousCoches =
+    comptesDuGroupe.length > 0 &&
+    comptesDuGroupe.every((c) => next.has(c.bankAccountId));
+  for (const c of comptesDuGroupe) {
+    if (tousCoches) next.delete(c.bankAccountId);
+    else next.add(c.bankAccountId);
+  }
+  return next;
 }

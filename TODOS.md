@@ -5,7 +5,15 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
-### Bandeau/sélecteur par titulaire — dette ouverte par la cross-review (2026-07-07)
+### Bandeau/sélecteur par titulaire — dettes ouvertes (2026-07-07)
+
+- [ ] **TITULAIRE-GENERIQUE1 (P2, effort ~15 min) — sentinelle « Account Holder » en
+  dur dans `src/lib/grouper-titulaire.ts` (`NOMS_TITULAIRE_GENERIQUES`).** C'est le
+  `PartyName` PLACEHOLDER d'Omni-FI en sandbox (77/87 comptes) : relégué après les
+  titulaires réellement nommés (S3, PLAN-selecteur-titulaire-accordeon.md) pour ne pas
+  noyer AIRPORT HOTEL/DYOSPOWER/OMNICANE… **Déclencheur** : Omni-FI expose un flag de
+  placeholder, OU la production fournit de vrais `PartyName` (le cas générique
+  disparaît) → retirer la sentinelle et le tri en 3 strates à ce moment-là.
 
 - [ ] **TITULAIRE-TEST-SCOPE1 (P2, effort ~0,25 j) — couverture de test : lecture
   titulaire sous `account_scope`/`view_filter` non testée directement.**
