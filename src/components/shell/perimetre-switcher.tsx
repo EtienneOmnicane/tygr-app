@@ -30,6 +30,7 @@ import {
   definirPerimetreEntite,
   type EtatPerimetre,
 } from "@/app/(workspace)/actions";
+import { grouperParTitulaire } from "@/lib/grouper-titulaire";
 import type {
   CompteConnecte,
   EntiteVisible,
@@ -46,6 +47,50 @@ type Onglet = "compte" | "entite";
 /** Libellé court d'un compte pour la liste / le déclencheur (banque · compte). */
 function libelleCompte(c: CompteConnecte): string {
   return c.institutionName ? `${c.institutionName} · ${c.accountName}` : c.accountName;
+}
+
+/**
+ * Option « compte » de la listbox (markup HISTORIQUE, inchangé par le groupement
+ * titulaire — D6) : checkbox per-compte, extraite pour être rendue à l'identique
+ * en liste plate (repli mono-groupe) ET sous un sous-en-tête titulaire.
+ */
+function optionCompte(
+  c: CompteConnecte,
+  coches: Set<string>,
+  basculer: (id: string) => void,
+) {
+  const coche = coches.has(c.bankAccountId);
+  return (
+    <button
+      key={c.bankAccountId}
+      type="button"
+      role="option"
+      aria-selected={coche}
+      onClick={() => basculer(c.bankAccountId)}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+        "text-sm transition-colors focus:outline-none focus-visible:ring-2",
+        "focus-visible:ring-primary",
+        coche ? "bg-primary-50" : "hover:bg-surface-inset",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
+          coche
+            ? "border-primary bg-primary text-text-onink"
+            : "border-line",
+        )}
+      >
+        {coche ? "✓" : ""}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-text">
+        {libelleCompte(c)}
+      </span>
+      <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
+    </button>
+  );
 }
 
 /**
@@ -196,6 +241,16 @@ export function PerimetreSwitcher({
     );
   }, [comptes, recherche]);
 
+  // Groupement par TITULAIRE (D6) — sous-en-têtes PUREMENT VISUELS dans la
+  // listbox « Par compte » : la sélection reste per-compte, les inputs postés
+  // (bankAccountId) sont INCHANGÉS, aucun nouvel axe serveur. Recalculé sur la
+  // liste FILTRÉE (la recherche peut vider un groupe → son en-tête disparaît).
+  // < 2 groupes → liste plate historique (repli, pas d'en-tête superflu).
+  const groupesTitulaire = useMemo(
+    () => grouperParTitulaire(comptesFiltres),
+    [comptesFiltres],
+  );
+
   const entitesFiltrees = useMemo(() => {
     const q = recherche.trim().toLocaleLowerCase("fr");
     if (!q) return entites;
@@ -342,39 +397,30 @@ export function PerimetreSwitcher({
                   <p className="px-2 py-6 text-center text-sm text-text-muted">
                     Aucun compte ne correspond.
                   </p>
+                ) : groupesTitulaire.length < 2 ? (
+                  /* Repli mono-groupe : liste plate historique, aucun en-tête. */
+                  comptesFiltres.map((c) => optionCompte(c, coches, basculer))
                 ) : (
-                  comptesFiltres.map((c) => {
-                    const coche = coches.has(c.bankAccountId);
+                  /* Sous-en-têtes TITULAIRE (D6) — non cliquables, purement
+                     visuels. Les options restent per-compte (sélection et
+                     inputs postés inchangés) ; « Non regroupé » en dernier. */
+                  groupesTitulaire.map((groupe) => {
+                    const titre = groupe.holderName ?? "Non regroupé";
                     return (
-                      <button
-                        key={c.bankAccountId}
-                        type="button"
-                        role="option"
-                        aria-selected={coche}
-                        onClick={() => basculer(c.bankAccountId)}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
-                          "text-sm transition-colors focus:outline-none focus-visible:ring-2",
-                          "focus-visible:ring-primary",
-                          coche ? "bg-primary-50" : "hover:bg-surface-inset",
-                        )}
+                      <div
+                        key={groupe.holderId ?? "non-regroupe"}
+                        role="group"
+                        aria-label={titre}
                       >
-                        <span
+                        <div
                           aria-hidden
-                          className={cn(
-                            "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
-                            coche
-                              ? "border-primary bg-primary text-text-onink"
-                              : "border-line",
-                          )}
+                          className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase
+                            tracking-[0.08em] text-text-muted"
                         >
-                          {coche ? "✓" : ""}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-text">
-                          {libelleCompte(c)}
-                        </span>
-                        <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
-                      </button>
+                          {titre}
+                        </div>
+                        {groupe.comptes.map((c) => optionCompte(c, coches, basculer))}
+                      </div>
                     );
                   })
                 )}
