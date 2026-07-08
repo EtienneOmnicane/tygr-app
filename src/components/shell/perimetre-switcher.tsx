@@ -218,15 +218,15 @@ export function PerimetreSwitcher({
   }, [ouvert]);
 
   // Libellé du déclencheur (FERMÉ) : dérivé de la vérité serveur `viewFilterActif`.
-  //   « Groupe » (0)  →  « Sucre » si le filtre = exactement une entité (C5)  →  le
-  //   nom du compte (1 compte, hors entité)  →  « N comptes » (repli / péremption).
+  //   « Tous les comptes » (0)  →  « Sucre » si le filtre = exactement une entité (C5)
+  //   →  le nom du compte (1 compte, hors entité)  →  « N comptes » (repli / péremption).
   // INVARIANT : tout id de `coches` provient de `comptes` (init filtré par idsConnus
   // + basculer() n'ajoute que des ids de la liste rendue) → le find à 1 coché ne
   // retourne jamais undefined.
   const nbCoches = coches.size;
   let libelleDeclencheur: string;
   if (nbCoches === 0) {
-    libelleDeclencheur = "Groupe";
+    libelleDeclencheur = "Tous les comptes";
   } else if (entiteActive) {
     libelleDeclencheur = entiteActive.name; // ex. « Sucre »
   } else if (nbCoches === 1) {
@@ -305,13 +305,13 @@ export function PerimetreSwitcher({
         onClick={() => setOuvert((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={ouvert}
-        className="flex max-w-[220px] items-center gap-2 rounded-full bg-surface-inset
+        className="flex w-[220px] items-center gap-2 rounded-full bg-surface-inset
           px-3 py-1 text-xs font-medium text-ink focus:outline-none focus:ring-2
           focus:ring-primary"
       >
-        <span aria-hidden className="text-ink/60">Vue</span>
-        <span className="truncate">{libelleDeclencheur}</span>
-        <span aria-hidden>▾</span>
+        <span aria-hidden className="shrink-0 text-ink/60">Vue</span>
+        <span className="min-w-0 flex-1 truncate text-left">{libelleDeclencheur}</span>
+        <span aria-hidden className="shrink-0">▾</span>
       </button>
 
       {ouvert && (
@@ -385,8 +385,8 @@ export function PerimetreSwitcher({
           {ongletEffectif === "compte" ? (
             /* ───────── Onglet « Par compte » (L8b-1) — INCHANGÉ ───────── */
             <form action={actionCompte} role="tabpanel" aria-label="Filtrer par compte">
-              {/* Option « Groupe » épinglée = état PAR DÉFAUT / reset (décocher tout).
-                  Encadré accent permanent (point de retour), ✓ quand actif. */}
+              {/* Option « Tous les comptes » épinglée = état PAR DÉFAUT / reset
+                  (décocher tout). Encadré accent permanent (retour), ✓ quand actif. */}
               <button
                 type="button"
                 onClick={() => setCoches(new Set())}
@@ -402,9 +402,9 @@ export function PerimetreSwitcher({
                 )}
               >
                 <span>
-                  Groupe
+                  Tous les comptes
                   <span className="ml-1 text-xs text-text-muted">
-                    · tous les comptes (vue par défaut)
+                    · vue par défaut
                   </span>
                 </span>
                 {nbCoches === 0 && (
@@ -568,9 +568,9 @@ export function PerimetreSwitcher({
                 )}
               >
                 <span>
-                  Groupe
+                  Toutes les entités
                   <span className="ml-1 text-xs text-text-muted">
-                    · toutes les entités (vue par défaut)
+                    · vue par défaut
                   </span>
                 </span>
                 {entiteChoisie === null && (
