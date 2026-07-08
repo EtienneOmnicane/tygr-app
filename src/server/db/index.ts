@@ -277,3 +277,32 @@ export type {
   RegleAModifier,
   ResultatApplication,
 } from "@/server/repositories/regles-categorisation";
+
+// Échéances prévisionnelles (Epic 8 · FEAT-8.2) : CRUD + synthèse par horizon
+// (30/60/90 j). Deux étages RLS (tenant + entity_scope) portés par withWorkspace ;
+// écriture réservée aux membres (peutModifier). Même frontière P0-a : les Server
+// Actions de echeances/ appellent ceci DANS withWorkspace(tx, ctx) sans importer
+// @/server/repositories/* directement.
+export {
+  listerEcheances,
+  synthetiserHorizon,
+  creerEcheance,
+  modifierEcheance,
+  changerStatutEcheance,
+  supprimerEcheance,
+  EcheanceIntrouvableError,
+  EcheanceNonAutoriseeError,
+  ReferenceEcheanceInvalideError,
+  EcheanceHorsPerimetreError,
+  MontantRegleInvalideError,
+} from "@/server/repositories/echeances";
+export type {
+  EcheanceLue,
+  EcheanceACreer,
+  EcheanceAModifier,
+  ChangementStatutEcheance,
+  SyntheseHorizonDevise,
+  SyntheseHorizon,
+  SyntheseEcheances,
+  HorizonJours,
+} from "@/server/repositories/echeances";

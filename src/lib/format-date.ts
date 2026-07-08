@@ -95,6 +95,13 @@ const FMT_MOIS_MAURICE = new Intl.DateTimeFormat("en-CA", {
   timeZone: FUSEAU_MAURICE,
 });
 
+const FMT_DATE_MAURICE = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  timeZone: FUSEAU_MAURICE,
+});
+
 /**
  * Mois calendaire COURANT à l'Île Maurice (`YYYY-MM`). Conversion EXPLICITE vers
  * Indian/Mauritius (CLAUDE.md, non négociable) : un instant UTC du 31 à 22h tombe
@@ -103,6 +110,19 @@ const FMT_MOIS_MAURICE = new Intl.DateTimeFormat("en-CA", {
  */
 export function moisCourantMaurice(maintenant: Date = new Date()): string {
   return FMT_MOIS_MAURICE.format(maintenant).slice(0, 7);
+}
+
+/**
+ * Date calendaire COURANTE à l'Île Maurice (`YYYY-MM-DD`). Conversion EXPLICITE vers
+ * Indian/Mauritius (CLAUDE.md « Localisation & temps », non négociable) : un instant
+ * UTC du 8 juillet à 22h tombe le 9 à Maurice (+4h). Sert de « aujourd'hui » comptable
+ * pour dériver le statut « en retard » d'une échéance et borner les horizons de
+ * synthèse (30/60/90 j) — jamais une date « nue » comparée sans fuseau posé (E20).
+ * `maintenant` injectable pour des tests déterministes (défaut = now). en-CA donne
+ * directement « YYYY-MM-DD », comparable lexicographiquement à `date_echeance`.
+ */
+export function dateCouranteMaurice(maintenant: Date = new Date()): string {
+  return FMT_DATE_MAURICE.format(maintenant);
 }
 
 /**
