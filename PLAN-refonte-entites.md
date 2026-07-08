@@ -51,6 +51,14 @@ identifiant de repli disponible en base est `bank_accounts.omnifi_account_id`
   - Conséquence : **on ne réserve pas** de comportement de « refus persistant » ; si
     le besoin apparaît plus tard, ce sera une dette P2 nommée (champ + migration), pas
     ce chantier.
+- **Libellé de repli (compte sans nom) — tranché :** `« Compte sans libellé · …{4
+  derniers chiffres de `omnifiAccountId`} · {devise} »`. On **garde** l'identifiant
+  (4 chiffres) — Etienne ne veut pas le masquer — suivi de la devise. C'est un
+  libellé, jamais un montant → `truncate` autorisé (Règle 8).
+- **Vocabulaire « Party » → « Titulaire » : question CLOSE (sans objet).** Etienne
+  retraduira toute l'UI en anglais en toute fin de projet ; le choix du terme FR
+  intermédiaire n'a pas d'enjeu. On garde le libellé le plus clair sur le moment,
+  sans en faire un point de blocage.
 - **Ordre de travail : plan écrit d'abord** (ce document), validation, puis code.
 
 ## 3. Périmètre du chantier (lots)
@@ -66,7 +74,8 @@ identifiant de repli disponible en base est `bank_accounts.omnifi_account_id`
 **UI (`propositions.tsx`) :**
 
 - **Libellé de repli** quand `accountName.trim() === ""` : afficher
-  `« Compte sans libellé · …{4 derniers de omnifiAccountId} »`. Le libellé n'est
+  `« Compte sans libellé · …{4 derniers de omnifiAccountId} · {devise} »` (décision
+  Etienne 2026-07-08 : on garde les 4 chiffres, on ajoute la devise). Le libellé n'est
   jamais un chiffre financier → `truncate` autorisé (Règle 8 : seuls les **montants**
   ne se tronquent pas ; ici pas de montant du tout sur cette page).
 - **Liste défilable + compacte** : conteneur `max-h` + `overflow-y-auto` (calqué sur
@@ -158,10 +167,12 @@ Sans migration (décision « simple ») :
 
 ## 7. Questions ouvertes pour Etienne (avant implémentation)
 
-1. **Vocabulaire :** remplacer « Party » par **« Titulaire »** dans l'UI ? (ou autre
-   terme.)
-2. **Libellé de repli :** « Compte sans libellé · …{4 chiffres} » convient-il, ou
-   préfères-tu masquer complètement l'identifiant (juste « Compte sans libellé
-   ({devise}) ») ?
-3. Le compromis « re-proposé au prochain sync » est-il acceptable tel quel (rappel
-   affiché dans l'UI), ou veux-tu au minimum un texte d'aide qui l'explique dans le sas ?
+1. ~~**Vocabulaire :** « Party » → « Titulaire » ?~~ **CLOSE (2026-07-08).** Sans objet :
+   retraduction complète en anglais en fin de projet.
+2. ~~**Libellé de repli :** garder l'identifiant ou le masquer ?~~ **TRANCHÉ
+   (2026-07-08).** `« Compte sans libellé · …{4 derniers chiffres de l'id} · {devise} »` —
+   on garde les 4 chiffres, on ajoute la devise.
+3. **(SEULE QUESTION OUVERTE)** Le compromis « re-proposé au prochain sync » est-il
+   acceptable tel quel, avec un simple texte d'aide qui l'explique dans le sas, ou
+   veux-tu autre chose ? (Rappel : décocher = `entity_id NULL`, réapparaît au sync
+   suivant, pas de mémoire du « non ».)
