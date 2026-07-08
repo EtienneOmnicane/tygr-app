@@ -20,6 +20,7 @@
  */
 import { useId, useMemo, useState } from "react";
 
+import { Select } from "@/components/ui/select";
 import type { CategorieUI } from "@/components/ui/category";
 
 import type {
@@ -199,19 +200,16 @@ export function EcheanceForm({
           <label htmlFor={idDirection} className="text-xs text-text-muted">
             Sens
           </label>
-          <select
+          <Select
             id={idDirection}
             value={direction}
             disabled={enCours}
-            onChange={(e) => setDirection(e.target.value as DirectionEcheance)}
-            className={champ}
-          >
-            {OPTIONS_DIRECTION.map((o) => (
-              <option key={o.valeur} value={o.valeur}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setDirection(v as DirectionEcheance)}
+            options={OPTIONS_DIRECTION.map((o) => ({
+              value: o.valeur,
+              label: o.label,
+            }))}
+          />
         </div>
 
         {/* Libellé */}
@@ -272,19 +270,16 @@ export function EcheanceForm({
           <label htmlFor={idDevise} className="text-xs text-text-muted">
             Devise
           </label>
-          <select
+          <Select
             id={idDevise}
             value={devise}
             disabled={enCours}
-            onChange={(e) => setDevise(e.target.value as DeviseEcheance)}
-            className={champ}
-          >
-            {OPTIONS_DEVISE.map((o) => (
-              <option key={o.valeur} value={o.valeur}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setDevise(v as DeviseEcheance)}
+            options={OPTIONS_DEVISE.map((o) => ({
+              value: o.valeur,
+              label: o.label,
+            }))}
+          />
         </div>
 
         {/* Date d'exigibilité */}
@@ -309,20 +304,16 @@ export function EcheanceForm({
           <label htmlFor={idCat} className="text-xs text-text-muted">
             Catégorie <span className="text-text-faint">(opt.)</span>
           </label>
-          <select
+          <Select
             id={idCat}
             value={categorieId}
             disabled={enCours}
-            onChange={(e) => setCategorieId(e.target.value)}
-            className={champ}
-          >
-            <option value="">Aucune</option>
-            {optionsCat.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setCategorieId(v)}
+            options={[
+              { value: "", label: "Aucune" },
+              ...optionsCat.map((o) => ({ value: o.id, label: o.label })),
+            ]}
+          />
         </div>
 
         {/* Récurrence (opt) */}
@@ -330,19 +321,16 @@ export function EcheanceForm({
           <label htmlFor={idRecurrence} className="text-xs text-text-muted">
             Récurrence
           </label>
-          <select
+          <Select
             id={idRecurrence}
             value={recurrence}
             disabled={enCours}
-            onChange={(e) => setRecurrence(e.target.value as "" | RecurrenceEcheance)}
-            className={champ}
-          >
-            {OPTIONS_RECURRENCE.map((o) => (
-              <option key={o.valeur} value={o.valeur}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setRecurrence(v as "" | RecurrenceEcheance)}
+            options={OPTIONS_RECURRENCE.map((o) => ({
+              value: o.valeur,
+              label: o.label,
+            }))}
+          />
         </div>
 
         {/* Entité (opt) — n'apparaît que si des entités sont fournies (sas ADMIN). */}
@@ -351,20 +339,16 @@ export function EcheanceForm({
             <label htmlFor={idEntite} className="text-xs text-text-muted">
               Entité <span className="text-text-faint">(opt.)</span>
             </label>
-            <select
+            <Select
               id={idEntite}
               value={entiteId}
               disabled={enCours}
-              onChange={(e) => setEntiteId(e.target.value)}
-              className={champ}
-            >
-              <option value="">Non assignée</option>
-              {entites.map((ent) => (
-                <option key={ent.id} value={ent.id}>
-                  {ent.nom}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setEntiteId(v)}
+              options={[
+                { value: "", label: "Non assignée" },
+                ...entites.map((ent) => ({ value: ent.id, label: ent.nom })),
+              ]}
+            />
           </div>
         )}
       </div>
