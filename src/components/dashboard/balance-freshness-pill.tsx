@@ -10,6 +10,11 @@
  * Sémantique des couleurs (§3.7, ≠ §3.4) : success/warning/danger portent un ÉTAT
  * SYSTÈME (fraîcheur), pas une donnée financière — donc jamais inflow/outflow. Le
  * rouge `perime` (≥24h) déclenche le mode Repair : CTA « Reconnecter » vers /banques.
+ *
+ * Le CTA « Reconnecter » est OPT-OUT (`ctaReconnexion={false}`) : sur la page
+ * /banques elle-même, il pointerait vers la page courante ET contredirait le badge
+ * « Connectée » (la connexion est active, seule la donnée est périmée — le geste juste
+ * y est « Synchroniser mes comptes », déjà présent). Défaut = affiché (Dashboard).
  */
 import Link from "next/link";
 
@@ -29,6 +34,7 @@ export function BalanceFreshnessPill({
   fraicheur,
   compteLabel,
   reconnectHref = "/banques",
+  ctaReconnexion = true,
 }: {
   /** Fraîcheur déjà calculée (`formaterFraicheurRelative`). */
   fraicheur: Fraicheur;
@@ -36,6 +42,12 @@ export function BalanceFreshnessPill({
   compteLabel?: string | null;
   /** Cible du CTA Reconnecter (mode Repair ≥24h). Défaut : /banques. */
   reconnectHref?: string;
+  /**
+   * Affiche le CTA « Reconnecter » quand la donnée est périmée (≥24h). Défaut `true`
+   * (Dashboard). Passé à `false` sur la page /banques (lien vers la page courante +
+   * contradiction avec le badge « Connectée » — cf. docstring en tête de fichier).
+   */
+  ctaReconnexion?: boolean;
 }) {
   const { niveau, libelle, horodatageAbsolu } = fraicheur;
   const style = STYLES[niveau];
@@ -63,7 +75,7 @@ export function BalanceFreshnessPill({
         />
         {libelle}
       </span>
-      {perime && (
+      {perime && ctaReconnexion && (
         <Link
           href={reconnectHref}
           className={cn(

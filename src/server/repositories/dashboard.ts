@@ -205,6 +205,62 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
 }
 
 /**
+ * Connexions bancaires du workspace (page /banques — QA-LISTES-MANQUANTES1a : la
+ * page ne montrait que « + Connecter », jamais les banques déjà reliées). UNE ligne
+ * par connexion : nom d'institution, statut, nombre de comptes rattachés et fraîcheur
+ * de la dernière synchro (max des comptes). LEFT JOIN pour lister aussi une connexion
+ * sans compte (0). Pilotée par la RLS tenant (`tenant_isolation` sur bank_connections) ;
+ * le nombre de comptes hérite en plus du scope entité (RESTRICTIVE sur bank_accounts,
+ * ENTITY-READ-JOIN1) — un membre scopé voit la connexion mais ne compte que ses comptes
+ * visibles. Aucun workspace_id en paramètre. Agrégats calculés EN SQL (règle 8).
+ */
+export interface ConnexionBancaire {
+  connectionId: string;
+  /** Nom lisible de l'institution ; null si la connexion est antérieure à la colonne. */
+  institutionName: string | null;
+  /** Statut STOCKÉ (« active », …) — libellé mappé côté UI. */
+  status: string;
+  /** Nombre de comptes rattachés VISIBLES sous le droit du membre. */
+  nbComptes: number;
+  /** Dernière synchro (max sur les comptes) ; null si aucun compte synchronisé. */
+  lastSyncedAt: Date | null;
+  createdAt: Date;
+}
+
+export async function listerConnexionsBancaires(
+  tx: Tx,
+): Promise<ConnexionBancaire[]> {
+  const lignes = await tx
+    .select({
+      connectionId: bankConnections.id,
+      institutionName: bankConnections.institutionName,
+      status: bankConnections.status,
+      createdAt: bankConnections.createdAt,
+      nbComptes: sql<number>`count(${bankAccounts.id})::int`,
+      // Agrégat SQL brut : Drizzle NE mappe PAS un `sql` vers Date (contrairement à
+      // une vraie colonne timestamptz). `max(...)` remonte donc une CHAÎNE du driver
+      // pg/Neon — on la type honnêtement `string | null` et on la coerce ci-dessous.
+      lastSyncedAt: sql<string | null>`max(${bankAccounts.lastSyncedAt})`,
+    })
+    .from(bankConnections)
+    .leftJoin(bankAccounts, eq(bankAccounts.connectionId, bankConnections.id))
+    .groupBy(
+      bankConnections.id,
+      bankConnections.institutionName,
+      bankConnections.status,
+      bankConnections.createdAt,
+    )
+    .orderBy(bankConnections.institutionName, bankConnections.createdAt);
+  // Coercion Date à la frontière du repository : l'UI reçoit un vrai `Date`
+  // (formaterFraicheurRelative appelle `.getTime()`). createdAt est une vraie
+  // colonne → déjà mappée en Date, pas de coercion nécessaire.
+  return lignes.map((l) => ({
+    ...l,
+    lastSyncedAt: l.lastSyncedAt ? new Date(l.lastSyncedAt) : null,
+  }));
+}
+
+/**
  * Traduction « axe ENTITÉ → liste de bankAccountId » pour le sélecteur de périmètre
  * (L8b-2). Renvoie les comptes de l'entité `entityId` VISIBLES sous le droit du membre.
  *

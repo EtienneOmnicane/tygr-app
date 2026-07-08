@@ -18,6 +18,7 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   courbeTresorerie,
   listerComptes,
+  listerConnexionsBancaires,
   soldeConsolideCourant,
   syntheseMois,
   syntheseMoisParDevise,
@@ -101,6 +102,21 @@ describe("isolation : chaque service ne voit que le workspace courant", () => {
     const b = await withWorkspace(sessionB, (tx) => listerComptes(tx));
     expect(a.map((c) => c.accountName)).toEqual(["Compte A"]);
     expect(b.map((c) => c.accountName)).toEqual(["Compte B"]);
+  });
+
+  it("listerConnexionsBancaires — A voit sa connexion (2 comptes), B la sienne (1), jamais l'autre", async () => {
+    const a = await withWorkspace(sessionA, (tx) =>
+      listerConnexionsBancaires(tx),
+    );
+    const b = await withWorkspace(sessionB, (tx) =>
+      listerConnexionsBancaires(tx),
+    );
+    // A ne voit QUE CONN_A (compte le total des comptes rattachés, sélectionnés ou non).
+    expect(a.map((c) => c.connectionId)).toEqual([CONN_A]);
+    expect(a[0]?.nbComptes).toBe(2);
+    // B ne voit QUE CONN_B (jamais la connexion de A — isolation tenant).
+    expect(b.map((c) => c.connectionId)).toEqual([CONN_B]);
+    expect(b[0]?.nbComptes).toBe(1);
   });
 
   it("soldeConsolideCourant — A=5000 (dernier EOD), jamais le 9999 de B", async () => {
