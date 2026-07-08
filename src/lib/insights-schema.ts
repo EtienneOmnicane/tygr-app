@@ -76,3 +76,39 @@ export const vendorsParamsSchema = z.object({
 
 export type CashflowParams = z.infer<typeof cashflowParamsSchema>;
 export type VendorsParams = z.infer<typeof vendorsParamsSchema>;
+
+/**
+ * Sens d'analyse d'un camembert par catégorie (enum fermée, sans `both` : on ne
+ * mélange pas crédits et débits dans un donut). Mappé côté repository vers un
+ * littéral SQL figé (`credit_debit = 'Credit' | 'Debit'`).
+ */
+export const sensFluxSchema = z.enum(["inflow", "outflow"]);
+
+/**
+ * Preset de période de l'analyse (enum fermée). Les bornes réelles [from, to] sont
+ * calculées À MAURICE côté serveur (E20) par `bornesPeriodeMaurice`
+ * (`lib/periode-analyse.ts`) — le client n'envoie qu'un preset, jamais des dates
+ * (pas de fuseau client interpolé dans une borne comptable).
+ */
+export const periodePresetSchema = z.enum([
+  "mois-courant",
+  "30-jours",
+  "90-jours",
+  "12-mois",
+]);
+
+/**
+ * Paramètres de la Server Action d'analyse par catégorie : sens + preset de période.
+ * Défauts métier = analyse des SORTIES du mois courant (cas d'usage FYGR « category
+ * analysis » = dépenses). Les dates sont dérivées du preset côté serveur, pas ici.
+ */
+export const analyseCategoriesParamsSchema = z.object({
+  sens: sensFluxSchema.default("outflow"),
+  periode: periodePresetSchema.default("mois-courant"),
+});
+
+export type SensFluxParam = z.infer<typeof sensFluxSchema>;
+export type PeriodePresetParam = z.infer<typeof periodePresetSchema>;
+export type AnalyseCategoriesParams = z.infer<
+  typeof analyseCategoriesParamsSchema
+>;

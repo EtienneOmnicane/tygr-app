@@ -43,7 +43,11 @@ import type {
   DirectionVendors,
   GranulariteCashflow,
   LigneVendor,
+  PartCategorie,
   PointCashflow,
+  RepartitionCategories,
+  RepartitionDevise,
+  SensFlux,
   SerieCashflow,
 } from "@/server/insights/types";
 
@@ -227,4 +231,229 @@ export async function vendorsParConcentration(
     .limit(topN);
 
   return { direction, lignes: lignes as LigneVendor[] };
+}
+
+/**
+ * Répartition par catégorie (camembert), par devise, sur la fenêtre [from, to] (bornes
+ * INCLUSIVES, dates comptables Maurice "YYYY-MM-DD"). `sens` fige le côté agrégé :
+ * `inflow` (Credit) ou `outflow` (Debit, défaut métier « analyse des dépenses »). PAS de
+ * `both` (≠ vendors) : un donut mélangeant crédits et débits n'a pas de sens (types.ts).
+ *
+ * Une entrée `RepartitionDevise` par devise (JAMAIS d'addition cross-devise, règle 8) :
+ *   - `total` / `nbTransactions` / `montantMoyen` (total/nb, L2) de la devise viennent de
+ *     windows `over (partition by currency)` — pas d'addition JS (le JS ne fait QUE
+ *     regrouper des chaînes déjà SQL).
+ *   - `parts[]` = une catégorie chacune ; `montant` = `sum(amount)` (magnitude positive,
+ *     le signe est porté par `credit_debit`, filtré). `part` = montant / total de SA
+ *     devise (0..1, `nullif` anti-DIV/0). `montantPrecedent` = somme de la MÊME catégorie
+ *     sur la fenêtre précédente (L4, « 0.00 » si absente).
+ *
+ * Catégorie = `primary_category` Omni-FI ; NULL/''/sentinelles Omni-FI (`UNCLASSIFIED`,
+ * `Uncategorized`, insensibles casse+espaces) collapsés en un seul poste
+ * « Non catégorisé » (`estNonCategorise=true`), TOUJOURS trié en dernier (rendu neutre).
+ * Tri : devises par code croissant ; au sein d'une devise, catégorisées d'abord (montant
+ * décroissant), « Non catégorisé » repoussé en fin.
+ *
+ * L4 (variation) : si `fromPrecedent`/`toPrecedent` sont fournis, une 2e requête SÉPARÉE
+ * (jamais un FILTER sur la principale — la requête du donut reste inchangée) agrège la
+ * fenêtre précédente ; le merge par clé (devise, catégorie) est une simple recopie de
+ * chaîne SQL côté JS (aucune addition de montant, règle 8).
+ *
+ * Sécurité : `sens` pilote un `filter (where …)` à littéral FIGÉ (jamais l'entrée
+ * interpolée) ; dates en paramètres liés + re-validées ici (défense en profondeur).
+ * ENTITY-READ-JOIN1 : jointure `bank_accounts` obligatoire (héritage scope entité) — sur
+ * les DEUX requêtes (courante + précédente).
+ */
+export async function repartitionParCategorie(
+  tx: Tx,
+  params: {
+    sens: SensFlux;
+    from: string;
+    to: string;
+    /** Fenêtre précédente (L4, optionnelle) — active le calcul de `montantPrecedent`. */
+    fromPrecedent?: string;
+    toPrecedent?: string;
+  },
+): Promise<RepartitionCategories> {
+  const { sens, from, to, fromPrecedent, toPrecedent } = params;
+  if (sens !== "inflow" && sens !== "outflow") {
+    throw new InsightsParamsInvalidesError(`sens invalide : ${sens}`);
+  }
+  if (!estDateCalendaireValide(from) || !estDateCalendaireValide(to)) {
+    throw new InsightsParamsInvalidesError("bornes de dates invalides (YYYY-MM-DD)");
+  }
+  if (from > to) {
+    throw new InsightsParamsInvalidesError("from doit être ≤ to");
+  }
+  // Fenêtre précédente : les deux bornes ensemble ou aucune (XOR interdit) ; mêmes
+  // règles calendaires que la fenêtre courante (défense en profondeur).
+  if ((fromPrecedent === undefined) !== (toPrecedent === undefined)) {
+    throw new InsightsParamsInvalidesError(
+      "fromPrecedent et toPrecedent doivent être fournis ensemble",
+    );
+  }
+  if (fromPrecedent !== undefined && toPrecedent !== undefined) {
+    if (
+      !estDateCalendaireValide(fromPrecedent) ||
+      !estDateCalendaireValide(toPrecedent)
+    ) {
+      throw new InsightsParamsInvalidesError(
+        "bornes précédentes invalides (YYYY-MM-DD)",
+      );
+    }
+    if (fromPrecedent > toPrecedent) {
+      throw new InsightsParamsInvalidesError(
+        "fromPrecedent doit être ≤ toPrecedent",
+      );
+    }
+  }
+
+  // Filtre de sens : littéral FIGÉ (Credit pour inflow, Debit pour outflow) — jamais
+  // l'entrée brute interpolée dans le SQL.
+  const filtreSens =
+    sens === "inflow"
+      ? sql`${transactionsCache.creditDebit} = 'Credit'`
+      : sql`${transactionsCache.creditDebit} = 'Debit'`;
+
+  // Détection du NON-catégorisé : NULL, chaîne vide/espaces, OU sentinelle Omni-FI
+  // (« UNCLASSIFIED » / « Uncategorized », insensible à la casse et aux espaces). Sur la
+  // vraie donnée, `primary_category` porte la sentinelle littérale brute — sans ce repli
+  // elle fuirait en anglais dans l'UI FR et monopoliserait le donut (retour Etienne
+  // 2026-07-08). Les VRAIES catégories (Title Case Omni-FI) ne sont pas touchées.
+  const estNonCat = sql`(
+    ${transactionsCache.primaryCategory} is null
+    or btrim(${transactionsCache.primaryCategory}) = ''
+    or lower(btrim(${transactionsCache.primaryCategory})) in ('unclassified', 'uncategorized')
+  )`;
+  // Clé de regroupement : catégorie NORMALISÉE (non-catégorisé → NULL) — collapse tous
+  // les non-catégorisés (NULL/''/sentinelles) en un poste unique. La casse des vraies
+  // catégories est PRÉSERVÉE (« Utilities » reste « Utilities »). Réutilisée en SELECT
+  // (label + drapeau) et en GROUP BY / ORDER BY (fonctions de cette même clé).
+  const cleCategorie = sql`case when ${estNonCat} then null else ${transactionsCache.primaryCategory} end`;
+  // Label d'affichage : catégorie Omni-FI, repli « Non catégorisé » (constante FR figée).
+  // Défini UNE fois — réutilisé par la requête courante ET la requête précédente (L4),
+  // pour que les clés de merge (devise, label) coïncident exactement.
+  const labelCategorie = sql<string>`coalesce(${cleCategorie}, 'Non catégorisé')`;
+
+  // ── L4 : période précédente (2e requête SÉPARÉE, jamais un FILTER sur la requête
+  // principale) ────────────────────────────────────────────────────────────────────
+  // La requête courante (qui pilote tout le donut) reste INCHANGÉE : la « variation » ne
+  // peut donc pas casser les montants du camembert. On agrège ici (devise, catégorie,
+  // somme) sur la fenêtre précédente et on recopie la CHAÎNE SQL dans une Map — aucune
+  // addition de montant côté JS (règle 8). Catégorie absente avant → « 0.00 » (défaut).
+  let montantsPrecedents: Map<string, string> | null = null;
+  if (fromPrecedent !== undefined && toPrecedent !== undefined) {
+    const lignesPrec = await tx
+      .select({
+        categorie: labelCategorie,
+        currency: transactionsCache.currency,
+        montant: sql<string>`sum(${transactionsCache.amount})::numeric(15,2)::text`,
+      })
+      .from(transactionsCache)
+      // ENTITY-READ-JOIN1 : même jointure que la requête courante (héritage scope entité).
+      .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+      .where(
+        and(
+          eq(transactionsCache.isRemoved, false),
+          filtreSens,
+          gte(transactionsCache.transactionDate, fromPrecedent),
+          lt(
+            transactionsCache.transactionDate,
+            sql`(${toPrecedent}::date + interval '1 day')`,
+          ),
+        ),
+      )
+      .groupBy(cleCategorie, transactionsCache.currency);
+    montantsPrecedents = new Map(
+      lignesPrec.map((r) => [`${r.currency}|${r.categorie}`, r.montant]),
+    );
+  }
+
+  const lignes = await tx
+    .select({
+      // Label domaine : catégorie Omni-FI, repli "Non catégorisé".
+      categorie: labelCategorie,
+      estNonCategorise: sql<boolean>`(${cleCategorie} is null)`,
+      currency: transactionsCache.currency,
+      montant: sql<string>`sum(${transactionsCache.amount})::numeric(15,2)::text`,
+      // part = montant catégorie / total devise ; nullif anti-DIV/0 (total nul → "0").
+      part: sql<string>`coalesce(
+        (sum(${transactionsCache.amount})
+          / nullif(sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency}), 0)
+        )::text, '0')`,
+      nbTransactions: sql<number>`count(*)::int`,
+      // Total & nb de LA devise via window — récupérés tels quels côté JS (aucune
+      // addition JS de montants, règle 8). ::numeric(15,2) fige l'échelle (2 décimales).
+      totalDevise: sql<string>`(sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency}))::numeric(15,2)::text`,
+      nbTransactionsDevise: sql<number>`(sum(count(*)) over (partition by ${transactionsCache.currency}))::int`,
+      // L2 — montant moyen par opération de LA devise : total / nb (EN SQL, règle 8).
+      // nullif anti-DIV/0 (nb nul impossible ici mais défensif) ; coalesce fige "0.00".
+      montantMoyenDevise: sql<string>`coalesce(
+        (sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency})
+          / nullif(sum(count(*)) over (partition by ${transactionsCache.currency}), 0)
+        )::numeric(15,2), 0)::numeric(15,2)::text`,
+    })
+    .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage du scope entité par jointure sur bank_accounts.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        filtreSens,
+        gte(transactionsCache.transactionDate, from),
+        // Borne haute INCLUSIVE sur `to` : < to + 1 jour (calcul SQL).
+        lt(
+          transactionsCache.transactionDate,
+          sql`(${to}::date + interval '1 day')`,
+        ),
+      ),
+    )
+    .groupBy(cleCategorie, transactionsCache.currency)
+    // Devise croissante (regroupement JS contigu), puis « Non catégorisé » en fin
+    // (is null trié après is not null), puis montant décroissant, puis label (stable).
+    .orderBy(
+      transactionsCache.currency,
+      sql`(${cleCategorie} is null) asc`,
+      sql`sum(${transactionsCache.amount}) desc`,
+      labelCategorie,
+    );
+
+  // Regroupement PAR DEVISE : les lignes sont déjà triées par currency (contiguës) — on
+  // ne fait qu'assembler des chaînes SQL, jamais additionner un montant côté JS.
+  const devises: RepartitionDevise[] = [];
+  let courante: RepartitionDevise | undefined;
+  for (const r of lignes) {
+    if (!courante || courante.currency !== r.currency) {
+      courante = {
+        currency: r.currency,
+        total: r.totalDevise,
+        nbTransactions: r.nbTransactionsDevise,
+        montantMoyen: r.montantMoyenDevise,
+        parts: [],
+      };
+      devises.push(courante);
+    }
+    const part: PartCategorie = {
+      categorie: r.categorie,
+      estNonCategorise: r.estNonCategorise,
+      montant: r.montant,
+      part: r.part,
+      nbTransactions: r.nbTransactions,
+      // L4 — recopie de la CHAÎNE agrégée de la fenêtre précédente (merge par clé
+      // devise|catégorie) ; « 0.00 » si la catégorie n'existait pas avant (ou pas de
+      // fenêtre précédente demandée).
+      montantPrecedent:
+        montantsPrecedents?.get(`${r.currency}|${r.categorie}`) ?? "0.00",
+    };
+    courante.parts.push(part);
+  }
+
+  return {
+    sens,
+    from,
+    to,
+    fromPrecedent: fromPrecedent ?? "",
+    toPrecedent: toPrecedent ?? "",
+    devises,
+  };
 }
