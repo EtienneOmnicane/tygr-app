@@ -19,6 +19,7 @@
 import { useState } from "react";
 
 import { CategoryBadge } from "@/components/ui/category";
+import { Select } from "@/components/ui/select";
 import { formaterDateComptableLongue } from "@/lib/format-date";
 import { formatMontant, montantNu } from "@/lib/format-montant";
 
@@ -95,19 +96,14 @@ function StatutControl({
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <select
-        aria-label="Changer le statut"
+      <Select
+        ariaLabel="Changer le statut"
+        size="sm"
         value={echeance.statut}
         disabled={enCours}
-        onChange={(e) => auChangement(e.target.value as StatutEcheance)}
-        className={champPetit}
-      >
-        {STATUTS_CHOIX.map((s) => (
-          <option key={s} value={s}>
-            {libelleStatut(s)}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => auChangement(v as StatutEcheance)}
+        options={STATUTS_CHOIX.map((s) => ({ value: s, label: libelleStatut(s) }))}
+      />
 
       {saisiePartiel === "partiel" && (
         <div className="flex items-center gap-1">
@@ -214,12 +210,12 @@ export function EcheancesList({
                   <CategoryBadge name={nomCat} colorKey={e.categorieId!} size="sm" />
                 )}
                 {e.recurrence && (
-                  <span className="rounded-full bg-surface-inset px-2 py-0.5 text-[11px] font-medium text-text-muted">
+                  <span className="rounded-full bg-surface-inset px-2 py-0.5 text-xs font-medium text-text-muted">
                     {e.recurrence === "mensuelle" ? "Mensuelle" : "Trimestrielle"}
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-xs text-text-muted">
+              <div className="flex items-center gap-2 text-[13px] text-text-muted">
                 <span className="tabular-nums">
                   Exigible le {formaterDateComptableLongue(e.dateEcheance)}
                 </span>
@@ -237,7 +233,7 @@ export function EcheancesList({
                 {formatMontant(e.montant, e.devise)}
               </span>
               {e.statut === "partiel" && e.montantRegle && (
-                <span className="whitespace-nowrap text-[11px] text-text-muted tabular-nums">
+                <span className="whitespace-nowrap text-xs text-text-muted tabular-nums">
                   reste {montantNu(restantDecimal(e.montant, e.montantRegle))} ·
                   réglé {montantNu(e.montantRegle)}
                 </span>
@@ -267,7 +263,7 @@ export function EcheancesList({
                     <button
                       type="button"
                       onClick={() => onModifier(e)}
-                      className="rounded-control px-2.5 py-1.5 text-xs font-medium text-text-muted
+                      className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
                         transition-colors hover:bg-surface-inset hover:text-text
                         focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     >
@@ -279,7 +275,7 @@ export function EcheancesList({
                       type="button"
                       onClick={() => onSupprimer(e.id)}
                       disabled={enSuppression}
-                      className="rounded-control px-2.5 py-1.5 text-xs font-medium text-text-muted
+                      className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
                         transition-colors hover:bg-danger-bg hover:text-danger
                         focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
                         disabled:opacity-[0.48]"
