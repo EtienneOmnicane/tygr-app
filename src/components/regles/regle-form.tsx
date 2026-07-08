@@ -18,6 +18,7 @@
  */
 import { useId, useMemo, useState } from "react";
 
+import { Select } from "@/components/ui/select";
 import type { CategorieUI } from "@/components/ui/category";
 
 import type { RegleUI, RuleMatchType } from "./types-regles";
@@ -137,19 +138,16 @@ export function RegleForm({
           <label htmlFor={idMatch} className="text-xs text-text-muted">
             Si le libellé
           </label>
-          <select
+          <Select
             id={idMatch}
             value={matchType}
             disabled={enCours}
-            onChange={(e) => setMatchType(e.target.value as RuleMatchType)}
-            className={champ}
-          >
-            {OPTIONS_MATCH.map((o) => (
-              <option key={o.valeur} value={o.valeur}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setMatchType(v as RuleMatchType)}
+            options={OPTIONS_MATCH.map((o) => ({
+              value: o.valeur,
+              label: o.label,
+            }))}
+          />
         </div>
 
         {/* Motif */}
@@ -174,22 +172,16 @@ export function RegleForm({
           <label htmlFor={idCat} className="text-xs text-text-muted">
             alors classer dans
           </label>
-          <select
+          <Select
             id={idCat}
             value={categoryId}
             disabled={enCours}
-            onChange={(e) => setCategoryId(e.target.value)}
-            className={champ}
-          >
-            <option value="" disabled>
-              Choisir une catégorie…
-            </option>
-            {options.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setCategoryId(v)}
+            options={[
+              { value: "", label: "Choisir une catégorie…", disabled: true },
+              ...options.map((o) => ({ value: o.id, label: o.label })),
+            ]}
+          />
         </div>
 
         <button

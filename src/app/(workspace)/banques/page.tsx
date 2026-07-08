@@ -13,13 +13,14 @@
 import { redirect } from "next/navigation";
 
 import { peutModifier } from "@/lib/permissions";
-import { withWorkspace } from "@/server/db";
+import { listerConnexionsBancaires, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
   NonAuthentifieError,
 } from "@/server/auth/session";
 
+import { ConnexionsBancaires } from "@/components/banques/connexions-bancaires";
 import { BankConnectWidget } from "@/components/widget/bank-connect-widget";
 
 export const metadata = { title: "Connecter une banque — Dodo" };
@@ -38,7 +39,12 @@ export default async function PageBanques() {
     throw erreur;
   }
 
-  const role = await withWorkspace(session, async (_tx, ctx) => ctx.role);
+  // Rôle (gating MANAGER/ADMIN) + connexions déjà reliées, dans le MÊME contexte
+  // RLS (une seule transaction scopée workspace, règle 2).
+  const { role, connexions } = await withWorkspace(session, async (tx, ctx) => ({
+    role: ctx.role,
+    connexions: await listerConnexionsBancaires(tx),
+  }));
   const peutConnecter = peutModifier(role);
 
   return (
@@ -52,8 +58,12 @@ export default async function PageBanques() {
         </p>
       </header>
 
-      <div className="rounded-card bg-surface-card p-6 shadow-card">
-        <BankConnectWidget peutConnecter={peutConnecter} />
+      <div className="flex flex-col gap-6">
+        <ConnexionsBancaires connexions={connexions} />
+
+        <div className="rounded-card bg-surface-card p-6 shadow-card">
+          <BankConnectWidget peutConnecter={peutConnecter} />
+        </div>
       </div>
     </main>
   );

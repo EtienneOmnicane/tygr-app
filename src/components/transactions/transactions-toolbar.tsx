@@ -15,6 +15,8 @@
  */
 import { useMemo } from "react";
 
+import { Select } from "@/components/ui/select";
+
 import type {
   FiltresTransactions,
   StatutCategorisation,
@@ -97,55 +99,40 @@ export function TransactionsToolbar({
 
       {/* Compte — seulement si plusieurs comptes, groupés par institution */}
       {comptes.length > 1 && (
-        <label className="inline-flex items-center gap-2 text-sm text-text-muted">
-          <span className="sr-only">Filtrer par compte</span>
-          <select
-            value={filtres.bankAccountId ?? ""}
-            disabled={disabled}
-            onChange={(e) =>
-              onChange({
-                ...filtres,
-                bankAccountId: e.target.value || undefined,
-              })
-            }
-            className={champSelect}
-          >
-            <option value="">Tous les comptes</option>
-            {groupes.map((groupe) => (
-              <optgroup key={groupe.institution} label={groupe.institution}>
-                {groupe.comptes.map((c) => (
-                  <option key={c.bankAccountId} value={c.bankAccountId}>
-                    {c.accountName}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
+        <Select
+          ariaLabel="Filtrer par compte"
+          value={filtres.bankAccountId ?? ""}
+          disabled={disabled}
+          onChange={(v) =>
+            onChange({ ...filtres, bankAccountId: v || undefined })
+          }
+          className="max-w-[16rem]"
+          groups={[
+            { label: "", options: [{ value: "", label: "Tous les comptes" }] },
+            ...groupes.map((groupe) => ({
+              label: groupe.institution,
+              options: groupe.comptes.map((c) => ({
+                value: c.bankAccountId,
+                label: c.accountName,
+              })),
+            })),
+          ]}
+        />
       )}
 
       {/* Statut de ventilation */}
-      <label className="inline-flex items-center gap-2 text-sm text-text-muted">
-        <span className="sr-only">Filtrer par statut de ventilation</span>
-        <select
-          value={filtres.statutCategorisation ?? ""}
-          disabled={disabled}
-          onChange={(e) =>
-            onChange({
-              ...filtres,
-              statutCategorisation:
-                (e.target.value as StatutCategorisation) || undefined,
-            })
-          }
-          className={champSelect}
-        >
-          {OPTIONS_STATUT.map((o) => (
-            <option key={o.label} value={o.valeur}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <Select
+        ariaLabel="Filtrer par statut de ventilation"
+        value={filtres.statutCategorisation ?? ""}
+        disabled={disabled}
+        onChange={(v) =>
+          onChange({
+            ...filtres,
+            statutCategorisation: (v as StatutCategorisation) || undefined,
+          })
+        }
+        options={OPTIONS_STATUT.map((o) => ({ value: o.valeur, label: o.label }))}
+      />
 
       {/* Bornes de date comptable (from/to) — INCLUSES. Opt-in : vides = aucune
           fenêtre (montre tout). Le range part au SERVEUR (WHERE gte/lte via

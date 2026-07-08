@@ -19,21 +19,39 @@ function cn(...classes: Array<string | false | null | undefined>): string {
 export function FlowTag({
   sens,
   size = "sm",
+  variant = "solid",
   className,
 }: {
   sens: "Credit" | "Debit";
   size?: "sm" | "md";
+  /**
+   * "solid" (défaut) = pastille pastel §3.6 ; "subtle" = flèche + mot sans fond,
+   * pour les contextes où le MONTANT au-dessus porte déjà la couleur ET le signe
+   * (ligne /transactions) : la pastille faisait redite visuelle (« cercle » trop
+   * présent). Le sens reste une donnée → couleur sémantique conservée, poids réduit.
+   */
+  variant?: "solid" | "subtle";
   className?: string;
 }) {
   const entree = sens === "Credit";
+  const subtil = variant === "subtle";
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full font-medium",
-        size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
+        "inline-flex items-center font-medium",
+        subtil
+          ? "gap-0.5 text-[11px]"
+          : cn(
+              "gap-1 rounded-full",
+              size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
+            ),
         entree
-          ? "bg-inflow-bg text-inflow-700"
-          : "bg-outflow-bg text-outflow-700",
+          ? subtil
+            ? "text-inflow-700"
+            : "bg-inflow-bg text-inflow-700"
+          : subtil
+            ? "text-outflow-700"
+            : "bg-outflow-bg text-outflow-700",
         className,
       )}
     >
@@ -45,7 +63,7 @@ export function FlowTag({
         strokeWidth={2.5}
         strokeLinecap="round"
         strokeLinejoin="round"
-        className="size-3"
+        className={subtil ? "size-2.5" : "size-3"}
       >
         {entree ? (
           <>
