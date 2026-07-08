@@ -103,6 +103,13 @@ ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA public
 --                                     workspace_members (membre retiré → octrois purgés)
 --                                     et bank_accounts (compte supprimé → octroi purgé).
 --                                     NON append-only.
+--      - echeances                  : registre MANUEL d'échéances prévisionnelles
+--                                     (Epic 8) — donnée UTILISATEUR de projection,
+--                                     éditable/supprimable (ECH-D3). PAS l'historique
+--                                     réalisé, JAMAIS append-only. Suppression physique
+--                                     d'une échéance obsolète = légitime (les FK
+--                                     composites entity/categorie en ON DELETE
+--                                     restrict/no action protègent l'intégrité amont).
 --    ABSENTES par dessein (append-only, jamais de DELETE) :
 --      - transactions_cache (+ partitions transactions_cache_YYYY, _default)
 --      - balance_history
@@ -141,7 +148,8 @@ BEGIN
     'member_entity_scopes',
     'parties',
     'account_party_role',
-    'user_scopes'
+    'user_scopes',
+    'echeances'
   ]
   LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
