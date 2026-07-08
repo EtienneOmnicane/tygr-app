@@ -127,6 +127,13 @@
       "when": 1783340105758,
       "tag": "0018_unique-composites-expand",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1783600105758,
+      "tag": "0019_echeances",
+      "breakpoints": true
     }
   ]
 }

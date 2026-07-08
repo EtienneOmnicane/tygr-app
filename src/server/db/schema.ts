@@ -1067,3 +1067,156 @@ export const userScopes = pgTable(
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Échéances prévisionnelles (Epic 8 · FEAT-8.2 « Dettes & Échéanciers  */
+/* — saisie manuelle » ; cadrage PLAN-cadrage-echeances.md). Registre   */
+/* MANUEL de mouvements FUTURS planifiés (encaissements clients /       */
+/* décaissements fournisseurs) — PAS des factures, PAS du lettrage      */
+/* (Epic 6, différé P2). Chaque échéance non terminée alimentera la     */
+/* zone PRÉVISIONNELLE (grise, UI_GUIDELINES §3.5) de la courbe de solde */
+/* cumulé du dashboard (câblage différé, cadrage §3.2).                 */
+/*                                                                      */
+/* Table ÉDITABLE / SUPPRIMABLE (donnée utilisateur de projection, PAS  */
+/* de l'historique réalisé) → liste blanche DELETE de tygr_app.sql ;    */
+/* JAMAIS append-only, JAMAIS mêlée à transactions_cache/balance_history */
+/* (ECH-D3). DEUX étages d'isolation, comme bank_accounts :             */
+/*   • Étage 1 (tenant, dur)   : RLS tenant_isolation (workspace_id).   */
+/*   • Étage 2 (entité, scopé)  : policy entity_scope RESTRICTIVE FOR    */
+/*     ALL posée PAR MIGRATION (même patron que 0014 sur bank_accounts).*/
+/*     entity_id NULLABLE = « non rattachée » (Vision Globale seule).   */
+/* Montant : DECIMAL, jamais float (règle 8) — le SENS (direction) porte */
+/* le signe, `montant` est TOUJOURS positif. Multi-devise : 1 échéance  */
+/* = 1 devise (ECH-D6), jamais d'addition cross-devise à l'agrégation.  */
+/* ------------------------------------------------------------------ */
+
+/** Sens d'une échéance : à encaisser (client) ou à décaisser (fournisseur). */
+export const ECHEANCE_DIRECTIONS = ["encaissement", "decaissement"] as const;
+export type EcheanceDirection = (typeof ECHEANCE_DIRECTIONS)[number];
+
+/**
+ * Statuts d'échéance (UI_GUIDELINES §3.6). `en_retard` est VOLONTAIREMENT ABSENT :
+ * il est DÉRIVÉ à l'affichage (date d'échéance passée + non soldée), jamais stocké
+ * (ECH-D5) — un statut dérivé ne se désynchronise pas de l'horloge (Indian/Mauritius).
+ */
+export const ECHEANCE_STATUTS = [
+  "en_cours",
+  "partiel",
+  "paiement_en_cours",
+  "payee",
+  "annulee",
+] as const;
+export type EcheanceStatut = (typeof ECHEANCE_STATUTS)[number];
+
+/**
+ * Récurrence optionnelle. NULL = ponctuelle (« aucune »). Matérialisée à la
+ * GÉNÉRATION des points de projection (cadrage §3.1), jamais en dupliquant N lignes
+ * en base (ECH-D4) — zéro moteur d'occurrences au MVP (Epic 4.1, différé).
+ */
+export const ECHEANCE_RECURRENCES = ["mensuelle", "trimestrielle"] as const;
+export type EcheanceRecurrence = (typeof ECHEANCE_RECURRENCES)[number];
+
+export const echeances = pgTable(
+  "echeances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /**
+     * Entité (BU) rattachée. NULLABLE = « non rattachée » (visible en Vision
+     * Globale seule). FK COMPOSITE scopée workspace (ci-dessous) : une entity_id
+     * d'un autre tenant est impossible. Porte l'étage 2 (entity_scope), même rôle
+     * que bank_accounts.entity_id.
+     */
+    entityId: uuid("entity_id"),
+    direction: varchar("direction", { length: 12 })
+      .notNull()
+      .$type<EcheanceDirection>(),
+    libelle: varchar("libelle", { length: 255 }).notNull(),
+    /**
+     * Nom libre du client/fournisseur (TEXTE au MVP — pas de lien vers `parties`,
+     * pré-remplissage PartyId = dette P2 ENTITY-PARTY1). Peut tronquer à l'affichage
+     * (libellé, jamais un chiffre — règle formatage).
+     */
+    contrepartie: varchar("contrepartie", { length: 255 }),
+    /** Montant TOUJOURS positif (le signe est porté par `direction`). DECIMAL (règle 8). */
+    montant: numeric("montant", { precision: 15, scale: 2 }).notNull(),
+    devise: char("devise", { length: 3 }).notNull(),
+    /**
+     * Jour calendaire d'exigibilité — `DATE`, PAS un instant (ECH-D2). Une échéance
+     * est due « le 15 juillet », pas « à 14h03 UTC ». La dérivation « en retard ? »
+     * compare cette date à AUJOURD'HUI à Indian/Mauritius, côté application.
+     */
+    dateEcheance: date("date_echeance").notNull(),
+    statut: varchar("statut", { length: 20 })
+      .notNull()
+      .default("en_cours")
+      .$type<EcheanceStatut>(),
+    /**
+     * Catégorie analytique optionnelle. FK COMPOSITE scopée workspace (patron
+     * categorization_rules) : une catégorie d'un autre tenant est impossible.
+     */
+    categorieId: uuid("categorie_id"),
+    recurrence: varchar("recurrence", { length: 12 }).$type<EcheanceRecurrence>(),
+    /** Montant déjà réglé (support du statut `partiel`). NULL = aucun règlement partiel. */
+    montantRegle: numeric("montant_regle", { precision: 15, scale: 2 }),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Cible de FK COMPOSITES scopées futures (patron maison — cf. entities /
+    // bank_accounts). Additive, expand-safe (la PK reste `id` seul).
+    unique("echeances_id_workspace_unique").on(t.id, t.workspaceId),
+    // FK COMPOSITE scopée workspace vers la BU (cœur de l'étage 2). Cible
+    // entities(id, workspace_id) [UNIQUE]. ON DELETE RESTRICT : on archive une
+    // entité référencée (is_active=false), jamais de cascade. Idem bank_accounts.
+    foreignKey({
+      columns: [t.entityId, t.workspaceId],
+      foreignColumns: [entities.id, entities.workspaceId],
+      name: "echeances_entity_workspace_fk",
+    }).onDelete("restrict"),
+    // FK COMPOSITE scopée workspace vers la catégorie (cible categories(id,
+    // workspace_id)). Pas d'onDelete (no action) — aligné sur categorization_rules :
+    // une catégorie référencée s'archive (is_active), l'échéance ne casse pas.
+    foreignKey({
+      columns: [t.categorieId, t.workspaceId],
+      foreignColumns: [categories.id, categories.workspaceId],
+      name: "echeances_categorie_workspace_fk",
+    }),
+    check(
+      "echeances_direction_check",
+      sql`${t.direction} IN ('encaissement','decaissement')`,
+    ),
+    check(
+      "echeances_statut_check",
+      sql`${t.statut} IN ('en_cours','partiel','paiement_en_cours','payee','annulee')`,
+    ),
+    check(
+      "echeances_recurrence_check",
+      sql`${t.recurrence} IS NULL OR ${t.recurrence} IN ('mensuelle','trimestrielle')`,
+    ),
+    // Montant strictement positif : le sens porte le signe (jamais de négatif stocké).
+    check("echeances_montant_positif_check", sql`${t.montant} > 0`),
+    // Règlement partiel cohérent : borné [0, montant] quand renseigné.
+    check(
+      "echeances_montant_regle_check",
+      sql`${t.montantRegle} IS NULL OR (${t.montantRegle} >= 0 AND ${t.montantRegle} <= ${t.montant})`,
+    ),
+    index("echeances_workspace_id_idx").on(t.workspaceId),
+    // Scope entité : retrouver les échéances d'une entité (ou les non-rattachées).
+    index("echeances_workspace_entity_idx").on(t.workspaceId, t.entityId),
+    // Tri par exigibilité + fenêtres d'horizon (30/60/90 j) ; workspace_id meneur.
+    index("echeances_workspace_date_idx").on(t.workspaceId, t.dateEcheance),
+    // Étage 1 — TENANT (fail-closed). L'étage 2 (entity_scope RESTRICTIVE FOR ALL)
+    // est posé PAR MIGRATION (comme bank_accounts) — drizzle ne déclare que le tenant.
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
