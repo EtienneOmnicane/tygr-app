@@ -42,6 +42,20 @@
   --color-line: #e8e3d5;
   --color-line-strong: #d8d2c2;
 
+  /* Palette catégorielle du camembert « Analyse par catégorie » (UI_GUIDELINES
+   * §0, bloc chart.cat). Teintes DISTINCTES réservées aux PARTS de donut —
+   * jamais un vert/rouge sémantique (inflow/outflow) sur une catégorie. Au-delà
+   * de 8 catégories, la queue et « Non catégorisé » basculent sur cat-neutral. */
+  --color-chart-cat-1: #2c5fe8;
+  --color-chart-cat-2: #dfa218;
+  --color-chart-cat-3: #0e9488;
+  --color-chart-cat-4: #7c5cbf;
+  --color-chart-cat-5: #5ba8d9;
+  --color-chart-cat-6: #c65b8a;
+  --color-chart-cat-7: #6b8e23;
+  --color-chart-cat-8: #d9772e;
+  --color-chart-cat-neutral: #b3b9c9;
+
   --color-text: #0c1633;
   --color-text-muted: #5c6274;
   --color-text-faint: #8a8f9f;

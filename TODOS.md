@@ -5,6 +5,25 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Analyse par catégorie (camembert) — KPI d'en-tête (2026-07-08)
+
+Chantier KPI livré (retour Etienne « page très maigre ») : fix libellé sentinelles
+Omni-FI → « Non catégorisé » (L1), stats d'en-tête par devise moyenne/couverture/poste
+dominant/concentration (L2+L3), variation vs période précédente dans la légende (L4).
+Un lot du plan `PLAN-graphiques-kpi.md` a été **volontairement différé** :
+
+- [ ] **GRAPHIQUES-KPI-L5-SOUSCATEGORIES1 (P2, effort ~1 j) — top marchands /
+  sous-catégories par poste dominant NON livré.** Le plan L5 prévoyait, sous le poste
+  dominant de chaque devise, un mini-classement des contreparties (`clean_label`) OU
+  des sous-catégories Omni-FI qui le composent. Différé : (a) la donnée réelle est
+  quasi intégralement NON catégorisée aujourd'hui (le poste dominant est souvent
+  « Non catégorisé » → un sous-classement n'apporterait rien tant que la catégorisation
+  n'a pas tourné) ; (b) l'agrégat existe déjà côté repo (`vendorsParConcentration`),
+  donc pas de dette de schéma, juste du câblage UI. **Déclencheur** : quand la
+  catégorisation Omni-FI (ou manuelle) couvre une part significative des opérations
+  (couverture KPI « Catégorisé » > ~50 % sur un workspace réel) — brancher
+  `vendorsParConcentration` filtré par catégorie dominante sous `StatsDevise`.
+
 ### Bandeau/sélecteur par titulaire — dettes ouvertes (2026-07-07)
 
 - [ ] **TITULAIRE-GENERIQUE1 (P2, effort ~15 min) — sentinelle « Account Holder » en

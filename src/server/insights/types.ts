@@ -73,3 +73,65 @@ export interface ConcentrationVendors {
   /** Lignes triées par montant décroissant (top N borné), groupées par devise. */
   lignes: LigneVendor[];
 }
+
+/**
+ * Sens d'analyse d'un camembert de répartition par catégorie. VOLONTAIREMENT sans
+ * `both` (≠ vendors) : un donut mélangeant crédits et débits (signes opposés) n'a
+ * pas de sens — on répartit soit les ENTRÉES (Credit) soit les SORTIES (Debit).
+ */
+export type SensFlux = "inflow" | "outflow";
+
+/**
+ * Une part de camembert = une catégorie, DANS UNE devise. `montant` = somme des
+ * montants (magnitude positive, le sens est fixé par le filtre) en CHAÎNE décimale
+ * (agrégat SQL, règle 8). `part` = fraction du total de SA devise (0..1, chaîne).
+ * `categorie` = `primary_category` Omni-FI ; si absente (NULL/'' ou sentinelle
+ * `UNCLASSIFIED`/`Uncategorized`), libellé « Non catégorisé » et `estNonCategorise=true`
+ * (rendu neutre, trié en dernier).
+ */
+export interface PartCategorie {
+  categorie: string;
+  estNonCategorise: boolean;
+  montant: string; // sum(amount) — chaîne décimale
+  part: string; // fraction 0..1 du total de la devise — chaîne décimale
+  nbTransactions: number;
+  /**
+   * Somme de la MÊME catégorie sur la fenêtre PRÉCÉDENTE (L4), CHAÎNE décimale (agrégat
+   * SQL). « 0.00 » si la catégorie n'existait pas avant, ou si aucune fenêtre précédente
+   * n'a été demandée. Sert au badge de variation (ratio d'affichage, jamais réinjecté).
+   */
+  montantPrecedent: string;
+}
+
+/**
+ * Répartition par catégorie POUR UNE devise. `total` est le total mono-devise
+ * (centre du donut) — JAMAIS une somme cross-devise. Les parts sont triées par
+ * montant décroissant ; « Non catégorisé » est toujours repoussé en fin.
+ */
+export interface RepartitionDevise {
+  currency: string;
+  total: string; // total mono-devise (chaîne décimale)
+  nbTransactions: number;
+  /** Montant moyen par opération de la devise (total/nb, EN SQL, L2) — chaîne décimale. */
+  montantMoyen: string;
+  parts: PartCategorie[];
+}
+
+/**
+ * Répartition par catégorie complète, MULTI-DEVISE : une entrée par devise, JAMAIS
+ * d'addition cross-devise (CLAUDE.md Localisation / règle 8). Fenêtre [from, to]
+ * (bornes comptables Maurice « YYYY-MM-DD », E20). `sens` fige le côté agrégé.
+ * `fromPrecedent`/`toPrecedent` = fenêtre précédente contiguë (L4) — chaînes vides si
+ * la variation n'a pas été demandée (info d'affichage, ex. libellé « vs 30 j préc. »).
+ */
+export interface RepartitionCategories {
+  sens: SensFlux;
+  from: string;
+  to: string;
+  /** Borne basse de la fenêtre précédente (L4) — « » si non calculée. */
+  fromPrecedent: string;
+  /** Borne haute de la fenêtre précédente (L4) — « » si non calculée. */
+  toPrecedent: string;
+  /** Une entrée par devise (devises triées) — jamais d'addition cross-devise. */
+  devises: RepartitionDevise[];
+}

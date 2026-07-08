@@ -68,6 +68,22 @@ colors: {
     forecastFill: '#EDF2FB',   // aire prévisionnelle (plus claire)
     threshold: '#BF3B2F',      // ligne de seuil/zéro (continue, 1.5px)
     donut: '#5BA8D9',          // séries neutres d'analyse (non sémantiques)
+    // Palette CATÉGORIELLE du camembert « Analyse par catégorie ». Teintes
+    // distinctes et harmonisées Dodo, réservées aux PARTS de donut. Le vert/rouge
+    // sémantique (inflow/outflow) reste réservé aux MONTANTS — jamais à une
+    // catégorie. Au-delà de 8 catégories : le reste bascule sur `catNeutral`
+    // (queue neutre) ; « Non catégorisé » est TOUJOURS `catNeutral`.
+    cat: [
+      '#2C5FE8', // 1 — Lagoon Blue (primary)
+      '#DFA218', // 2 — Native Amber (accent)
+      '#0E9488', // 3 — Teal lagon
+      '#7C5CBF', // 4 — Violet
+      '#5BA8D9', // 5 — Sky (donut neutre historique)
+      '#C65B8A', // 6 — Rose corail
+      '#6B8E23', // 7 — Olive
+      '#D9772E', // 8 — Terre cuite
+    ],
+    catNeutral: '#B3B9C9',     // queue « Autres » + « Non catégorisé » (gris ardoise)
   },
 }
 ```
