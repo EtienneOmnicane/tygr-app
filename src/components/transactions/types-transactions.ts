@@ -139,6 +139,14 @@ export type CurseurTransactions = string;
  * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
  */
 export interface FiltresTransactions {
+  /**
+   * Terme de recherche libre sur le LIBELLÉ NETTOYÉ (`cleanLabel`) — jamais
+   * `bank_label_raw` (PII, règle 8 ; garde côté repository). Absent = pas de
+   * filtre ; l'UI ne remonte JAMAIS une chaîne vide (le Zod `min(1)` la
+   * rejetterait) — une saisie effacée redevient `undefined`. Borné à 120 (aligné
+   * `listerTransactionsSchema.recherche` ; l'UI tronque, le serveur reste la garde).
+   */
+  recherche?: string;
   /** Restreindre à un compte connecté. */
   bankAccountId?: string;
   /** Restreindre par statut de ventilation. */

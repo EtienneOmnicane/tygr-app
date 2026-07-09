@@ -263,15 +263,32 @@ export function TransactionsFeature({
       return <AppErrorState onRetry={() => void rechargerPremierePage(filtres)} />;
     }
     if (!aDesResultats) {
-      // Empty : distingue « aucune transaction » de « aucune banque connectée ».
-      return aucuneBanque ? (
-        <EmptyState
-          illustration="table"
-          title="Connectez une banque pour voir vos opérations"
-          message="Dès votre première synchronisation, toutes vos transactions s’afficheront ici, prêtes à être catégorisées."
-          cta={{ label: "Connecter une banque", href: "/banques" }}
-        />
-      ) : (
+      // Empty : trois cas distincts.
+      // 1) Aucune banque connectée → CTA de connexion.
+      if (aucuneBanque) {
+        return (
+          <EmptyState
+            illustration="table"
+            title="Connectez une banque pour voir vos opérations"
+            message="Dès votre première synchronisation, toutes vos transactions s’afficheront ici, prêtes à être catégorisées."
+            cta={{ label: "Connecter une banque", href: "/banques" }}
+          />
+        );
+      }
+      // 2) Recherche active sans résultat → message ciblé citant le terme (variante
+      //    MESSAGE de l'empty existant, pas un nouvel état). Le terme affiché vient de
+      //    l'état des filtres (UI), pas d'un log — aucune fuite PII.
+      if (filtres.recherche) {
+        return (
+          <EmptyState
+            illustration="table"
+            title="Aucune transaction ne correspond à votre recherche"
+            message={`Aucune opération ne contient « ${filtres.recherche} » dans son libellé. Vérifiez l’orthographe ou élargissez les autres filtres.`}
+          />
+        );
+      }
+      // 3) Autres filtres (compte/statut/dates) sans résultat, ou sync en cours.
+      return (
         <EmptyState
           illustration="table"
           title="Aucune transaction pour ces critères"
