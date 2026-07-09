@@ -48,6 +48,7 @@ const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ADMIN_A = "11111111-1111-4111-8111-111111111111"; // ADMIN de A
 const VIEWER_A = "33333333-3333-4333-8333-333333333333"; // VIEWER de A
+const MANAGER_A = "44444444-4444-4444-8444-444444444444"; // MANAGER de A
 const ADMIN_B = "22222222-2222-4222-8222-222222222222"; // ADMIN de B
 
 const execWs =
@@ -173,10 +174,12 @@ beforeAll(async () => {
     insert into users (id, email, full_name) values
       ('${ADMIN_A}','admina@g.mu','Admin A'),
       ('${VIEWER_A}','viewera@g.mu','Viewer A'),
+      ('${MANAGER_A}','managera@g.mu','Manager A'),
       ('${ADMIN_B}','adminb@g.mu','Admin B');
     insert into workspace_members (user_id, workspace_id, role) values
       ('${ADMIN_A}','${WS_A}','ADMIN'),
       ('${VIEWER_A}','${WS_A}','VIEWER'),
+      ('${MANAGER_A}','${WS_A}','MANAGER'),
       ('${ADMIN_B}','${WS_B}','ADMIN');
   `);
   const provisioning = readFileSync(
@@ -531,6 +534,23 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
       synchroniserConnexionsDepuisOmnifi(c, execWs(VIEWER_A, WS_A)),
     ).rejects.toBeInstanceOf(ConnexionNonAutoriseeError);
     expect(c.listerConnexions).not.toHaveBeenCalled();
+  });
+
+  it("MANAGER PEUT synchroniser (FB0709-SYNC-MANAGER1) : mêmes garanties que l'ADMIN", async () => {
+    // Miroir du cas ADMIN ci-dessus : la garde `peutModifier` (MANAGER/ADMIN)
+    // laisse passer un MANAGER — seul VIEWER est bloqué.
+    await semerConnexionEnBase("conn-sync-mgr", "oa-sync-mgr"); // périmètre LOT 1 : connue en base
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-sync-mgr", InstitutionId: "mcb", Status: "active" }],
+      accounts: [
+        { AccountId: "oa-sync-mgr", Status: "Enabled", Currency: "MUR", PartyName: "Cpt", Balances: [{ Type: "ITAV", Amount: { Amount: "3000.00", Currency: "MUR" } }] },
+      ],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(MANAGER_A, WS_A));
+    expect(r.connexions).toBe(1);
+    expect(r.comptesRattaches).toBe(1);
+    // Frontière tenant inchangée : le ClientUserId du workspace A, jamais un param.
+    expect(c.listerConnexions).toHaveBeenCalledWith("enduser-a", expect.anything());
   });
 
   it("importe AUSSI les transactions du compte (débloque Détails + Transactions récentes)", async () => {

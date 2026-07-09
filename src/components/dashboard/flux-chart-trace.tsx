@@ -343,7 +343,9 @@ function LigneTooltip({
 function compact(v: number): string {
   const abs = Math.abs(v);
   const signe = v < 0 ? "−" : ""; // U+2212 (vrai signe moins, règle formatage)
-  if (abs >= 1_000_000) return `${signe}${(abs / 1_000_000).toFixed(1)} M`;
+  // Décimale FR = VIRGULE (règle formatage) : toFixed produit un point → remplacé.
+  if (abs >= 1_000_000)
+    return `${signe}${(abs / 1_000_000).toFixed(1).replace(".", ",")} M`;
   if (abs >= 1_000) return `${signe}${Math.round(abs / 1_000)} k`;
   return `${signe}${Math.round(abs)}`;
 }

@@ -192,8 +192,13 @@ export function DashboardContent({
         </div>
 
         {/* 4. FEATURES CONSERVÉES hors maquette, empilées pleine largeur. */}
-        {/* Top contreparties (concentration des postes, dérivé de la Voie A). */}
-        <TopVendorsCard concentration={topVendors} />
+        {/* Top contreparties (concentration des postes, dérivé de la Voie A),
+            fenêtrées sur la MÊME période que la courbe (FB0709-TOPVENDORS5) —
+            le libellé reprend la formulation du sous-titre d'en-tête. */}
+        <TopVendorsCard
+          concentration={topVendors}
+          libellePeriode={`${nbMoisFenetre} dernier${nbMoisFenetre > 1 ? "s" : ""} mois`}
+        />
 
         {/* Tendance : entrées/sorties des N derniers mois (barres + tableau). */}
         <MonthlyCashflow

@@ -103,6 +103,15 @@ export interface TransactionLigne {
   /** Dérivé en SQL : 0 split → NON_CATEGORISE ; somme = |montant| → COMPLET ;
    *  0 < somme < |montant| → PARTIEL. */
   statut: StatutVentilation;
+  /**
+   * Catégorie DOMINANTE de la ventilation (FB0709-TX-CATEGORIE-VISIBLE1) : la part
+   * au plus GROS montant (départage déterministe par nom puis id à montant égal).
+   * Mono-split → LA catégorie. `null` si aucun split. Sert au badge NOMMÉ de la
+   * liste /transactions (« Loyer », « Fournisseurs +1 ») au lieu du compteur
+   * générique « N catégories ». Résolue dans la MÊME requête (anti-N+1).
+   */
+  categorieDominanteId: string | null;
+  categorieDominanteNom: string | null;
 }
 
 /** Page de résultats. Curseur opaque pour la page suivante (null = fin). */
@@ -235,13 +244,22 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
   // alors que le CASE, lui, voyait le bon agrégat — symptôme observé en test).
   // Une table dérivée expose des colonnes nommées sans ambiguïté. (LATERAL écarté :
   // Drizzle préfixe un `left join` redondant via .leftJoin().)
+  // Catégorie DOMINANTE (FB0709-TX-CATEGORIE-VISIBLE1) : jointure INTERNE sur
+  // categories DANS l'agrégat — sûre en cardinalité (category_id NOT NULL + FK
+  // composite (category_id, workspace_id) → même workspace, PK unique → 1:1, la
+  // RLS de categories ne peut donc rien filtrer de plus que celle des splits).
+  // `array_agg(… order by tc.amount desc, …)` élit la part au plus gros montant ;
+  // départage déterministe par nom puis category_id à montants égaux.
   const agg = sql`(
     select
       tc.transaction_id  as txn_id,
       tc.transaction_date as txn_date,
       count(*)::int       as nb_splits,
-      coalesce(sum(tc.amount), 0)::numeric as montant_ventile
+      coalesce(sum(tc.amount), 0)::numeric as montant_ventile,
+      (array_agg(tc.category_id order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_id,
+      (array_agg(cat.name        order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_nom
     from transaction_categorizations tc
+    join categories cat on cat.id = tc.category_id
     group by tc.transaction_id, tc.transaction_date
   ) agg`;
 
@@ -291,6 +309,10 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       nbSplits: nbSplitsExpr,
       montantVentile: montantVentileExpr,
       statut: statutExpr,
+      // Colonnes NOMMÉES de la table dérivée (jamais de sous-requête scalaire ici,
+      // cf. avertissement rowMode "array" ci-dessus). NULL si aucun split (LEFT JOIN).
+      categorieDominanteId: sql<string | null>`agg.cat_dominante_id`,
+      categorieDominanteNom: sql<string | null>`agg.cat_dominante_nom`,
     })
     .from(transactionsCache)
     // Jointures de provenance. innerJoin SÛR : transactions_cache.bank_account_id est

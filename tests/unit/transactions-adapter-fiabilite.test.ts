@@ -31,6 +31,8 @@ function ligne(over: Partial<TransactionLigne> = {}): TransactionLigne {
     nbSplits: 1,
     montantVentile: "1500.00",
     statut: "COMPLET",
+    categorieDominanteId: null,
+    categorieDominanteNom: null,
     ...over,
   };
 }
@@ -99,6 +101,35 @@ describe("versLigneUI — normalisation sourceClassification", () => {
     expect(
       versLigneUI(ligne({ classificationSource: "OVERRIDE" }), nomParCompte)
         .sourceClassification,
+    ).toBeNull();
+  });
+});
+
+describe("versLigneUI — catégorie dominante (FB0709-TX-CATEGORIE-VISIBLE1)", () => {
+  it("construit `categorie {id,name}` quand la dominante est connue", () => {
+    const l = versLigneUI(
+      ligne({
+        categorieDominanteId: "cccc1111-cccc-4ccc-8ccc-cccccccccccc",
+        categorieDominanteNom: "Loyer",
+        nbSplits: 2,
+      }),
+      nomParCompte,
+    );
+    expect(l.categorie).toEqual({
+      id: "cccc1111-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Loyer",
+    });
+    expect(l.nbCategories).toBe(2);
+  });
+
+  it("retombe sur null (comptage générique) si la dominante est absente ou partielle", () => {
+    expect(versLigneUI(ligne(), nomParCompte).categorie).toBeNull();
+    // Paire incohérente (id sans nom) → repli défensif, jamais un badge sans nom.
+    expect(
+      versLigneUI(
+        ligne({ categorieDominanteId: "cccc1111-cccc-4ccc-8ccc-cccccccccccc" }),
+        nomParCompte,
+      ).categorie,
     ).toBeNull();
   });
 });

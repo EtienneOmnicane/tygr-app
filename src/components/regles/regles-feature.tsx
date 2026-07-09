@@ -318,18 +318,30 @@ export function ReglesFeature({
           illustration="empty"
         />
       ) : (
-        <ReglesList
-          regles={activesDabord}
-          nomParCategorie={nomParCategorie}
-          onSupprimer={supprimer}
-          suppressionEnCours={suppressionEnCours}
-          onModifier={demarrerEdition}
-          onReordonner={reordonner}
-          idsActifsOrdonnes={idsActifsOrdonnes}
-          reordreEnCours={reordreEnCours}
-          idEnEdition={regleEnEdition?.id ?? null}
-          peutGerer={peutGerer}
-        />
+        <div className="flex flex-col gap-2">
+          {/* Aide de priorité (FB0709-REGLES-PRIORITE-AIDE1) : explique l'ordre
+              d'application (haut → bas, première correspondance gagne — le serveur
+              persiste priority = index, cf. reordonnerReglesAction). */}
+          <p className="text-[13px] text-text-muted">
+            Les règles s’appliquent de haut en bas : pour chaque transaction, la
+            première règle dont le motif correspond attribue la catégorie — les
+            suivantes sont ignorées.
+            {peutGerer &&
+              " Glissez une règle (ou utilisez les flèches) pour changer sa priorité."}
+          </p>
+          <ReglesList
+            regles={activesDabord}
+            nomParCategorie={nomParCategorie}
+            onSupprimer={supprimer}
+            suppressionEnCours={suppressionEnCours}
+            onModifier={demarrerEdition}
+            onReordonner={reordonner}
+            idsActifsOrdonnes={idsActifsOrdonnes}
+            reordreEnCours={reordreEnCours}
+            idEnEdition={regleEnEdition?.id ?? null}
+            peutGerer={peutGerer}
+          />
+        </div>
       )}
     </div>
   );

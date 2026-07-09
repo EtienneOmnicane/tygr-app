@@ -172,14 +172,21 @@ export async function cashflowParDevise(
  * normalisé (dans une même devise) sont agrégées. Tri : montant décroissant, puis
  * libellé (stable). `topN` borné [1, VENDORS_TOP_N_MAX].
  *
+ * Fenêtre `[from, to]` OPTIONNELLE (bornes INCLUSIVES, dates comptables Maurice
+ * "YYYY-MM-DD", mêmes conventions que `cashflowParDevise` : borne haute rendue
+ * exclusive en SQL via `< to + 1 jour`, paramètres liés, re-validation calendaire
+ * défensive). Les deux bornes vont ensemble (XOR interdit) ; sans fenêtre, on agrège
+ * tout l'historique (comportement historique conservé pour les appelants existants).
+ *
  * NB : le top N est appliqué APRÈS agrégation, sur l'ensemble multi-devise trié par
  * montant — c'est un classement des plus gros postes toutes devises confondues, pas un
  * top N par devise (cohérent avec « concentration des dépenses »). La `part` reste,
- * elle, relative à la devise de la ligne (jamais un ratio cross-devise).
+ * elle, relative à la devise de la ligne (jamais un ratio cross-devise) et au total de
+ * la FENÊTRE (le dénominateur est lui aussi filtré par [from, to]).
  */
 export async function vendorsParConcentration(
   tx: Tx,
-  params: { direction: DirectionVendors; topN?: number },
+  params: { direction: DirectionVendors; topN?: number; from?: string; to?: string },
 ): Promise<ConcentrationVendors> {
   const direction = params.direction;
   if (direction !== "inflow" && direction !== "outflow" && direction !== "both") {
@@ -190,6 +197,22 @@ export async function vendorsParConcentration(
     throw new InsightsParamsInvalidesError(
       `topN hors bornes [1, ${VENDORS_TOP_N_MAX}] : ${topN}`,
     );
+  }
+  // Fenêtre optionnelle : les deux bornes ensemble ou aucune (XOR interdit), mêmes
+  // règles calendaires que cashflowParDevise (défense en profondeur, pièges F1/F2).
+  const { from, to } = params;
+  if ((from === undefined) !== (to === undefined)) {
+    throw new InsightsParamsInvalidesError(
+      "from et to doivent être fournis ensemble",
+    );
+  }
+  if (from !== undefined && to !== undefined) {
+    if (!estDateCalendaireValide(from) || !estDateCalendaireValide(to)) {
+      throw new InsightsParamsInvalidesError("bornes de dates invalides (YYYY-MM-DD)");
+    }
+    if (from > to) {
+      throw new InsightsParamsInvalidesError("from doit être ≤ to");
+    }
   }
 
   // Filtre de sens : littéraux figés (pas d'entrée interpolée). `both` = pas de filtre.
@@ -223,6 +246,17 @@ export async function vendorsParConcentration(
         eq(transactionsCache.isRemoved, false),
         // Filtre de sens injecté en littéral figé via raw fragment.
         sql`true ${filtreSens}`,
+        // Fenêtre [from, to] inclusive : paramètres liés, borne haute exclusive en SQL
+        // (< to + 1 jour), comme cashflowParDevise. Absente → tout l'historique.
+        ...(from !== undefined && to !== undefined
+          ? [
+              gte(transactionsCache.transactionDate, from),
+              lt(
+                transactionsCache.transactionDate,
+                sql`(${to}::date + interval '1 day')`,
+              ),
+            ]
+          : []),
       ),
     )
     .groupBy(contrepartie, transactionsCache.currency)

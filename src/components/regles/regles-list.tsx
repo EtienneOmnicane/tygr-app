@@ -183,6 +183,19 @@ export function ReglesList({
               </div>
             )}
 
+            {/* Numéro d'ordre VISIBLE (FB0709-REGLES-PRIORITE-AIDE1) : la priorité
+                est la position — on l'affiche (1 = appliquée en premier), y compris
+                en lecture seule (VIEWER, sans poignées). Archivées : pas de numéro. */}
+            {regle.isActive && posActif !== -1 && (
+              <span
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full
+                  bg-surface-inset text-[11px] font-semibold tabular-nums text-text-muted"
+                title={`Priorité ${posActif + 1} — appliquée en ${posActif === 0 ? "premier" : `position ${posActif + 1}`}`}
+              >
+                {posActif + 1}
+              </span>
+            )}
+
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
               <span className="text-text-muted">Si le libellé</span>
               <span className="font-medium text-text">{libelleMatch(regle.matchType)}</span>

@@ -9,9 +9,10 @@
  *  - statut : Backend `NON_CATEGORISE|PARTIEL|COMPLET` → UI `non_categorise|…` ;
  *  - `compteNom` : absent de la ligne Backend (que `bankAccountId`) → résolu via la
  *    map des comptes déjà chargés en page (pas de requête en plus) ;
- *  - `categorie {id,name}` : Backend ne renvoie pas LA catégorie unique, juste
- *    `nbSplits` → on n'affiche un badge nommé que si on le sait ; sinon le badge de
- *    comptage générique (« 1 catégorie » / « N catégories ») via `nbCategories` ;
+ *  - `categorie {id,name}` : le Backend renvoie la catégorie DOMINANTE de la
+ *    ventilation (`categorieDominanteId/Nom`, part au plus gros montant) → badge
+ *    NOMMÉ (mono : le nom ; multi : « Nom +N ») ; repli comptage générique si
+ *    absente (FB0709-TX-CATEGORIE-VISIBLE1) ;
  *  - libellé : cascade marchand → catégorie FR → brut bancaire → repli générique
  *    (`resoudreLibelle`, source unique). Le brut (`bankLabelRaw`) n'est plus masqué
  *    (arbitrage produit 2026-06-23 : utilisabilité > interdiction PII stricte) ; il
@@ -115,8 +116,13 @@ export function versLigneUI(
     sens: ligne.creditDebit,
     bankAccountId: ligne.bankAccountId,
     statutCategorisation: statut,
-    // Backend ne renvoie pas la catégorie unique → badge de comptage générique.
-    categorie: null,
+    // Catégorie DOMINANTE de la ventilation (FB0709-TX-CATEGORIE-VISIBLE1) : badge
+    // NOMMÉ dès qu'elle est connue (mono → LE nom ; multi → « Nom +N » côté badge).
+    // Repli null (comptage générique) si le Backend ne l'a pas résolue.
+    categorie:
+      ligne.categorieDominanteId && ligne.categorieDominanteNom
+        ? { id: ligne.categorieDominanteId, name: ligne.categorieDominanteNom }
+        : null,
     nbCategories: ligne.nbSplits,
     // Métadonnées de fiabilité amont (TECH-API-TRACE) NORMALISÉES vers des unions :
     // toute valeur brute inattendue (la colonne est sans CHECK côté DB) retombe sur
