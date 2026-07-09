@@ -94,20 +94,9 @@ export default async function PageTransactions() {
   // banque est inconnue, pour ne jamais afficher de vide.
   const nomCompte = (c: (typeof comptes)[number]) =>
     c.institutionName ?? c.accountName;
-  // Le FILTRE, lui, porte accountName + institutionName (sous-libellé) ET le
-  // TITULAIRE (holderId/holderName) : l'accordéon `CompteSelecteur` (C2) groupe par
-  // titulaire (Omni-FI Party), pas par institution — un titulaire portant des
-  // dizaines de comptes reste navigable (feedback 0709). holderId/holderName sont
-  // déjà retournés par `listerComptes` (via account_party_role).
-  const comptesFiltre = comptes.map((c) => ({
-    bankAccountId: c.bankAccountId,
-    accountName: c.accountName,
-    institutionName: c.institutionName,
-    // `CompteConnecte` porte holder* en OPTIONNELS (?: string | null) ; le contrat
-    // du filtre les veut EXPLICITES (string | null) → on normalise l'absence en null.
-    holderId: c.holderId ?? null,
-    holderName: c.holderName ?? null,
-  }));
+  // `nomParCompte` : libellé du compte porteur DANS LA TABLE (résolu via l'adaptateur).
+  // CONSERVÉ (le filtre par compte a été retiré de la toolbar — doublon du
+  // PerimetreSwitcher —, mais l'affichage du compte de chaque ligne reste nécessaire).
   const nomParCompte = new Map(
     comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
   );
@@ -214,7 +203,6 @@ export default async function PageTransactions() {
       <TransactionsFeature
         initial={initial}
         categories={categories}
-        comptes={comptesFiltre}
         actions={actionsTransactions}
         remplacerSplits={remplacerSplitsAction}
         creerCategorie={creerCategorieNature}

@@ -17,9 +17,9 @@
  * Contrat MINIMAL pour être groupable par titulaire : un porteur `holderId`
  * (clé de groupe) et un `holderName` (libellé). `bankAccountId` sert de clé de
  * rendu stable. Le groupement est GÉNÉRIQUE sur ce contrat (D3) : il sert le
- * dashboard (`CompteConnecte`, display-only) ET le sélecteur de /transactions
- * (`CompteFiltre` enrichi, sélectionnable) — le type serveur `CompteConnecte`
- * satisfait ce contrat sans y être couplé.
+ * dashboard (`CompteConnecte`, display-only) et le bandeau « Comptes connectés » —
+ * le type serveur `CompteConnecte` satisfait ce contrat sans y être couplé. (Le
+ * sélecteur de /transactions qui le consommait aussi a été retiré le 2026-07-09.)
  */
 export interface CompteTitulable {
   bankAccountId: string;

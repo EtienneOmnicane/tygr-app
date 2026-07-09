@@ -139,8 +139,11 @@ export type CurseurTransactions = string;
  * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
  */
 export interface FiltresTransactions {
-  /** Restreindre à un compte connecté. */
-  bankAccountId?: string;
+  // NB : PAS de filtre `bankAccountId` — le périmètre de comptes est piloté
+  // GLOBALEMENT par le PerimetreSwitcher (topbar), qui borne déjà les transactions
+  // côté serveur via `viewFilter` intersecté par la RLS (withWorkspace). Un filtre
+  // compte dans la toolbar ferait doublon (retiré 2026-07-09). Le paramètre reste
+  // accepté INERTE côté repo (affinage backend non sollicité par l'UI).
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
   /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */

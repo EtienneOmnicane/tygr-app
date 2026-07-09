@@ -6,7 +6,7 @@
 export { TransactionsFeature } from "./transactions-feature";
 export { TransactionsTable } from "./transactions-table";
 export { TransactionRow } from "./transaction-row";
-export { TransactionsToolbar, type CompteFiltre } from "./transactions-toolbar";
+export { TransactionsToolbar } from "./transactions-toolbar";
 export { CategorisationStatusBadge } from "./categorisation-status-badge";
 export { FiabiliteBadge } from "./fiabilite-badge";
 export { SourceClassificationIcon } from "./source-classification-icon";

@@ -66,7 +66,9 @@ export function versInputBackend(
   curseur: string | null | undefined,
 ): Partial<ListerTransactionsInput> {
   const input: Partial<ListerTransactionsInput> = {};
-  if (filtres?.bankAccountId) input.bankAccountId = filtres.bankAccountId;
+  // NB : pas de `bankAccountId` — le filtre par compte a été retiré de la toolbar
+  // (doublon du PerimetreSwitcher, qui borne déjà les comptes côté serveur). Le
+  // paramètre reste accepté par le repo/schéma (inerte), mais l'UI ne le produit plus.
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }

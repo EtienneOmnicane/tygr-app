@@ -28,10 +28,7 @@ import { AppErrorState, EmptyState } from "@/components/ui/states";
 
 import { TransactionsTable } from "./transactions-table";
 import { TransactionsLoading } from "./states/transactions-loading";
-import {
-  TransactionsToolbar,
-  type CompteFiltre,
-} from "./transactions-toolbar";
+import { TransactionsToolbar } from "./transactions-toolbar";
 import type {
   ActionsTransactions,
   CurseurTransactions,
@@ -48,7 +45,6 @@ interface ModaleEnCours {
 export function TransactionsFeature({
   initial,
   categories,
-  comptes,
   actions,
   remplacerSplits,
   creerCategorie,
@@ -61,8 +57,6 @@ export function TransactionsFeature({
   initial: { lignes: TransactionListItem[]; curseurSuivant: CurseurTransactions | null };
   /** Référentiel de catégories (pour la modale de ventilation). */
   categories: CategorieUI[];
-  /** Comptes connectés (filtre par compte). */
-  comptes: CompteFiltre[];
   /** Lecture paginée + chargement des splits (B1/B3bis). */
   actions: ActionsTransactions;
   /** Action atomique de remplacement des splits (remplacerSplitsAction). */
@@ -306,7 +300,6 @@ export function TransactionsFeature({
 
       <TransactionsToolbar
         filtres={filtres}
-        comptes={comptes}
         onChange={appliquerFiltres}
         disabled={chargement}
       />
