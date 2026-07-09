@@ -94,13 +94,19 @@ export default async function PageTransactions() {
   // banque est inconnue, pour ne jamais afficher de vide.
   const nomCompte = (c: (typeof comptes)[number]) =>
     c.institutionName ?? c.accountName;
-  // Le FILTRE, lui, porte les deux champs : la toolbar groupe par institution
-  // (<optgroup>) et affiche l'accountName dedans — l'institution n'est donc plus
-  // répétée N fois. (Distinct du nom de la table ci-dessus, volontairement.)
+  // Le FILTRE, lui, porte accountName + institutionName (sous-libellé) ET le
+  // TITULAIRE (holderId/holderName) : l'accordéon `CompteSelecteur` (C2) groupe par
+  // titulaire (Omni-FI Party), pas par institution — un titulaire portant des
+  // dizaines de comptes reste navigable (feedback 0709). holderId/holderName sont
+  // déjà retournés par `listerComptes` (via account_party_role).
   const comptesFiltre = comptes.map((c) => ({
     bankAccountId: c.bankAccountId,
     accountName: c.accountName,
     institutionName: c.institutionName,
+    // `CompteConnecte` porte holder* en OPTIONNELS (?: string | null) ; le contrat
+    // du filtre les veut EXPLICITES (string | null) → on normalise l'absence en null.
+    holderId: c.holderId ?? null,
+    holderName: c.holderName ?? null,
   }));
   const nomParCompte = new Map(
     comptes.map((c) => [c.bankAccountId, nomCompte(c)]),

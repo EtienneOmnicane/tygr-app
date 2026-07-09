@@ -1,23 +1,39 @@
 /**
  * Groupement des comptes connectés par TITULAIRE (Omni-FI Party) — helper PUR
- * partagé par le bandeau « Comptes connectés » (accordéon) et l'onglet « Par
- * compte » du sélecteur de périmètre (PLAN-bandeau-titulaire-accordeon.md, D3).
+ * partagé par le bandeau « Comptes connectés » (accordéon dashboard, display-only),
+ * l'onglet « Par compte » du sélecteur de périmètre, et le sélecteur de comptes de
+ * /transactions (accordéon SÉLECTIONNABLE — PLAN-transactions-selecteur-entites.md, C2).
  *
- * DISPLAY-ONLY (règle 2) : le titulaire est un LIBELLÉ de présentation, jamais un
- * filtre — chaque compte reçu ressort exactement une fois, aucun n'est masqué.
- * Le périmètre de sécurité vit dans la RLS, en amont (listerComptes).
+ * Le titulaire est un LIBELLÉ de GROUPEMENT, jamais un filtre de sécurité : chaque
+ * compte reçu ressort exactement une fois, aucun n'est masqué (conservation totale).
+ * Le périmètre de sécurité vit dans la RLS, en amont (listerComptes) — ce qui rentre
+ * ici est déjà scopé tenant + entité. Ce qu'un consommateur fait de la sélection
+ * (filtre /transactions) reste borné côté serveur (DROIT ∩ filtre, règle 2).
  *
  * Zéro React, zéro dépendance : testable en isolation (tests/unit).
  */
-import type { CompteConnecte } from "@/server/repositories/dashboard";
 
-export interface GroupeTitulaire {
+/**
+ * Contrat MINIMAL pour être groupable par titulaire : un porteur `holderId`
+ * (clé de groupe) et un `holderName` (libellé). `bankAccountId` sert de clé de
+ * rendu stable. Le groupement est GÉNÉRIQUE sur ce contrat (D3) : il sert le
+ * dashboard (`CompteConnecte`, display-only) ET le sélecteur de /transactions
+ * (`CompteFiltre` enrichi, sélectionnable) — le type serveur `CompteConnecte`
+ * satisfait ce contrat sans y être couplé.
+ */
+export interface CompteTitulable {
+  bankAccountId: string;
+  holderId?: string | null;
+  holderName?: string | null;
+}
+
+export interface GroupeTitulaire<T extends CompteTitulable = CompteTitulable> {
   /** parties.id — clé de groupe STABLE (désambiguïse deux titulaires homonymes). */
   holderId: string | null;
   /** parties.name — libellé affiché ; null UNIQUEMENT pour le bucket « Non regroupé ». */
   holderName: string | null;
   /** Comptes du groupe, dans l'ordre reçu (déjà triés par accountName en amont). */
-  comptes: CompteConnecte[];
+  comptes: T[];
 }
 
 /** Tri des libellés titulaire en français (accents, casse). */
@@ -43,7 +59,10 @@ function estTitulaireGenerique(holderName: string): boolean {
 }
 
 /** Tri alpha fr des groupes nommés, homonymie départagée par holderId. */
-function comparerGroupes(a: GroupeTitulaire, b: GroupeTitulaire): number {
+function comparerGroupes(
+  a: GroupeTitulaire<CompteTitulable>,
+  b: GroupeTitulaire<CompteTitulable>,
+): number {
   return (
     collator.compare(a.holderName ?? "", b.holderName ?? "") ||
     // Tiebreak homonymie par id : comparaison de code units (locale-indépendante,
@@ -68,11 +87,11 @@ function comparerGroupes(a: GroupeTitulaire, b: GroupeTitulaire): number {
  * Le REPLI mono-groupe (< 2 groupes → liste plate, pas d'accordéon superflu) est
  * une décision de VUE : les consommateurs testent `groupes.length` (D4/D6).
  */
-export function grouperParTitulaire(
-  comptes: CompteConnecte[],
-): GroupeTitulaire[] {
-  const parId = new Map<string, GroupeTitulaire>();
-  const sansTitulaire: CompteConnecte[] = [];
+export function grouperParTitulaire<T extends CompteTitulable>(
+  comptes: T[],
+): GroupeTitulaire<T>[] {
+  const parId = new Map<string, GroupeTitulaire<T>>();
+  const sansTitulaire: T[] = [];
 
   for (const compte of comptes) {
     const holderId = compte.holderId ?? null;
@@ -115,7 +134,7 @@ export type EtatSelectionGroupe = "aucun" | "partiel" | "tous";
  * compte serait un mensonge). PURE, zéro React.
  */
 export function etatSelectionGroupe(
-  comptesDuGroupe: CompteConnecte[],
+  comptesDuGroupe: CompteTitulable[],
   coches: ReadonlySet<string>,
 ): EtatSelectionGroupe {
   let n = 0;
@@ -138,7 +157,7 @@ export function etatSelectionGroupe(
  */
 export function basculerGroupe(
   coches: ReadonlySet<string>,
-  comptesDuGroupe: CompteConnecte[],
+  comptesDuGroupe: CompteTitulable[],
 ): Set<string> {
   const next = new Set(coches);
   const tousCoches =
