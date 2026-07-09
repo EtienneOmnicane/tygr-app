@@ -130,10 +130,21 @@ export function SplitAllocationModal({
   // (le conteneur recharge le référentiel au prochain rendu). On les CONCATÈNE aux
   // props plutôt que de dupliquer tout l'état (évite un setState/effect de synchro).
   const [categoriesCreees, setCategoriesCreees] = useState<CategorieUI[]>([]);
-  const categoriesLocales = useMemo(
-    () => [...categories, ...categoriesCreees],
-    [categories, categoriesCreees],
-  );
+  // DÉDOUBLONNAGE par id (FB0709-CAT-PICKER-FRAICHEUR1) : depuis que le conteneur
+  // /transactions remonte lui-même les créations dans sa prop `categories`, une
+  // catégorie créée ici apparaîtrait DEUX fois (une via `categories`, une via
+  // `categoriesCreees`). On garde `categoriesCreees` comme filet (démo/conteneur
+  // qui ne remonte pas), mais on unifie par id → jamais de doublon dans le picker.
+  const categoriesLocales = useMemo(() => {
+    const vus = new Set<string>();
+    const fusion: CategorieUI[] = [];
+    for (const c of [...categories, ...categoriesCreees]) {
+      if (vus.has(c.id)) continue;
+      vus.add(c.id);
+      fusion.push(c);
+    }
+    return fusion;
+  }, [categories, categoriesCreees]);
 
   // CTA « Importer les catégories standard » (picker vide) : appelle l'action
   // ADMIN puis FUSIONNE les catégories renvoyées dans l'état local (affichage

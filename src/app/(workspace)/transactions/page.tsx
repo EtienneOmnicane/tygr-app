@@ -33,15 +33,23 @@ import type {
   ActionsTransactions,
   PageTransactions,
 } from "@/components/transactions/types-transactions";
-import type { CategorieUI, ResultatAction, SplitUI } from "@/components/ui/category";
+import type {
+  ActionsReferentielCategories,
+  CategorieUI,
+  ResultatAction,
+  SplitUI,
+} from "@/components/ui/category";
 
 import {
+  archiverCategorieAction,
+  type CategorieDTO,
   creerCategorieAction,
   importerCategoriesStandardAction,
   listerCategoriesAction,
   listerSplitsAction,
   listerTransactionsAction,
   remplacerSplitsAction,
+  renommerCategorieAction,
 } from "./actions";
 import { versInputBackend, versPageUI } from "./adapter";
 
@@ -157,6 +165,36 @@ export default async function PageTransactions() {
     };
   }
 
+  // Surface d'actions du RÉFÉRENTIEL de catégories (gestionnaire : créer / renommer /
+  // archiver / lister). Réservée ADMIN — on ne construit et ne passe l'objet QUE si
+  // peutAdministrer(role) (surface ABSENTE du DOM pour un non-admin, règle D2). La
+  // garde de fond reste le repository (exigerAdminReferentiel), souveraine dans tous
+  // les cas. Chaque closure adapte le DTO serveur au contrat UI (CategorieUI).
+  const versUI = (c: CategorieDTO): CategorieUI => ({
+    id: c.id,
+    name: c.name,
+    parentId: c.parentId,
+    isActive: c.isActive,
+  });
+  const actionsReferentiel: ActionsReferentielCategories = {
+    async listerCategories(): Promise<CategorieUI[]> {
+      "use server";
+      return (await listerCategoriesAction()).map(versUI);
+    },
+    async creerCategorie(input) {
+      "use server";
+      return creerCategorieAction(input);
+    },
+    async renommerCategorie(input) {
+      "use server";
+      return renommerCategorieAction(input);
+    },
+    async archiverCategorie(categoryId) {
+      "use server";
+      return archiverCategorieAction(categoryId);
+    },
+  };
+
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
       <div className="mb-6">
@@ -176,6 +214,9 @@ export default async function PageTransactions() {
         creerCategorie={creerCategorieNature}
         importerCategoriesStandard={
           peutAdministrer(role) ? importerCategoriesStandard : undefined
+        }
+        actionsReferentiel={
+          peutAdministrer(role) ? actionsReferentiel : undefined
         }
         aucuneBanque={aucuneBanque}
       />
