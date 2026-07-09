@@ -562,11 +562,16 @@ export const categories = pgTable(
       foreignColumns: [t.id, t.workspaceId],
       name: "categories_parent_id_workspace_fk",
     }),
-    // Pas de doublon de nom au même niveau d'un workspace.
-    unique("categories_workspace_name_parent_unique").on(
+    // Pas de doublon de nom au même niveau d'un workspace — INSENSIBLE À LA CASSE
+    // (FB0709-CAT-DOUBLONS1, migration 0020). `lower(name)` ferme la casse
+    // (« VAT » = « vat ») ; `coalesce(parent_id, 0-uuid)` ferme le trou NULL≠NULL
+    // (deux Natures racine homonymes = même clé, ce que l'ancien UNIQUE laissait
+    // passer). La sentinelle 0-uuid est IDENTIQUE à PARENT_RACINE_SENTINELLE du
+    // repository (categorisation.ts) → cohérence garde applicative ⇆ contrainte.
+    uniqueIndex("categories_workspace_lower_name_parent_unique").on(
       t.workspaceId,
-      t.name,
-      t.parentId,
+      sql`lower(${t.name})`,
+      sql`coalesce(${t.parentId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
     ),
     index("categories_workspace_id_idx").on(t.workspaceId),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),

@@ -17,7 +17,9 @@
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  CategoryManagerModal,
   SplitAllocationModal,
+  type ActionsReferentielCategories,
   type CategorieUI,
   type ResultatAction,
   type SplitUI,
@@ -51,6 +53,7 @@ export function TransactionsFeature({
   remplacerSplits,
   creerCategorie,
   importerCategoriesStandard,
+  actionsReferentiel,
   /** Y a-t-il au moins une banque connectée ? (oriente l'Empty State.) */
   aucuneBanque,
 }: {
@@ -82,8 +85,27 @@ export function TransactionsFeature({
   importerCategoriesStandard?: () => Promise<
     ResultatAction<{ imported: number; categories: CategorieUI[] }>
   >;
+  /**
+   * Surface d'actions du RÉFÉRENTIEL (créer/renommer/archiver/lister) pour le
+   * gestionnaire de catégories (FB0709-CAT-RENOMMER1). Fournie UNIQUEMENT à l'ADMIN
+   * (la page ne passe la closure que si `peutAdministrer` — surface ABSENTE du DOM
+   * pour un non-admin, pas juste grisée) ; absente ⇒ pas de bouton « Gérer les
+   * catégories ». Le serveur reste la vraie garde (repository ADMIN-only).
+   */
+  actionsReferentiel?: ActionsReferentielCategories;
   aucuneBanque: boolean;
 }) {
+  // Référentiel de catégories tenu en ÉTAT LOCAL (FB0709-CAT-PICKER-FRAICHEUR1).
+  // La 1re valeur vient du RSC (prop `categories`) ; toute catégorie créée depuis
+  // le picker d'une modale est APPENDUE ici → elle reste visible pour TOUTES les
+  // ouvertures suivantes (modale d'une autre transaction, gestionnaire). Sans ce
+  // remonté, la création vivait dans le `useState` LOCAL de chaque SplitAllocationModal,
+  // perdu à sa fermeture → « la catégorie créée n'apparaît pas ailleurs » (bug Etienne).
+  const [categoriesLocales, setCategoriesLocales] =
+    useState<CategorieUI[]>(categories);
+  /** Gestionnaire de catégories (renommer/archiver/créer) — ADMIN seul. */
+  const [managerOuvert, setManagerOuvert] = useState(false);
+
   const [lignes, setLignes] = useState<TransactionListItem[]>(initial.lignes);
   const [curseur, setCurseur] = useState<CurseurTransactions | null>(
     initial.curseurSuivant,
@@ -98,6 +120,68 @@ export function TransactionsFeature({
   const [ouvertureEnCours, setOuvertureEnCours] = useState<string | null>(null);
   /** Échec de chargement des splits à l'ouverture → on N'OUVRE PAS la modale. */
   const [erreurOuverture, setErreurOuverture] = useState(false);
+
+  // Enrobe la closure serveur `creerCategorie` : au succès, APPEND la catégorie
+  // créée à l'état local (Nature racine → parentId null, cohérent avec la closure
+  // serveur `creerCategorieNature` de la page). Dédoublonné par id (re-append sûr).
+  // Le picker/la modale restent PURS : ils reçoivent `categoriesLocales` à jour et
+  // remontent la création via cette closure — aucun fetch, aucun état de référentiel
+  // chez eux. Retour `ResultatAction` relayé tel quel (l'UI mappe l'erreur).
+  const creerCategorieEtRafraichir = useMemo(
+    () =>
+      creerCategorie
+        ? async (name: string) => {
+            const res = await creerCategorie(name);
+            if (res.ok) {
+              const nouvelle: CategorieUI = {
+                id: res.data.categoryId,
+                name: name.trim(),
+                parentId: null,
+                isActive: true,
+              };
+              setCategoriesLocales((prev) =>
+                prev.some((c) => c.id === nouvelle.id) ? prev : [...prev, nouvelle],
+              );
+            }
+            return res;
+          }
+        : undefined,
+    [creerCategorie],
+  );
+
+  // Enrobe l'import du référentiel standard (picker VIDE, ADMIN) : au succès, on
+  // FUSIONNE la liste fraîche renvoyée par le serveur dans l'état local (dédoublonné
+  // par id) → le référentiel importé peuple aussitôt tous les pickers, et persiste
+  // au-delà de la modale courante (même logique de fraîcheur que la création).
+  const importerStandardEtRafraichir = useMemo(
+    () =>
+      importerCategoriesStandard
+        ? async () => {
+            const res = await importerCategoriesStandard();
+            if (res.ok) {
+              setCategoriesLocales((prev) => {
+                const connues = new Set(prev.map((c) => c.id));
+                const fraiches = res.data.categories.filter(
+                  (c) => !connues.has(c.id),
+                );
+                return fraiches.length > 0 ? [...prev, ...fraiches] : prev;
+              });
+            }
+            return res;
+          }
+        : undefined,
+    [importerCategoriesStandard],
+  );
+
+  // Recharge le RÉFÉRENTIEL de catégories depuis le serveur (source de vérité)
+  // après une mutation du gestionnaire (renommage/archivage/création). Remplace
+  // l'état local par la liste fraîche (les archivées disparaissent, les renommées
+  // s'actualisent) → les pickers reflètent immédiatement l'état réel.
+  const rechargerReferentiel = useCallback(async () => {
+    if (!actionsReferentiel) return;
+    const fraiches = await actionsReferentiel.listerCategories();
+    setCategoriesLocales(fraiches);
+  }, [actionsReferentiel]);
 
   /** (Re)charge la PREMIÈRE page pour un jeu de filtres donné (reset curseur). */
   const rechargerPremierePage = useCallback(
@@ -203,6 +287,23 @@ export function TransactionsFeature({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Barre d'actions du référentiel (ADMIN seul) : accès au gestionnaire de
+          catégories — seul chemin en prod pour renommer/archiver (FB0709-CAT-RENOMMER1). */}
+      {actionsReferentiel && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setManagerOuvert(true)}
+            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-control border border-line
+              bg-surface-card px-3 text-sm font-medium text-text transition-colors
+              hover:bg-surface-inset focus:outline-none focus-visible:ring-2
+              focus-visible:ring-primary focus-visible:ring-offset-2"
+          >
+            <span aria-hidden>⚙</span> Gérer les catégories
+          </button>
+        </div>
+      )}
+
       <TransactionsToolbar
         filtres={filtres}
         comptes={comptes}
@@ -286,11 +387,14 @@ export function TransactionsFeature({
             transactionId: modale.transaction.transactionId,
             transactionDate: modale.transaction.transactionDate,
             label: modale.transaction.label,
+            // cleanLabel NON-PII → seul motif autorisé pour le deep-link « Créer une
+            // règle » (jamais bankLabelRaw). Null ⇒ pas de lien côté modale.
+            cleanLabel: modale.transaction.cleanLabel,
             montantAbs: modale.transaction.montantAbs,
             devise: modale.transaction.devise,
             sens: modale.transaction.sens,
           }}
-          categories={categories}
+          categories={categoriesLocales}
           initialSplits={modale.initialSplits}
           onReplace={(splits) =>
             remplacerSplits(
@@ -302,8 +406,22 @@ export function TransactionsFeature({
             )
           }
           onSaved={apresSauvegarde}
-          onCreateCategorie={creerCategorie}
-          onImportStandard={importerCategoriesStandard}
+          onCreateCategorie={creerCategorieEtRafraichir}
+          onImportStandard={importerStandardEtRafraichir}
+        />
+      )}
+
+      {/* Gestionnaire de catégories (ADMIN seul) : créer / renommer / archiver.
+          Monté uniquement si les actions du référentiel sont fournies. Au succès
+          d'une mutation (`onChanged`), on recharge le référentiel depuis le serveur
+          → les pickers reflètent l'état réel (renommage/archivage inclus). */}
+      {actionsReferentiel && (
+        <CategoryManagerModal
+          open={managerOuvert}
+          onClose={() => setManagerOuvert(false)}
+          categories={categoriesLocales}
+          actions={actionsReferentiel}
+          onChanged={() => void rechargerReferentiel()}
         />
       )}
     </div>

@@ -723,6 +723,57 @@ describe("préconditions", () => {
   });
 });
 
+// ── FB0709-REGLES-CASSE1 : le matching règle ↔ libellé est INSENSIBLE À LA CASSE ─
+// Le plan (B4) posait que le matching est DÉJÀ insensible à la casse (ILIKE) et que
+// les règles ciblent les catégories par UUID — la « casse » perçue par Etienne
+// venait des DOUBLONS de catégories (réglés en B2), pas du moteur. Ce bloc le PROUVE
+// explicitement dans les deux sens : motif MAJUSCULE vs libellé minuscule ET
+// l'inverse. On isole sur un compte dédié (ACCT_CASSE) + appliquerRegles borné.
+describe("FB0709-REGLES-CASSE1 : matching insensible à la casse (ILIKE)", () => {
+  const ACCT_CASSE = "dddd9999-dddd-4ddd-8ddd-dddddddddddd";
+  const TXN_MAJ = "eeee9001-eeee-4eee-8eee-eeeeeeeeeeee"; // libellé MAJUSCULE, motif minuscule
+  const TXN_MIN = "eeee9002-eeee-4eee-8eee-eeeeeeeeeeee"; // libellé minuscule, motif MAJUSCULE
+
+  beforeAll(async () => {
+    // Insert owner (comme le seed global) : compte + 2 transactions de casses opposées.
+    await client.exec(`reset role;`);
+    await client.exec(`
+      insert into bank_accounts (id,workspace_id,connection_id,omnifi_account_id,account_name,currency) values
+        ('${ACCT_CASSE}','${WS_A}','cccc0001-cccc-4ccc-8ccc-cccccccccccc','a-casse','CC','MUR');
+      insert into transactions_cache
+        (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,bank_label_raw,clean_label) values
+        ('${TXN_MAJ}','${WS_A}','${ACCT_CASSE}','t-maj','${DATE}','${DATE}T08:00:00Z','-100.00','MUR','Debit','RAW','PAIEMENT NETFLIX'),
+        ('${TXN_MIN}','${WS_A}','${ACCT_CASSE}','t-min','${DATE}','${DATE}T08:00:00Z','-200.00','MUR','Debit','RAW','abonnement spotify');
+    `);
+    await client.exec(`set role tygr_app;`);
+  });
+
+  it("motif MINUSCULE « netflix » matche un libellé MAJUSCULE « PAIEMENT NETFLIX »", async () => {
+    await withWorkspace(sessionA, (tx, ctx) =>
+      creerRegle(tx, ctx, { pattern: "netflix", matchType: "contains", categoryId: CAT_A }),
+    );
+    await withWorkspace(sessionA, (tx, ctx) =>
+      appliquerRegles(tx, ctx, { bankAccountId: ACCT_CASSE }),
+    );
+    const s = await splitsDe(sessionA, TXN_MAJ);
+    expect(s).toHaveLength(1);
+    expect(s[0].categoryId).toBe(CAT_A);
+    expect(s[0].source).toBe("RULE");
+  });
+
+  it("motif MAJUSCULE « SPOTIFY » matche un libellé minuscule « abonnement spotify »", async () => {
+    await withWorkspace(sessionA, (tx, ctx) =>
+      creerRegle(tx, ctx, { pattern: "SPOTIFY", matchType: "contains", categoryId: CAT_A2 }),
+    );
+    await withWorkspace(sessionA, (tx, ctx) =>
+      appliquerRegles(tx, ctx, { bankAccountId: ACCT_CASSE }),
+    );
+    const s = await splitsDe(sessionA, TXN_MIN);
+    expect(s).toHaveLength(1);
+    expect(s[0].categoryId).toBe(CAT_A2);
+  });
+});
+
 // Contre-preuve R1 : prouve POURQUOI le rôle non-owner est vital. Sous l'owner la
 // frontière tenant ne filtre pas ; sous tygr_app elle filtre. Si l'app pointait sur
 // l'owner (RLS contournée), R1a casserait — l'angle mort devient bloquant.

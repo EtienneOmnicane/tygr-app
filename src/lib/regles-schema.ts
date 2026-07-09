@@ -93,3 +93,31 @@ export const appliquerReglesSchema = z
   .strict();
 
 export type AppliquerReglesInput = z.infer<typeof appliquerReglesSchema>;
+
+/**
+ * Deep-link « Créer une règle » depuis la catégorisation (FB0709-REGLES-LIEN1).
+ * Valide les searchParams `?nouvelle=1&motif=<pattern>&categorie=<uuid>` de
+ * `regles/page.tsx`. STRICT et TOLÉRANT : les valeurs mal formées sont IGNORÉES
+ * silencieusement (le formulaire s'ouvre sans pré-remplissage partiel) — jamais
+ * d'erreur, jamais d'oracle. `catchall`/coercion volontairement absents : on ne
+ * lit que ces 3 clés, le reste des searchParams est ignoré par nature.
+ *
+ * - `nouvelle` : "1" active l'ouverture pré-remplie (toute autre valeur = ignorée).
+ * - `motif` : réutilise les bornes du motif de règle (trim, 1..255). Un motif vide
+ *   ou trop long est écarté (le formulaire s'ouvre sans motif).
+ * - `categorie` : uuid ; sa VALIDITÉ TENANT (appartenance au workspace) est
+ *   re-vérifiée côté page contre le référentiel chargé sous RLS — un uuid d'un
+ *   autre tenant (ou inexistant) est simplement ignoré (pas de pré-sélection),
+ *   aucun oracle d'existence. `searchParams` peut fournir string | string[] :
+ *   on n'accepte que la forme string (un tableau = clé répétée = ignorée).
+ */
+export const deepLinkRegleSchema = z
+  .object({
+    nouvelle: z.literal("1").optional(),
+    motif: z.string().trim().min(1).max(255).optional(),
+    categorie: z.string().uuid().optional(),
+  })
+  // Non-strict à dessein : les autres searchParams (le cas échéant) sont ignorés.
+  .partial();
+
+export type DeepLinkRegleInput = z.infer<typeof deepLinkRegleSchema>;

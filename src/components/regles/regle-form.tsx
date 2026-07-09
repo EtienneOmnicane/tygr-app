@@ -60,6 +60,7 @@ export function RegleForm({
   onCreer,
   mode = "creation",
   valeurInitiale,
+  creationInitiale,
   onModifier,
   onAnnuler,
   enCours = false,
@@ -75,6 +76,13 @@ export function RegleForm({
   mode?: "creation" | "edition";
   /** Règle à éditer (obligatoire si mode="edition") — pré-remplit le formulaire. */
   valeurInitiale?: RegleUI;
+  /**
+   * Pré-remplissage en mode CRÉATION (deep-link FB0709-REGLES-LIEN1) : motif et/ou
+   * catégorie proposés à l'ouverture. Le conteneur remonte le composant (via `key`)
+   * quand ces valeurs changent → pré-remplissage par initialisation d'état (comme
+   * l'édition). Valeurs déjà validées côté serveur (motif borné, catégorie du tenant).
+   */
+  creationInitiale?: { pattern?: string; categoryId?: string };
   /** Remonte la modification (mode édition). */
   onModifier?: (input: ModificationRegle) => void;
   /** Annule l'édition (referme le mode édition côté conteneur). */
@@ -84,12 +92,14 @@ export function RegleForm({
 }) {
   const edition = mode === "edition" && valeurInitiale !== undefined;
 
-  const [pattern, setPattern] = useState(edition ? valeurInitiale!.pattern : "");
+  const [pattern, setPattern] = useState(
+    edition ? valeurInitiale!.pattern : creationInitiale?.pattern ?? "",
+  );
   const [matchType, setMatchType] = useState<RuleMatchType>(
     edition ? valeurInitiale!.matchType : "contains",
   );
   const [categoryId, setCategoryId] = useState(
-    edition ? valeurInitiale!.categoryId : "",
+    edition ? valeurInitiale!.categoryId : creationInitiale?.categoryId ?? "",
   );
   const [isActive, setIsActive] = useState(edition ? valeurInitiale!.isActive : true);
 

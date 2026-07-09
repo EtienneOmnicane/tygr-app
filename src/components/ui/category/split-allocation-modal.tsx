@@ -22,6 +22,7 @@
  * injectées par le conteneur (Server Actions en réel, stubs en démo/test).
  */
 import { useId, useMemo, useState } from "react";
+import Link from "next/link";
 
 import { formatMontant } from "@/lib/format-montant";
 import { Modal } from "@/components/ui/modal/modal";
@@ -79,6 +80,13 @@ export function SplitAllocationModal({
     transactionDate: string;
     /** Libellé propre (ex. « Beachcomber Resorts »). */
     label: string;
+    /**
+     * Marchand normalisé NON-PII (`cleanLabel`) — SEULE valeur autorisée comme motif
+     * de règle (FB0709-REGLES-LIEN1). `null` si absent : pas de lien « Créer une règle »
+     * (on ne met JAMAIS `bankLabelRaw` en query param — PII bancaire). Distinct de
+     * `label` (résolu, peut être le brut).
+     */
+    cleanLabel?: string | null;
     /** Montant ABSOLU de la transaction, chaîne décimale > 0. */
     montantAbs: string;
     devise: string;
@@ -130,10 +138,21 @@ export function SplitAllocationModal({
   // (le conteneur recharge le référentiel au prochain rendu). On les CONCATÈNE aux
   // props plutôt que de dupliquer tout l'état (évite un setState/effect de synchro).
   const [categoriesCreees, setCategoriesCreees] = useState<CategorieUI[]>([]);
-  const categoriesLocales = useMemo(
-    () => [...categories, ...categoriesCreees],
-    [categories, categoriesCreees],
-  );
+  // DÉDOUBLONNAGE par id (FB0709-CAT-PICKER-FRAICHEUR1) : depuis que le conteneur
+  // /transactions remonte lui-même les créations dans sa prop `categories`, une
+  // catégorie créée ici apparaîtrait DEUX fois (une via `categories`, une via
+  // `categoriesCreees`). On garde `categoriesCreees` comme filet (démo/conteneur
+  // qui ne remonte pas), mais on unifie par id → jamais de doublon dans le picker.
+  const categoriesLocales = useMemo(() => {
+    const vus = new Set<string>();
+    const fusion: CategorieUI[] = [];
+    for (const c of [...categories, ...categoriesCreees]) {
+      if (vus.has(c.id)) continue;
+      vus.add(c.id);
+      fusion.push(c);
+    }
+    return fusion;
+  }, [categories, categoriesCreees]);
 
   // CTA « Importer les catégories standard » (picker vide) : appelle l'action
   // ADMIN puis FUSIONNE les catégories renvoyées dans l'état local (affichage
@@ -237,6 +256,27 @@ export function SplitAllocationModal({
 
   const categorieDe = (id: string | null) =>
     id ? categoriesLocales.find((c) => c.id === id) ?? null : null;
+
+  // Deep-link « Créer une règle » (FB0709-REGLES-LIEN1). PII : le motif = `cleanLabel`
+  // UNIQUEMENT (jamais `bankLabelRaw`) → pas de lien si cleanLabel absent/vide. Si une
+  // SEULE catégorie distincte est déjà choisie dans la ventilation, on la pré-remplit
+  // (une règle vise 1 catégorie). encodeURIComponent protège le query param ; l'URL
+  // n'est NI loggée NI construite serveur (aucun oracle). Le libellé est court par
+  // nature (marchand normalisé), pas de risque de longueur d'URL.
+  const motifPropre = transaction.cleanLabel?.trim() ?? "";
+  const categoriesChoisiesUniques = Array.from(
+    new Set(lignes.map((l) => l.categoryId).filter((id): id is string => id !== null)),
+  );
+  const lienCreerRegle =
+    motifPropre.length > 0
+      ? (() => {
+          const p = new URLSearchParams({ nouvelle: "1", motif: motifPropre });
+          if (categoriesChoisiesUniques.length === 1) {
+            p.set("categorie", categoriesChoisiesUniques[0]);
+          }
+          return `/regles?${p.toString()}`;
+        })()
+      : null;
 
   // Affichage du montant dans le champ : brut si focus, formaté (nu) sinon.
   function affichageMontant(ligne: LigneAllocation): string {
@@ -538,6 +578,21 @@ export function SplitAllocationModal({
               >
                 + Catégoriser le reste ({formatMontant(etat.reste, transaction.devise)})
               </button>
+            )}
+
+            {/* Deep-link « Créer une règle » (FB0709-REGLES-LIEN1) : pré-remplit
+                /regles avec le libellé PROPRE (cleanLabel, jamais le brut) et la
+                catégorie choisie (si une seule). Navigation → la modale se démonte.
+                Absent si pas de cleanLabel (on ne met jamais de PII en URL). */}
+            {lienCreerRegle && (
+              <Link
+                href={lienCreerRegle}
+                className="ml-auto inline-flex cursor-pointer items-center gap-1.5 text-sm font-medium
+                  text-text-muted transition-colors hover:text-primary focus:outline-none
+                  focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                <span aria-hidden>⚡</span> Créer une règle pour ce libellé
+              </Link>
             )}
           </div>
         </div>

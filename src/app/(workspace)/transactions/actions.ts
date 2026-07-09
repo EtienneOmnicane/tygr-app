@@ -31,6 +31,7 @@ import {
   ServiceIndisponibleError,
 } from "@/server/auth/session";
 import {
+  CategorieDejaExisteError,
   CategorieDupliqueeError,
   CategorieIntrouvableError,
   CategorieNonAutoriseeError,
@@ -99,6 +100,9 @@ function echec(
   } else if (erreur instanceof CategorieIntrouvableError) {
     code = erreur.code; // CATEGORY_NOT_FOUND
     message = "Catégorie introuvable.";
+  } else if (erreur instanceof CategorieDejaExisteError) {
+    code = erreur.code; // CATEGORIE_DEJA_EXISTANTE
+    message = "Cette catégorie existe déjà.";
   } else if (erreur instanceof CurseurInvalideError) {
     code = erreur.code; // INVALID_CURSOR
     message = "Page demandée invalide.";
