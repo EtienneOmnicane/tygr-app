@@ -42,7 +42,6 @@ import type {
 
 import {
   archiverCategorieAction,
-  type CategorieDTO,
   creerCategorieAction,
   importerCategoriesStandardAction,
   listerCategoriesAction,
@@ -176,16 +175,19 @@ export default async function PageTransactions() {
   // peutAdministrer(role) (surface ABSENTE du DOM pour un non-admin, règle D2). La
   // garde de fond reste le repository (exigerAdminReferentiel), souveraine dans tous
   // les cas. Chaque closure adapte le DTO serveur au contrat UI (CategorieUI).
-  const versUI = (c: CategorieDTO): CategorieUI => ({
-    id: c.id,
-    name: c.name,
-    parentId: c.parentId,
-    isActive: c.isActive,
-  });
   const actionsReferentiel: ActionsReferentielCategories = {
     async listerCategories(): Promise<CategorieUI[]> {
       "use server";
-      return (await listerCategoriesAction()).map(versUI);
+      // Transformation DTO→UI INLINE : une closure "use server" ne peut pas capturer
+      // une fonction locale non-sérialisable (ex. un ancien `versUI` partagé) — Next
+      // la refuse au rendu (« Functions cannot be passed directly to Client
+      // Components »). On mappe donc ici, sans dépendance à une closure parente.
+      return (await listerCategoriesAction()).map((c) => ({
+        id: c.id,
+        name: c.name,
+        parentId: c.parentId,
+        isActive: c.isActive,
+      }));
     },
     async creerCategorie(input) {
       "use server";
