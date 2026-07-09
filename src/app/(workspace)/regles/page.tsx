@@ -30,6 +30,8 @@ import type { CategorieUI } from "@/components/ui/category";
 import { ReglesFeature } from "@/components/regles";
 import type { ActionsRegles, RegleUI } from "@/components/regles";
 
+import { deepLinkRegleSchema } from "@/lib/regles-schema";
+
 import { listerCategoriesAction } from "../transactions/actions";
 import {
   appliquerReglesAction,
@@ -42,7 +44,12 @@ import {
 
 export const metadata = { title: "Règles — Dodo" };
 
-export default async function PageRegles() {
+export default async function PageRegles({
+  searchParams,
+}: {
+  // Next 16 : searchParams est un Promise à `await` (AGENTS.md).
+  searchParams: Promise<{ [cle: string]: string | string[] | undefined }>;
+}) {
   let session;
   try {
     session = await exigerSessionWorkspace();
@@ -77,6 +84,31 @@ export default async function PageRegles() {
     parentId: c.parentId,
     isActive: c.isActive,
   }));
+
+  // Deep-link « Créer une règle » depuis la catégorisation (FB0709-REGLES-LIEN1) :
+  // `?nouvelle=1&motif=<pattern>&categorie=<uuid>`. Validation zod STRICTE + tolérante
+  // (valeurs mal formées ignorées, aucun oracle). La catégorie n'est pré-sélectionnée
+  // que si elle appartient VRAIMENT au workspace (présente dans `categories`, chargées
+  // sous RLS) → un uuid d'un AUTRE tenant est simplement ignoré (fail-closed, pas
+  // d'oracle d'existence). Le motif transite en clair dans l'URL : côté /transactions
+  // on n'y met QUE `cleanLabel` (jamais bank_label_raw) et on NE LOGGE PAS l'URL.
+  const params = await searchParams;
+  const deepLink = deepLinkRegleSchema.safeParse(params);
+  let creationInitiale: { pattern?: string; categoryId?: string } | undefined;
+  if (deepLink.success && deepLink.data.nouvelle === "1") {
+    const categorieValide =
+      deepLink.data.categorie &&
+      categories.some((c) => c.id === deepLink.data.categorie && c.isActive)
+        ? deepLink.data.categorie
+        : undefined;
+    // N'ouvre le formulaire pré-rempli que si au moins un champ exploitable subsiste.
+    if (deepLink.data.motif || categorieValide) {
+      creationInitiale = {
+        pattern: deepLink.data.motif,
+        categoryId: categorieValide,
+      };
+    }
+  }
 
   // Surface d'actions RÉELLE (closures serveur). Le retour de chaque action est
   // déjà normalisé `ResultatAction` côté ./actions.ts — on relaie tel quel, en
@@ -134,6 +166,7 @@ export default async function PageRegles() {
         categories={categories}
         actions={actions}
         peutGerer={peutGerer}
+        creationInitiale={creationInitiale}
       />
     </main>
   );

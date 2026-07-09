@@ -387,6 +387,9 @@ export function TransactionsFeature({
             transactionId: modale.transaction.transactionId,
             transactionDate: modale.transaction.transactionDate,
             label: modale.transaction.label,
+            // cleanLabel NON-PII → seul motif autorisé pour le deep-link « Créer une
+            // règle » (jamais bankLabelRaw). Null ⇒ pas de lien côté modale.
+            cleanLabel: modale.transaction.cleanLabel,
             montantAbs: modale.transaction.montantAbs,
             devise: modale.transaction.devise,
             sens: modale.transaction.sens,

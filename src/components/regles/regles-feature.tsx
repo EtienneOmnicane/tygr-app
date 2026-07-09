@@ -49,6 +49,7 @@ export function ReglesFeature({
   categories,
   actions,
   peutGerer = true,
+  creationInitiale,
 }: {
   /** Première page de règles (chargée en RSC), réutilisée puis rafraîchie. */
   initiales: RegleUI[];
@@ -57,6 +58,13 @@ export function ReglesFeature({
   actions: ActionsRegles;
   /** false = VIEWER (lecture seule : pas de création/suppression/ré-analyse). */
   peutGerer?: boolean;
+  /**
+   * Pré-remplissage du formulaire de CRÉATION (deep-link depuis la catégorisation,
+   * FB0709-REGLES-LIEN1) : motif et/ou catégorie proposés à l'arrivée. Déjà validé
+   * côté page (motif borné, catégorie appartenant au tenant). Absent = formulaire
+   * de création vierge, comportement inchangé.
+   */
+  creationInitiale?: { pattern?: string; categoryId?: string };
 }) {
   const [regles, setRegles] = useState<RegleUI[]>(initiales);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -299,9 +307,12 @@ export function ReglesFeature({
           />
         ) : (
           <RegleForm
-            key="creation"
+            // `key` intègre le pré-remplissage : si le deep-link change (motif/
+            // catégorie), le formulaire se ré-initialise proprement (pas d'effet).
+            key={`creation:${creationInitiale?.pattern ?? ""}:${creationInitiale?.categoryId ?? ""}`}
             categories={categories}
             onCreer={creer}
+            creationInitiale={creationInitiale}
             enCours={creationEnCours}
           />
         ))}
