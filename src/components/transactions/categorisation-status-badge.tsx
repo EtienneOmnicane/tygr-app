@@ -2,11 +2,13 @@
  * Indicateur de statut de ventilation pour une ligne de /transactions.
  * Présentationnel PUR (aucune donnée fetchée, aucun état).
  *
- * Rend, selon le résumé porté par la ligne (B2 du contrat) :
+ * Rend, selon le résumé porté par la ligne (B2 du contrat,
+ * FB0709-TX-CATEGORIE-VISIBLE1 : le NOM prime sur le compteur) :
  *  - 1 catégorie  → CategoryBadge réel (couleur déterministe), + « partiel » si la
  *                   somme des splits < |montant|.
- *  - N catégories → pastille neutre « N catégories » (la liste ne détaille pas ;
- *                   le détail s'ouvre dans la modale), + « partiel » éventuel.
+ *  - N catégories → badge de la catégorie DOMINANTE + suffixe « +N−1 » (le détail
+ *                   s'ouvre dans la modale) ; repli pastille neutre « N catégories »
+ *                   si la dominante est inconnue, + « partiel » éventuel.
  *  - 0 catégorie  → « Non catégorisé » en `text-muted` : incitation DISCRÈTE, pas
  *                   une alerte (l'absence de ventilation n'est pas une erreur).
  *
@@ -43,7 +45,7 @@ export function CategorisationStatusBadge({
   className,
 }: {
   statut: StatutCategorisation;
-  /** La catégorie unique si `nbCategories === 1`, sinon null. */
+  /** Catégorie unique (mono) ou DOMINANTE (multi) ; null si aucune/inconnue. */
   categorie: { id: string; name: string } | null;
   nbCategories: number;
   size?: "sm" | "md";
@@ -75,7 +77,25 @@ export function CategorisationStatusBadge({
     );
   }
 
-  // N catégories : pastille neutre de comptage (le détail vit dans la modale).
+  // N catégories, dominante CONNUE : badge nommé + « +N−1 » (les autres parts,
+  // détaillées dans la modale). Le nom peut tronquer (CategoryBadge), le suffixe
+  // reste entier. FB0709-TX-CATEGORIE-VISIBLE1.
+  if (categorie) {
+    return (
+      <span className={cn("inline-flex items-center gap-2", className)}>
+        <CategoryBadge name={categorie.name} colorKey={categorie.id} size={size} />
+        <span
+          className="text-[11px] font-medium text-text-muted"
+          title={`${nbCategories} catégories ventilées — détail dans la fenêtre de ventilation`}
+        >
+          +{nbCategories - 1}
+        </span>
+        {partiel && <IndicePartiel />}
+      </span>
+    );
+  }
+
+  // Repli (dominante inconnue) : pastille neutre de comptage.
   return (
     <span className={cn("inline-flex items-center gap-2", className)}>
       <span

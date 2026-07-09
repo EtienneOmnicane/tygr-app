@@ -19,7 +19,9 @@ import { z } from "zod";
  * dépendance va lib → server, jamais l'inverse). Plafond dur = anti-abus mémoire/SQL.
  */
 export const VENDORS_TOP_N_MAX = 100;
-export const VENDORS_TOP_N_DEFAUT = 10;
+// Défaut métier passé de 10 à 5 (retour Etienne 2026-07-09, FB0709-TOPVENDORS5) :
+// la carte « Top contreparties » se concentre sur les 5 plus gros postes.
+export const VENDORS_TOP_N_DEFAUT = 5;
 
 /** Granularité temporelle du cashflow (enum fermée, valeurs FR). */
 export const granulariteCashflowSchema = z.enum(["jour", "semaine", "mois"]);

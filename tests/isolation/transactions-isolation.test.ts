@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -219,6 +220,19 @@ describe("résumé de ventilation (anti-N+1, calculé en SQL)", () => {
     expect(parId[T3].nbSplits).toBe(1);
     expect(Number(parId[T3].montantVentile)).toBe(200);
   });
+
+  it("mono-split : la catégorie dominante = LA catégorie (id + nom, même requête)", async () => {
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100 })),
+    );
+    const parId = Object.fromEntries(page.lignes.map((l) => [l.id, l]));
+    // FB0709-TX-CATEGORIE-VISIBLE1 : le nom est joint en SQL (anti-N+1).
+    expect(parId[T2].categorieDominanteId).toBe(CAT_A);
+    expect(parId[T2].categorieDominanteNom).toBe("Fournisseurs");
+    // Sans split : null (LEFT JOIN), jamais un nom fabriqué.
+    expect(parId[T1].categorieDominanteId).toBeNull();
+    expect(parId[T1].categorieDominanteNom).toBeNull();
+  });
 });
 
 describe("filtres", () => {
@@ -340,5 +354,57 @@ describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () =
     );
     expect(vus.every((r) => r.workspaceId === WS_A)).toBe(true);
     expect(vus.some((r) => r.workspaceId === WS_B)).toBe(false);
+  });
+});
+
+// ── Catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1) ──────────
+// Déclaré EN DERNIER à dessein : ce bloc sème une transaction SUPPLÉMENTAIRE (T6)
+// qui fausserait les énumérations exhaustives des describes précédents (l'ordre
+// d'exécution vitest suit l'ordre de déclaration). Le semis passe par withWorkspace
+// sous tygr_app (GUC posé → WITH CHECK tenant vérifié, même chemin que l'app).
+describe("catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1)", () => {
+  const T6 = "66660006-0000-4000-8000-000000000000"; // 2026-03-11, 2 splits
+  const CAT_A2 = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // « Loyer »
+
+  afterAll(async () => {
+    // Hygiène : tombstone (jamais de DELETE, append-only) pour que toute
+    // extension future de la suite retrouve le jeu de données initial.
+    await withWorkspace(sessionA, (tx) =>
+      tx.execute(
+        sql`update transactions_cache set is_removed = true where id = ${T6}::uuid`,
+      ),
+    );
+  });
+
+  it("multi-splits : la dominante est la part au plus GROS montant", async () => {
+    await withWorkspace(sessionA, async (tx) => {
+      await tx.execute(
+        sql`insert into categories (id, workspace_id, name) values (${CAT_A2}, ${WS_A}, 'Loyer')`,
+      );
+      await tx.execute(sql`
+        insert into transactions_cache
+          (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,bank_label_raw,clean_label,is_removed)
+        values
+          (${T6},${WS_A},${ACC_A},'x6','2026-03-11','2026-03-11T08:00:00Z','-300.00','MUR','Debit','raw6','Achat D',false)
+      `);
+      // 50 (Fournisseurs) + 250 (Loyer) = 300 = |montant| → COMPLET ; dominante = Loyer.
+      await tx.execute(sql`
+        insert into transaction_categorizations
+          (workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by)
+        values
+          (${WS_A},${T6},'2026-03-11',${CAT_A},'50.00','MANUAL',${ALICE}),
+          (${WS_A},${T6},'2026-03-11',${CAT_A2},'250.00','MANUAL',${ALICE})
+      `);
+    });
+
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100 })),
+    );
+    const l = page.lignes.find((x) => x.id === T6);
+    expect(l).toBeDefined();
+    expect(l?.nbSplits).toBe(2);
+    expect(l?.statut).toBe("COMPLET");
+    expect(l?.categorieDominanteId).toBe(CAT_A2);
+    expect(l?.categorieDominanteNom).toBe("Loyer");
   });
 });

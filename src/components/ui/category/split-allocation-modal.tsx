@@ -319,10 +319,15 @@ export function SplitAllocationModal({
       }
     >
       <div className="flex flex-col gap-6">
-        {/* Contexte transaction */}
+        {/* Contexte transaction — description mise en AVANT (FB0709-TX-DESCRIPTION1,
+            CSS uniquement) : le libellé passe en 15px semi-gras `text-text` (il était
+            noyé dans le 13px muted) ; le reste du contexte (sens · montant) demeure
+            secondaire, le montant garde son emphase tabular-nums. */}
         <p className="text-[13px] text-text-muted">
-          {transaction.label} ·{" "}
-          {transaction.sens === "Credit" ? "entrée" : "sortie"} ·{" "}
+          <span className="text-[15px] font-semibold leading-snug text-text">
+            {transaction.label}
+          </span>{" "}
+          · {transaction.sens === "Credit" ? "entrée" : "sortie"} ·{" "}
           <span className="font-semibold tabular-nums text-text">
             {formatMontant(transaction.montantAbs, transaction.devise)}
           </span>
