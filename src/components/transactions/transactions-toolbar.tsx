@@ -6,60 +6,38 @@
  * - Sens : segmented control (segment actif = pill `ink` blanc, §2.3), pattern
  *   identique aux démos existantes (cohérence).
  * - Compte : affiché UNIQUEMENT s'il y a >1 compte connecté (sinon inutile).
- *   GROUPÉ PAR INSTITUTION (<optgroup>) : un même établissement (« Bank One »)
- *   ne se répète plus N fois — il devient l'en-tête de groupe, et chaque compte
- *   apparaît une fois par son `accountName` à l'intérieur (ergonomie, 2026-06-22).
+ *   Accordéon par TITULAIRE (`CompteSelecteur`, C2) — remplace l'ancien `<Select>`
+ *   natif groupé par institution, ingérable dès qu'un titulaire porte des dizaines
+ *   de comptes (« banque noyée », feedback 0709).
  * - Statut de ventilation : select natif (Tout / Non catégorisé / Partiel / Complet).
  *
  * Changer un filtre = le parent recharge la page 1 (reset du curseur).
  */
-import { useMemo } from "react";
-
 import { Select } from "@/components/ui/select";
 
+import { CompteSelecteur } from "./comptes-selecteur";
 import type {
   FiltresTransactions,
   StatutCategorisation,
 } from "./types-transactions";
 
 /**
- * Un compte connecté, pour le filtre par compte. On porte `accountName` ET
- * `institutionName` (et non plus un `nom` pré-résolu) pour pouvoir GROUPER par
- * établissement dans le select : l'institution devient l'`<optgroup>`, le compte
- * l'`<option>`. `institutionName` peut être nul (banque inconnue → groupe
- * « Autres comptes »).
+ * Un compte connecté, pour le filtre par compte. Porte `accountName` +
+ * `institutionName` (sous-libellé de l'option) et le TITULAIRE (`holderId`/
+ * `holderName`) — clé de groupement de l'accordéon `CompteSelecteur` (C2).
  */
 export interface CompteFiltre {
   bankAccountId: string;
   accountName: string;
   institutionName: string | null;
-}
-
-/** Libellé du groupe pour les comptes sans institution résolue. */
-const GROUPE_SANS_INSTITUTION = "Autres comptes";
-
-/**
- * Regroupe les comptes par institution en PRÉSERVANT l'ordre d'arrivée (le
- * serveur les trie déjà par `accountName` ; on ne réordonne pas). Chaque
- * institution rencontrée crée un groupe ; les comptes sans institution tombent
- * dans un groupe « Autres comptes » placé selon sa 1re occurrence.
- */
-function grouperParInstitution(
-  comptes: CompteFiltre[],
-): Array<{ institution: string; comptes: CompteFiltre[] }> {
-  const groupes: Array<{ institution: string; comptes: CompteFiltre[] }> = [];
-  const index = new Map<string, number>();
-  for (const compte of comptes) {
-    const cle = compte.institutionName ?? GROUPE_SANS_INSTITUTION;
-    let pos = index.get(cle);
-    if (pos === undefined) {
-      pos = groupes.length;
-      index.set(cle, pos);
-      groupes.push({ institution: cle, comptes: [] });
-    }
-    groupes[pos].comptes.push(compte);
-  }
-  return groupes;
+  /**
+   * Titulaire (Omni-FI Party) du compte, pour l'accordéon de sélection groupé par
+   * titulaire (C2 — `CompteSelecteur`). `null` = compte sans titulaire exploitable
+   * → bucket « Non regroupé ». Ces deux champs satisfont `CompteTitulable`
+   * (`grouperParTitulaire`). Fournis par `listerComptes` (via `account_party_role`).
+   */
+  holderId: string | null;
+  holderName: string | null;
 }
 
 const OPTIONS_STATUT: Array<{ valeur: StatutCategorisation | ""; label: string }> = [
@@ -87,36 +65,24 @@ export function TransactionsToolbar({
     "focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary " +
     "disabled:opacity-[0.48]";
 
-  // Comptes groupés par établissement (mémoïsé : ne change qu'avec la liste).
-  const groupes = useMemo(() => grouperParInstitution(comptes), [comptes]);
-
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="flex flex-wrap items-start gap-3">
       {/* NB : le filtre Sens (Entrées/Sorties) n'est PAS exposé en v1 — le schéma de
           lecture Backend ne supporte pas encore ce filtre (pas de champ `sens`,
           .strict). Le filtrer côté client casserait la pagination (pages tronquées).
           À ré-activer dès que Backend l'ajoute (tracé TODOS TX-FILTRE1). */}
 
-      {/* Compte — seulement si plusieurs comptes, groupés par institution */}
+      {/* Compte — seulement si plusieurs comptes. Accordéon par TITULAIRE
+          (CompteSelecteur, C2) : remplace le <Select> natif groupé par institution,
+          ingérable dès qu'un titulaire porte des dizaines de comptes. */}
       {comptes.length > 1 && (
-        <Select
-          ariaLabel="Filtrer par compte"
-          value={filtres.bankAccountId ?? ""}
+        <CompteSelecteur
+          comptes={comptes}
+          valeur={filtres.bankAccountId}
           disabled={disabled}
-          onChange={(v) =>
-            onChange({ ...filtres, bankAccountId: v || undefined })
+          onChange={(bankAccountId) =>
+            onChange({ ...filtres, bankAccountId })
           }
-          className="max-w-[16rem]"
-          groups={[
-            { label: "", options: [{ value: "", label: "Tous les comptes" }] },
-            ...groupes.map((groupe) => ({
-              label: groupe.institution,
-              options: groupe.comptes.map((c) => ({
-                value: c.bankAccountId,
-                label: c.accountName,
-              })),
-            })),
-          ]}
         />
       )}
 

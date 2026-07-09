@@ -55,6 +55,40 @@ Un lot du plan `PLAN-graphiques-kpi.md` a été **volontairement différé** :
   statu quo, cocher cette entrée ; sinon ~0,25 j (passer les groupes complets au
   handler).
 
+- [ ] **TX-SELECTEUR-A11Y1 (P2, effort ~0,25 j, 2026-07-09) — accordéon
+  `CompteSelecteur` (/transactions) : radios dans un `<details>` replié = hors arbre
+  d'accessibilité.** Le nouvel accordéon (C2, `src/components/transactions/comptes-selecteur.tsx`)
+  est un `role="radiogroup"` où chaque compte est un `role="radio"` posé DANS un
+  `<details>` : un volet replié met ses radios hors de l'arbre a11y — un lecteur
+  d'écran ne les atteint pas sans d'abord ouvrir le `<summary>`. Mitigations déjà en
+  place : « Tous les comptes » toujours visible hors accordéon, et le volet contenant
+  la sélection courante est ouvert d'office (`contientSelection`). Distinct de
+  [[TITULAIRE-A11Y1]] (qui vise la `listbox` du PerimetreSwitcher). Constat cross-review
+  2026-07-09, confiance 6/10. **Déclencheur** : premier audit accessibilité, OU toute
+  retouche du sélecteur — envisager un vrai composant divulgation clavier à ce moment.
+
+- [ ] **TX-ISSELECTED-MORT1 (P2, effort ~0,5 j — migration + nettoyage, 2026-07-09) —
+  colonne `bank_accounts.is_selected` MORTE-NÉE (toujours `true`).** Diagnostic C1 du
+  chantier sélecteur (PLAN-transactions-selecteur-entites.md) : le bug supposé « banque
+  invisible » via `listerComptes` filtrant `.where(eq(bankAccounts.isSelected, true))`
+  (`src/server/repositories/dashboard.ts:202`, idem `:334`/`:396` et
+  `orchestration.ts:971`/`:1270`) est un FAUX suspect. Preuve runtime (base locale
+  d'Etienne, 87 comptes) : `is_selected = false` → **0 ligne** ; le filtre ne masque
+  rien. Le seul écrivain applicatif est `upsertCompte` (`src/server/repositories/ingestion.ts`)
+  qui pose `isSelected: c.isSelected` aux DEUX branches (INSERT `:132` ET UPDATE `:146`),
+  avec un call site unique en prod (`orchestration.ts:339`, valeur `true`) + 2 seeds
+  dev-only (aussi `true`). AUCUN chemin de désélection (widget/UI/migration) n'existe.
+  Colonne `NOT NULL DEFAULT true` (`schema.ts:311`), commentaire « Account Selection
+  (consentement) » : vestige d'une feature de sélection de comptes au widget jamais
+  livrée. Le vrai « compte noyé » ressenti par Etienne = ergonomie du `<Select>` natif
+  (résolu par C2). **Décision** : NE PAS retirer le filtre `isSelected=true` dans ce PR
+  (change le contrat de 4 requêtes dashboard, hors périmètre C2 ; le filtre est un
+  fail-safe correct tant que la colonne existe). **Déclencheur** : si Omni-FI livre une
+  vraie « account selection » au widget → câbler l'écriture `false` ; SINON, à la
+  prochaine passe de nettoyage schéma → migration expand-contract retirant la colonne +
+  les 6 filtres. Dette d'ergonomie/schéma mort, PAS d'isolation (le filtre n'affecte ni
+  le tenant ni l'entity_scope).
+
 - [ ] **TITULAIRE-TEST-SCOPE1 (P2, effort ~0,25 j) — couverture de test : lecture
   titulaire sous `account_scope`/`view_filter` non testée directement.**
   `tests/isolation/dashboard-titulaire-isolation.test.ts` prouve tenant +
