@@ -65,22 +65,47 @@ BEGIN
     FROM _fusion_categories f
     WHERE tc.category_id = f.doublon;
 
-    -- 1c. RÈGLES : supprimer d'abord celles qui deviendraient un DOUBLON EXACT
-    --     après re-pointage (même workspace, pattern, match_type, category=survivante)
-    --     — la contrainte categorization_rules_workspace_unique l'exigerait. On garde
-    --     la règle déjà rattachée à la survivante ; on jette la redondante du doublon.
+    -- 1c. RÈGLES : le re-pointage vers la survivante peut créer un DOUBLON EXACT
+    --     (workspace_id, pattern, match_type, category_id) → violerait
+    --     categorization_rules_workspace_unique. Le piège (cross-review) : ≥ 2
+    --     doublons peuvent porter LA MÊME règle alors que la survivante ne l'a pas —
+    --     un simple « existe-t-il déjà une règle sur la survivante ? » les laisserait
+    --     TOUS passer puis collisionner entre eux à l'UPDATE. On raisonne donc sur la
+    --     CLÉ FINALE (workspace, pattern, match_type, category CIBLE = survivante pour
+    --     un doublon, category actuelle sinon) et on ne garde qu'UNE règle par clé
+    --     finale, toutes catégories confondues (survivante ET doublons). Priorité au
+    --     survivant : garde-la si elle porte déjà la clé, sinon la plus ancienne
+    --     (created_at, id) — ordre total déterministe. Les autres sont supprimées
+    --     AVANT le re-pointage → l'UPDATE ne peut plus collisionner.
     DELETE FROM categorization_rules r
-    USING _fusion_categories f
-    WHERE r.category_id = f.doublon
-      AND EXISTS (
-        SELECT 1 FROM categorization_rules r2
-        WHERE r2.workspace_id = r.workspace_id
-          AND r2.pattern = r.pattern
-          AND r2.match_type = r.match_type
-          AND r2.category_id = f.survivante
-      );
+    WHERE r.id IN (
+      SELECT id FROM (
+        SELECT
+          r2.id,
+          row_number() OVER (
+            PARTITION BY
+              r2.workspace_id,
+              r2.pattern,
+              r2.match_type,
+              coalesce(f2.survivante, r2.category_id)
+            ORDER BY
+              -- une règle DÉJÀ sur la survivante gagne (elle ne bouge pas) ;
+              (f2.survivante IS NULL) DESC,
+              r2.created_at ASC,
+              r2.id ASC
+          ) AS rang
+        FROM categorization_rules r2
+        LEFT JOIN _fusion_categories f2 ON f2.doublon = r2.category_id
+        WHERE r2.category_id IN (
+          SELECT survivante FROM _fusion_categories
+          UNION SELECT doublon FROM _fusion_categories
+        )
+      ) classees
+      WHERE classees.rang > 1
+    );
 
-    --     Puis re-pointer les règles restantes du doublon vers la survivante.
+    --     Puis re-pointer les règles SURVIVANTES (une par clé finale) du doublon
+    --     vers la survivante — plus aucune collision possible.
     UPDATE categorization_rules r
     SET category_id = f.survivante
     FROM _fusion_categories f

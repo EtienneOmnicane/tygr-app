@@ -37,6 +37,14 @@ const VAT_RECENT = "cccc0002-cccc-4ccc-8ccc-cccccccccccc"; // doublon → fusion
 // Une sous-catégorie rattachée au doublon récent (doit suivre la survivante).
 const SOUS_DU_RECENT = "cccc0003-cccc-4ccc-8ccc-cccccccccccc";
 
+// TROIS Natures « FEES » homonymes (cross-review CONSTAT 1) : la survivante NE
+// porte PAS la règle « BANKFEE », mais les DEUX doublons la portent chacun. Sans
+// la déduplication par CLÉ FINALE, le re-pointage créerait deux règles identiques
+// sur la survivante → violation de categorization_rules_workspace_unique.
+const FEES_SURV = "cccc1001-cccc-4ccc-8ccc-cccccccccccc"; // survivante (sans règle)
+const FEES_DUP1 = "cccc1002-cccc-4ccc-8ccc-cccccccccccc"; // doublon (règle BANKFEE)
+const FEES_DUP2 = "cccc1003-cccc-4ccc-8ccc-cccccccccccc"; // doublon (règle BANKFEE)
+
 function statements(sqlText: string): string[] {
   return sqlText.split("--> statement-breakpoint").map((s) => s.trim()).filter((s) => s.length > 0);
 }
@@ -82,7 +90,11 @@ beforeAll(async () => {
     insert into categories (id,workspace_id,name,parent_id,created_at) values
       ('${VAT_ANCIEN}','${WS}','VAT',null,'2026-01-01T00:00:00Z'),
       ('${VAT_RECENT}','${WS}','vat',null,'2026-02-01T00:00:00Z'),
-      ('${SOUS_DU_RECENT}','${WS}','Import','${VAT_RECENT}'::uuid,'2026-02-02T00:00:00Z');
+      ('${SOUS_DU_RECENT}','${WS}','Import','${VAT_RECENT}'::uuid,'2026-02-02T00:00:00Z'),
+      -- Groupe FEES : survivante SANS règle, 2 doublons portant la MÊME règle.
+      ('${FEES_SURV}','${WS}','FEES',null,'2026-01-01T00:00:00Z'),
+      ('${FEES_DUP1}','${WS}','fees',null,'2026-02-01T00:00:00Z'),
+      ('${FEES_DUP2}','${WS}','Fees',null,'2026-03-01T00:00:00Z');
 
     -- Un split rattaché au DOUBLON récent (doit être re-pointé vers la survivante).
     insert into transaction_categorizations (id,workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by) values
@@ -93,7 +105,12 @@ beforeAll(async () => {
     -- migration doit en supprimer une (sinon violation du UNIQUE des règles).
     insert into categorization_rules (id,workspace_id,pattern,match_type,category_id,priority,created_by) values
       ('11110001-1111-4111-8111-111111111111','${WS}','TVA','contains','${VAT_ANCIEN}',0,'${USER}'),
-      ('11110002-1111-4111-8111-111111111111','${WS}','TVA','contains','${VAT_RECENT}',1,'${USER}');
+      ('11110002-1111-4111-8111-111111111111','${WS}','TVA','contains','${VAT_RECENT}',1,'${USER}'),
+      -- CONSTAT 1 : deux doublons FEES portent chacun « BANKFEE/contains », la
+      -- survivante NON → clé finale identique après re-pointage. La dédup par clé
+      -- finale doit n'en garder qu'UNE (sinon 23505 → migration en échec).
+      ('11110003-1111-4111-8111-111111111111','${WS}','BANKFEE','contains','${FEES_DUP1}',0,'${USER}'),
+      ('11110004-1111-4111-8111-111111111111','${WS}','BANKFEE','contains','${FEES_DUP2}',1,'${USER}');
   `);
 
   // Applique 0020 (dédoublonnage + index).
@@ -138,6 +155,26 @@ describe("migration 0020 — dédoublonnage LEGACY", () => {
       `select category_id from categorization_rules where pattern = 'TVA' and match_type = 'contains'`,
     );
     expect(cat.rows[0].category_id).toBe(VAT_ANCIEN);
+  });
+
+  it("CONSTAT 1 : ≥2 doublons portant LA MÊME règle, survivante sans → une seule règle BANKFEE reste (pas de 23505)", async () => {
+    // Si la migration avait échoué (violation categorization_rules_workspace_unique),
+    // beforeAll aurait levé et tous les tests seraient rouges. Qu'on arrive ici prouve
+    // déjà la non-régression. On vérifie en plus l'état final attendu.
+    const surv = await client.query<{ n: number }>(
+      `select count(*)::int as n from categories where lower(name) = 'fees'`,
+    );
+    expect(surv.rows[0].n).toBe(1); // les 3 FEES fusionnées en 1
+
+    const regles = await client.query<{ n: number }>(
+      `select count(*)::int as n from categorization_rules
+       where workspace_id = '${WS}' and pattern = 'BANKFEE' and match_type = 'contains'`,
+    );
+    expect(regles.rows[0].n).toBe(1); // les 2 règles identiques dédupliquées en 1
+    const cat = await client.query<{ category_id: string }>(
+      `select category_id from categorization_rules where pattern = 'BANKFEE'`,
+    );
+    expect(cat.rows[0].category_id).toBe(FEES_SURV); // pointe la survivante
   });
 
   it("l'index unique fonctionnel REFUSE désormais un nouveau doublon de casse", async () => {

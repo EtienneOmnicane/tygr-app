@@ -491,6 +491,24 @@ export class CategorieDejaExisteError extends Error {
 const PARENT_RACINE_SENTINELLE = "00000000-0000-0000-0000-000000000000";
 
 /**
+ * Extrait le SQLSTATE Postgres d'une erreur (5 caractères, ex. « 23505 »), en
+ * remontant la chaîne de `cause`. Calque exact de `entites.ts` (pattern projet) :
+ * on ignore les `code` applicatifs de nos propres erreurs (chaînes nommées comme
+ * CATEGORIE_DEJA_EXISTANTE). Sert à traduire une violation d'unicité de COURSE
+ * (deux créations concurrentes passent le pré-check applicatif puis insèrent → la
+ * 2ᵉ heurte l'index 0020) en erreur NOMMÉE plutôt qu'un 23505 brut non mappé.
+ */
+function codePg(e: unknown): string | undefined {
+  let cur: unknown = e;
+  while (cur instanceof Error) {
+    const c = (cur as { code?: unknown }).code;
+    if (typeof c === "string" && /^[0-9A-Z]{5}$/.test(c)) return c;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
  * Vrai s'il existe DÉJÀ une catégorie de même nom (insensible à la casse ET aux
  * accents — cohérent avec la recherche du picker, `toLocaleLowerCase("fr")`… mais
  * ici en SQL via `lower()`) au MÊME niveau (même parent effectif) dans le
@@ -579,20 +597,28 @@ export async function creerCategorie<TDb extends AnyPgDatabase>(
 ): Promise<{ categoryId: string }> {
   exigerAdminReferentiel(ctx);
   // Rejet insensible à la casse AVANT insert (FB0709-CAT-DOUBLONS1) : message UI
-  // clair au lieu d'une violation de contrainte brute. L'index fonctionnel 0020
-  // reste le rempart anti-course (deux INSERT concurrents).
+  // clair au lieu d'une violation de contrainte brute.
   if (await existeCategorieMemeNom(tx, ctx, input.name, input.parentId)) {
     throw new CategorieDejaExisteError();
   }
-  const inserted = await tx
-    .insert(categories)
-    .values({
-      workspaceId: ctx.workspaceId,
-      name: input.name,
-      parentId: input.parentId,
-    })
-    .returning({ id: categories.id });
-  return { categoryId: inserted[0].id };
+  try {
+    const inserted = await tx
+      .insert(categories)
+      .values({
+        workspaceId: ctx.workspaceId,
+        name: input.name,
+        parentId: input.parentId,
+      })
+      .returning({ id: categories.id });
+    return { categoryId: inserted[0].id };
+  } catch (e) {
+    // COURSE : deux créations concurrentes passent le pré-check puis insèrent → la
+    // 2ᵉ heurte l'index unique fonctionnel 0020 (23505). On traduit en erreur
+    // NOMMÉE (message UI « Cette catégorie existe déjà ») au lieu d'un 23505 brut
+    // qui retomberait dans le catch-all générique de l'action (pattern entites.ts).
+    if (codePg(e) === "23505") throw new CategorieDejaExisteError();
+    throw e;
+  }
 }
 
 /**
@@ -639,17 +665,25 @@ export async function renommerCategorie<TDb extends AnyPgDatabase>(
     throw new CategorieDejaExisteError();
   }
 
-  const maj = await tx
-    .update(categories)
-    .set({ name: input.name })
-    // RLS + filtre explicite workspace_id (défense en profondeur).
-    .where(
-      and(
-        eq(categories.id, input.categoryId),
-        eq(categories.workspaceId, ctx.workspaceId),
-      ),
-    )
-    .returning({ id: categories.id });
+  let maj;
+  try {
+    maj = await tx
+      .update(categories)
+      .set({ name: input.name })
+      // RLS + filtre explicite workspace_id (défense en profondeur).
+      .where(
+        and(
+          eq(categories.id, input.categoryId),
+          eq(categories.workspaceId, ctx.workspaceId),
+        ),
+      )
+      .returning({ id: categories.id });
+  } catch (e) {
+    // COURSE (cf. creerCategorie) : un renommage concurrent vers le même nom heurte
+    // l'index 0020 → 23505 traduit en erreur nommée plutôt qu'un brut non mappé.
+    if (codePg(e) === "23505") throw new CategorieDejaExisteError();
+    throw e;
+  }
   if (maj.length === 0) {
     throw new CategorieIntrouvableError();
   }
