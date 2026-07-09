@@ -11,13 +11,24 @@
  */
 import type { CompteConnecte } from "@/server/repositories/dashboard";
 
-export interface GroupeTitulaire {
+/**
+ * Forme MINIMALE qu'un compte doit exposer pour être groupé par titulaire : le
+ * helper ne lit QUE ces deux champs. Générique `T` = type réel du compte (par défaut
+ * `CompteConnecte`, mais aussi `CompteFiltre` de la toolbar /transactions) — chaque
+ * compte ressort tel quel dans son groupe, sans perte de champ.
+ */
+export interface CompteTitulable {
+  holderId?: string | null;
+  holderName?: string | null;
+}
+
+export interface GroupeTitulaire<T extends CompteTitulable = CompteConnecte> {
   /** parties.id — clé de groupe STABLE (désambiguïse deux titulaires homonymes). */
   holderId: string | null;
   /** parties.name — libellé affiché ; null UNIQUEMENT pour le bucket « Non regroupé ». */
   holderName: string | null;
   /** Comptes du groupe, dans l'ordre reçu (déjà triés par accountName en amont). */
-  comptes: CompteConnecte[];
+  comptes: T[];
 }
 
 /** Tri des libellés titulaire en français (accents, casse). */
@@ -43,7 +54,10 @@ function estTitulaireGenerique(holderName: string): boolean {
 }
 
 /** Tri alpha fr des groupes nommés, homonymie départagée par holderId. */
-function comparerGroupes(a: GroupeTitulaire, b: GroupeTitulaire): number {
+function comparerGroupes(
+  a: GroupeTitulaire<CompteTitulable>,
+  b: GroupeTitulaire<CompteTitulable>,
+): number {
   return (
     collator.compare(a.holderName ?? "", b.holderName ?? "") ||
     // Tiebreak homonymie par id : comparaison de code units (locale-indépendante,
@@ -68,11 +82,11 @@ function comparerGroupes(a: GroupeTitulaire, b: GroupeTitulaire): number {
  * Le REPLI mono-groupe (< 2 groupes → liste plate, pas d'accordéon superflu) est
  * une décision de VUE : les consommateurs testent `groupes.length` (D4/D6).
  */
-export function grouperParTitulaire(
-  comptes: CompteConnecte[],
-): GroupeTitulaire[] {
-  const parId = new Map<string, GroupeTitulaire>();
-  const sansTitulaire: CompteConnecte[] = [];
+export function grouperParTitulaire<T extends CompteTitulable = CompteConnecte>(
+  comptes: T[],
+): GroupeTitulaire<T>[] {
+  const parId = new Map<string, GroupeTitulaire<T>>();
+  const sansTitulaire: T[] = [];
 
   for (const compte of comptes) {
     const holderId = compte.holderId ?? null;

@@ -21,6 +21,7 @@
 import { useMemo, useState } from "react";
 
 import { Modal } from "@/components/ui/modal/modal";
+import { Select } from "@/components/ui/select";
 
 import type { ActionsReferentielCategories, CategorieUI } from "./types";
 import { CategoryBadge } from "./category-badge";
@@ -136,23 +137,21 @@ export function CategoryManagerModal({
                 )}
               />
             </label>
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
               <span className="text-[13px] text-text-muted">Nature parente</span>
-              <select
+              {/* Primitive Select (cohérence avec la toolbar) plutôt que <select>
+                  natif : liste stylée aux tokens, scroll borné. Échap y est capturé
+                  et stoppé → ne ferme PAS la modale parente (pattern du Select). */}
+              <Select
+                ariaLabel="Nature parente de la catégorie"
                 value={parentId ?? ""}
-                onChange={(e) => setParentId(e.target.value || null)}
-                className="rounded-control border border-line bg-surface-inset px-3 py-2
-                  text-sm text-text focus:border-primary focus:outline-none focus:ring-2
-                  focus:ring-primary"
-              >
-                <option value="">— Aucune (Nature racine) —</option>
-                {natures.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={(v) => setParentId(v || null)}
+                options={[
+                  { value: "", label: "— Aucune (Nature racine) —" },
+                  ...natures.map((n) => ({ value: n.id, label: n.name })),
+                ]}
+              />
+            </div>
             <button
               type="button"
               onClick={creer}

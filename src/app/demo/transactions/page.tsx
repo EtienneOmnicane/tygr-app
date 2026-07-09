@@ -49,14 +49,13 @@ const CATEGORIES: CategorieUI[] = [
   { id: "cat-income-clients", name: "Paiements clients", parentId: "cat-income", isActive: true },
 ];
 
-// Fixture calibrée pour montrer le GROUPEMENT par institution (<optgroup>) :
-// deux comptes sous « Bank One » + un compte sous une autre banque + un compte
-// sans institution (→ groupe de repli « Autres comptes »).
+// Fixtures : 2 titulaires nommés (groupes) + 1 compte sans titulaire (bucket « Autres
+// comptes ») → couvre le rendu du groupement par titulaire du popover au Visual QA.
 const COMPTES = [
-  { bankAccountId: "acc-mur", accountName: "Compte courant MUR", institutionName: "Bank One" },
-  { bankAccountId: "acc-usd", accountName: "Compte USD", institutionName: "Bank One" },
-  { bankAccountId: "acc-mcb", accountName: "Compte épargne", institutionName: "MCB" },
-  { bankAccountId: "acc-orphelin", accountName: "Compte non rattaché", institutionName: null },
+  { bankAccountId: "acc-mur", accountName: "Compte courant MUR", institutionName: "Bank One", holderId: "h-omnicane", holderName: "Omnicane Ltd" },
+  { bankAccountId: "acc-usd", accountName: "Compte USD", institutionName: "Bank One", holderId: "h-omnicane", holderName: "Omnicane Ltd" },
+  { bankAccountId: "acc-mcb", accountName: "Compte épargne", institutionName: "MCB", holderId: "h-sugar", holderName: "Sugar Investment" },
+  { bankAccountId: "acc-orphelin", accountName: "Compte non rattaché", institutionName: null, holderId: null, holderName: null },
 ];
 
 // Lignes fictives couvrant tous les cas d'affichage.

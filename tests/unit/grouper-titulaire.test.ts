@@ -164,6 +164,29 @@ describe("grouperParTitulaire", () => {
     );
     expect(ressortis.sort()).toEqual(["c1", "c2", "c3", "c4"]);
   });
+
+  it("générique sur le TYPE de compte : préserve les champs propres (CompteFiltre toolbar)", () => {
+    // Le helper ne lit que holderId/holderName ; il doit rendre les comptes TELS QUELS.
+    // Ici une forme minimale « CompteFiltre » (toolbar /transactions) — on vérifie que
+    // ses champs spécifiques (bankAccountId, accountName) ressortent intacts, ce que le
+    // paramètre de type générique garantit (pas de rabotage vers CompteConnecte).
+    type CompteFiltreLike = {
+      bankAccountId: string;
+      accountName: string;
+      holderId: string | null;
+      holderName: string | null;
+    };
+    const comptes: CompteFiltreLike[] = [
+      { bankAccountId: "a1", accountName: "Courant MUR", holderId: "h1", holderName: "Alpha" },
+      { bankAccountId: "a2", accountName: "Épargne", holderId: null, holderName: null },
+    ];
+    const groupes = grouperParTitulaire(comptes);
+    expect(groupes[0].holderName).toBe("Alpha");
+    // accountName (champ hors contrat de groupement) est conservé → typé, non raboté.
+    expect(groupes[0].comptes[0].accountName).toBe("Courant MUR");
+    expect(groupes[1].holderId).toBeNull();
+    expect(groupes[1].comptes[0].accountName).toBe("Épargne");
+  });
 });
 
 describe("etatSelectionGroupe (S2 — tri-état)", () => {

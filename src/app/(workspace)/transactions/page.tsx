@@ -86,13 +86,17 @@ export default async function PageTransactions() {
   // banque est inconnue, pour ne jamais afficher de vide.
   const nomCompte = (c: (typeof comptes)[number]) =>
     c.institutionName ?? c.accountName;
-  // Le FILTRE, lui, porte les deux champs : la toolbar groupe par institution
-  // (<optgroup>) et affiche l'accountName dedans — l'institution n'est donc plus
-  // répétée N fois. (Distinct du nom de la table ci-dessus, volontairement.)
+  // Le FILTRE porte le TITULAIRE (holderId/holderName, fournis par listerComptes via
+  // account_party_role) : la toolbar groupe les comptes par titulaire dans le popover
+  // (grouperParTitulaire) — l'institution n'est plus l'axe de groupement. accountName
+  // + institutionName restent pour le libellé de l'option (repli). holderName est de
+  // la PII d'affichage sous RLS : jamais loggé.
   const comptesFiltre = comptes.map((c) => ({
     bankAccountId: c.bankAccountId,
     accountName: c.accountName,
     institutionName: c.institutionName,
+    holderId: c.holderId ?? null,
+    holderName: c.holderName ?? null,
   }));
   const nomParCompte = new Map(
     comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
