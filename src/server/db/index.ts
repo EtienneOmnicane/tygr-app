@@ -187,6 +187,7 @@ export {
   archiverCategorie,
   importerReferentielCategories,
   VentilationDepasseError,
+  CategorieDejaExisteError,
   CategorieDupliqueeError,
   TransactionIntrouvableError,
   CategorieIntrouvableError,

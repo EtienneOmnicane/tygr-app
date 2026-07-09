@@ -24,6 +24,7 @@ import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   ajouterSplit,
   archiverCategorie,
+  CategorieDejaExisteError,
   CategorieDupliqueeError,
   CategorieIntrouvableError,
   CategorieNonAutoriseeError,
@@ -404,14 +405,17 @@ describe("remplacerSplits — atomique tout-ou-rien", () => {
 
 describe("CRUD référentiel de catégories — réservé ADMIN (décision PO 2026-06-22)", () => {
   it("ADMIN : creerCategorie crée une Nature, listerCategories la renvoie", async () => {
+    // NB : « Salaires » existe déjà (CAT_A2 du seed) → on crée un nom DISTINCT pour
+    // ne pas heurter la garde d'unicité insensible à la casse (FB0709-CAT-DOUBLONS1,
+    // testée séparément plus bas).
     const r = await withWorkspace(sessionAdmin, (tx, ctx) =>
-      creerCategorie(tx, ctx, { name: "Salaires", parentId: null }),
+      creerCategorie(tx, ctx, { name: "Assurances", parentId: null }),
     );
     expect(r.categoryId).toBeTruthy();
     // listerCategories reste ouvert à tous (lecture pour les pickers) : un membre
     // simple voit la catégorie créée.
     const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
-    expect(cats.some((c) => c.name === "Salaires")).toBe(true);
+    expect(cats.some((c) => c.name === "Assurances")).toBe(true);
   });
 
   it("MANAGER ne peut PAS créer de catégorie (CategorieNonAutorisee)", async () => {
@@ -501,6 +505,92 @@ describe("CRUD référentiel de catégories — réservé ADMIN (décision PO 20
     await expect(
       withWorkspace(sessionAdmin, (tx, ctx) => archiverCategorie(tx, ctx, CAT_B)),
     ).rejects.toBeInstanceOf(CategorieIntrouvableError);
+  });
+});
+
+// ── FB0709-CAT-DOUBLONS1 : unicité insensible à la casse + parent NULL ────────
+describe("unicité de catégorie insensible à la casse (FB0709-CAT-DOUBLONS1)", () => {
+  it("REFUSE un doublon EXACT au même niveau (CategorieDejaExiste)", async () => {
+    await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Marketing", parentId: null }),
+    );
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Marketing", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDejaExisteError);
+  });
+
+  it("REFUSE un doublon de CASSE au même niveau (« VAT » vs « vat »)", async () => {
+    await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "VAT", parentId: null }),
+    );
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "vat", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDejaExisteError);
+  });
+
+  it("REFUSE un doublon de RACINE (parent NULL) — le trou NULL≠NULL est fermé", async () => {
+    // C'est le bug exact d'Etienne : deux Natures « Frais » passaient l'ancien
+    // UNIQUE(workspace_id, name, parent_id) car NULL ≠ NULL en SQL.
+    await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Frais bancaires", parentId: null }),
+    );
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "frais bancaires", parentId: null }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDejaExisteError);
+  });
+
+  it("AUTORISE le même nom sous des PARENTS DIFFÉRENTS (unicité par niveau)", async () => {
+    const p1 = await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Nature P1", parentId: null }),
+    );
+    const p2 = await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Nature P2", parentId: null }),
+    );
+    await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Divers", parentId: p1.categoryId }),
+    );
+    // Même libellé « Divers » sous un AUTRE parent = niveau distinct → autorisé.
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        creerCategorie(tx, ctx, { name: "Divers", parentId: p2.categoryId }),
+      ),
+    ).resolves.toMatchObject({ categoryId: expect.any(String) });
+  });
+
+  it("renommer vers un nom EXISTANT (autre casse) au même niveau → CategorieDejaExiste", async () => {
+    const a = await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Alpha", parentId: null }),
+    );
+    await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Beta", parentId: null }),
+    );
+    // Renommer « Alpha » en « beta » (déjà pris, casse différente) → rejet.
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        renommerCategorie(tx, ctx, { categoryId: a.categoryId, name: "beta" }),
+      ),
+    ).rejects.toBeInstanceOf(CategorieDejaExisteError);
+  });
+
+  it("renommer une catégorie en changeant SEULEMENT sa casse (soi-même) → AUTORISÉ", async () => {
+    const c = await withWorkspace(sessionAdmin, (tx, ctx) =>
+      creerCategorie(tx, ctx, { name: "Gamma", parentId: null }),
+    );
+    // « Gamma » → « gamma » : la garde s'exclut elle-même (exclureId) → pas de faux
+    // doublon contre soi.
+    await expect(
+      withWorkspace(sessionAdmin, (tx, ctx) =>
+        renommerCategorie(tx, ctx, { categoryId: c.categoryId, name: "gamma" }),
+      ),
+    ).resolves.toBeUndefined();
+    const cats = await withWorkspace(sessionA, (tx, ctx) => listerCategories(tx, ctx));
+    expect(cats.some((x) => x.id === c.categoryId && x.name === "gamma")).toBe(true);
   });
 });
 

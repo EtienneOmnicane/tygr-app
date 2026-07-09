@@ -463,6 +463,72 @@ export class CategorieNonAutoriseeError extends Error {
 }
 
 /**
+ * Levée quand une catégorie de MÊME nom (insensible à la casse) existe déjà au
+ * MÊME niveau (même parent effectif) dans le workspace (FB0709-CAT-DOUBLONS1).
+ *
+ * DEUX gardes complémentaires, à ne pas confondre :
+ *  (1) applicative — CETTE erreur, levée AVANT l'INSERT/UPDATE : elle permet un
+ *      message UI clair (« Cette catégorie existe déjà ») plutôt qu'une violation
+ *      de contrainte brute, et couvre le cas casse (« VAT » vs « vat ») que
+ *      l'ancien UNIQUE (sensible à la casse) laissait passer ;
+ *  (2) structurelle — l'index unique fonctionnel `(workspace_id, LOWER(name),
+ *      COALESCE(parent_id, 0-uuid))` (migration 0020) : dernier rempart contre une
+ *      COURSE (deux créations concurrentes passent le check applicatif puis
+ *      insèrent) — la 2ᵉ échoue sur l'index. La garde applicative NE remplace PAS
+ *      l'index ; elle le double pour l'ergonomie. Non-énumérant.
+ */
+export class CategorieDejaExisteError extends Error {
+  readonly code = "CATEGORIE_DEJA_EXISTANTE";
+  constructor() {
+    super("Une catégorie de même nom existe déjà à ce niveau.");
+    this.name = "CategorieDejaExisteError";
+  }
+}
+
+/** UUID « zéro » : parent effectif d'une Nature racine (parent_id NULL). Doit être
+ * IDENTIQUE à la sentinelle COALESCE de l'index unique fonctionnel (migration 0020),
+ * sinon la garde applicative et l'index divergeraient sur le cas parent NULL. */
+const PARENT_RACINE_SENTINELLE = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Vrai s'il existe DÉJÀ une catégorie de même nom (insensible à la casse ET aux
+ * accents — cohérent avec la recherche du picker, `toLocaleLowerCase("fr")`… mais
+ * ici en SQL via `lower()`) au MÊME niveau (même parent effectif) dans le
+ * workspace courant. `exclureId` retire une catégorie du test (renommage : ne pas
+ * se heurter à soi-même). Scopé RLS + filtre explicite workspace_id.
+ *
+ * NB casse/accents : `lower()` de PostgreSQL est sensible à la locale du serveur
+ * pour les accents ; l'unicité VISÉE porte sur la casse (le doublon « VAT »/« vat »
+ * d'Etienne), pas sur les accents — un « Frais » vs « Frais » accentué reste
+ * distinct, ce qui est le comportement attendu (deux libellés réellement
+ * différents). L'index fonctionnel 0020 emploie le MÊME `lower()` → cohérence
+ * garantie entre la garde applicative et la contrainte.
+ */
+async function existeCategorieMemeNom<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  name: string,
+  parentId: string | null,
+  exclureId?: string,
+): Promise<boolean> {
+  const parentEffectif = sql`coalesce(${categories.parentId}, ${PARENT_RACINE_SENTINELLE})`;
+  const conditions = [
+    eq(categories.workspaceId, ctx.workspaceId),
+    sql`lower(${categories.name}) = lower(${name})`,
+    sql`${parentEffectif} = coalesce(${parentId}::uuid, ${PARENT_RACINE_SENTINELLE})`,
+  ];
+  if (exclureId !== undefined) {
+    conditions.push(sql`${categories.id} <> ${exclureId}::uuid`);
+  }
+  const rows = await tx
+    .select({ un: sql<number>`1` })
+    .from(categories)
+    .where(and(...conditions))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Exige le rôle ADMIN pour muter le référentiel. La LECTURE (listerCategories)
  * reste ouverte à tous les membres : les pickers de ventilation en ont besoin
  * (la saisie de splits demeure ouverte, seule l'administration est restreinte).
@@ -512,6 +578,12 @@ export async function creerCategorie<TDb extends AnyPgDatabase>(
   input: { name: string; parentId: string | null },
 ): Promise<{ categoryId: string }> {
   exigerAdminReferentiel(ctx);
+  // Rejet insensible à la casse AVANT insert (FB0709-CAT-DOUBLONS1) : message UI
+  // clair au lieu d'une violation de contrainte brute. L'index fonctionnel 0020
+  // reste le rempart anti-course (deux INSERT concurrents).
+  if (await existeCategorieMemeNom(tx, ctx, input.name, input.parentId)) {
+    throw new CategorieDejaExisteError();
+  }
   const inserted = await tx
     .insert(categories)
     .values({
@@ -535,6 +607,38 @@ export async function renommerCategorie<TDb extends AnyPgDatabase>(
   // Rôle AVANT existence : un non-ADMIN obtient « non autorisé » même sur une
   // catégorie inexistante → pas d'oracle d'existence (règle 3).
   exigerAdminReferentiel(ctx);
+
+  // Le parent effectif de la catégorie renommée détermine le NIVEAU où l'unicité
+  // s'apprécie (le renommage ne déplace pas la catégorie). On le lit sous RLS ;
+  // absence de ligne = catégorie introuvable (autre tenant ou inexistante).
+  const cible = await tx
+    .select({ parentId: categories.parentId })
+    .from(categories)
+    .where(
+      and(
+        eq(categories.id, input.categoryId),
+        eq(categories.workspaceId, ctx.workspaceId),
+      ),
+    )
+    .limit(1);
+  if (cible.length === 0) {
+    throw new CategorieIntrouvableError();
+  }
+
+  // Rejet insensible à la casse AVANT update (FB0709-CAT-DOUBLONS1), en s'excluant
+  // soi-même (renommer « VAT » en « vat » — même catégorie — ne doit pas être bloqué).
+  if (
+    await existeCategorieMemeNom(
+      tx,
+      ctx,
+      input.name,
+      cible[0].parentId,
+      input.categoryId,
+    )
+  ) {
+    throw new CategorieDejaExisteError();
+  }
+
   const maj = await tx
     .update(categories)
     .set({ name: input.name })
