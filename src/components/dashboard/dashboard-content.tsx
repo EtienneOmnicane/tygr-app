@@ -144,6 +144,7 @@ export function DashboardContent({
               <BalanceFreshnessPill
                 fraicheur={fraicheur}
                 compteLabel={synchro?.compteLabel}
+                ctaReconnexion={false}
               />
             )}
             <SyncButton role={role} />
