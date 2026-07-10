@@ -25,12 +25,17 @@ import {
   NonAuthentifieError,
 } from "@/server/auth/session";
 import {
+  listerComptesAvecEntite,
   listerEntites,
   listerMembresWorkspace,
   listerPropositionsPartyEntite,
   withWorkspace,
 } from "@/server/db";
 
+import {
+  AssignationComptes,
+  type CompteVueAssignation,
+} from "./assignation-comptes";
 import {
   AssignationEntites,
   type EntiteVue,
@@ -72,8 +77,14 @@ export default async function PageEntites() {
       tx,
       ctx,
     );
+    // L7 : tous les comptes du workspace + leur entité (null = non assigné). Lecture
+    // ADMIN-only (garde du repo), sans aucun montant.
+    const comptes: CompteVueAssignation[] = await listerComptesAvecEntite(
+      tx,
+      ctx,
+    );
 
-    return { entites, membres, propositions };
+    return { entites, membres, propositions, comptes };
   });
 
   if (donnees === null) {
@@ -119,6 +130,19 @@ export default async function PageEntites() {
           <AssignationEntites
             entites={entitesActives}
             membres={donnees.membres}
+          />
+        </section>
+
+        <section>
+          <h2 className="mb-1 text-lg font-semibold">Assignation des comptes</h2>
+          <p className="mb-6 text-sm text-text-muted">
+            Rattachez chaque compte bancaire à une entité, ou repassez-le en
+            « non assigné ». Un compte non assigné reste invisible aux membres en
+            Vision Entité.
+          </p>
+          <AssignationComptes
+            comptes={donnees.comptes}
+            entites={entitesActives}
           />
         </section>
       </div>

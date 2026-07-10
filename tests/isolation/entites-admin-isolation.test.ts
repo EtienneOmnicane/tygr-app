@@ -31,6 +31,7 @@ import {
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
   CompteIntrouvableError,
+  listerComptesAvecEntite,
   listerEntites,
   listerMembresWorkspace,
   listerScopesMembre,
@@ -428,5 +429,78 @@ describe("listerMembresWorkspace — membres + scope joint (anti-N+1), ADMIN-onl
     expect(occurrences).toBe(1);
     // Et le total reste 3 membres (pas de lignes dupliquées).
     expect(membres).toHaveLength(3);
+  });
+});
+
+describe("listerComptesAvecEntite — lecture ADMIN-only, bornée au tenant (L7)", () => {
+  it("18. un MANAGER ne peut PAS lister les comptes (garde ADMIN du repository)", async () => {
+    // La RLS tenant ne connaît PAS le rôle : sans cette garde applicative, un MANAGER
+    // (Vision Globale) lirait tout le référentiel de comptes du groupe.
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) => listerComptesAvecEntite(tx, ctx)),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("19. ne remonte QUE les comptes du tenant courant (cross-workspace → 0 ligne)", async () => {
+    // Depuis WS_A : ACC_A visible, ACC_B jamais (RLS tenant_isolation).
+    const comptesA = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    const idsA = comptesA.map((c) => c.bankAccountId);
+    expect(idsA).toContain(ACC_A);
+    expect(idsA).not.toContain(ACC_B);
+
+    // Symétrie : depuis WS_B on ne voit QUE ACC_B. `toEqual` (et non `not.toContain`)
+    // pour attraper aussi une fuite d'un compte qu'on n'aurait pas nommé ici.
+    const comptesB = await withWorkspace(sAdminB, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(comptesB.map((c) => c.bankAccountId)).toEqual([ACC_B]);
+  });
+
+  it("20. contre-preuve : l'ADMIN lit nom/devise/entityId courants, et l'entityId suit l'assignation", async () => {
+    // État de départ POSÉ ici (indépendance vis-à-vis de l'ordre des tests : le cas 10
+    // laisse ACC_A désassigné, on ne s'appuie pas dessus).
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, {
+        bankAccountId: ACC_A,
+        entityId: ENT_SUCRE,
+      }),
+    );
+
+    let comptes = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    const compte = comptes.find((c) => c.bankAccountId === ACC_A);
+    expect(compte).toBeDefined();
+    expect(compte?.accountName).toBe("Compte A");
+    expect(compte?.currency).toBe("MUR");
+    expect(compte?.entityId).toBe(ENT_SUCRE);
+
+    // Dé-assignation (le chemin que cette lecture est censée servir) : entityId → null.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+    comptes = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(
+      comptes.find((c) => c.bankAccountId === ACC_A)?.entityId,
+    ).toBeNull();
+  });
+
+  it("21. n'expose AUCUN montant (règle 8) — le contrat ne porte pas de solde", async () => {
+    // ACC_A a bien un current_balance en base ('100.00') : la preuve est que la
+    // projection ne le remonte pas (sinon on ouvrirait une surface de float en UI).
+    const comptes = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    const compte = comptes.find((c) => c.bankAccountId === ACC_A);
+    expect(Object.keys(compte ?? {}).sort()).toEqual([
+      "accountName",
+      "bankAccountId",
+      "currency",
+      "entityId",
+    ]);
   });
 });

@@ -110,6 +110,25 @@ export interface EntiteLue {
 }
 
 /**
+ * Un compte bancaire du workspace + l'entité (BU) à laquelle il est assigné (L7,
+ * PLAN-admin-entites-assignation-comptes.md). Alimente la section « Assignation des
+ * comptes » de /admin/entites : la SEULE surface qui permet de repasser un compte en
+ * « non assigné » (le sas de propositions ne sait qu'assigner, et seulement les comptes
+ * portés par une Party).
+ *
+ * ⚠️ AUCUN montant (règle 8) : ni `current_balance`, ni agrégat. Ce contrat sert à
+ * IDENTIFIER un compte (nom + devise), pas à le chiffrer — on n'ouvre pas ici une
+ * surface de manipulation de float.
+ */
+export interface CompteAvecEntite {
+  bankAccountId: string;
+  accountName: string;
+  currency: string;
+  /** entity_id actuel du compte ; `null` = « non assigné ». */
+  entityId: string | null;
+}
+
+/**
  * Un membre du workspace courant + son périmètre « Vision Entité » résolu en UNE
  * requête (l'écran d'assignation consomme ceci, plan §3.3 L4). `scopeInitial = []`
  * → Vision Globale (aucune ligne member_entity_scopes). Le Front mappe directement
@@ -208,6 +227,44 @@ export async function listerEntites<TDb extends AnyPgDatabase>(
     .leftJoin(bankAccounts, eq(bankAccounts.entityId, entities.id))
     .groupBy(entities.id, entities.name, entities.code, entities.isActive)
     .orderBy(entities.name);
+  return lignes;
+}
+
+/**
+ * Liste TOUS les comptes bancaires du workspace courant avec l'entité à laquelle ils
+ * sont assignés (`entityId = null` ⇒ « non assigné »). ADMIN-only. Alimente la section
+ * « Assignation des comptes » (L7) — la seule surface qui permet la DÉ-assignation.
+ *
+ * Isolation, deux étages (CLAUDE.md « Entités multi-tenant ») :
+ *  - étage 1 TENANT : policy `tenant_isolation` sur bank_accounts (le GUC workspace est
+ *    posé par withWorkspace). Le `where(workspaceId = ctx)` explicite ci-dessous est
+ *    REDONDANT VOLONTAIREMENT — défense en profondeur, même gabarit que
+ *    `assignerCompteEntite`. L'autorité reste la RLS, jamais ce WHERE.
+ *  - étage 2 ENTITÉ : policy `entity_scope` (RESTRICTIVE FOR ALL). Sans effet ici : la
+ *    garde ADMIN implique la Vision Globale (GUC entity_scope vide) → l'ADMIN voit tous
+ *    les comptes de SON tenant, y compris les non assignés (fail-closed pour les autres).
+ *
+ * ⚠️ Ne sélectionne AUCUN montant (pas de `current_balance`) : cet écran identifie des
+ * comptes, il n'en chiffre aucun (règle 8).
+ *
+ * Tri déterministe (accountName, id) : deux comptes homonymes ne permutent pas d'un
+ * rendu à l'autre, ce qui ferait sauter les lignes sous le curseur de l'ADMIN.
+ */
+export async function listerComptesAvecEntite<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+): Promise<CompteAvecEntite[]> {
+  exigerAdmin(ctx);
+  const lignes = await tx
+    .select({
+      bankAccountId: bankAccounts.id,
+      accountName: bankAccounts.accountName,
+      currency: bankAccounts.currency,
+      entityId: bankAccounts.entityId,
+    })
+    .from(bankAccounts)
+    .where(eq(bankAccounts.workspaceId, ctx.workspaceId))
+    .orderBy(bankAccounts.accountName, bankAccounts.id);
   return lignes;
 }
 
