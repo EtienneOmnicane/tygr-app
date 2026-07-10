@@ -1244,7 +1244,9 @@ export const echeances = pgTable(
 /*  (3) trigger BEFORE UPDATE OR DELETE (migration 0021) réutilisant    */
 /*      tygr_refuser_mutation_append_only() créée en 0005. Seule        */
 /*      défense indépendante du privilège ET du chemin (cascade FK,     */
-/*      DELETE direct, même sous l'owner).                              */
+/*      DELETE direct, même sous l'owner). ⚠️ Ne couvre PAS TRUNCATE    */
+/*      (trigger STATEMENT distinct) — sans effet au runtime : tygr_app */
+/*      n'a ni TRUNCATE ni DELETE ni UPDATE. Analyse dans 0021.         */
 /*                                                                      */
 /* AUTO-SUFFISANCE (plan §2.4, décision Q2) : aucune FK vers une table  */
 /* ÉDITABLE (bank_connections, users — toutes deux dans la liste        */

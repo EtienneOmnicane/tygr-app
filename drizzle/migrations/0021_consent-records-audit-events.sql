@@ -89,8 +89,16 @@ ALTER TABLE "audit_events" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 -- La fonction tygr_refuser_mutation_append_only() est créée par la migration
 -- 0005 (categorization_audit) : on ne la recrée pas, on l'appelle. Elle lève
 -- ERRCODE check_violation avec un message SANS PII (nom de table seulement).
--- C'est la seule défense indépendante du privilège ET du chemin : elle mord
--- même sous l'owner, même via une cascade FK, même depuis une migration.
+-- C'est la seule défense indépendante du privilège ET du chemin : elle mord sur
+-- UPDATE et DELETE, y compris sous l'owner et via une cascade FK.
+--
+-- ⚠️ PORTÉE EXACTE (ne pas sur-promettre) : un trigger `BEFORE UPDATE OR DELETE`
+-- FOR EACH ROW n'est PAS déclenché par `TRUNCATE` (PostgreSQL exige un trigger
+-- `BEFORE TRUNCATE ... FOR EACH STATEMENT`, distinct). L'exposition reste nulle
+-- au runtime : `tygr_app` n'a NI TRUNCATE, NI DELETE, NI UPDATE sur ces tables
+-- (étapes 5 et 6 du provisioning). Seul l'owner peut TRUNCATE — et il peut de
+-- toute façon DROP la table : c'est hors modèle de menace, exactement comme pour
+-- le trigger 0004 de transactions_cache. Constat de cross-review 2026-07-10.
 DROP TRIGGER IF EXISTS "consent_records_no_mutation" ON "consent_records";--> statement-breakpoint
 CREATE TRIGGER "consent_records_no_mutation" BEFORE UPDATE OR DELETE ON "consent_records"
 	FOR EACH ROW EXECUTE FUNCTION tygr_refuser_mutation_append_only();--> statement-breakpoint
