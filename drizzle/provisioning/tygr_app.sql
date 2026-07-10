@@ -159,17 +159,33 @@ BEGIN
 END
 $$;
 
--- 6. APPEND-ONLY au niveau PRIVILÈGE (deny-by-default, comme #3bis pour DELETE) :
---    `categorization_audit` est immuable → tygr_app ne doit avoir NI UPDATE NI
+-- 6. APPEND-ONLY STRICT au niveau PRIVILÈGE (deny-by-default, comme #3bis pour
+--    DELETE). Ces tables sont IMMUABLES : tygr_app ne doit avoir NI UPDATE NI
 --    DELETE dessus, seulement INSERT/SELECT. L'étape 3 a accordé UPDATE en bloc
---    (`ON ALL TABLES`) ; on le RETIRE ici. Le trigger 0005 est la défense de
---    fond ; ce REVOKE est la ceinture de privilège (double garde). Conditionnel
---    à l'existence (mêmes deux ordres de pipeline que l'étape 5).
+--    (`ON ALL TABLES`) ; on le RETIRE ici. Les triggers (0005 pour
+--    categorization_audit, 0021 pour consent_records/audit_events) sont la
+--    défense de fond ; ce REVOKE est la ceinture de privilège (double garde).
+--    Conditionnel à l'existence (mêmes deux ordres de pipeline que l'étape 5).
+--
+--    ⚠️ Ne PAS confondre avec transactions_cache / balance_history, append-only
+--    au DELETE SEULEMENT (l'UPDATE tombstone `is_removed` y est légitime) : ces
+--    deux-là gardent UPDATE et n'apparaissent donc pas ici. Elles sont protégées
+--    par leur absence de la liste blanche (étape 5) + le trigger BEFORE DELETE
+--    de la migration 0004.
 DO $$
+DECLARE
+  t text;
 BEGIN
-  IF to_regclass('public.categorization_audit') IS NOT NULL THEN
-    REVOKE UPDATE, DELETE ON public.categorization_audit FROM tygr_app;
-  END IF;
+  FOREACH t IN ARRAY ARRAY[
+    'categorization_audit',
+    'consent_records',
+    'audit_events'
+  ]
+  LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('REVOKE UPDATE, DELETE ON public.%I FROM tygr_app', t);
+    END IF;
+  END LOOP;
 END
 $$;
 
@@ -177,3 +193,6 @@ $$;
 -- DROP. Ordre de pipeline non négociable : db:provision -> migrate -> deploy.
 -- Rappel tombstone : ne JAMAIS ajouter transactions_cache / balance_history (ni
 -- une partition) à la liste blanche de l'étape 5.
+-- Rappel append-only STRICT : ne JAMAIS ajouter consent_records / audit_events /
+-- categorization_audit à la liste blanche de l'étape 5 (ils doivent rester sans
+-- DELETE), et toute nouvelle table append-only stricte s'ajoute à l'étape 6.

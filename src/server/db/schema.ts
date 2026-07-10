@@ -3,8 +3,9 @@
  * Traduction stricte de docs/cahier_des_charges.md §4 (v2.1) : workspaces,
  * users, workspace_members, puis bank_connections / bank_accounts /
  * transactions_cache / balance_history (modèle SQL du plan approuvé).
- * Restent à venir avec leurs chantiers : consent_records, audit_events,
- * sync_runs (pipeline de sync & consent flow).
+ * Epic 1 (consent flow & audit) ajoute consent_records + audit_events, tous deux
+ * APPEND-ONLY STRICTS (cf. section dédiée en fin de fichier).
+ * Reste à venir avec son chantier : sync_runs (pipeline de sync).
  *
  * Conventions de sécurité (CLAUDE.md règles 2 et 8) :
  * - workspace_members est sous RLS : politique tenant_isolation keyée sur
@@ -31,6 +32,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   numeric,
   pgPolicy,
   pgTable,
@@ -1222,6 +1224,166 @@ export const echeances = pgTable(
     index("echeances_workspace_date_idx").on(t.workspaceId, t.dateEcheance),
     // Étage 1 — TENANT (fail-closed). L'étage 2 (entity_scope RESTRICTIVE FOR ALL)
     // est posé PAR MIGRATION (comme bank_accounts) — drizzle ne déclare que le tenant.
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Epic 1 — Consent flow & audit trail (PLAN-epic1-auth-consent.md).    */
+/* ------------------------------------------------------------------ */
+/*                                                                      */
+/* APPEND-ONLY STRICT (CLAUDE.md règle 8) : ni UPDATE ni DELETE, même   */
+/* en migration de réparation — on écrit un ÉVÉNEMENT CORRECTIF. À ne   */
+/* pas confondre avec transactions_cache / balance_history, qui sont    */
+/* append-only au DELETE seulement (l'UPDATE tombstone y est permis).   */
+/*                                                                      */
+/* TROIS gardes complémentaires (aucune ne suffit seule) :              */
+/*  (1) hors liste blanche DELETE de drizzle/provisioning/tygr_app.sql ;*/
+/*  (2) REVOKE UPDATE, DELETE explicite (étape 6 du même script) — le   */
+/*      GRANT global de l'étape 3 accorde UPDATE ON ALL TABLES ;        */
+/*  (3) DEUX triggers (migration 0021), seule défense indépendante du   */
+/*      privilège ET du chemin — ils mordent même sous l'owner :        */
+/*      (3a) BEFORE UPDATE OR DELETE ... FOR EACH ROW → réutilise       */
+/*           tygr_refuser_mutation_append_only() créée en 0005 ;        */
+/*      (3b) BEFORE TRUNCATE ... FOR EACH STATEMENT → trigger DISTINCT  */
+/*           obligatoire : un trigger ROW n'est JAMAIS déclenché par    */
+/*           TRUNCATE. Sans lui, `TRUNCATE audit_events` sous l'owner   */
+/*           viderait l'audit réglementaire SANS lever.                 */
+/*                                                                      */
+/* AUTO-SUFFISANCE (plan §2.4, décision Q2) : aucune FK vers une table  */
+/* ÉDITABLE (bank_connections, users — toutes deux dans la liste        */
+/* blanche DELETE). Un audit qui exige une jointure vers une table      */
+/* vivante n'est pas un audit : la ligne jointe a pu changer après      */
+/* coup. On COPIE donc, à l'instant de l'événement, ce qu'il faut pour  */
+/* relire l'enregistrement sans jointure et sans la ligne d'origine.    */
+/* Précédent identique au repo : categorization_audit (transaction_id   */
+/* sans FK + snapshots category_name/amount/source).                    */
+
+/**
+ * Cycle de vie du consentement bancaire — immuable et AUTO-SUFFISANT.
+ *
+ * Trois actions, trois événements (jamais un état muté) : l'état courant se
+ * DÉRIVE du dernier événement par connexion. C'est ce qui rend le narratif
+ * réglementaire (BOM Innov8) défendable : on ne peut pas réécrire l'histoire.
+ *
+ * ⚠️ Pas de FK sur `connectionId` ni `grantedByUserId` (décision Q2) :
+ * - la révocation SUPPRIME la connexion (L3.3) → une FK RESTRICT bloquerait la
+ *   révocation, une FK CASCADE tenterait d'effacer l'audit (le trigger lève) ;
+ * - l'offboarding RGPD envisage `created_by → SET NULL` (dette #6, TODOS) →
+ *   « Alice a consenti » deviendrait « ␀ a consenti ».
+ * Les snapshots ci-dessous compensent : ils rendent la ligne lisible seule.
+ */
+export const consentRecords = pgTable(
+  "consent_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Seule FK conservée : le tenant ne disparaît jamais sans que TOUT disparaisse. */
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+
+    /* --- Objet du consentement : UUID nu + snapshot de désignation --- */
+    /** `bank_connections.id`. PAS de FK (cf. supra) — corrélation applicative. */
+    connectionId: uuid("connection_id").notNull(),
+    /** Snapshot : « Absa Internet Banking ». Survit à la purge de la connexion. */
+    institutionName: varchar("institution_name", { length: 140 }),
+
+    /* --- Acteur : UUID nu + snapshot d'identité à l'instant T --- */
+    /** `users.id`. PAS de FK (dette #6 : `SET NULL` à l'offboarding). */
+    grantedByUserId: uuid("granted_by_user_id").notNull(),
+    /** Snapshot NOT NULL : un consentement sans acteur identifiable n'a pas de valeur. */
+    grantedByEmail: varchar("granted_by_email", { length: 254 }).notNull(),
+    grantedByName: varchar("granted_by_name", { length: 120 }),
+
+    action: varchar("action", { length: 30 }).notNull(),
+
+    /**
+     * `{ requestedScopes:[…] }` | `{ accountIds:[…], accountsLabels:[{accountId,masked}] }`
+     * | `{ reason }`. Comptes MASQUÉS (`••••4321`) via `masquerCompte()` — JAMAIS
+     * d'IBAN, de numéro complet ni de libellé bancaire brut (règle 8, PII).
+     * Aucun montant, aucun solde : ce journal ne porte pas de donnée financière.
+     */
+    scope: jsonb("scope").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check(
+      "consent_records_action_check",
+      sql`${t.action} IN ('GRANTED','ACCOUNTS_SELECTED','REVOKED')`,
+    ),
+    // Dérivation de l'état courant : dernier événement par connexion.
+    index("consent_records_ws_connection_idx").on(
+      t.workspaceId,
+      t.connectionId,
+      t.createdAt.desc(),
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
+  ],
+).enableRLS();
+
+/**
+ * Journal d'audit — append-only strict, une table pour DEUX producteurs :
+ * - `omnifiEventId IS NULL`  → événement APPLICATIF (consentement, révocation) ;
+ * - `omnifiEventId IS NOT NULL` → événement WEBHOOK (route à venir, dette P1).
+ *
+ * ⚠️ `workspaceId` SANS FK, et c'est INTENTIONNEL (plan §6/P3, conforme au
+ * cahier des charges §4.1) : un webhook peut arriver avant que le workspace
+ * soit résolu, et l'audit doit pouvoir consigner l'anomalie. La RLS protège de
+ * toute façon (elle compare au GUC, pas à une FK). NE PAS « réparer » en
+ * ajoutant la FK : on rouvrirait le problème P1 sur cette table.
+ *
+ * Accès : ADMIN SEUL (décision Q1, `peutAdministrer`). Ces tables ne portent
+ * pas `entity_id` (invariant : il vit uniquement sur bank_accounts) — un membre
+ * en Vision Entité y verrait les événements de TOUTES les BU du groupe (fuite
+ * intra-groupe). Fail-closed : la surface est cachée aux non-ADMIN.
+ */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id").notNull(),
+    /** `consent.granted`, `consent.revoked`, `sync.completed`… VARCHAR, pas d'enum SQL. */
+    eventType: varchar("event_type", { length: 60 }).notNull(),
+    /** `EventId` du webhook Omni-FI (dédup). NULL = événement applicatif. */
+    omnifiEventId: varchar("omnifi_event_id", { length: 64 }),
+    /** PAS de FK (cf. consentRecords). */
+    connectionId: uuid("connection_id"),
+    /** NULL si événement système/webhook. PAS de FK. */
+    actorUserId: uuid("actor_user_id"),
+    /** 8 hexa = 32 bits : traçable, non rejouable. Jamais la signature complète. */
+    hmacSignatureTruncated: varchar("hmac_signature_truncated", { length: 8 }),
+    /** Liste blanche de clés par `eventType`, appliquée par le repository (zéro PII). */
+    payload: jsonb("payload").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    /**
+     * Q4 — unicité COMPOSITE, jamais globale. Un `UNIQUE(omnifi_event_id)` seul
+     * serait un ORACLE D'EXISTENCE cross-tenant (insérer l'EventId deviné d'un
+     * autre workspace révèle son existence par la violation) + un DoS d'ingestion
+     * sur collision. Même leçon que `omnifi_connection_id` (dette 1.1/1.2, 0018).
+     *
+     * Repose sur le garde-fou WEBHOOK-TENANT-FIRST1 (cf. bank_connections) : le
+     * futur résolveur webhook DOIT résoudre le TENANT d'abord (ClientUserId →
+     * workspace) PUIS la connexion dans ce workspace. Un EventId ne peut alors,
+     * par construction, atterrir que dans un seul workspace.
+     *
+     * ⚠️ COMPORTEMENT POSTGRESQL À NE PAS « CORRIGER » : une contrainte UNIQUE
+     * n'est JAMAIS violée par des NULL. N lignes applicatives
+     * (`omnifi_event_id IS NULL`) coexistent donc sans conflit dans le même
+     * workspace — c'est exactement le comportement voulu. Passer la colonne en
+     * NOT NULL casserait l'émission applicative (consent.*).
+     */
+    unique("audit_events_workspace_omnifi_event_unique").on(
+      t.workspaceId,
+      t.omnifiEventId,
+    ),
+    // Pagination keyset du panneau d'audit (jamais d'OFFSET).
+    index("audit_events_ws_created_idx").on(t.workspaceId, t.createdAt.desc()),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
