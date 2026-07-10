@@ -37,7 +37,11 @@ import type {
   FiltresTransactions,
   TransactionListItem,
 } from "@/components/transactions/types-transactions";
-import type { CategorieUI, SplitUI } from "@/components/ui/category";
+import type {
+  ActionsReferentielCategories,
+  CategorieUI,
+  SplitUI,
+} from "@/components/ui/category";
 
 // Référentiel fictif (mêmes natures que la démo catégorisation).
 const CATEGORIES: CategorieUI[] = [
@@ -245,6 +249,19 @@ const SCENARIOS: Array<{ id: Scenario; label: string }> = [
   { id: "erreur", label: "Erreur" },
 ];
 
+/**
+ * Surface d'actions du référentiel, STUB inerte (aucun réseau, aucune DB). Fournie
+ * pour que la démo rende l'action ADMIN « Gérer les catégories » de la toolbar —
+ * sans elle, le bouton serait absent du DOM et non capturable au Visual QA (Gate 4).
+ * En prod, la page ne la passe QU'À l'admin (`peutAdministrer`, règle D2).
+ */
+const ACTIONS_REFERENTIEL_STUB: ActionsReferentielCategories = {
+  listerCategories: async () => CATEGORIES,
+  creerCategorie: async () => ({ ok: true, data: { categoryId: "cat-demo" } }),
+  renommerCategorie: async () => ({ ok: true, data: undefined }),
+  archiverCategorie: async () => ({ ok: true, data: undefined }),
+};
+
 export default function TransactionsDemoPage() {
   const [scenario, setScenario] = useState<Scenario>("liste");
 
@@ -256,9 +273,15 @@ export default function TransactionsDemoPage() {
         filtres?: FiltresTransactions;
       }) {
         const f = args.filtres ?? {};
+        // Recherche : imite le serveur — ILIKE sur le libellé NETTOYÉ (`cleanLabel`),
+        // insensible à la casse, sous-chaîne littérale. JAMAIS sur `bankLabelRaw`
+        // (PII, règle 8). Sans ce filtre, la démo rendrait la recherche inerte et
+        // l'empty state « recherche active » serait incapturable (Gate 4).
+        const terme = f.recherche?.trim().toLowerCase();
         const lignes = LIGNES.filter((l) => {
           if (f.statutCategorisation && l.statutCategorisation !== f.statutCategorisation)
             return false;
+          if (terme && !(l.cleanLabel ?? "").toLowerCase().includes(terme)) return false;
           return true;
         });
         return { ok: true as const, data: { lignes, curseurSuivant: null } };
@@ -330,6 +353,7 @@ export default function TransactionsDemoPage() {
             categories={CATEGORIES}
             actions={actions}
             remplacerSplits={async () => ({ ok: true, data: undefined })}
+            actionsReferentiel={ACTIONS_REFERENTIEL_STUB}
             aucuneBanque={false}
           />
         )}
