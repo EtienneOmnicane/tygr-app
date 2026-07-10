@@ -1241,12 +1241,14 @@ export const echeances = pgTable(
 /*  (1) hors liste blanche DELETE de drizzle/provisioning/tygr_app.sql ;*/
 /*  (2) REVOKE UPDATE, DELETE explicite (étape 6 du même script) — le   */
 /*      GRANT global de l'étape 3 accorde UPDATE ON ALL TABLES ;        */
-/*  (3) trigger BEFORE UPDATE OR DELETE (migration 0021) réutilisant    */
-/*      tygr_refuser_mutation_append_only() créée en 0005. Seule        */
-/*      défense indépendante du privilège ET du chemin (cascade FK,     */
-/*      DELETE direct, même sous l'owner). ⚠️ Ne couvre PAS TRUNCATE    */
-/*      (trigger STATEMENT distinct) — sans effet au runtime : tygr_app */
-/*      n'a ni TRUNCATE ni DELETE ni UPDATE. Analyse dans 0021.         */
+/*  (3) DEUX triggers (migration 0021), seule défense indépendante du   */
+/*      privilège ET du chemin — ils mordent même sous l'owner :        */
+/*      (3a) BEFORE UPDATE OR DELETE ... FOR EACH ROW → réutilise       */
+/*           tygr_refuser_mutation_append_only() créée en 0005 ;        */
+/*      (3b) BEFORE TRUNCATE ... FOR EACH STATEMENT → trigger DISTINCT  */
+/*           obligatoire : un trigger ROW n'est JAMAIS déclenché par    */
+/*           TRUNCATE. Sans lui, `TRUNCATE audit_events` sous l'owner   */
+/*           viderait l'audit réglementaire SANS lever.                 */
 /*                                                                      */
 /* AUTO-SUFFISANCE (plan §2.4, décision Q2) : aucune FK vers une table  */
 /* ÉDITABLE (bank_connections, users — toutes deux dans la liste        */

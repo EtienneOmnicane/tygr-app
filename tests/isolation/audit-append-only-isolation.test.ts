@@ -232,6 +232,85 @@ describe("garde (3) — le TRIGGER mord même sous l'OWNER", () => {
   });
 });
 
+describe("garde (3b) — TRUNCATE refusé (trigger STATEMENT distinct)", () => {
+  /*
+   * L'angle mort que la garde (3a) NE couvre PAS, relevé en cross-review.
+   *
+   * Un trigger `BEFORE UPDATE OR DELETE ... FOR EACH ROW` n'est JAMAIS déclenché
+   * par TRUNCATE : PostgreSQL traite TRUNCATE au niveau TABLE, pas ligne. Sans le
+   * trigger `BEFORE TRUNCATE ... FOR EACH STATEMENT`, `TRUNCATE audit_events` sous
+   * l'owner viderait l'audit réglementaire SANS lever — donc silencieusement.
+   *
+   * Le privilège ne rattrape pas : `tygr_app` n'a effectivement pas TRUNCATE (jamais
+   * accordé), mais une migration de réparation ou un `psql` d'admin tourne sous
+   * l'OWNER. C'est exactement la règle 8 : « aucun UPDATE/DELETE, MÊME EN MIGRATION
+   * DE RÉPARATION — on écrit un événement correctif ».
+   *
+   * Ces cas sont placés AVANT le cas 5 (qui mute les fixtures) : un TRUNCATE qui
+   * passerait détruirait toute la suite, et l'assertion de survie ci-dessous le
+   * prouverait immédiatement plutôt que de faire échouer un test sans rapport.
+   */
+  it("4d. TRUNCATE de consent_records refusé sous l'OWNER (le cas qui compte)", async () => {
+    await sousOwner(async () => {
+      await expect(client.exec(`truncate consent_records`)).rejects.toThrow(
+        /append_only_no_truncate/i,
+      );
+    });
+  });
+
+  it("4e. TRUNCATE d'audit_events refusé sous l'OWNER", async () => {
+    await sousOwner(async () => {
+      await expect(client.exec(`truncate audit_events`)).rejects.toThrow(
+        /append_only_no_truncate/i,
+      );
+    });
+  });
+
+  it("4f. TRUNCATE refusé sous tygr_app (privilège OU trigger — les deux gardes)", async () => {
+    // Sous le rôle applicatif, le privilège suffit déjà (TRUNCATE jamais accordé) :
+    // on accepte donc l'un OU l'autre message. C'est la défense en profondeur.
+    await expect(client.exec(`truncate audit_events`)).rejects.toThrow(
+      /append_only_no_truncate|permission denied|must be owner/i,
+    );
+  });
+
+  it("4g. TRUNCATE CASCADE depuis workspaces refusé (le chemin VRAIMENT dangereux)", async () => {
+    /*
+     * Le cas le plus grave, et le moins évident. `TRUNCATE ... CASCADE` propage
+     * aux tables qui référencent la cible par FK — donc à `consent_records` via
+     * `workspace_id → workspaces`. Ce n'est PAS un « TRUNCATE consent_records »
+     * explicite que l'auteur verrait dans sa migration : c'est un TRUNCATE sur une
+     * AUTRE table, dont la cascade emporte l'audit réglementaire.
+     *
+     * Vérifié empiriquement en retirant le trigger : `TRUNCATE workspaces CASCADE`
+     * vide alors `consent_records` (0 ligne) SANS lever aucune erreur. C'est le
+     * scénario #3bis (la cascade FK contourne le privilège) transposé à TRUNCATE —
+     * et c'est ce qui rend la garde (3b) indispensable, pas seulement défensive :
+     * un simple `not null` de privilège n'aurait rien arrêté ici.
+     *
+     * Le trigger de la table FILLE mord : c'est la table tronquée par cascade qui
+     * déclenche son propre BEFORE TRUNCATE.
+     */
+    await sousOwner(async () => {
+      await expect(client.exec(`truncate workspaces cascade`)).rejects.toThrow(
+        /append_only_no_truncate/i,
+      );
+    });
+  });
+
+  it("4h. les données ont survécu à toutes les tentatives", async () => {
+    const consentements = await client.query<{ n: number }>(
+      "select count(*)::int as n from consent_records",
+    );
+    const evenements = await client.query<{ n: number }>(
+      "select count(*)::int as n from audit_events",
+    );
+    // Seed : 2 consentements (WS_A), 1 événement (WS_A). Rien n'a été effacé.
+    expect(consentements.rows[0].n).toBe(2);
+    expect(evenements.rows[0].n).toBe(1);
+  });
+});
+
 describe("cas 5 — cascade + AUTO-SUFFISANCE (décision Q2, plan §2.4)", () => {
   /*
    * Le cas qui justifie l'absence de FK. `bank_connections` et `users` sont
