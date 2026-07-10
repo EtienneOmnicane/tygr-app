@@ -2,10 +2,10 @@
 
 /**
  * Rendu SVG des BARRES entrées/sorties mensuelles — EXTRAIT verbatim de
- * `monthly-cashflow.tsx` (L8a) pour être réutilisé par la carte d'ancre unifiée
- * `flux-tresorerie-card.tsx` (toggle Barres/Courbe). La GÉOMÉTRIE des barres est
- * INCHANGÉE (ligne de base centrale, entrée vers le haut `inflow`, sortie vers le
- * bas `outflow`, hauteur ∝ valeur/max, labels) : déplacement, pas réécriture.
+ * `monthly-cashflow.tsx` (L8a) pour être réutilisé par la carte d'ancre
+ * `flux-tresorerie-card.tsx`. La GÉOMÉTRIE des barres est INCHANGÉE (ligne de base
+ * centrale, entrée vers le haut `inflow`, sortie vers le bas `outflow`, hauteur ∝
+ * valeur/max, labels) : déplacement, pas réécriture.
  *
  * `FluxBarres` rend UNIQUEMENT le corps (barres ou message « pas de mouvement »).
  * Le tableau récapitulatif mensuel RESTE dans `monthly-cashflow.tsx` (carte
@@ -105,8 +105,7 @@ const MAX_LABELS = 8; // densité max de labels d'axe X (C3 : 1 label sur N au-d
 /**
  * Barres empilées par mois : entrée (inflow) vers le haut, sortie (outflow) vers le
  * bas, à partir d'une ligne de base centrale. Hauteur ∝ montant / max de la fenêtre.
- * SVG inline (zéro dépendance — Tremor incompatible React 19, cohérent avec
- * `flux-chart-trace.tsx`).
+ * SVG inline (zéro dépendance — Tremor incompatible React 19).
  *
  * REMPLISSAGE (C1+C2) : le SVG fait `w-full` et porte `HAUTEUR_ANCRE`, et son viewBox
  * suit la taille RÉELLE mesurée (`useDimensionsSvg`). La hauteur d'une demi-bande et
@@ -160,8 +159,8 @@ function BarresMensuelles({
       aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
     >
       {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
-          projet (cf. flux-chart-trace.tsx) — les utilitaires fill-/stroke-
-          custom ne sont pas employés pour les traits ici. */}
+          projet — les utilitaires fill-/stroke- custom ne sont pas employés pour
+          les traits ici. */}
       <line
         x1={0}
         y1={yAxe}

@@ -2,13 +2,11 @@
 
 /**
  * Hook de MESURE d'un élément SVG (largeur + hauteur rendues, en px), via
- * `ResizeObserver`. Extrait du patron de la courbe (`flux-chart-trace.tsx`) pour être
- * partagé avec les barres (`flux-bars.tsx`) sans dupliquer le code de l'observateur.
+ * `ResizeObserver`. Consommé par les barres (`flux-bars.tsx`).
  *
  * Pourquoi mesurer : un viewBox SVG en coordonnées FIXES étiré sur une zone fluide
- * déforme le dessin (cause racine corrigée sur la courbe). En connaissant les px
- * RÉELS, on peut poser un viewBox où 1 unité = 1 px → aucune déformation, et un
- * dessin qui remplit exactement la zone.
+ * déforme le dessin. En connaissant les px RÉELS, on peut poser un viewBox où
+ * 1 unité = 1 px → aucune déformation, et un dessin qui remplit exactement la zone.
  *
  * Les dimensions servent UNIQUEMENT à la géométrie (positions/tailles en px) ; elles
  * ne sont JAMAIS réinjectées dans un montant affiché (frontière float, règle 8).
