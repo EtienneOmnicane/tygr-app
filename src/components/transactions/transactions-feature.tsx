@@ -84,7 +84,8 @@ export function TransactionsFeature({
    * gestionnaire de catégories (FB0709-CAT-RENOMMER1). Fournie UNIQUEMENT à l'ADMIN
    * (la page ne passe la closure que si `peutAdministrer` — surface ABSENTE du DOM
    * pour un non-admin, pas juste grisée) ; absente ⇒ pas de bouton « Gérer les
-   * catégories ». Le serveur reste la vraie garde (repository ADMIN-only).
+   * catégories » DANS LA TOOLBAR. Le serveur reste la vraie garde (repository
+   * ADMIN-only).
    */
   actionsReferentiel?: ActionsReferentielCategories;
   aucuneBanque: boolean;
@@ -257,15 +258,32 @@ export function TransactionsFeature({
       return <AppErrorState onRetry={() => void rechargerPremierePage(filtres)} />;
     }
     if (!aDesResultats) {
-      // Empty : distingue « aucune transaction » de « aucune banque connectée ».
-      return aucuneBanque ? (
-        <EmptyState
-          illustration="table"
-          title="Connectez une banque pour voir vos opérations"
-          message="Dès votre première synchronisation, toutes vos transactions s’afficheront ici, prêtes à être catégorisées."
-          cta={{ label: "Connecter une banque", href: "/banques" }}
-        />
-      ) : (
+      // Empty : trois cas distincts.
+      // 1) Aucune banque connectée → CTA de connexion.
+      if (aucuneBanque) {
+        return (
+          <EmptyState
+            illustration="table"
+            title="Connectez une banque pour voir vos opérations"
+            message="Dès votre première synchronisation, toutes vos transactions s’afficheront ici, prêtes à être catégorisées."
+            cta={{ label: "Connecter une banque", href: "/banques" }}
+          />
+        );
+      }
+      // 2) Recherche active sans résultat → message ciblé citant le terme (variante
+      //    MESSAGE de l'empty existant, pas un nouvel état). Le terme affiché vient de
+      //    l'état des filtres (UI), pas d'un log — aucune fuite PII.
+      if (filtres.recherche) {
+        return (
+          <EmptyState
+            illustration="table"
+            title="Aucune transaction ne correspond à votre recherche"
+            message={`Aucune opération ne contient « ${filtres.recherche} » dans son libellé. Vérifiez l’orthographe ou élargissez les autres filtres.`}
+          />
+        );
+      }
+      // 3) Autres filtres (statut/dates) sans résultat, ou sync en cours.
+      return (
         <EmptyState
           illustration="table"
           title="Aucune transaction pour ces critères"
@@ -281,27 +299,18 @@ export function TransactionsFeature({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Barre d'actions du référentiel (ADMIN seul) : accès au gestionnaire de
-          catégories — seul chemin en prod pour renommer/archiver (FB0709-CAT-RENOMMER1). */}
-      {actionsReferentiel && (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => setManagerOuvert(true)}
-            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-control border border-line
-              bg-surface-card px-3 text-sm font-medium text-text transition-colors
-              hover:bg-surface-inset focus:outline-none focus-visible:ring-2
-              focus-visible:ring-primary focus-visible:ring-offset-2"
-          >
-            <span aria-hidden>⚙</span> Gérer les catégories
-          </button>
-        </div>
-      )}
-
+      {/* Toolbar UNIQUE : filtres à gauche, action du référentiel à droite. L'accès au
+          gestionnaire de catégories (seul chemin en prod pour renommer/archiver,
+          FB0709-CAT-RENOMMER1) y est passé en closure — et SEULEMENT si l'utilisateur
+          est ADMIN (`actionsReferentiel` n'est fourni qu'à lui par la page, règle D2).
+          Non-admin ⇒ prop `undefined` ⇒ bouton ABSENT du DOM, pas grisé. */}
       <TransactionsToolbar
         filtres={filtres}
         onChange={appliquerFiltres}
         disabled={chargement}
+        onOuvrirGestionCategories={
+          actionsReferentiel ? () => setManagerOuvert(true) : undefined
+        }
       />
 
       {corps}

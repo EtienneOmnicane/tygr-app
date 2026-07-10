@@ -50,9 +50,14 @@ const T2 = "22220002-0000-4000-8000-000000000000"; // 2026-03-14, |300|, PARTIEL
 const T3 = "33330003-0000-4000-8000-000000000000"; // 2026-03-14, |200|, COMPLET (200)
 const T4 = "44440004-0000-4000-8000-000000000000"; // 2026-03-13, |100|, "Salaire ACME"
 const T5 = "55550005-0000-4000-8000-000000000000"; // 2026-03-12, is_removed=true
+// T6 porte des méta-caractères LIKE dans son libellé : prouve l'échappement %/_
+// (recherche littérale). Daté le plus ancien (03-11) pour ne pas perturber l'ordre
+// keyset des tests existants (ceux-ci bornent leurs dates >= 03-13 ou ciblent un terme).
+const T6 = "66660006-0000-4000-8000-000000000000"; // 2026-03-11, |100|, "Remise 50% x_y ACME"
 
-// Ordre attendu en (date DESC, id DESC), tombstone exclu : T1, T3, T2, T4.
-const ORDRE_ATTENDU = [T1, T3, T2, T4];
+// Ordre attendu en (date DESC, id DESC), tombstone exclu (jeu SANS filtre de terme) :
+// T1, T3, T2, T4, T6.
+const ORDRE_ATTENDU = [T1, T3, T2, T4, T6];
 
 const parse = (f: Record<string, unknown>) => {
   const r = listerTransactionsSchema.safeParse(f);
@@ -93,7 +98,8 @@ beforeAll(async () => {
       ('${T2}','${WS_A}','${ACC_A}','x2','2026-03-14','2026-03-14T08:00:00Z','-300.00','MUR','Debit','raw2','Achat B',false),
       ('${T3}','${WS_A}','${ACC_A}','x3','2026-03-14','2026-03-14T09:00:00Z','-200.00','MUR','Debit','raw3','Achat C',false),
       ('${T4}','${WS_A}','${ACC_A}','x4','2026-03-13','2026-03-13T08:00:00Z','-100.00','MUR','Debit','raw4','Salaire ACME',false),
-      ('${T5}','${WS_A}','${ACC_A}','x5','2026-03-12','2026-03-12T08:00:00Z','-999.00','MUR','Debit','raw5','Supprimee',true);
+      ('${T5}','${WS_A}','${ACC_A}','x5','2026-03-12','2026-03-12T08:00:00Z','-999.00','MUR','Debit','raw5','Supprimee',true),
+      ('${T6}','${WS_A}','${ACC_A}','x6','2026-03-11','2026-03-11T08:00:00Z','-100.00','MUR','Debit','raw6','Remise 50% x_y ACME',false);
 
     -- Transaction du workspace B (ne doit JAMAIS apparaître pour A).
     insert into transactions_cache
@@ -118,7 +124,7 @@ afterAll(async () => {
 });
 
 describe("RLS / tombstone", () => {
-  it("le workspace A ne voit QUE ses 4 transactions vivantes (B exclu, tombstone exclu)", async () => {
+  it("le workspace A ne voit QUE ses 5 transactions vivantes (B exclu, tombstone exclu)", async () => {
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ limite: 100 })),
     );
@@ -168,9 +174,18 @@ describe("pagination keyset (curseur, jamais OFFSET)", () => {
     const p2 = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ limite: 2, curseur: p1.curseurSuivant! })),
     );
+    // T6 (03-11) reste après T2/T4 → il y a encore une page (hasMore=true).
     expect(p2.lignes.map((l) => l.id)).toEqual([T2, T4]);
-    expect(p2.hasMore).toBe(false);
-    expect(p2.curseurSuivant).toBeNull();
+    expect(p2.hasMore).toBe(true);
+    expect(p2.curseurSuivant).not.toBeNull();
+
+    // Dernière page : T6 seul, plus rien après.
+    const p3 = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 2, curseur: p2.curseurSuivant! })),
+    );
+    expect(p3.lignes.map((l) => l.id)).toEqual([T6]);
+    expect(p3.hasMore).toBe(false);
+    expect(p3.curseurSuivant).toBeNull();
   });
 
   it("REJETTE un curseur falsifié (forme base64url valide, contenu absurde)", async () => {
@@ -240,7 +255,8 @@ describe("filtres", () => {
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ statut: "NON_CATEGORISE", limite: 100 })),
     );
-    expect(page.lignes.map((l) => l.id).sort()).toEqual([T1, T4].sort());
+    // T6 (sans split) est aussi NON_CATEGORISE.
+    expect(page.lignes.map((l) => l.id).sort()).toEqual([T1, T4, T6].sort());
   });
 
   it("filtre par statut COMPLET", async () => {
@@ -255,6 +271,54 @@ describe("filtres", () => {
       listerTransactions(tx, ctx, parse({ recherche: "salaire", limite: 100 })),
     );
     expect(page.lignes.map((l) => l.id)).toEqual([T4]);
+  });
+
+  // Échappement des méta-caractères LIKE (%/_) : la saisie est traitée LITTÉRALEMENT,
+  // jamais comme un wildcard. Sans échappement, ces termes matcheraient trop de lignes
+  // (voire toutes) — le repository échappe `[\\%_]` avant le motif `%…%`.
+  it("le % de la saisie est LITTÉRAL, pas un wildcard", async () => {
+    // "50%" ne matche QUE T6 ('Remise 50% …'). Non échappé, "50%" collerait à tout
+    // libellé contenant "50" suivi de n'importe quoi (le % agirait en joker).
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ recherche: "50%", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T6]);
+  });
+
+  it("l'underscore de la saisie est LITTÉRAL, pas un joker de caractère", async () => {
+    // "x_y" ne matche QUE T6 ('… x_y …'). Non échappé, "_" collerait à "xAy", "xBy"…
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ recherche: "x_y", limite: 100 })),
+    );
+    expect(page.lignes.map((l) => l.id)).toEqual([T6]);
+  });
+
+  it("un terme sans correspondance renvoie une page vide (état empty « recherche active »)", async () => {
+    const page = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ recherche: "introuvable-zzz", limite: 100 })),
+    );
+    expect(page.lignes).toHaveLength(0);
+    expect(page.hasMore).toBe(false);
+  });
+
+  it("compose recherche + compte + statut (filtres cumulés en AND)", async () => {
+    // "ACME" matche T4 (Salaire ACME) et T6 (… ACME), tous deux sur ACC_A et tous deux
+    // NON_CATEGORISE. En exigeant EN PLUS statut=COMPLET, l'AND des prédicats doit vider
+    // la page : c'est la preuve que les filtres se CUMULENT (un OR renverrait les 2 lignes).
+    const cumul = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(
+        tx,
+        ctx,
+        parse({
+          recherche: "ACME",
+          bankAccountId: ACC_A,
+          statut: "COMPLET",
+          limite: 100,
+        }),
+      ),
+    );
+    // Aucune ligne "ACME" n'est COMPLET → l'AND des filtres vide la page.
+    expect(cumul.lignes).toHaveLength(0);
   });
 
   it("bornes de date (incluses)", async () => {
@@ -276,11 +340,11 @@ describe("filtres", () => {
   });
 
   it("dateFin seul → uniquement les transactions ≤ borne (borne haute)", async () => {
-    // ≤ 2026-03-14 : T3/T2 (03-14), T4 (03-13) ; exclut T1 (03-15). T5 tombstone.
+    // ≤ 2026-03-14 : T3/T2 (03-14), T4 (03-13), T6 (03-11) ; exclut T1 (03-15). T5 tombstone.
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ dateFin: "2026-03-14", limite: 100 })),
     );
-    expect(page.lignes.map((l) => l.id)).toEqual([T3, T2, T4]);
+    expect(page.lignes.map((l) => l.id)).toEqual([T3, T2, T4, T6]);
   });
 
   it("filtre par compte (un seul compte ici → toutes les lignes vivantes)", async () => {
@@ -358,12 +422,14 @@ describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () =
 });
 
 // ── Catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1) ──────────
-// Déclaré EN DERNIER à dessein : ce bloc sème une transaction SUPPLÉMENTAIRE (T6)
+// Déclaré EN DERNIER à dessein : ce bloc sème une transaction SUPPLÉMENTAIRE (T7)
 // qui fausserait les énumérations exhaustives des describes précédents (l'ordre
 // d'exécution vitest suit l'ordre de déclaration). Le semis passe par withWorkspace
 // sous tygr_app (GUC posé → WITH CHECK tenant vérifié, même chemin que l'app).
+// NB : T7 (et non T6) — T6/'x6' sont pris par la fixture d'échappement LIKE du
+// jeu global ; réutiliser l'id violait la PK de transactions_cache_2026.
 describe("catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1)", () => {
-  const T6 = "66660006-0000-4000-8000-000000000000"; // 2026-03-11, 2 splits
+  const T7 = "77770007-0000-4000-8000-000000000000"; // 2026-03-11, 2 splits
   const CAT_A2 = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // « Loyer »
 
   afterAll(async () => {
@@ -371,7 +437,7 @@ describe("catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1)", () 
     // extension future de la suite retrouve le jeu de données initial.
     await withWorkspace(sessionA, (tx) =>
       tx.execute(
-        sql`update transactions_cache set is_removed = true where id = ${T6}::uuid`,
+        sql`update transactions_cache set is_removed = true where id = ${T7}::uuid`,
       ),
     );
   });
@@ -385,22 +451,22 @@ describe("catégorie dominante multi-splits (FB0709-TX-CATEGORIE-VISIBLE1)", () 
         insert into transactions_cache
           (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,bank_label_raw,clean_label,is_removed)
         values
-          (${T6},${WS_A},${ACC_A},'x6','2026-03-11','2026-03-11T08:00:00Z','-300.00','MUR','Debit','raw6','Achat D',false)
+          (${T7},${WS_A},${ACC_A},'x7','2026-03-11','2026-03-11T08:00:00Z','-300.00','MUR','Debit','raw7','Achat D',false)
       `);
       // 50 (Fournisseurs) + 250 (Loyer) = 300 = |montant| → COMPLET ; dominante = Loyer.
       await tx.execute(sql`
         insert into transaction_categorizations
           (workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by)
         values
-          (${WS_A},${T6},'2026-03-11',${CAT_A},'50.00','MANUAL',${ALICE}),
-          (${WS_A},${T6},'2026-03-11',${CAT_A2},'250.00','MANUAL',${ALICE})
+          (${WS_A},${T7},'2026-03-11',${CAT_A},'50.00','MANUAL',${ALICE}),
+          (${WS_A},${T7},'2026-03-11',${CAT_A2},'250.00','MANUAL',${ALICE})
       `);
     });
 
     const page = await withWorkspace(sessionA, (tx, ctx) =>
       listerTransactions(tx, ctx, parse({ limite: 100 })),
     );
-    const l = page.lignes.find((x) => x.id === T6);
+    const l = page.lignes.find((x) => x.id === T7);
     expect(l).toBeDefined();
     expect(l?.nbSplits).toBe(2);
     expect(l?.statut).toBe("COMPLET");

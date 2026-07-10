@@ -139,8 +139,19 @@ export type CurseurTransactions = string;
  * Les BORNES DE DATE (`dateDebut`/`dateFin`), elles, SONT supportées serveur (WHERE
  * `gte/lte` sur `transaction_date`) : exposées ici, elles partent au WHERE via
  * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
+ * Idem pour la RECHERCHE (`recherche`) : ILIKE serveur, jamais de filtrage client.
+ * NB : plus de filtre `bankAccountId` — le périmètre de comptes est piloté
+ * globalement par le `PerimetreSwitcher` de la navbar (doublon retiré, PR #190).
  */
 export interface FiltresTransactions {
+  /**
+   * Terme de recherche libre sur le LIBELLÉ NETTOYÉ (`cleanLabel`) — jamais
+   * `bank_label_raw` (PII, règle 8 ; garde côté repository). Absent = pas de
+   * filtre ; l'UI ne remonte JAMAIS une chaîne vide (le Zod `min(1)` la
+   * rejetterait) — une saisie effacée redevient `undefined`. Borné à 120 (aligné
+   * `listerTransactionsSchema.recherche` ; l'UI tronque, le serveur reste la garde).
+   */
+  recherche?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
   /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */
