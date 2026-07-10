@@ -57,6 +57,8 @@ const ENT_B = "b0b00000-cccc-4ccc-8ccc-cccccccccccc"; // WS_B (témoin cross-ten
 
 const ACC_A = "acc05000-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // compte WS_A
 const ACC_B = "acc0bbbb-dddd-4ddd-8ddd-dddddddddddd"; // compte WS_B
+/** WS_A, `account_name` = '' — cas MAJORITAIRE en sandbox (77/87 comptes). */
+const ACC_A_SANS_NOM = "acc09999-eeee-4eee-8eee-eeeeeeeeeeee";
 const CONN_A = "c0aa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CONN_B = "c0bb0000-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
@@ -102,12 +104,15 @@ beforeAll(async () => {
       ('${ENT_SUCRE}','${WS_A}','Sucrière','SUC',true),
       ('${ENT_ENERGIE}','${WS_A}','Énergie','ENE',true),
       ('${ENT_B}','${WS_B}','Entité B','XB',true);
-    insert into bank_connections (id, workspace_id, omnifi_connection_id, institution_id, created_by) values
-      ('${CONN_A}','${WS_A}','oc-a','mcb','${ADMIN_A}'),
-      ('${CONN_B}','${WS_B}','oc-b','mcb','${ADMIN_B}');
+    insert into bank_connections (id, workspace_id, omnifi_connection_id, institution_id, institution_name, created_by) values
+      ('${CONN_A}','${WS_A}','oc-a','mcb','Mauritius Commercial Bank','${ADMIN_A}'),
+      ('${CONN_B}','${WS_B}','oc-b','sbm','Banque de B','${ADMIN_B}');
     insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected, entity_id) values
       ('${ACC_A}','${WS_A}','${CONN_A}','oa-a','Compte A','MUR','100.00',true,null),
-      ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','200.00',true,null);
+      ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','200.00',true,null),
+      -- Cas MAJORITAIRE en sandbox (77/87) : account_name est NOT NULL mais vaut la
+      -- CHAÎNE VIDE. Le libellé doit alors se replier sur institution_name.
+      ('${ACC_A_SANS_NOM}','${WS_A}','${CONN_A}','oa-a-sansnom','','USD','50.00',true,null);
   `);
 
   const provisioning = readFileSync(
@@ -504,6 +509,55 @@ describe("listerComptesAvecEntite — lecture ADMIN-only, bornée au tenant (L7)
       "bankAccountId",
       "currency",
       "entityId",
+      "institutionName",
     ]);
+  });
+
+  it("22. remonte institution_name via la jointure bank_connections (identifiant de repli)", async () => {
+    const comptes = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    // Compte NOMMÉ : nom + institution tous deux disponibles.
+    expect(
+      comptes.find((c) => c.bankAccountId === ACC_A)?.institutionName,
+    ).toBe("Mauritius Commercial Bank");
+
+    // Compte SANS NOM (cas majoritaire sandbox) : account_name = '' (pas null), et
+    // c'est institution_name qui portera l'identification côté UI.
+    const sansNom = comptes.find((c) => c.bankAccountId === ACC_A_SANS_NOM);
+    expect(sansNom).toBeDefined();
+    expect(sansNom?.accountName).toBe("");
+    expect(sansNom?.institutionName).toBe("Mauritius Commercial Bank");
+  });
+
+  it("23. la jointure bank_connections ne fuite AUCUNE connexion d'un autre tenant", async () => {
+    // bank_connections porte sa propre policy tenant_isolation. Depuis WS_B, on ne doit
+    // voir que l'institution de CONN_B — jamais celle de CONN_A. Une jointure mal
+    // scopée remonterait « Mauritius Commercial Bank » dans le workspace B.
+    const comptesB = await withWorkspace(sAdminB, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(comptesB.map((c) => c.bankAccountId)).toEqual([ACC_B]);
+    expect(comptesB[0].institutionName).toBe("Banque de B");
+    expect(
+      comptesB.map((c) => c.institutionName),
+    ).not.toContain("Mauritius Commercial Bank");
+  });
+
+  it("24. tri déterministe sur le libellé EFFECTIF (nom sinon institution), pas sur account_name brut", async () => {
+    // ACC_A_SANS_NOM a account_name = '' : trié sur le brut il passerait AVANT
+    // « Compte A » (la chaîne vide trie en premier). Trié sur le libellé effectif, il
+    // se range sous « Mauritius Commercial Bank », donc APRÈS « Compte A ».
+    const comptes = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    const ordre = comptes.map((c) => c.bankAccountId);
+    expect(ordre.indexOf(ACC_A)).toBeLessThan(ordre.indexOf(ACC_A_SANS_NOM));
+
+    // Stabilité : deux lectures successives rendent le même ordre (tri final par id).
+    const encore = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(encore.map((c) => c.bankAccountId)).toEqual(ordre);
   });
 });

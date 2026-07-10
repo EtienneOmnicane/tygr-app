@@ -27,6 +27,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
   accountPartyRole,
   bankAccounts,
+  bankConnections,
   entities,
   memberEntityScopes,
   parties,
@@ -122,8 +123,22 @@ export interface EntiteLue {
  */
 export interface CompteAvecEntite {
   bankAccountId: string;
+  /**
+   * `bank_accounts.account_name` BRUT. NOT NULL en base, mais fréquemment la CHAÎNE
+   * VIDE : sur la sandbox, 77 des 87 comptes (tous ceux de SBM) n'ont pas de nom.
+   * Le repli d'affichage est calculé côté UI (`libelleCompte`), pas ici : le repo
+   * remonte le fait brut, la présentation choisit quoi en faire.
+   */
   accountName: string;
   currency: string;
+  /**
+   * `bank_connections.institution_name` (nullable, expand-compatible). Seul
+   * identifiant humain disponible quand `accountName` est vide — il n'existe AUCUN
+   * masque de compte ni IBAN en base (`omnifi_account_id` est un uuid technique).
+   * Insuffisant SEUL : les 77 comptes sans nom partagent la même institution, d'où
+   * le suffixe d'id ajouté à l'affichage.
+   */
+  institutionName: string | null;
   /** entity_id actuel du compte ; `null` = « non assigné ». */
   entityId: string | null;
 }
@@ -247,24 +262,45 @@ export async function listerEntites<TDb extends AnyPgDatabase>(
  * ⚠️ Ne sélectionne AUCUN montant (pas de `current_balance`) : cet écran identifie des
  * comptes, il n'en chiffre aucun (règle 8).
  *
- * Tri déterministe (accountName, id) : deux comptes homonymes ne permutent pas d'un
- * rendu à l'autre, ce qui ferait sauter les lignes sous le curseur de l'ADMIN.
+ * JOINTURE `bank_connections` (INNER — `connection_id` est NOT NULL) : remonte
+ * `institution_name`, seul identifiant humain quand `account_name` est vide. La
+ * jointure n'élargit PAS le périmètre : `bank_connections` porte sa propre policy
+ * `tenant_isolation`, donc une connexion d'un autre tenant est invisible et
+ * amputerait la ligne au lieu de la fuiter (fail-closed dans le bon sens).
+ *
+ * Tri déterministe sur le LIBELLÉ EFFECTIF (nom si non vide, sinon institution), puis
+ * id : trier sur `account_name` brut regrouperait en tête les 77 comptes à nom vide,
+ * ce qui est exactement l'écran qu'on cherche à rendre lisible. Le tri final par `id`
+ * garantit que deux comptes de même libellé ne permutent pas d'un rendu à l'autre
+ * (sinon les lignes sautent sous le curseur de l'ADMIN).
  */
 export async function listerComptesAvecEntite<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
   ctx: WorkspaceContext,
 ): Promise<CompteAvecEntite[]> {
   exigerAdmin(ctx);
+  // `account_name` est NOT NULL mais souvent '' → NULLIF(btrim(...), '') le ramène à
+  // NULL pour que COALESCE bascule sur l'institution. Paramètres liés uniquement.
+  const libelleEffectif = sql<string>`coalesce(
+    nullif(btrim(${bankAccounts.accountName}), ''),
+    nullif(btrim(${bankConnections.institutionName}), ''),
+    ''
+  )`;
   const lignes = await tx
     .select({
       bankAccountId: bankAccounts.id,
       accountName: bankAccounts.accountName,
       currency: bankAccounts.currency,
+      institutionName: bankConnections.institutionName,
       entityId: bankAccounts.entityId,
     })
     .from(bankAccounts)
+    .innerJoin(
+      bankConnections,
+      eq(bankConnections.id, bankAccounts.connectionId),
+    )
     .where(eq(bankAccounts.workspaceId, ctx.workspaceId))
-    .orderBy(bankAccounts.accountName, bankAccounts.id);
+    .orderBy(libelleEffectif, bankAccounts.id);
   return lignes;
 }
 

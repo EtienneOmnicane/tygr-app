@@ -36,24 +36,30 @@ const COMPTES_DEMO: CompteVueAssignation[] = [
   {
     bankAccountId: "00000000-0000-4000-8000-0000000000a1",
     accountName: "MCB — Compte courant Sucrière",
+    institutionName: "MCB",
     currency: "MUR",
     entityId: "ent-sucriere",
   },
   {
     bankAccountId: "00000000-0000-4000-8000-0000000000a2",
     accountName: "MCB — Compte USD Énergie",
+    institutionName: "MCB",
     currency: "USD",
     entityId: "ent-energie",
   },
   {
+    // accountName vide : éprouve le repli sur institutionName (cas des 77 comptes
+    // sandbox sans nom). Le libellé effectif affiché doit être « SBM ».
     bankAccountId: "00000000-0000-4000-8000-0000000000a3",
-    accountName: "SBM — Compte de placement",
+    accountName: "",
+    institutionName: "SBM",
     currency: "MUR",
     entityId: null, // non assigné : invisible en Vision Entité (fail-closed)
   },
   {
     bankAccountId: "00000000-0000-4000-8000-0000000000a4",
     accountName: "AfrAsia — Compte EUR Hôtellerie",
+    institutionName: "AfrAsia",
     currency: "EUR",
     entityId: "ent-hotellerie",
   },
@@ -61,6 +67,7 @@ const COMPTES_DEMO: CompteVueAssignation[] = [
     bankAccountId: "00000000-0000-4000-8000-0000000000a5",
     accountName:
       "Absa — Compte à libellé très long pour éprouver la troncature du nom de compte",
+    institutionName: "Absa",
     currency: "MUR",
     entityId: null,
   },

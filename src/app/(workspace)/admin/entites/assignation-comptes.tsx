@@ -1,52 +1,143 @@
 "use client";
 
 /**
- * Section « Assignation des comptes » (L7, PLAN-admin-entites-assignation-comptes.md).
- * Surface ADMIN à plat : chaque compte bancaire du workspace porte un `Select` d'entité
- * (BU), incluant « — Non assigné — ». C'est la SEULE surface qui permette la
- * DÉ-assignation (entityId = null) : le sas de propositions (section 1) ne sait
- * qu'assigner, et seulement les comptes portés par une Party Omni-FI.
+ * Section « Assignation des comptes » (L7). Surface ADMIN dense : un TABLEAU d'une
+ * ligne par compte, groupé par entité (BU), avec auto-save au changement de Select.
+ * C'est la SEULE surface qui permette la DÉ-assignation (entityId = null) : le sas de
+ * propositions (section 1) ne sait qu'assigner, et seulement les comptes portés par
+ * une Party Omni-FI.
  *
- * Données reçues en props depuis la page RSC (`listerComptesAvecEntite`, lu sous
- * withWorkspace + garde ADMIN du repo). L'enregistrement passe par la vraie Server
- * Action `assignerCompteAction` (./actions.ts), PAR compte, via <form> + useActionState.
- * Aucune logique d'isolation ici : le composant affiche et poste, la RLS + la garde
- * ADMIN décident.
+ * Pourquoi un tableau et plus des cartes : le workspace réel porte ~87 comptes. Empilés
+ * en cartes (gabarit CarteMembre), l'écran est inutilisable — d'autant que 77 d'entre
+ * eux n'ont AUCUN nom en sandbox, ce qui produisait des cartes quasi vides.
  *
- * ⚠️ AUCUN montant affiché (règle 8) : nom de compte + devise, jamais de solde. Le
- * contrat serveur `CompteAvecEntite` ne le remonte pas — on n'ouvre pas de surface de
- * manipulation de float sur cet écran d'administration.
+ * Auto-save (plus de bouton « Enregistrer ») : le `onChange` du Select appelle
+ * directement `assignerCompteAction`. Le serveur pose `revalidatePath("/admin/entites")`
+ * → la page re-rend et le compte MIGRE vers son nouveau groupe. La vérité reste donc la
+ * prop serveur ; l'état local ne sert qu'à l'affichage optimiste du Select et au statut.
  *
- * PATTERN INAUGURÉ ICI — `Select` maison + <form action> : `Select` rend un
- * `<button role="combobox">`, PAS un champ natif : il ne poste rien tout seul. Sa valeur
- * est donc miroitée dans un `<input type="hidden" name="entityId">` qui lui est FRÈRE
- * (jamais imbriqué dans le <label>, qui doit pointer l'`id` du trigger via htmlFor).
+ * ⚠️ AUCUN montant affiché (règle 8) : libellé + institution + devise. Le contrat
+ * serveur `CompteAvecEntite` ne remonte aucun solde.
  *
- * Tokens & conventions UI_GUIDELINES (§1.1/§2.2/§2.3/§4.4). Pas de dépendance externe
- * (clsx/cva/lucide — règle 9) : SVG inline, classes statiques.
+ * `Select` maison = `<button role="combobox">` : il ne poste RIEN dans un `<form>`. En
+ * auto-save on n'utilise donc pas de `<form>` du tout — on construit un `FormData` et on
+ * appelle l'action programmatiquement (cf. `useLigneAssignation`).
+ *
+ * Tokens & conventions UI_GUIDELINES (§2.2 tableau dense, §3.4 erreur ≠ sortie, §4.4
+ * états vides). Pas de dépendance externe (règle 9) : SVG inline, `cn` local.
  */
-import { useMemo, useState } from "react";
-import { useActionState } from "react";
+import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/states";
 
-import { assignerCompteAction, type EtatAction } from "./actions";
+import { assignerCompteAction } from "./actions";
 import type { EntiteVue } from "./assignation-entites";
+
+/** Concatène des classes en ignorant les valeurs falsy. Pas de clsx (règle 9). */
+function cn(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(" ");
+}
 
 /** Compte + son entité courante (projection de `CompteAvecEntite` côté page). */
 export interface CompteVueAssignation {
   bankAccountId: string;
+  /** Brut : NOT NULL en base, mais souvent la chaîne vide (77/87 en sandbox). */
   accountName: string;
   currency: string;
+  /** Institution de la connexion (nullable). Identifiant de repli. */
+  institutionName: string | null;
   /** entity_id actuel ; `null` = non assigné. */
   entityId: string | null;
 }
 
-const ETAT_INITIAL: EtatAction = { erreur: null, succes: null };
-
 /** Valeur du `Select` pour « non assigné ». La Server Action mappe "" → null. */
 const VALEUR_NON_ASSIGNE = "";
+
+/** Clé du groupe « non assigné », distincte d'un entityId (uuid). */
+const GROUPE_NON_ASSIGNE = "__non_assigne__";
+
+const LIBELLE_NON_ASSIGNE = "— Non assigné —";
+
+/**
+ * Identifiant lisible d'un compte, par ordre de préférence :
+ *   1. `accountName` non vide (10 comptes sur 87 en sandbox) ;
+ *   2. `institutionName` + suffixe d'id — l'institution SEULE ne suffit pas : les 77
+ *      comptes sans nom partagent la même (« State Bank of Mauritius »), ils seraient
+ *      indistinguables. Le suffixe est l'id INTERNE (uuid TYGR), jamais un numéro de
+ *      compte : il n'existe aucun masque/IBAN en base, et on n'en fabriquerait pas un
+ *      (aucune donnée bancaire dans un libellé, règle 8) ;
+ *   3. `Compte {8 car. de l'id}` quand l'institution est nulle (expand-compat).
+ *
+ * Exportée pour être testée et réutilisée sans dupliquer la cascade (même esprit que la
+ * règle « source unique de formatage » appliquée aux montants et aux dates).
+ */
+export function libelleCompte(compte: CompteVueAssignation): string {
+  const nom = compte.accountName.trim();
+  if (nom !== "") return nom;
+
+  const suffixe = compte.bankAccountId.slice(0, 8);
+  const institution = compte.institutionName?.trim();
+  if (institution) return `${institution} · ${suffixe}`;
+
+  return `Compte ${suffixe}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Groupement par entité                                               */
+/* ------------------------------------------------------------------ */
+
+interface GroupeComptes {
+  /** entityId, ou `GROUPE_NON_ASSIGNE`. */
+  cle: string;
+  titre: string;
+  comptes: CompteVueAssignation[];
+}
+
+/**
+ * Groupe les comptes par entité : entités ACTIVES dans l'ordre reçu (alphabétique,
+ * comme `listerEntites`), puis « — Non assigné — » en DERNIER. Les groupes vides ne
+ * sont pas rendus (utile quand un filtre de recherche est actif).
+ *
+ * Un compte dont l'`entityId` ne correspond à aucune entité ACTIVE (entité archivée
+ * après coup) retombe dans « non assigné » plutôt que de disparaître de l'écran —
+ * sinon l'ADMIN ne pourrait plus jamais le rattacher ailleurs.
+ */
+function grouperParEntite(
+  comptes: CompteVueAssignation[],
+  entites: EntiteVue[],
+): GroupeComptes[] {
+  const connues = new Set(entites.map((e) => e.id));
+  const parCle = new Map<string, CompteVueAssignation[]>();
+
+  for (const compte of comptes) {
+    const cle =
+      compte.entityId !== null && connues.has(compte.entityId)
+        ? compte.entityId
+        : GROUPE_NON_ASSIGNE;
+    const seau = parCle.get(cle);
+    if (seau) seau.push(compte);
+    else parCle.set(cle, [compte]);
+  }
+
+  const groupes: GroupeComptes[] = entites
+    .map((e) => ({ cle: e.id, titre: e.nom, comptes: parCle.get(e.id) ?? [] }))
+    .filter((g) => g.comptes.length > 0);
+
+  const orphelins = parCle.get(GROUPE_NON_ASSIGNE);
+  if (orphelins && orphelins.length > 0) {
+    groupes.push({
+      cle: GROUPE_NON_ASSIGNE,
+      titre: LIBELLE_NON_ASSIGNE,
+      comptes: orphelins,
+    });
+  }
+  return groupes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Composant principal                                                 */
+/* ------------------------------------------------------------------ */
 
 export function AssignationComptes({
   comptes,
@@ -57,14 +148,28 @@ export function AssignationComptes({
 }) {
   const [recherche, setRecherche] = useState("");
 
+  // Filtre sur l'identifiant AFFICHÉ (ce que l'ADMIN lit), pas sur `accountName` brut :
+  // chercher « State Bank » doit trouver les comptes dont c'est le libellé de repli.
   const comptesFiltres = useMemo(() => {
     const q = recherche.trim().toLowerCase();
     if (q === "") return comptes;
-    return comptes.filter((c) => c.accountName.toLowerCase().includes(q));
+    return comptes.filter((c) => libelleCompte(c).toLowerCase().includes(q));
   }, [recherche, comptes]);
 
-  // État vide « métier » : aucune banque connectée → rien à assigner. Un CTA utile
-  // (D2 de EmptyState : pas de bouton creux).
+  const groupes = useMemo(
+    () => grouperParEntite(comptesFiltres, entites),
+    [comptesFiltres, entites],
+  );
+
+  const options = useMemo(
+    () => [
+      { value: VALEUR_NON_ASSIGNE, label: LIBELLE_NON_ASSIGNE },
+      ...entites.map((e) => ({ value: e.id, label: e.nom })),
+    ],
+    [entites],
+  );
+
+  // État vide « métier » : aucune banque connectée → rien à assigner (§4.4).
   if (comptes.length === 0) {
     return (
       <EmptyState
@@ -76,8 +181,7 @@ export function AssignationComptes({
     );
   }
 
-  // Des comptes, mais aucune entité : les Select n'offriraient que « — Non assigné — ».
-  // On oriente vers la création d'entité plutôt que d'afficher des menus inertes.
+  // Des comptes, mais aucune entité : le Select n'offrirait que « — Non assigné — ».
   if (entites.length === 0) {
     return (
       <EmptyState
@@ -90,172 +194,341 @@ export function AssignationComptes({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Barre d'outils : recherche par nom de compte */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <label className="relative flex-1 sm:max-w-xs">
-          <span className="sr-only">Rechercher un compte</span>
-          <svg
-            aria-hidden
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input
-            type="search"
-            value={recherche}
-            onChange={(e) => setRecherche(e.target.value)}
-            placeholder="Rechercher un compte…"
-            className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
-              text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
-              focus:ring-2 focus:ring-primary/30"
-          />
-        </label>
-        <p className="text-sm text-text-muted">
-          {comptes.length} compte{comptes.length > 1 ? "s" : ""}
+      <BarreRecherche
+        valeur={recherche}
+        onChange={setRecherche}
+        nbTotal={comptes.length}
+        nbFiltres={comptesFiltres.length}
+      />
+
+      {comptesFiltres.length === 0 ? (
+        <p className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
+          Aucun compte ne correspond à « {recherche} ».
         </p>
-      </div>
+      ) : (
+        <div className="overflow-x-auto rounded-card border border-line bg-surface-card shadow-card">
+          {/* table-fixed : impose les largeurs du <colgroup> → `truncate` opère et la
+              table ne déborde pas (même convention que TransactionsTable, §2.2). */}
+          <table className="w-full table-fixed border-collapse text-left">
+            <colgroup>
+              <col />
+              <col className="w-[72px] sm:w-[88px]" />
+              <col className="w-[200px] sm:w-[260px]" />
+            </colgroup>
 
-      {/* Une carte par compte — chaque carte gère son propre enregistrement */}
-      <ul className="flex flex-col gap-3">
-        {comptesFiltres.map((compte) => (
-          <CarteCompte
-            key={compte.bankAccountId}
-            compte={compte}
-            entites={entites}
-          />
-        ))}
+            <thead>
+              <tr className="border-b border-line-strong bg-surface-card">
+                <th
+                  scope="col"
+                  className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
+                >
+                  Compte
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
+                >
+                  Devise
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
+                >
+                  Entité
+                </th>
+              </tr>
+            </thead>
 
-        {comptesFiltres.length === 0 && (
-          <li className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
-            Aucun compte ne correspond à « {recherche} ».
-          </li>
-        )}
-      </ul>
+            {/* Un <tbody> par groupe : c'est le regroupement sémantique natif d'un
+                tableau (une seule <table>, donc une seule structure de colonnes). */}
+            {groupes.map((groupe) => (
+              <tbody key={groupe.cle} className="divide-y divide-line">
+                <tr>
+                  <th
+                    scope="colgroup"
+                    colSpan={3}
+                    className="border-y border-line bg-surface-inset px-3 py-2 text-left text-xs font-semibold text-text sm:px-4"
+                  >
+                    {groupe.titre}
+                    <span className="ml-2 font-normal text-text-muted">
+                      {groupe.comptes.length} compte
+                      {groupe.comptes.length > 1 ? "s" : ""}
+                    </span>
+                  </th>
+                </tr>
+
+                {groupe.comptes.map((compte) => (
+                  <LigneCompte
+                    key={compte.bankAccountId}
+                    compte={compte}
+                    options={options}
+                  />
+                ))}
+              </tbody>
+            ))}
+          </table>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Carte d'un compte : Select d'entité + enregistrement (par compte)   */
+/* Barre de recherche                                                  */
 /* ------------------------------------------------------------------ */
 
-function CarteCompte({
+function BarreRecherche({
+  valeur,
+  onChange,
+  nbTotal,
+  nbFiltres,
+}: {
+  valeur: string;
+  onChange: (v: string) => void;
+  nbTotal: number;
+  nbFiltres: number;
+}) {
+  const filtreActif = valeur.trim() !== "";
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <label className="relative flex-1 sm:max-w-xs">
+        <span className="sr-only">Rechercher un compte</span>
+        <svg
+          aria-hidden
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <input
+          type="search"
+          value={valeur}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Rechercher un compte…"
+          className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
+            text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
+            focus:ring-2 focus:ring-primary/30"
+        />
+      </label>
+      <p className="text-sm text-text-muted" aria-live="polite">
+        {filtreActif
+          ? `${nbFiltres} sur ${nbTotal} compte${nbTotal > 1 ? "s" : ""}`
+          : `${nbTotal} compte${nbTotal > 1 ? "s" : ""}`}
+      </p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Une ligne : Select auto-save + statut                               */
+/* ------------------------------------------------------------------ */
+
+type Statut =
+  | { phase: "repos" }
+  | { phase: "envoi" }
+  | { phase: "succes" }
+  | { phase: "erreur"; message: string };
+
+/**
+ * Auto-save d'une ligne, avec sémantique « DERNIER GAGNE ».
+ *
+ * Le problème : l'ADMIN peut enchaîner deux changements sur la même ligne avant que le
+ * premier appel ne réponde. Sans garde, la réponse LENTE du premier écraserait le
+ * statut du second, et afficherait « Enregistré » pour une valeur qui n'est plus celle
+ * du Select.
+ *
+ * La parade : un compteur MONOTONE par ligne (`useRef`). Chaque envoi capture son
+ * numéro ; à la réponse, on jette tout ce qui n'est pas le dernier émis. On ne désactive
+ * donc PAS le Select pendant l'envoi (ce qui ferait « coller » l'UI sur 87 lignes) :
+ * l'ADMIN peut corriger immédiatement.
+ *
+ * (Un compteur monotone, pas un booléen « en cours » : deux envois rapides partagent le
+ * même booléen, mais jamais le même numéro.)
+ */
+function useLigneAssignation(bankAccountId: string, valeurServeur: string) {
+  const [statut, setStatut] = useState<Statut>({ phase: "repos" });
+  const [, demarrerTransition] = useTransition();
+
+  // Valeur affichée : optimiste pendant l'envoi, sinon la vérité serveur.
+  const [valeurLocale, setValeurLocale] = useState<string | null>(null);
+  const dernierEnvoi = useRef(0);
+
+  const envoyer = useCallback(
+    (entityId: string) => {
+      setValeurLocale(entityId);
+      const numero = dernierEnvoi.current + 1;
+      dernierEnvoi.current = numero;
+      setStatut({ phase: "envoi" });
+
+      demarrerTransition(async () => {
+        const formData = new FormData();
+        formData.set("bankAccountId", bankAccountId);
+        // "" = « non assigné » : l'action mappe la chaîne vide sur null.
+        formData.set("entityId", entityId);
+
+        let resultat: { erreur: string | null; succes: string | null };
+        try {
+          resultat = await assignerCompteAction(
+            { erreur: null, succes: null },
+            formData,
+          );
+        } catch {
+          // Message GÉNÉRIQUE : jamais de libellé bancaire ni de cause brute dans l'UI
+          // (règle 8 — pas de PII dans un message d'erreur ni dans la télémétrie).
+          resultat = { erreur: "Enregistrement impossible.", succes: null };
+        }
+
+        // Réponse périmée (un envoi plus récent l'a doublée) → on la jette.
+        if (dernierEnvoi.current !== numero) return;
+
+        if (resultat.erreur !== null) {
+          setStatut({ phase: "erreur", message: resultat.erreur });
+        } else {
+          setStatut({ phase: "succes" });
+        }
+        // Dans les deux cas on relâche l'optimisme : après un succès, `revalidatePath`
+        // re-rend la page avec la nouvelle prop (le compte migre de groupe) ; après un
+        // échec, le Select doit retomber sur la vérité serveur plutôt que de mentir.
+        setValeurLocale(null);
+      });
+    },
+    [bankAccountId],
+  );
+
+  return { valeur: valeurLocale ?? valeurServeur, statut, envoyer };
+}
+
+function LigneCompte({
   compte,
-  entites,
+  options,
 }: {
   compte: CompteVueAssignation;
-  entites: EntiteVue[];
+  options: Array<{ value: string; label: string }>;
 }) {
-  // `null` (non assigné) est représenté par "" côté formulaire (mappé null par l'action).
-  const valeurInitiale = compte.entityId ?? VALEUR_NON_ASSIGNE;
-  const [entiteChoisie, setEntiteChoisie] = useState<string>(valeurInitiale);
-
-  const [etat, action, enCours] = useActionState(
-    assignerCompteAction,
-    ETAT_INITIAL,
+  const valeurServeur = compte.entityId ?? VALEUR_NON_ASSIGNE;
+  const { valeur, statut, envoyer } = useLigneAssignation(
+    compte.bankAccountId,
+    valeurServeur,
   );
 
-  // Dirty state : rien à enregistrer tant que la sélection vaut l'entité courante.
-  const modifie = entiteChoisie !== valeurInitiale;
-
-  // `id` dérivé du bankAccountId : unique par ligne (sinon `aria-activedescendant`
-  // et `htmlFor` pointeraient la même cible sur plusieurs cartes).
+  // `id` dérivé du bankAccountId : unique par ligne (sinon `aria-activedescendant` et
+  // le `listboxId` du Select collisionneraient d'une ligne à l'autre).
   const idSelect = `compte-entite-${compte.bankAccountId}`;
-
-  const options = useMemo(
-    () => [
-      { value: VALEUR_NON_ASSIGNE, label: "— Non assigné —" },
-      ...entites.map((e) => ({ value: e.id, label: e.nom })),
-    ],
-    [entites],
-  );
+  const libelle = libelleCompte(compte);
+  // Le repli affiche DÉJÀ l'institution : ne pas la répéter en sous-titre.
+  const sousTitre =
+    compte.accountName.trim() !== "" ? compte.institutionName?.trim() : null;
 
   return (
-    <li className="rounded-card bg-surface-card p-5 shadow-card">
-      {/* `flex-wrap` assumé ici : c'est un formulaire d'administration, pas le header
-          (l'interdiction §2.2 « jamais flex-wrap » vise le header, qui doit condenser).
-          Sous breakpoint étroit, mieux vaut replier que d'écraser le Select. */}
-      <form
-        action={action}
-        className="flex flex-wrap items-center justify-between gap-4"
-      >
-        <input
-          type="hidden"
-          name="bankAccountId"
-          value={compte.bankAccountId}
-        />
-        {/* Le `Select` maison n'est pas un champ natif : sa valeur est postée par ce
-            hidden, qui lui est FRÈRE (jamais dans le <label>). */}
-        <input type="hidden" name="entityId" value={entiteChoisie} />
+    <tr className="align-middle">
+      <td className="px-3 py-2 sm:px-4">
+        <p className="truncate text-sm text-text" title={libelle}>
+          {libelle}
+        </p>
+        {sousTitre && (
+          <p className="truncate text-xs text-text-faint">{sousTitre}</p>
+        )}
+      </td>
 
-        {/* Identité du compte — nom + devise, JAMAIS de solde (règle 8). La zone de
-            statut vit SOUS le nom : elle reste dans le flux (pas de rangée vide
-            réservée sur toute la largeur), tout en gardant un min-h pour ne pas
-            faire sauter le layout à l'apparition du message. */}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-ink">
-            {compte.accountName}
-          </p>
-          <p className="text-xs text-text-faint">{compte.currency}</p>
+      <td className="px-3 py-2 text-sm text-text-muted sm:px-4">
+        {compte.currency}
+      </td>
 
-          <div aria-live="polite" className="min-h-[1rem] text-xs">
-            {etat.erreur !== null && (
-              <span role="alert" className="text-danger">
-                {etat.erreur}
-              </span>
-            )}
-            {etat.succes !== null && (
-              <span role="status" className="text-success">
-                {etat.succes}
-              </span>
-            )}
-            {etat.erreur === null && etat.succes === null && modifie && (
-              <span className="text-text-faint">
-                Modification non enregistrée.
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Entité cible */}
+      <td className="px-3 py-2 sm:px-4">
         <div className="flex flex-col gap-1">
-          <label htmlFor={idSelect} className="text-xs text-text-muted">
-            Entité
+          {/* Pas de <label> visible (l'en-tête de colonne « Entité » le porte) : un
+              nom accessible par ligne reste nécessaire pour le lecteur d'écran. */}
+          <label htmlFor={idSelect} className="sr-only">
+            Entité de {libelle}
           </label>
           <Select
             id={idSelect}
-            value={entiteChoisie}
-            onChange={setEntiteChoisie}
-            disabled={enCours}
+            value={valeur}
+            onChange={envoyer}
             options={options}
-            className="min-w-[240px]"
+            size="sm"
+            className="w-full"
           />
+          <StatutLigne statut={statut} />
         </div>
+      </td>
+    </tr>
+  );
+}
 
-        <button
-          type="submit"
-          disabled={!modifie || enCours}
-          className="flex h-10 items-center justify-center gap-2 rounded-control bg-primary
-            px-4 text-sm font-semibold text-white transition-colors hover:bg-primary-600
-            focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-            focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-48"
+/**
+ * Statut d'une ligne. `aria-live="polite"` : annoncé sans voler le focus (l'ADMIN peut
+ * enchaîner les lignes au clavier). Hauteur minimale réservée pour éviter le saut de
+ * layout à l'apparition du message.
+ *
+ * L'erreur porte fond `danger-bg` + icône + message (§3.4 « erreur ≠ sortie ») : un
+ * simple texte rouge se confondrait avec la couleur d'un montant sortant.
+ */
+function StatutLigne({ statut }: { statut: Statut }) {
+  return (
+    <div aria-live="polite" className="min-h-[1.125rem]">
+      {statut.phase === "envoi" && (
+        <span className="flex items-center gap-1.5 text-xs text-text-faint">
+          <span
+            aria-hidden
+            className="size-3 animate-spin rounded-full border-2 border-line border-t-text-muted"
+          />
+          Enregistrement…
+        </span>
+      )}
+
+      {statut.phase === "succes" && (
+        <span
+          role="status"
+          className="flex items-center gap-1 text-xs text-success"
         >
-          {enCours && (
-            <span
-              aria-hidden
-              className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+          <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0">
+            <path
+              d="M3.5 8.5l3 3 6-7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             />
+          </svg>
+          Enregistré
+        </span>
+      )}
+
+      {statut.phase === "erreur" && (
+        <span
+          role="alert"
+          className={cn(
+            "flex items-center gap-1 rounded-control bg-danger-bg px-1.5 py-0.5",
+            "text-xs text-danger",
           )}
-          {enCours ? "Enregistrement…" : "Enregistrer"}
-        </button>
-      </form>
-    </li>
+        >
+          <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0">
+            <circle
+              cx="8"
+              cy="8"
+              r="6.25"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            />
+            <path
+              d="M8 4.75v3.75M8 11.1v.05"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+          {statut.message}
+        </span>
+      )}
+    </div>
   );
 }
