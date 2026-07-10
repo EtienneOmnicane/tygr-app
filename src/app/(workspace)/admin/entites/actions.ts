@@ -17,6 +17,7 @@
  *
  * (La page.tsx + l'UI sas/sélecteur sont du rôle Front — hors de ce fichier.)
  */
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { exigerSessionWorkspace } from "@/server/auth/session";
@@ -237,6 +238,15 @@ export async function assignerCompteAction(
     if (m) return m;
     throw e;
   }
+
+  // Succès UNIQUEMENT (jamais dans un chemin d'erreur, cf. plan L7 §R1). La page
+  // /admin/entites re-rend ses trois sections : sans cela, le sas de propositions
+  // resterait pré-coché d'après un `entityIdActuel` périmé, et un clic « Confirmer »
+  // réassignerait un compte que l'ADMIN vient de ranger ailleurs (piège d'écriture).
+  // Le sas n'est PAS impacté par ailleurs : confirmerPropositionAction appelle
+  // assignerCompteEntite (le repo) en direct, pas cette action.
+  revalidatePath("/admin/entites");
+
   return {
     erreur: null,
     succes: parsed.data.entityId

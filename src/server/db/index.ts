@@ -220,6 +220,7 @@ export type {
 // @/server/repositories/* directement. Garde ADMIN portée par le repository.
 export {
   listerEntites,
+  listerComptesAvecEntite,
   listerScopesMembre,
   listerMembresWorkspace,
   listerPropositionsPartyEntite,
@@ -238,6 +239,7 @@ export {
 } from "@/server/repositories/entites";
 export type {
   EntiteLue,
+  CompteAvecEntite,
   MembreScope,
   PropositionEntite,
   CompteDeProposition,

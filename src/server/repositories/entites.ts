@@ -27,6 +27,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
   accountPartyRole,
   bankAccounts,
+  bankConnections,
   entities,
   memberEntityScopes,
   parties,
@@ -107,6 +108,39 @@ export interface EntiteLue {
   isActive: boolean;
   /** Nb de comptes assignés à cette entité (agrégat scopé workspace). */
   nbComptes: number;
+}
+
+/**
+ * Un compte bancaire du workspace + l'entité (BU) à laquelle il est assigné (L7,
+ * PLAN-admin-entites-assignation-comptes.md). Alimente la section « Assignation des
+ * comptes » de /admin/entites : la SEULE surface qui permet de repasser un compte en
+ * « non assigné » (le sas de propositions ne sait qu'assigner, et seulement les comptes
+ * portés par une Party).
+ *
+ * ⚠️ AUCUN montant (règle 8) : ni `current_balance`, ni agrégat. Ce contrat sert à
+ * IDENTIFIER un compte (nom + devise), pas à le chiffrer — on n'ouvre pas ici une
+ * surface de manipulation de float.
+ */
+export interface CompteAvecEntite {
+  bankAccountId: string;
+  /**
+   * `bank_accounts.account_name` BRUT. NOT NULL en base, mais fréquemment la CHAÎNE
+   * VIDE : sur la sandbox, 77 des 87 comptes (tous ceux de SBM) n'ont pas de nom.
+   * Le repli d'affichage est calculé côté UI (`libelleCompte`), pas ici : le repo
+   * remonte le fait brut, la présentation choisit quoi en faire.
+   */
+  accountName: string;
+  currency: string;
+  /**
+   * `bank_connections.institution_name` (nullable, expand-compatible). Seul
+   * identifiant humain disponible quand `accountName` est vide — il n'existe AUCUN
+   * masque de compte ni IBAN en base (`omnifi_account_id` est un uuid technique).
+   * Insuffisant SEUL : les 77 comptes sans nom partagent la même institution, d'où
+   * le suffixe d'id ajouté à l'affichage.
+   */
+  institutionName: string | null;
+  /** entity_id actuel du compte ; `null` = « non assigné ». */
+  entityId: string | null;
 }
 
 /**
@@ -208,6 +242,65 @@ export async function listerEntites<TDb extends AnyPgDatabase>(
     .leftJoin(bankAccounts, eq(bankAccounts.entityId, entities.id))
     .groupBy(entities.id, entities.name, entities.code, entities.isActive)
     .orderBy(entities.name);
+  return lignes;
+}
+
+/**
+ * Liste TOUS les comptes bancaires du workspace courant avec l'entité à laquelle ils
+ * sont assignés (`entityId = null` ⇒ « non assigné »). ADMIN-only. Alimente la section
+ * « Assignation des comptes » (L7) — la seule surface qui permet la DÉ-assignation.
+ *
+ * Isolation, deux étages (CLAUDE.md « Entités multi-tenant ») :
+ *  - étage 1 TENANT : policy `tenant_isolation` sur bank_accounts (le GUC workspace est
+ *    posé par withWorkspace). Le `where(workspaceId = ctx)` explicite ci-dessous est
+ *    REDONDANT VOLONTAIREMENT — défense en profondeur, même gabarit que
+ *    `assignerCompteEntite`. L'autorité reste la RLS, jamais ce WHERE.
+ *  - étage 2 ENTITÉ : policy `entity_scope` (RESTRICTIVE FOR ALL). Sans effet ici : la
+ *    garde ADMIN implique la Vision Globale (GUC entity_scope vide) → l'ADMIN voit tous
+ *    les comptes de SON tenant, y compris les non assignés (fail-closed pour les autres).
+ *
+ * ⚠️ Ne sélectionne AUCUN montant (pas de `current_balance`) : cet écran identifie des
+ * comptes, il n'en chiffre aucun (règle 8).
+ *
+ * JOINTURE `bank_connections` (INNER — `connection_id` est NOT NULL) : remonte
+ * `institution_name`, seul identifiant humain quand `account_name` est vide. La
+ * jointure n'élargit PAS le périmètre : `bank_connections` porte sa propre policy
+ * `tenant_isolation`, donc une connexion d'un autre tenant est invisible et
+ * amputerait la ligne au lieu de la fuiter (fail-closed dans le bon sens).
+ *
+ * Tri déterministe sur le LIBELLÉ EFFECTIF (nom si non vide, sinon institution), puis
+ * id : trier sur `account_name` brut regrouperait en tête les 77 comptes à nom vide,
+ * ce qui est exactement l'écran qu'on cherche à rendre lisible. Le tri final par `id`
+ * garantit que deux comptes de même libellé ne permutent pas d'un rendu à l'autre
+ * (sinon les lignes sautent sous le curseur de l'ADMIN).
+ */
+export async function listerComptesAvecEntite<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+): Promise<CompteAvecEntite[]> {
+  exigerAdmin(ctx);
+  // `account_name` est NOT NULL mais souvent '' → NULLIF(btrim(...), '') le ramène à
+  // NULL pour que COALESCE bascule sur l'institution. Paramètres liés uniquement.
+  const libelleEffectif = sql<string>`coalesce(
+    nullif(btrim(${bankAccounts.accountName}), ''),
+    nullif(btrim(${bankConnections.institutionName}), ''),
+    ''
+  )`;
+  const lignes = await tx
+    .select({
+      bankAccountId: bankAccounts.id,
+      accountName: bankAccounts.accountName,
+      currency: bankAccounts.currency,
+      institutionName: bankConnections.institutionName,
+      entityId: bankAccounts.entityId,
+    })
+    .from(bankAccounts)
+    .innerJoin(
+      bankConnections,
+      eq(bankConnections.id, bankAccounts.connectionId),
+    )
+    .where(eq(bankAccounts.workspaceId, ctx.workspaceId))
+    .orderBy(libelleEffectif, bankAccounts.id);
   return lignes;
 }
 
