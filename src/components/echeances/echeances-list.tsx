@@ -10,7 +10,15 @@
  * Colonnes (cadrage §3.1.2) : libellé, contrepartie, date d'exigibilité, montant
  * (coloré par le SENS — inflow/outflow §3.1, `tabular-nums`, JAMAIS tronqué),
  * catégorie (badge), statut (badge §3.6). Actions inline : changer le statut,
- * modifier, supprimer — masquées en lecture seule (VIEWER, `peutGerer=false`).
+ * modifier, supprimer.
+ *
+ * Gating VIEWER (convention D2 #37, `peutGerer=false`) :
+ * - « Modifier » / « Supprimer » = actions de MODIFICATION → restent VISIBLES mais
+ *   INERTES (`BoutonProtege` : aria-disabled + tooltip explicatif, focusable). On ne
+ *   les cache pas : le VIEWER doit savoir que la capacité existe.
+ * - Le CONTRÔLE de statut (`StatutControl`) n'a pas de forme inerte lisible (c'est un
+ *   sélecteur) : en lecture seule il est remplacé par le badge d'état correspondant,
+ *   qui porte la même information sans suggérer une interaction.
  *
  * Montants (règle 8) : formatage EXCLUSIF via `format-montant` (aucun découpage local).
  * Dates : via `format-date` (aucun nom de mois en dur). Le restant d'un « partiel »
@@ -18,10 +26,15 @@
  */
 import { useState } from "react";
 
+import { BoutonProtege } from "@/components/ui/action-protegee";
 import { CategoryBadge } from "@/components/ui/category";
 import { Select } from "@/components/ui/select";
 import { formaterDateComptableLongue } from "@/lib/format-date";
 import { formatMontant, montantNu } from "@/lib/format-montant";
+
+/** Tooltip du gating VIEWER : dit POURQUOI, pas seulement « interdit ». */
+const RAISON_ECHEANCES =
+  "Votre rôle (lecture seule) ne permet pas de gérer les échéances.";
 
 import { EcheanceBadge, libelleStatut } from "./echeance-badge";
 import type {
@@ -252,39 +265,39 @@ export function EcheancesList({
                 <EcheanceBadge statut={e.statutAffiche} />
               )}
 
-              {peutGerer && (onModifier || onSupprimer) && (
-                <div className="flex items-center gap-1">
-                  {/* Rappel du statut d'affichage (dérivé « en retard ») à côté des
-                      actions, même quand le contrôle montre le statut STOCKÉ. */}
-                  {onChangerStatut && e.enRetard && (
-                    <EcheanceBadge statut="en_retard" className="mr-1" />
-                  )}
-                  {onModifier && (
-                    <button
-                      type="button"
-                      onClick={() => onModifier(e)}
-                      className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
-                        transition-colors hover:bg-surface-inset hover:text-text
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                    >
-                      Modifier
-                    </button>
-                  )}
-                  {onSupprimer && (
-                    <button
-                      type="button"
-                      onClick={() => onSupprimer(e.id)}
-                      disabled={enSuppression}
-                      className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
-                        transition-colors hover:bg-danger-bg hover:text-danger
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-                        disabled:opacity-[0.48]"
-                    >
-                      {enSuppression ? "Suppression…" : "Supprimer"}
-                    </button>
-                  )}
-                </div>
-              )}
+              {/* Actions de MODIFICATION : visibles pour tous, INERTES pour un
+                  VIEWER (convention D2 #37 — désactivé + tooltip, jamais caché).
+                  Les handlers ne sont fournis par le conteneur que si `peutGerer` ;
+                  on les rend donc conditionnels au rôle, pas à leur présence. */}
+              <div className="flex items-center gap-1">
+                {/* Rappel du statut d'affichage (dérivé « en retard ») à côté des
+                    actions, même quand le contrôle montre le statut STOCKÉ. */}
+                {onChangerStatut && e.enRetard && (
+                  <EcheanceBadge statut="en_retard" className="mr-1" />
+                )}
+                <BoutonProtege
+                  autorise={peutGerer}
+                  raison={RAISON_ECHEANCES}
+                  onClick={onModifier ? () => onModifier(e) : undefined}
+                  className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
+                    transition-colors hover:bg-surface-inset hover:text-text
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  Modifier
+                </BoutonProtege>
+                <BoutonProtege
+                  autorise={peutGerer}
+                  raison={RAISON_ECHEANCES}
+                  onClick={onSupprimer ? () => onSupprimer(e.id) : undefined}
+                  disabled={enSuppression}
+                  className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
+                    transition-colors hover:bg-danger-bg hover:text-danger
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+                    disabled:opacity-[0.48]"
+                >
+                  {enSuppression ? "Suppression…" : "Supprimer"}
+                </BoutonProtege>
+              </div>
             </div>
           </li>
         );
