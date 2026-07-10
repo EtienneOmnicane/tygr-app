@@ -458,7 +458,10 @@ describe("listerComptesAvecEntite — lecture ADMIN-only, bornée au tenant (L7)
     expect(comptesB.map((c) => c.bankAccountId)).toEqual([ACC_B]);
   });
 
-  it("20. contre-preuve : l'ADMIN lit nom/devise/entityId courants, et l'entityId suit l'assignation", async () => {
+  // Fonctionnel (pas une contre-preuve de garde : il tourne sous ADMIN, il passerait
+  // même sans `exigerAdmin` — c'est le cas 18 qui prouve la garde). Il prouve le
+  // chemin que cette lecture existe pour servir : la DÉ-assignation.
+  it("20. l'ADMIN lit nom/devise/entityId courants, et l'entityId suit l'assignation", async () => {
     // État de départ POSÉ ici (indépendance vis-à-vis de l'ordre des tests : le cas 10
     // laisse ACC_A désassigné, on ne s'appuie pas dessus).
     await withWorkspace(sAdminA, (tx, ctx) =>

@@ -179,9 +179,12 @@ function CarteCompte({
 
   return (
     <li className="rounded-card bg-surface-card p-5 shadow-card">
+      {/* `flex-wrap` assumé ici : c'est un formulaire d'administration, pas le header
+          (l'interdiction §2.2 « jamais flex-wrap » vise le header, qui doit condenser).
+          Sous breakpoint étroit, mieux vaut replier que d'écraser le Select. */}
       <form
         action={action}
-        className="flex flex-wrap items-end justify-between gap-4"
+        className="flex flex-wrap items-center justify-between gap-4"
       >
         <input
           type="hidden"
@@ -192,12 +195,33 @@ function CarteCompte({
             hidden, qui lui est FRÈRE (jamais dans le <label>). */}
         <input type="hidden" name="entityId" value={entiteChoisie} />
 
-        {/* Identité du compte — nom + devise, JAMAIS de solde (règle 8) */}
+        {/* Identité du compte — nom + devise, JAMAIS de solde (règle 8). La zone de
+            statut vit SOUS le nom : elle reste dans le flux (pas de rangée vide
+            réservée sur toute la largeur), tout en gardant un min-h pour ne pas
+            faire sauter le layout à l'apparition du message. */}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-ink">
             {compte.accountName}
           </p>
           <p className="text-xs text-text-faint">{compte.currency}</p>
+
+          <div aria-live="polite" className="min-h-[1rem] text-xs">
+            {etat.erreur !== null && (
+              <span role="alert" className="text-danger">
+                {etat.erreur}
+              </span>
+            )}
+            {etat.succes !== null && (
+              <span role="status" className="text-success">
+                {etat.succes}
+              </span>
+            )}
+            {etat.erreur === null && etat.succes === null && modifie && (
+              <span className="text-text-faint">
+                Modification non enregistrée.
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Entité cible */}
@@ -231,23 +255,6 @@ function CarteCompte({
           )}
           {enCours ? "Enregistrement…" : "Enregistrer"}
         </button>
-
-        {/* Retour de l'action, par ligne. `aria-live` : annoncé sans voler le focus. */}
-        <div aria-live="polite" className="min-h-[1rem] w-full text-xs">
-          {etat.erreur !== null && (
-            <span role="alert" className="text-danger">
-              {etat.erreur}
-            </span>
-          )}
-          {etat.succes !== null && (
-            <span role="status" className="text-success">
-              {etat.succes}
-            </span>
-          )}
-          {etat.erreur === null && etat.succes === null && modifie && (
-            <span className="text-text-faint">Modification non enregistrée.</span>
-          )}
-        </div>
       </form>
     </li>
   );
