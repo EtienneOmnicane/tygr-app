@@ -1609,14 +1609,43 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
 ## P0 — en cours (Semaines 2-3, séquencement C1 restauré par D3)
 
 - [ ] **Epic 1 — Auth.js + consent flow + audit + révocation** — priorité absolue.
-  Référence d'implémentation : plan v2.1 (Epic 1, E14, registre S2). Démontrable
-  en interne fin S2 sur le workspace démo sandbox.
+  Plan d'implémentation FIGÉ (2026-07-10) : `PLAN-epic1-auth-consent.md` (six
+  décisions Q1→Q6 arbitrées). Démontrable en interne sur le workspace démo sandbox.
   - [x] PR 1 `feature/auth-foundation` — FAIT 2026-06-12 (en attente PR humaine).
-  - [ ] PR 2 — sélecteur de workspace (états D2) + bascule activeWorkspaceId via
-    session update + parcours provisioning ADMIN + gating VIEWER.
-  - [ ] PR 3 — consent flow Omni-FI + audit trail append-only + révocation
-    (re-découpage au démarrage). Inclut la modal re-login sans perte de
-    contexte (D2 transverse).
+  - [x] PR 2 — sélecteur de workspace, bascule `activeWorkspaceId`, provisioning
+    ADMIN, gating VIEWER serveur : **CONSTATÉ LIVRÉ** à l'audit du 2026-07-10
+    (`auth/config.ts:88`, `(workspace)/actions.ts:60`, `provisioning.ts:87`,
+    `lib/permissions.ts` appliqué dans 8 repositories). Reliquat → PR 2′.
+  - [ ] PR 2′ `feature/epic1-d2-finition` — modal re-login sans perte de contexte
+    (bloquant du consent flow : une session expirée pendant le widget MFA perd le
+    `SessionToken` Omni-FI), tooltip VIEWER (convention D2 #37 : désactivé +
+    tooltip, PAS caché), runbook du premier ADMIN.
+  - [ ] L3.1 `feature/epic1-schema-audit` — `consent_records` + `audit_events`
+    append-only stricts (migration 0021, trois gardes, snapshots, UNIQUE composite).
+  - [ ] L3.2 — émission `GRANTED` + `ACCOUNTS_SELECTED` + `repositories/audit.ts`.
+  - [ ] L3.3 — révocation : `DELETE /connections/{ConnectionId}` (⚠️ **PAS**
+    `/widget/session/revoke`, qui n'invalide qu'un SessionToken de widget) + purge
+    LOGIQUE (`is_removed=true` — l'append-only interdit le DELETE physique).
+  - [ ] L3.4 — panneau `/audit` **ADMIN seul** (décision Q1) + export JSON.
+
+#### Dettes ouvertes par le plan Epic 1 (2026-07-10, §10 du plan)
+
+- [ ] **Ouverture du journal d'audit hors ADMIN** — Effort M (**P2**, déclencheur :
+  demande client explicite). Décision Q1 : ADMIN-only, fail-closed. `audit_events` et
+  `consent_records` ne portent pas `entity_id` (invariant : il vit uniquement sur
+  `bank_accounts`) → un membre en Vision Entité y verrait les événements de TOUTES
+  les BU du groupe (fuite intra-groupe). Pour l'ouvrir : dériver le scope par
+  JOINTURE `connection_id → bank_accounts.entity_id` (ne JAMAIS dénormaliser
+  `entity_id` dans l'append-only) + policy RLS `entity_scope` dédiée.
+- [ ] **`POST /widget/session/revoke` au `unload` du widget** — Effort S (**P2**,
+  déclencheur : polish du widget). **Hygiène de session**, à ne pas confondre avec la
+  révocation de consentement (`DELETE /connections/{id}`, lot L3.3). Sans elle, un
+  SessionToken de widget survit à la fermeture de l'onglet jusqu'à son expiration.
+- [ ] **Changement de mot de passe par l'utilisateur** (`AUTH-MDP-TEMPO1`) — Effort M
+  (**P1**, déclencheur : premier déploiement de production). Le provisioning ADMIN et
+  `seed-admin.mjs` posent un mot de passe temporaire ; la rotation passe aujourd'hui
+  par `scripts/reset-password.mjs` (opération d'administration, hors application).
+  Documenté dans `docs/DEMARRAGE-SANDBOX-PROD.md` § « Bootstrap du premier ADMIN ».
 
 ### Dette relevée au contrat widget natif (UI, 2026-06-15)
 
