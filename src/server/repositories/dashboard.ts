@@ -145,6 +145,13 @@ export interface TransactionRecente {
   isAutoCategorized: boolean;
   /** Source de la catégorie auto (NULL si non auto). */
   categorySource: CategorySource | null;
+  /**
+   * Narratif bancaire brut (OBIE `TransactionInformation`) ; ultime filet de la cascade
+   * de libellé quand `cleanLabel` est absent. Affiché atténué/italique et consultable au
+   * survol (cf. `LibelleTransaction`). Le narratif OBIE n'est PAS de la PII nominative —
+   * l'interdiction règle 8 vise les logs/télémétrie, pas l'UI du propriétaire.
+   */
+  bankLabelRaw: string | null;
   bankAccountId: string;
 }
 
@@ -611,8 +618,10 @@ export function grilleMois(nbMois: number, moisAncrage: string): string[] {
 
 /**
  * N transactions les plus récentes (hors tombstone), triées date desc puis
- * booking desc. Pas de bank_label_raw exposé (PII, règle 8) — on renvoie le
- * libellé nettoyé.
+ * booking desc. Expose `bankLabelRaw` (narratif OBIE brut) comme ultime filet de la
+ * cascade de libellé (alignement dashboard ↔ /transactions, dette TECH-DASHBOARD-CASCADE
+ * résolue 2026-07-10) : le narratif OBIE `TransactionInformation` n'est pas de la PII
+ * nominative — l'interdiction règle 8 vise les logs/télémétrie, pas l'UI du propriétaire.
  */
 export async function transactionsRecentes(
   tx: Tx,
@@ -630,6 +639,7 @@ export async function transactionsRecentes(
       subCategory: transactionsCache.subCategory,
       isAutoCategorized: transactionsCache.isAutoCategorized,
       categorySource: transactionsCache.categorySource,
+      bankLabelRaw: transactionsCache.bankLabelRaw,
       bankAccountId: transactionsCache.bankAccountId,
     })
     .from(transactionsCache)

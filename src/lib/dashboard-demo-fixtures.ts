@@ -122,6 +122,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       subCategory: "Client Payments",
       isAutoCategorized: true,
       categorySource: "OMNIFI",
+      bankLabelRaw: null,
       bankAccountId: "demo-acc-sbm-0937",
     },
     {
@@ -135,6 +136,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       subCategory: "Client Payments",
       isAutoCategorized: true,
       categorySource: "OMNIFI",
+      bankLabelRaw: null,
       bankAccountId: "demo-acc-sbm-0937",
     },
     {
@@ -148,6 +150,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       subCategory: "Electricity",
       isAutoCategorized: true,
       categorySource: "OMNIFI",
+      bankLabelRaw: null,
       bankAccountId: "demo-acc-mcb-4521",
     },
     {
@@ -161,6 +164,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
       subCategory: "Office Rent",
       isAutoCategorized: true,
       categorySource: "OMNIFI",
+      bankLabelRaw: null,
       bankAccountId: "demo-acc-mcb-4521",
     },
   ],

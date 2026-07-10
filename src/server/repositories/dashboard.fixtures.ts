@@ -85,6 +85,7 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     subCategory: "Client Payments",
     isAutoCategorized: true,
     categorySource: "OMNIFI",
+    bankLabelRaw: null,
     bankAccountId: "demo-acc-sbm-0937",
   },
   {
@@ -98,6 +99,7 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     subCategory: "Client Payments",
     isAutoCategorized: true,
     categorySource: "OMNIFI",
+    bankLabelRaw: null,
     bankAccountId: "demo-acc-sbm-0937",
   },
   {
@@ -111,6 +113,7 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     subCategory: "Electricity",
     isAutoCategorized: true,
     categorySource: "OMNIFI",
+    bankLabelRaw: null,
     bankAccountId: "demo-acc-mcb-4521",
   },
   {
@@ -124,6 +127,7 @@ export const FIXTURE_TRANSACTIONS_RECENTES: TransactionRecente[] = [
     subCategory: "Office Rent",
     isAutoCategorized: true,
     categorySource: "OMNIFI",
+    bankLabelRaw: null,
     bankAccountId: "demo-acc-mcb-4521",
   },
 ];
