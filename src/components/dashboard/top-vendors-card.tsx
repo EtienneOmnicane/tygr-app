@@ -53,8 +53,15 @@ const LIBELLE_DIRECTION: Record<
 
 export function TopVendorsCard({
   concentration,
+  libellePeriode,
 }: {
   concentration: ConcentrationVendors;
+  /**
+   * Libellé de la période analysée (ex. « 6 derniers mois »), fourni par le
+   * conteneur (la carte reste PURE : elle ne résout aucune période elle-même).
+   * Absent → sous-titre historique inchangé.
+   */
+  libellePeriode?: string;
 }) {
   const { direction, lignes } = concentration;
   const meta = LIBELLE_DIRECTION[direction];
@@ -71,7 +78,10 @@ export function TopVendorsCard({
       <div className="mb-4 flex items-start justify-between">
         <div>
           <h2 className="text-base font-semibold text-text">{meta.titre}</h2>
-          <p className="mt-0.5 text-xs text-text-muted">{meta.sousTitre}</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            {meta.sousTitre}
+            {libellePeriode ? ` · ${libellePeriode}` : null}
+          </p>
         </div>
       </div>
 

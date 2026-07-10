@@ -74,6 +74,12 @@ export function BalanceFreshnessPill({
           className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)}
         />
         {libelle}
+        {/* Horodatage ABSOLU (Maurice) EN CLAIR (FB0709-SYNC-HEURE-MU1) : le relatif
+            seul (« il y a 2 h ») obligeait à survoler le tooltip pour dater la
+            synchro. Neutre (`text-muted`) : la couleur reste portée par le niveau. */}
+        <span className="font-normal text-text-muted">
+          · {horodatageAbsolu}
+        </span>
       </span>
       {perime && ctaReconnexion && (
         <Link

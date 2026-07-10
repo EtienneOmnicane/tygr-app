@@ -103,8 +103,10 @@ export interface TransactionListItem {
   /** Résumé de ventilation manuelle (B2). */
   statutCategorisation: StatutCategorisation;
   /**
-   * Si EXACTEMENT une catégorie ventilée : de quoi afficher 1 badge sans requête
-   * supplémentaire. Null si 0 ou >1 catégorie (→ « Non catégorisé » ou « N catégories »).
+   * Catégorie à afficher en badge NOMMÉ, sans requête supplémentaire : l'unique
+   * (mono-ventilation) ou la DOMINANTE (multi — part au plus gros montant, rendue
+   * « Nom +N » par le badge). Null si 0 catégorie ou si inconnue (→ « Non
+   * catégorisé » ou repli « N catégories »). FB0709-TX-CATEGORIE-VISIBLE1.
    */
   categorie: { id: string; name: string } | null;
   /** Nombre de catégories distinctes ventilées (0, 1, ou N). Décide le rendu du badge. */

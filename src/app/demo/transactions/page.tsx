@@ -107,10 +107,12 @@ const LIGNES: TransactionListItem[] = [
     sens: "Debit",
     bankAccountId: "acc-mur",
     statutCategorisation: "complet",
-    categorie: null,
+    // Multi-ventilation avec dominante CONNUE (FB0709-TX-CATEGORIE-VISIBLE1) :
+    // badge nommé « Charges fixes » + suffixe « +2 » au lieu du compteur générique.
+    categorie: { id: "cat-charges", name: "Charges fixes" },
     nbCategories: 3,
     // Multi-catégories + ML moyen : pas de badge « À vérifier », ⚙ modèle. Vérifie que
-    // la pastille « 3 catégories » et l'icône coexistent sans gêne.
+    // le badge dominant « +2 » et l'icône coexistent sans gêne.
     niveauFiabilite: "Medium",
     sourceClassification: "ML_FALLBACK",
   },

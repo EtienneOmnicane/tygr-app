@@ -37,6 +37,7 @@ const ALICE = "11111111-1111-4111-8111-111111111111";
 const BOB = "22222222-2222-4222-8222-222222222222";
 const ACC_A = "aaaa1111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACC_A_USD = "aaaa3333-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACC_A_EUR = "aaaa4444-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACC_B = "bbbb2222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CONN_A = "aaaacccc-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CONN_B = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -67,6 +68,7 @@ beforeAll(async () => {
     insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected) values
       ('${ACC_A}','${WS_A}','${CONN_A}','oa-a','Compte A','MUR','5000.00',true),
       ('${ACC_A_USD}','${WS_A}','${CONN_A}','oa-a-usd','Compte A USD','USD','800.00',true),
+      ('${ACC_A_EUR}','${WS_A}','${CONN_A}','oa-a-eur','Compte A EUR','EUR','300.00',true),
       ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','9999.00',true);
     -- WS_A MUR (juin) : crédit 1000 (Client A) le 05, débit 300 (Bailleur) le 08,
     --   débit 200 (Bailleur, MÊME libellé → agrège) le 20, tombstone 99 (exclu).
@@ -82,6 +84,16 @@ beforeAll(async () => {
       ('${WS_A}','${ACC_A_USD}','txa-usd1','2026-06-06','2026-06-06T05:30:00Z','500.00','USD','Credit','WIRE IN','Client US',null,false),
       ('${WS_A}','${ACC_A_USD}','txa-usd2','2026-06-09','2026-06-09T05:30:00Z','200.00','USD','Debit','FEES','Bank fees',null,false),
       ('${WS_B}','${ACC_B}','txb1','2026-06-05','2026-06-05T05:30:00Z','7777.00','MUR','Debit','SECRET B','Secret B',null,false);
+    -- WS_A EUR (JUILLET, HORS des fenêtres de juin des tests précédents ; montants
+    -- < 1000 pour ne déplacer aucun classement existant) : 6 vendors DISTINCTS pour
+    -- prouver le top 5 PAR DÉFAUT (FB0709-TOPVENDORS5) et le fenêtrage [from, to].
+    insert into transactions_cache (workspace_id, bank_account_id, omnifi_txn_id, transaction_date, booking_date_time, amount, currency, credit_debit, bank_label_raw, clean_label, primary_category, is_removed) values
+      ('${WS_A}','${ACC_A_EUR}','txa-eur1','2026-07-01','2026-07-01T05:30:00Z','60.00','EUR','Debit','EUR V1','Vendor EUR 1',null,false),
+      ('${WS_A}','${ACC_A_EUR}','txa-eur2','2026-07-02','2026-07-02T05:30:00Z','50.00','EUR','Debit','EUR V2','Vendor EUR 2',null,false),
+      ('${WS_A}','${ACC_A_EUR}','txa-eur3','2026-07-03','2026-07-03T05:30:00Z','40.00','EUR','Debit','EUR V3','Vendor EUR 3',null,false),
+      ('${WS_A}','${ACC_A_EUR}','txa-eur4','2026-07-04','2026-07-04T05:30:00Z','30.00','EUR','Debit','EUR V4','Vendor EUR 4',null,false),
+      ('${WS_A}','${ACC_A_EUR}','txa-eur5','2026-07-05','2026-07-05T05:30:00Z','20.00','EUR','Debit','EUR V5','Vendor EUR 5',null,false),
+      ('${WS_A}','${ACC_A_EUR}','txa-eur6','2026-07-06','2026-07-06T05:30:00Z','10.00','EUR','Debit','EUR V6','Vendor EUR 6',null,false);
   `);
 
   const provisioning = readFileSync(
@@ -243,6 +255,85 @@ describe("vendorsParConcentration — concentration par contrepartie + isolation
         vendorsParConcentration(tx, { direction: "outflow", topN: 9999 }),
       ),
     ).rejects.toThrow(/topN hors bornes/);
+  });
+
+  // ── FB0709-TOPVENDORS5 : fenêtre [from, to] + top 5 par défaut ────────────────
+
+  it("fenêtre [from, to] : n'agrège QUE les transactions de la période (dedans/dehors)", async () => {
+    // Fenêtre 06→15 juin : inclut débit Bailleur 300 (08/06) + Sans libellé 50 (12/06) ;
+    // EXCLUT Bailleur 200 (20/06, hors fenêtre) et le tombstone (exclu de toute façon).
+    const conc = await withWorkspace(sessionA, (tx) =>
+      vendorsParConcentration(tx, {
+        direction: "outflow",
+        topN: 10,
+        from: "2026-06-06",
+        to: "2026-06-15",
+      }),
+    );
+    const bailleur = conc.lignes.find(
+      (l) => l.contrepartie === "Bailleur" && l.currency === "MUR",
+    );
+    expect(bailleur?.montant).toBe("300.00"); // PAS 500 : le 200 du 20/06 est hors fenêtre
+    expect(bailleur?.nbTransactions).toBe(1);
+    // La `part` est relative au total de la FENÊTRE (300 / 350), pas de l'historique.
+    expect(Number(bailleur?.part)).toBeCloseTo(300 / 350, 6);
+    // Aucune ligne EUR (juillet, hors fenêtre).
+    expect(conc.lignes.some((l) => l.currency === "EUR")).toBe(false);
+  });
+
+  it("fenêtre : borne haute `to` INCLUSIVE (transaction le jour `to` comptée)", async () => {
+    const conc = await withWorkspace(sessionA, (tx) =>
+      vendorsParConcentration(tx, {
+        direction: "outflow",
+        topN: 10,
+        from: "2026-06-20",
+        to: "2026-06-20",
+      }),
+    );
+    expect(conc.lignes).toHaveLength(1);
+    expect(conc.lignes[0].contrepartie).toBe("Bailleur");
+    expect(conc.lignes[0].montant).toBe("200.00");
+  });
+
+  it("topN par DÉFAUT = 5 : 9 postes outflow agrégés → 5 lignes (les plus grosses)", async () => {
+    // Sans fenêtre ni topN : MUR (Bailleur 500, Sans libellé 50) + USD (Bank fees 200)
+    // + EUR (6 vendors 60→10) = 9 postes → le défaut VENDORS_TOP_N_DEFAUT tronque à 5.
+    const conc = await withWorkspace(sessionA, (tx) =>
+      vendorsParConcentration(tx, { direction: "outflow" }),
+    );
+    expect(conc.lignes).toHaveLength(5);
+    // Tri par montant décroissant toutes devises : 500, 200, 60, 50, 50 — les plus
+    // petits postes EUR (40, 30, 20, 10) sont hors du top 5.
+    expect(conc.lignes[0].contrepartie).toBe("Bailleur");
+    expect(
+      conc.lignes.some((l) => l.contrepartie === "Vendor EUR 6"),
+    ).toBe(false);
+  });
+
+  it("rejette une fenêtre incomplète (from sans to) et des bornes invalides", async () => {
+    await expect(
+      withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, { direction: "outflow", from: "2026-06-01" }),
+      ),
+    ).rejects.toThrow(/fournis ensemble/);
+    await expect(
+      withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, {
+          direction: "outflow",
+          from: "2026-02-30", // date calendaire inexistante (piège F1/F2)
+          to: "2026-03-15",
+        }),
+      ),
+    ).rejects.toThrow(/bornes de dates invalides/);
+    await expect(
+      withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, {
+          direction: "outflow",
+          from: "2026-06-15",
+          to: "2026-06-01",
+        }),
+      ),
+    ).rejects.toThrow(/from doit être/);
   });
 });
 

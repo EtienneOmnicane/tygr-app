@@ -100,9 +100,13 @@ export default async function PageDashboard({
       // @deprecated : additionnait MUR + USD). Une ligne par devise.
       syntheseMoisParDevise(tx, mois),
       // Concentration des contreparties (par défaut dépenses) — donnée neuve Voie A.
+      // Fenêtre = MÊME période que la courbe de flux (FB0709-TOPVENDORS5 : le
+      // sélecteur 1/3/6 mois doit piloter la carte, pas tout l'historique).
       vendorsParConcentration(tx, {
         direction: "outflow",
         topN: VENDORS_TOP_N_DEFAUT,
+        from: fromFlux,
+        to,
       }),
       // Tendance des `nbMois` derniers mois jusqu'au mois courant Maurice (piloté par
       // le preset). Une seule requête GROUP BY (mois, devise) ; les mois vides sont
