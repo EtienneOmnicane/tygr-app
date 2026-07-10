@@ -17,7 +17,8 @@ import { eq } from "drizzle-orm";
 import { notFound, redirect, unstable_rethrow } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { signOut } from "@/server/auth/config";
+import { auth, signOut } from "@/server/auth/config";
+import { GardeSession } from "@/components/shell/garde-session";
 import {
   identite,
   listerComptes,
@@ -106,10 +107,23 @@ export default async function WorkspaceLayout({
   // passée au header pour que le sélecteur affiche l'état actif (comptes cochés).
   // Absent/null ⇒ « Groupe ». Lecture seule (pas une autorité — la RLS décide).
   let viewFilterActif: string[] | null = null;
+  // Expiration du JWT (ms epoch) pour la garde de session (PR 2′). `auth()` est
+  // mémoïsé par requête ; `exigerSessionWorkspace` ne remonte pas `expires` et on
+  // n'élargit pas son contrat (c'est une surface de sécurité).
+  let expiresAt: number | null = null;
   try {
     const session = await exigerSessionWorkspace();
     userId = session.userId;
     viewFilterActif = session.viewFilter ?? null;
+
+    const sessionBrute = await auth();
+    const expires = sessionBrute?.expires;
+    if (typeof expires === "string") {
+      const ms = Date.parse(expires);
+      // NaN (format inattendu) ⇒ on n'arme pas la garde plutôt que d'ouvrir la
+      // modale immédiatement (fail-soft : la session reste valide côté serveur).
+      expiresAt = Number.isNaN(ms) ? null : ms;
+    }
 
     // (1) CONTEXTE du chrome (role + nom du workspace). On garde la SESSION
     //     COMPLÈTE : le nom du workspace est indifférent au view_filter (il ne lit
@@ -197,6 +211,16 @@ export default async function WorkspaceLayout({
         />
         <div className="min-w-0 flex-1">{children}</div>
       </div>
+
+      {/* Garde de session (PR 2′, D2 « Transverse »). Montée EN DEHORS de
+          `children` et rendue en portail : quand la modale s'ouvre, l'écran
+          sous-jacent n'est ni démonté ni re-rendu — c'est ce qui préserve le
+          contexte (OTP du widget MFA, formulaire en cours). Inerte tant que la
+          session n'approche pas de l'expiration ; absente si `expiresAt` est
+          indéterminé (fail-soft). */}
+      {userId !== null && expiresAt !== null && (
+        <GardeSession userIdActuel={userId} expiresAt={expiresAt} />
+      )}
     </div>
   );
 }
