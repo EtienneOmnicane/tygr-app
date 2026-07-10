@@ -57,3 +57,41 @@ C'est tout. Le script `scripts/dev-server.sh` fait automatiquement le reste :
 Si les conteneurs n'existent pas encore (`❌ Conteneur 'tygr_postgres' inexistant`),
 créez d'abord la stack de validation locale : voir `CLAUDE.md` § « Dev local — stack de
 validation » (création du réseau + des conteneurs + provisioning de la base).
+
+### Bootstrap du premier ADMIN (Open Question 4, tranchée le 2026-06-12)
+
+Une base fraîchement migrée n'a **aucun utilisateur** : personne ne peut se connecter,
+et le provisioning de membres (`/admin/membres`) est lui-même réservé aux ADMIN. Le
+premier compte se crée donc **hors application**, par un script d'administration.
+
+C'est `scripts/seed-admin.mjs` (`npm run seed:admin`) : il crée le workspace
+« Omni-FI HQ » et l'ADMIN global. Tous les autres comptes se créent ensuite **depuis
+l'interface**, par cet ADMIN.
+
+```bash
+# Après provision → migrate → provision (ordre non négociable, cf. CLAUDE.md).
+SEED_ADMIN_PASSWORD='<mot de passe fort, jamais commité>' \
+  node --env-file=.env scripts/seed-admin.mjs
+```
+
+Garanties du script (à ne pas contourner) :
+
+- **Rôle owner** (`DATABASE_URL_ADMIN`) : opération d'administration, même statut que
+  les migrations — c'est une exception documentée à la règle 2 (CLAUDE.md).
+- **Aucun `BYPASSRLS`** : `workspace_members` est sous `FORCE RLS`, donc le script pose
+  `app.current_workspace_id` dans sa transaction et satisfait la policy comme n'importe
+  quel appelant. Le modèle d'isolation reste entier.
+- **Idempotent** : relançable sans effet de bord. Il ne **réécrit jamais** un mot de
+  passe existant — pas d'écrasement silencieux d'un compte vivant.
+- **Secret par variable d'environnement uniquement**, jamais en dur ni dans un log
+  (règle 8). Ne pas le mettre dans `.env` : le passer à la commande.
+
+> ⚠️ **Rotation du mot de passe initial.** L'ADMIN ainsi créé porte un mot de passe
+> temporaire. Le changement de mot de passe par l'utilisateur lui-même **n'existe pas
+> encore** (dette `AUTH-MDP-TEMPO1`, P1) : en attendant, la rotation passe par
+> `scripts/reset-password.mjs`. Sur un déploiement de production, changez-le
+> immédiatement après le premier accès.
+
+> `omnifi_client_user_id` est un **placeholder** à ce stade. Il est remplacé lors de
+> l'enrôlement Omni-FI réel (`POST /clients/end-users`) — c'est la frontière tenant côté
+> API amont, il ne doit jamais rester fictif en production.
