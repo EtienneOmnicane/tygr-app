@@ -31,6 +31,7 @@ import { OmniFiApiError } from "@/server/omnifi";
 import { and, eq, inArray } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
+import { masquerCompte } from "@/lib/masquage";
 import { peutModifier } from "@/lib/permissions";
 import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
 // Classes (valeurs) des gardes fail-closed : on les RÉ-LÈVE depuis le fail-soft
@@ -47,6 +48,7 @@ import {
   upsertPartieEtRole,
   versPartie,
 } from "@/server/repositories/ingestion";
+import { enregistrerConsentement } from "@/server/repositories/audit";
 import { normaliserNomInstitution } from "@/server/ingestion/conversion";
 import { synchroniserCompte } from "@/server/ingestion/orchestrateur";
 
@@ -293,6 +295,18 @@ async function ingererPartiesDesComptes(
 }
 
 /**
+ * Options de persistance. `consentement` n'est fourni QUE par les chemins issus d'un
+ * `link-exchange` (octroi explicite de l'utilisateur dans le widget) — voir la garde
+ * dans `persisterConnexionEtComptes`. Absent ⇒ aucun consentement n'est écrit.
+ */
+export interface PersistanceOptions {
+  consentement?: {
+    /** Scopes demandés au widget, si connus. Libellés d'API, jamais de la donnée. */
+    requestedScopes?: string[];
+  };
+}
+
+/**
  * Persiste connexion + comptes (Enabled uniquement) dans le workspace courant,
  * dans UNE transaction scopée, PUIS — dans une transaction SÉPARÉE (couche sacrée :
  * cf. ingererPartiesDesComptes) — ingère les parties des comptes rattachés.
@@ -313,6 +327,7 @@ export async function persisterConnexionEtComptes(
     InstitutionName?: string | null;
   },
   comptes: OmniFiAccount[],
+  options: PersistanceOptions = {},
 ): Promise<number> {
   // 1. Connexion + comptes dans UNE transaction. On collecte les paires
   //    (compte Omni-FI, bankAccountId local) des comptes RÉELLEMENT rattachés
@@ -325,6 +340,36 @@ export async function persisterConnexionEtComptes(
       status: "active",
       nextSyncAvailableAt: null,
     });
+
+    // ── Consentement GRANTED (Epic 1 / L3.2) — DANS cette transaction.
+    // Atomicité exigée (plan §5.2) : le consentement et la connexion vivent ou
+    // meurent ensemble. Si l'insertion des comptes échoue plus bas, le ROLLBACK
+    // emporte le consentement — jamais de consentement fantôme sans connexion.
+    //
+    // ⚠️ Émis UNIQUEMENT quand l'appelant le demande (`options.consentement`),
+    // c'est-à-dire sur les DEUX chemins issus d'un `link-exchange` (l'utilisateur
+    // vient d'accorder son accord dans le widget). Les autres appelants de cette
+    // fonction — re-synchronisation périodique, synchro idempotente depuis
+    // `GET /connections`, réparation — ne passent RIEN : sans cette garde, chaque
+    // re-sync écrirait un faux `GRANTED` et le journal réglementaire ne prouverait
+    // plus rien (les tables sont append-only : on ne pourrait pas le rattraper).
+    //
+    // Un re-link explicite de la même banque réémet légitimement un GRANTED : c'est
+    // un NOUVEL acte de consentement de l'utilisateur, même si `upsertConnexion` est
+    // idempotent et rend le même `connectionId`. Deux lignes = deux consentements
+    // horodatés, c'est le comportement voulu (append-only, on n'écrase pas l'histoire).
+    if (options.consentement) {
+      await enregistrerConsentement(tx, ctx, {
+        connectionId,
+        action: "GRANTED",
+        scope: {
+          institutionId: echange.InstitutionId,
+          ...(options.consentement.requestedScopes
+            ? { requestedScopes: options.consentement.requestedScopes }
+            : {}),
+        },
+      });
+    }
 
     const paires: { compte: OmniFiAccount; bankAccountId: string }[] = [];
     for (const c of comptes) {
@@ -400,8 +445,12 @@ export async function finaliserConnexion(
   const comptes: OmniFiAccount[] = accountsData.Account ?? [];
 
   // 3bis + 4 : recoupement anti-désalignement (1.1) puis persistance scopée.
+  //   `consentement` : ce chemin sort d'un link-exchange → l'utilisateur vient
+  //   d'accorder son accord. GRANTED est écrit dans la MÊME transaction (L3.2).
   verifierAlignement(comptes, echange.InstitutionId);
-  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes);
+  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes, {
+    consentement: {},
+  });
 
   return {
     connectionId: echange.ConnectionId,
@@ -458,8 +507,11 @@ export async function finaliserConnexionDropin(
   }
 
   // 4. Défense : recoupement institution + persistance scopée.
+  //   `consentement` : chemin drop-in, également issu d'un link-exchange (L3.2).
   verifierAlignement(comptes, echange.InstitutionId);
-  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes);
+  const rattaches = await persisterConnexionEtComptes(executer, echange, comptes, {
+    consentement: {},
+  });
 
   return {
     connectionId: echange.ConnectionId,
@@ -1284,4 +1336,130 @@ export async function resynchroniserConnexion(
   }
 
   return { comptesRattaches, transactionsImportees };
+}
+
+/* ------------------------------------------------------------------ */
+/* Account Selection — consentement ACCOUNTS_SELECTED (Epic 1 / L3.2)   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Un identifiant de compte fourni par le client n'appartient pas à la connexion
+ * ciblée (ou pas à ce tenant), OU Omni-FI l'a rejeté (409 `ACCOUNT_NOT_FOUND`).
+ * Erreur nommée exigée par le plan §5.2. Message non-énumérant : il ne confirme
+ * l'existence d'aucun compte.
+ */
+export class ConsentAccountUnknownError extends Error {
+  readonly code = "CONSENT_ACCOUNT_UNKNOWN";
+  constructor() {
+    super("Sélection de comptes invalide");
+    this.name = "ConsentAccountUnknownError";
+  }
+}
+
+export interface ResultatSelectionComptes {
+  connectionId: string;
+  comptesAutorises: number;
+}
+
+/**
+ * Enregistre la sélection de comptes de l'utilisateur (Account Selection).
+ *
+ * ORDRE NON NÉGOCIABLE (plan §2.3) : appel Omni-FI d'ABORD, écriture d'audit
+ * ENSUITE. La DB et le réseau ne partagent pas de transaction ; si l'appel amont
+ * échoue, RIEN n'est écrit — on ne consigne pas un consentement qui n'existe pas
+ * chez le fournisseur. L'inverse (écrire puis appeler) laisserait un consentement
+ * fantôme impossible à effacer (append-only strict).
+ *
+ * Anti-IDOR : `connectionId` et `bankAccountIds` sont des UUID LOCAUX fournis par le
+ * client. On les relit sous RLS (`withWorkspace`) ; une connexion d'un autre tenant
+ * est invisible → `ConnexionNonAutoriseeError` (mappée 404 par la Server Action,
+ * jamais 403 : pas d'oracle d'existence). Un compte qui n'appartient pas à CETTE
+ * connexion → `ConsentAccountUnknownError`, avant tout appel réseau.
+ */
+export async function selectionnerComptes(
+  client: OmniFiClient,
+  executer: ExecuterWorkspace,
+  params: { connectionId: string; bankAccountIds: string[] },
+): Promise<ResultatSelectionComptes> {
+  // 1. Garde de rôle + résolution SOUS RLS de la connexion et des comptes visés.
+  //    Tout se joue ici : ce que la RLS ne rend pas, le client ne peut pas cibler.
+  const { omnifiConnectionId, comptes } = await executer(async (tx, ctx) => {
+    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+
+    const connexions = await tx
+      .select({ omnifiConnectionId: bankConnections.omnifiConnectionId })
+      .from(bankConnections)
+      .where(
+        and(
+          eq(bankConnections.id, params.connectionId),
+          eq(bankConnections.workspaceId, ctx.workspaceId),
+        ),
+      )
+      .limit(1);
+    // Invisible sous RLS (autre tenant) ou inexistante : même refus, non-énumérant.
+    if (connexions.length === 0) throw new ConnexionNonAutoriseeError();
+
+    // Les comptes DOIVENT appartenir à cette connexion. `inArray` paramétré.
+    const lignes = await tx
+      .select({
+        id: bankAccounts.id,
+        omnifiAccountId: bankAccounts.omnifiAccountId,
+      })
+      .from(bankAccounts)
+      .where(
+        and(
+          eq(bankAccounts.workspaceId, ctx.workspaceId),
+          eq(bankAccounts.connectionId, params.connectionId),
+          inArray(bankAccounts.id, params.bankAccountIds),
+        ),
+      );
+
+    // Un seul identifiant non résolu (autre connexion, autre tenant, inexistant) et
+    // on refuse TOUTE la sélection : une sélection partiellement honorée serait un
+    // consentement que l'utilisateur n'a pas donné.
+    if (lignes.length !== params.bankAccountIds.length) {
+      throw new ConsentAccountUnknownError();
+    }
+
+    return {
+      omnifiConnectionId: connexions[0].omnifiConnectionId,
+      comptes: lignes,
+    };
+  });
+
+  // 2. Omni-FI D'ABORD (§2.3). `PermittedAccountIds` = identifiants Omni-FI.
+  //    Un 409 ACCOUNT_NOT_FOUND devient l'erreur nommée du plan.
+  try {
+    await client.definirComptesAutorises(
+      omnifiConnectionId,
+      comptes.map((c) => c.omnifiAccountId),
+    );
+  } catch (erreur) {
+    if (erreur instanceof OmniFiApiError && erreur.obieCode === "ACCOUNT_NOT_FOUND") {
+      throw new ConsentAccountUnknownError();
+    }
+    throw erreur;
+  }
+
+  // 3. Écriture d'audit ENSUITE, dans sa propre transaction scopée. Le scope ne
+  //    porte que des identifiants opaques + des masques (`masquerCompte`) : jamais
+  //    un `accountName` (libellé bancaire, PII), jamais un numéro de compte.
+  await executer(async (tx, ctx) => {
+    await enregistrerConsentement(tx, ctx, {
+      connectionId: params.connectionId,
+      action: "ACCOUNTS_SELECTED",
+      scope: {
+        accountIds: comptes.map((c) => c.omnifiAccountId),
+        accountsLabels: comptes.map((c) => ({
+          accountId: c.omnifiAccountId,
+          masked: masquerCompte(c.omnifiAccountId),
+        })),
+      },
+    });
+  });
+
+  return {
+    connectionId: params.connectionId,
+    comptesAutorises: comptes.length,
+  };
 }

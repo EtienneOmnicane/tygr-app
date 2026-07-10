@@ -71,7 +71,8 @@ interface OptionsRequete {
   /** Query params ; les valeurs nullish sont omises. */
   query?: Record<string, string | number | undefined>;
   /** Méthode HTTP (défaut GET). */
-  method?: "GET" | "POST";
+  /** `PUT` : Account Selection (`PUT /connections/{id}/accounts`), idempotent. */
+  method?: "GET" | "POST" | "PUT";
   /** Stratégie d'auth de CET appel (défaut : ApiKey serveur). */
   auth?: StrategieAuth;
   /** Corps JSON pour les POST. */
@@ -605,6 +606,34 @@ export class OmniFiClient {
         pageSize: pagination.pageSize,
       },
     });
+  }
+
+  /**
+   * [SERVEUR/ApiKey] PUT /connections/{ConnectionId}/accounts — Account Selection :
+   * définit la liste des comptes que l'utilisateur autorise le client à consulter.
+   *
+   * Idempotent : REMPLACE la sélection précédente (docs § Link Widget). Auth
+   * `ApiKeyAuth | SessionTokenAuth` — on prend l'ApiKey serveur, ce qui évite de
+   * faire transiter un SessionToken widget jusqu'à la Server Action (règle 8).
+   *
+   * `PermittedAccountIds` = identifiants Omni-FI (`AccountId`), PAS nos UUID locaux.
+   *
+   * Erreurs amont notables, remontées telles quelles par `OmniFiApiError.obieCode` :
+   * - 400 `ACCOUNT_SELECTION_NOT_ENABLED` (LinkToken émis sans Account Selection) ;
+   * - 409 `ACCOUNT_NOT_FOUND` (un identifiant est inconnu de la connexion).
+   */
+  async definirComptesAutorises(
+    connectionId: string,
+    permittedAccountIds: string[],
+  ): Promise<void> {
+    await this.requete<unknown>(
+      `/connections/${encodeURIComponent(connectionId)}/accounts`,
+      {
+        method: "PUT",
+        auth: authApiKey(),
+        body: { Data: { PermittedAccountIds: permittedAccountIds } },
+      },
+    );
   }
 }
 
