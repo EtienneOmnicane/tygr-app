@@ -49,16 +49,6 @@ const CATEGORIES: CategorieUI[] = [
   { id: "cat-income-clients", name: "Paiements clients", parentId: "cat-income", isActive: true },
 ];
 
-// Comptes de démo — porteurs de TITULAIRE (holderId/holderName) pour exercer
-// l'accordéon `CompteSelecteur` (C2) : 2 titulaires nommés + 1 compte « Non
-// regroupé » (sans party) → accordéon (≥ 2 groupes), pas liste plate.
-const COMPTES = [
-  { bankAccountId: "acc-mur", accountName: "Compte courant MUR", institutionName: "Bank One", holderId: "h-omnicane", holderName: "Omnicane Ltd" },
-  { bankAccountId: "acc-usd", accountName: "Compte USD", institutionName: "Bank One", holderId: "h-omnicane", holderName: "Omnicane Ltd" },
-  { bankAccountId: "acc-mcb", accountName: "Compte épargne", institutionName: "MCB", holderId: "h-alteo", holderName: "Alteo Ltd" },
-  { bankAccountId: "acc-orphelin", accountName: "Compte non rattaché", institutionName: null, holderId: null, holderName: null },
-];
-
 // Lignes fictives couvrant tous les cas d'affichage.
 const LIGNES: TransactionListItem[] = [
   {
@@ -265,7 +255,6 @@ export default function TransactionsDemoPage() {
       }) {
         const f = args.filtres ?? {};
         const lignes = LIGNES.filter((l) => {
-          if (f.bankAccountId && l.bankAccountId !== f.bankAccountId) return false;
           if (f.statutCategorisation && l.statutCategorisation !== f.statutCategorisation)
             return false;
           return true;
@@ -337,7 +326,6 @@ export default function TransactionsDemoPage() {
           <TransactionsFeature
             initial={{ lignes: LIGNES, curseurSuivant: null }}
             categories={CATEGORIES}
-            comptes={COMPTES}
             actions={actions}
             remplacerSplits={async () => ({ ok: true, data: undefined })}
             aucuneBanque={false}

@@ -139,8 +139,6 @@ export type CurseurTransactions = string;
  * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
  */
 export interface FiltresTransactions {
-  /** Restreindre à un compte connecté. */
-  bankAccountId?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
   /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */

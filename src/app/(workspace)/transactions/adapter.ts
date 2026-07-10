@@ -66,7 +66,6 @@ export function versInputBackend(
   curseur: string | null | undefined,
 ): Partial<ListerTransactionsInput> {
   const input: Partial<ListerTransactionsInput> = {};
-  if (filtres?.bankAccountId) input.bankAccountId = filtres.bankAccountId;
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
