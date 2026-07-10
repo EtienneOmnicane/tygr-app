@@ -28,6 +28,35 @@ import { cn } from "@/components/ui/states/primitives";
 export const MESSAGE_LECTURE_SEULE =
   "Votre rôle (lecture seule) ne permet pas cette action.";
 
+/**
+ * Identifiant stable dérivé de la raison — pas de `useId` (qui imposerait
+ * `"use client"` à une primitive purement présentationnelle). Deux actions qui
+ * partagent la même raison pointent la même description : c'est valide en ARIA
+ * (`aria-describedby` référence un id, plusieurs éléments peuvent le référencer),
+ * et ça évite de dupliquer N fois le même texte pour un lecteur d'écran.
+ */
+function idDescription(raison: string): string {
+  let hash = 0;
+  for (let i = 0; i < raison.length; i++) {
+    hash = (hash * 31 + raison.charCodeAt(i)) | 0;
+  }
+  return `raison-protegee-${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * Description lue par les lecteurs d'écran. `title` seul ne suffit PAS : VoiceOver
+ * et NVDA l'ignorent souvent, et il est inatteignable au tactile. On pose donc un
+ * `aria-describedby` vers ce texte `sr-only`, ET on garde `title` pour l'infobulle
+ * au survol souris. Les deux se complètent (constat de cross-review, 2026-07-10).
+ */
+function RaisonAccessible({ id, raison }: { id: string; raison: string }) {
+  return (
+    <span id={id} className="sr-only">
+      {raison}
+    </span>
+  );
+}
+
 export function ActionProtegee({
   autorise,
   children,
@@ -47,17 +76,25 @@ export function ActionProtegee({
     return <>{children}</>;
   }
 
+  const idRaison = idDescription(raison);
+
   return (
-    <span
-      aria-disabled
-      title={raison}
-      className={cn(
-        "inline-flex cursor-default items-center gap-1.5 text-text-faint",
-        className,
-      )}
-    >
-      {children}
-    </span>
+    <>
+      <span
+        aria-disabled
+        aria-describedby={idRaison}
+        title={raison}
+        className={cn(
+          "inline-flex cursor-default items-center gap-1.5 text-text-faint",
+          className,
+        )}
+      >
+        {children}
+      </span>
+      {/* FRÈRE, jamais enfant : un `sr-only` à l'intérieur serait agrégé au nom
+          accessible de l'élément (« Modifier Votre rôle… »). */}
+      <RaisonAccessible id={idRaison} raison={raison} />
+    </>
   );
 }
 
@@ -87,23 +124,32 @@ export function BoutonProtege({
   "onClick" | "disabled" | "className"
 >) {
   const inerte = !autorise;
+  const idRaison = idDescription(raison);
 
   return (
-    <button
-      type="button"
-      // Le rôle rend INERTE (aria-disabled, focusable) ; le métier rend DÉSACTIVÉ
-      // (disabled, hors tabulation) — deux mécanismes distincts, jamais confondus.
-      aria-disabled={inerte || undefined}
-      disabled={disabled}
-      title={inerte ? raison : undefined}
-      onClick={inerte ? undefined : onClick}
-      className={cn(
-        className,
-        inerte && "cursor-default text-text-faint hover:bg-transparent",
-      )}
-      {...rest}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        type="button"
+        // Le rôle rend INERTE (aria-disabled, focusable) ; le métier rend DÉSACTIVÉ
+        // (disabled, hors tabulation) — deux mécanismes distincts, jamais confondus.
+        aria-disabled={inerte || undefined}
+        // `aria-describedby` porte la raison de façon FIABLE aux lecteurs d'écran ;
+        // `title` ne fait qu'ajouter l'infobulle souris (souvent ignorée par
+        // VoiceOver/NVDA et inatteignable au tactile).
+        aria-describedby={inerte ? idRaison : undefined}
+        disabled={disabled}
+        title={inerte ? raison : undefined}
+        onClick={inerte ? undefined : onClick}
+        className={cn(
+          className,
+          inerte && "cursor-default text-text-faint hover:bg-transparent",
+        )}
+        {...rest}
+      >
+        {children}
+      </button>
+      {/* FRÈRE du bouton : à l'intérieur, il polluerait son nom accessible. */}
+      {inerte && <RaisonAccessible id={idRaison} raison={raison} />}
+    </>
   );
 }
