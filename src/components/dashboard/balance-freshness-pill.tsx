@@ -11,10 +11,12 @@
  * SYSTÈME (fraîcheur), pas une donnée financière — donc jamais inflow/outflow. Le
  * rouge `perime` (≥24h) déclenche le mode Repair : CTA « Reconnecter » vers /banques.
  *
- * Le CTA « Reconnecter » est OPT-OUT (`ctaReconnexion={false}`) : sur la page
- * /banques elle-même, il pointerait vers la page courante ET contredirait le badge
+ * Le CTA « Reconnecter » est OPT-OUT (`ctaReconnexion={false}`). Sur la page
+ * /banques, il pointerait vers la page courante ET contredirait le badge
  * « Connectée » (la connexion est active, seule la donnée est périmée — le geste juste
- * y est « Synchroniser mes comptes », déjà présent). Défaut = affiché (Dashboard).
+ * y est « Synchroniser mes comptes », déjà présent). Sur le Dashboard, la réparation
+ * vit aussi sur /banques et « Synchroniser » reste en tête : le CTA y est donc masqué
+ * (demande produit). Le défaut du composant reste `true` pour tout futur consommateur.
  */
 import Link from "next/link";
 
@@ -43,9 +45,9 @@ export function BalanceFreshnessPill({
   /** Cible du CTA Reconnecter (mode Repair ≥24h). Défaut : /banques. */
   reconnectHref?: string;
   /**
-   * Affiche le CTA « Reconnecter » quand la donnée est périmée (≥24h). Défaut `true`
-   * (Dashboard). Passé à `false` sur la page /banques (lien vers la page courante +
-   * contradiction avec le badge « Connectée » — cf. docstring en tête de fichier).
+   * Affiche le CTA « Reconnecter » quand la donnée est périmée (≥24h). Défaut `true` ;
+   * passé à `false` par les deux consommateurs actuels (page /banques ET Dashboard),
+   * cf. docstring en tête de fichier pour le raisonnement de chacun.
    */
   ctaReconnexion?: boolean;
 }) {
