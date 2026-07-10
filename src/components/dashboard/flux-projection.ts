@@ -15,7 +15,6 @@
  * montant affiché (les montants passent par `formatMontant` sur la chaîne).
  */
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
-import type { PointCashflow } from "@/server/insights/types";
 
 /** Une cellule mensuelle réduite à la devise de base (ce que la carte affiche). */
 export interface MoisAffiche {
@@ -63,36 +62,4 @@ export function maxFenetre(mois: MoisAffiche[]): number {
     max = Math.max(max, Math.abs(parseFloat(m.entrees)), Math.abs(parseFloat(m.sorties)));
   }
   return max;
-}
-
-/**
- * Projette la série mensuelle sur la MÊME grille CONTINUE que les barres, mais rendue
- * sous forme de `PointCashflow[]` pour la vue COURBE (`FluxCourbe`). Réutilise
- * `projeterSurGrille` (axe continu, mois vides à "0", réduction devise de base) puis
- * mappe chaque cellule `MoisAffiche` en point.
- *
- * Raison d'être (fix « courbe effondrée ») : la courbe recevait auparavant les points
- * BRUTS de `cashflowParDevise` (mois vides ABSENTS). Sur une fenêtre où un seul mois est
- * peuplé, cela donnait 1 point → axe collé à gauche. En passant par la grille, la courbe
- * reçoit N points (un par mois de la fenêtre), exactement comme les barres, donc un axe
- * pleine largeur ancré sur le mois courant.
- *
- * ⚠️ Mapping PUR, AUCUN recalcul de montant (règle 8) : `net ← variation` (le repo définit
- * `variation = entrees − sorties` EN SQL, identique à la sémantique de `net`), entrées et
- * sorties recopiées telles quelles (chaînes décimales), `currency` = devise de base,
- * `nbTransactions = 0` (non lu par le rendu de courbe — cul-de-sac neutre, jamais affiché).
- */
-export function projeterPointsCourbe(
-  serie: SyntheseMensuelle[],
-  grille: string[],
-  devise: string,
-): PointCashflow[] {
-  return projeterSurGrille(serie, grille, devise).map((m) => ({
-    bucket: m.libelleMois,
-    currency: devise,
-    entrees: m.entrees,
-    sorties: m.sorties,
-    net: m.variation,
-    nbTransactions: 0,
-  }));
 }

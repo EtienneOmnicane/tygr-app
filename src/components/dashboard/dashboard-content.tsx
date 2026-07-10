@@ -18,9 +18,9 @@
  *
  * Logique d'états (décisions revue, INCHANGÉE) :
  *   - AUCUN compte connecté            → empty GLOBAL (DashboardEmptyState).
- *   - Comptes présents, données vides  → PARTIEL par section : la courbe affiche
- *     « historique en cours de synchro », la table son propre vide ; les KPI/
- *     solde restent visibles. (Pas d'empty global qui masquerait le solde.)
+ *   - Comptes présents, données vides  → PARTIEL par section : le graphe de flux
+ *     affiche son propre vide, la table le sien ; les KPI/solde restent visibles.
+ *     (Pas d'empty global qui masquerait le solde.)
  *   - Données présentes                → dashboard complet.
  * L'état loading (loading.tsx natif) et error (error.tsx) vivent au niveau route.
  */
@@ -92,8 +92,8 @@ export function DashboardContent({
     grilleMensuelle,
     transactionsRecentes,
   } = donnees;
-  // NB : `donnees.flux` n'est PLUS déstructuré ici — la courbe ne le consomme plus
-  // (elle dérive de la série mensuelle projetée, cf. FluxTresorerieCard). Le champ reste
+  // NB : `donnees.flux` n'est PLUS déstructuré ici — le graphe ne le consomme plus
+  // (il dérive de la série mensuelle projetée, cf. FluxTresorerieCard). Le champ reste
   // néanmoins un discriminant vivant de l'état d'onboarding, lu par `choisirEtatDashboard`
   // (partiel vs complet) via l'objet `donnees` complet ci-dessous.
 
@@ -160,13 +160,13 @@ export function DashboardContent({
 
         {/* 3. GRILLE 2fr / 1fr : Flux de trésorerie (ancre, colonne gauche) + pile
             droite « Synthèse du mois » PUIS « Comptes connectés » (demande Etienne :
-            remonter les comptes dans l'espace résiduel à droite de la courbe — la
-            Synthèse est plus courte que la courbe, la colonne droite restait creuse).
+            remonter les comptes dans l'espace résiduel à droite du graphe — la
+            Synthèse est plus courte que le graphe, la colonne droite restait creuse).
             lg:grid-cols-3 → col-span-2 (2/3) + col-span-1 (1/3) = 2fr/1fr ; empilé
             sous lg. */}
         <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-3">
-          {/* Ancre : FLUX net mensuel — carte unifiée avec toggle Barres/Courbe (L8a).
-              Les deux vues partagent les séries déjà chargées par la page (zéro fetch). */}
+          {/* Ancre : FLUX mensuel en barres (entrées/sorties). Consomme les séries
+              déjà chargées par la page (zéro fetch). */}
           <div className="lg:col-span-2">
             <FluxTresorerieCard
               serieMensuelle={serieMensuelle}
@@ -175,7 +175,7 @@ export function DashboardContent({
             />
           </div>
           {/* Colonne droite (1fr) : Synthèse du mois PUIS Comptes connectés, empilés,
-              pour occuper la hauteur de la courbe plutôt que de laisser un vide. */}
+              pour occuper la hauteur du graphe plutôt que de laisser un vide. */}
           <div className="flex flex-col gap-3.5 lg:col-span-1">
             {/* Synthèse du mois (Entrées / Sorties / Variation), VENTILÉE PAR DEVISE. */}
             <CashFlowSummary
@@ -184,7 +184,7 @@ export function DashboardContent({
               devise={devise}
             />
             {/* Comptes connectés — remontés dans la colonne droite (sortis de la
-                pleine largeur) pour combler l'espace à droite de la courbe. La carte
+                pleine largeur) pour combler l'espace à droite du graphe. La carte
                 reste robuste en colonne étroite : libellés `truncate`, montants
                 `shrink-0 whitespace-nowrap tabular-nums` (jamais tronqués). */}
             <ConnectedAccountsCard comptes={comptes} />
