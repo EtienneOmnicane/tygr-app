@@ -12,6 +12,11 @@
  * « Évolution mensuelle »), qui réutilise `projeterSurGrille` (module NEUTRE
  * `flux-projection.ts`, importé ici aussi) pour ne pas dupliquer la projection.
  *
+ * Survol (îlot client) : chaque colonne porte une zone de HIT pleine hauteur ; au
+ * survol, un tooltip (§4.2, carte blanche) détaille le mois — Entrées / Sorties /
+ * Net — via `formatMontant` (source unique, `tabular-nums`, jamais de float). Design
+ * REPRIS verbatim de l'ancien tooltip de la courbe pour garder le même langage visuel.
+ *
  * ⚠️ La projection (`projeterSurGrille`/`maxFenetre`/`MoisAffiche`) vit dans
  * `flux-projection.ts` (`.ts` neutre, SANS `"use client"`) car `monthly-cashflow.tsx`
  * — un Server Component — l'appelle ; une fonction d'un module client ne peut pas être
@@ -20,9 +25,12 @@
  * ⚠️ Multi-devises (règle 8) : MONO-AFFICHÉ sur la devise de BASE ; aucune addition
  * cross-devise, aucune conversion FX.
  */
+import { useState } from "react";
+
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
-import { formaterMoisCourt } from "@/lib/format-date";
+import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
+import { formatMontant, estNegatif } from "@/lib/format-montant";
 import {
   maxFenetre,
   projeterSurGrille,
@@ -128,6 +136,10 @@ function BarresMensuelles({
     HAUTEUR_DEFAUT,
   );
 
+  // Index du mois survolé (îlot client). `null` = aucun survol → pas de tooltip.
+  const [survol, setSurvol] = useState<number | null>(null);
+  const moisActif = survol != null ? mois[survol] : null;
+
   // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
   // centre de cette zone (entrées au-dessus, sorties en dessous). `hauteurDemi`
   // borné ≥ 0 par sécurité (cartes très basses).
@@ -149,70 +161,152 @@ function BarresMensuelles({
   const pasLabel = Math.max(1, Math.ceil(mois.length / MAX_LABELS));
   const dernier = mois.length - 1;
 
+  // Hauteur de la zone traçable (hors bande de labels) — sert au bandeau de survol
+  // qui met en évidence la colonne active sur toute la hauteur des barres.
+  const hauteurZone = Math.max(hauteur - BANDE_LABELS, 0);
+
   return (
-    <svg
-      ref={ref}
-      viewBox={`0 0 ${largeur} ${hauteur}`}
-      className="w-full"
-      style={{ height: HAUTEUR_ANCRE }}
-      role="img"
-      aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
-    >
-      {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
-          projet — les utilitaires fill-/stroke- custom ne sont pas employés pour
-          les traits ici. */}
-      <line
-        x1={0}
-        y1={yAxe}
-        x2={largeur}
-        y2={yAxe}
-        stroke="var(--color-line)"
-        strokeWidth={1}
-      />
-      {mois.map((m, i) => {
-        const cx = i * pas + (pas - largeurBarre) / 2;
-        const hEntree =
-          max > 0 ? (Math.abs(parseFloat(m.entrees)) / max) * hauteurDemi : 0;
-        const hSortie =
-          max > 0 ? (Math.abs(parseFloat(m.sorties)) / max) * hauteurDemi : 0;
-        const labelVisible = i % pasLabel === 0 || i === dernier;
-        return (
-          <g key={m.libelleMois}>
-            {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
-            <rect
-              x={cx}
-              y={yAxe - hEntree}
-              width={largeurBarre}
-              height={hEntree}
-              rx={2}
-              fill="var(--color-inflow)"
+    <div className="relative">
+      <svg
+        ref={ref}
+        viewBox={`0 0 ${largeur} ${hauteur}`}
+        className="w-full"
+        style={{ height: HAUTEUR_ANCRE }}
+        role="img"
+        aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
+      >
+        {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre :
+            `surface-inset`, jamais une couleur de donnée). Rendu AVANT l'axe et les
+            barres → il reste en arrière-plan. */}
+        {survol != null && (
+          <rect
+            x={survol * pas}
+            y={0}
+            width={pas}
+            height={hauteurZone}
+            fill="var(--color-surface-inset)"
+          />
+        )}
+        {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
+            projet — les utilitaires fill-/stroke- custom ne sont pas employés pour
+            les traits ici. */}
+        <line
+          x1={0}
+          y1={yAxe}
+          x2={largeur}
+          y2={yAxe}
+          stroke="var(--color-line)"
+          strokeWidth={1}
+        />
+        {mois.map((m, i) => {
+          const cx = i * pas + (pas - largeurBarre) / 2;
+          const hEntree =
+            max > 0 ? (Math.abs(parseFloat(m.entrees)) / max) * hauteurDemi : 0;
+          const hSortie =
+            max > 0 ? (Math.abs(parseFloat(m.sorties)) / max) * hauteurDemi : 0;
+          const labelVisible = i % pasLabel === 0 || i === dernier;
+          return (
+            <g key={m.libelleMois}>
+              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
+              <rect
+                x={cx}
+                y={yAxe - hEntree}
+                width={largeurBarre}
+                height={hEntree}
+                rx={2}
+                fill="var(--color-inflow)"
+              />
+              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
+              <rect
+                x={cx}
+                y={yAxe}
+                width={largeurBarre}
+                height={hSortie}
+                rx={2}
+                fill="var(--color-outflow)"
+              />
+              {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
+                  court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
+                  complet reste dans le tableau « Évolution mensuelle ». */}
+              {labelVisible && (
+                <text
+                  x={cx + largeurBarre / 2}
+                  y={hauteur - 6}
+                  textAnchor="middle"
+                  fill="var(--color-text-muted)"
+                  className="text-[10px]"
+                >
+                  {formaterMoisCourt(m.libelleMois)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        {/* Zones de HIT : une par colonne, PLEINE largeur/hauteur et transparentes,
+            posées en DERNIER (au-dessus des barres) pour capter le survol partout
+            dans la colonne — pas seulement sur la barre étroite. */}
+        {mois.map((m, i) => (
+          <rect
+            key={`hit-${m.libelleMois}`}
+            x={i * pas}
+            y={0}
+            width={pas}
+            height={hauteurZone}
+            fill="transparent"
+            onMouseEnter={() => setSurvol(i)}
+            onMouseLeave={() => setSurvol(null)}
+          />
+        ))}
+      </svg>
+
+      {/* Tooltip (§4.2) : carte blanche, mois + entrées/sorties/net tabular. Centré
+          en haut (même patron que l'ancienne courbe), inerte au pointeur. */}
+      {moisActif && (
+        <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
+            {formaterMoisAnnee(moisActif.libelleMois)}
+          </p>
+          <dl className="mt-1 flex flex-col gap-0.5">
+            <LigneTooltip
+              label="Entrées"
+              valeur={formatMontant(moisActif.entrees, devise, {
+                signeExplicite: true,
+              })}
+              couleur="text-inflow-700"
             />
-            {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
-            <rect
-              x={cx}
-              y={yAxe}
-              width={largeurBarre}
-              height={hSortie}
-              rx={2}
-              fill="var(--color-outflow)"
+            <LigneTooltip
+              label="Sorties"
+              valeur={formatMontant(moisActif.sorties, devise)}
+              couleur="text-outflow-700"
             />
-            {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
-                court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
-                complet reste dans le tableau « Évolution mensuelle ». */}
-            {labelVisible && (
-              <text
-                x={cx + largeurBarre / 2}
-                y={hauteur - 6}
-                textAnchor="middle"
-                fill="var(--color-text-muted)"
-                className="text-[10px]"
-              >
-                {formaterMoisCourt(m.libelleMois)}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
+            <LigneTooltip
+              label="Net"
+              valeur={formatMontant(moisActif.variation, devise, {
+                signeExplicite: true,
+              })}
+              couleur={estNegatif(moisActif.variation) ? "text-outflow-700" : "text-text"}
+            />
+          </dl>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Une rangée du tooltip : libellé discret + montant tabular coloré. */
+function LigneTooltip({
+  label,
+  valeur,
+  couleur,
+}: {
+  label: string;
+  valeur: string;
+  couleur: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <dt className="text-[11px] text-text-muted">{label}</dt>
+      <dd className={`text-sm font-semibold tabular-nums ${couleur}`}>{valeur}</dd>
+    </div>
   );
 }
