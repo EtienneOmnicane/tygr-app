@@ -172,7 +172,7 @@ export function TransactionRow({
           })}
         </span>
         <span className="mt-1 flex justify-end">
-          <FlowTag sens={transaction.sens} />
+          <FlowTag sens={transaction.sens} variant="subtle" />
         </span>
       </td>
     </tr>

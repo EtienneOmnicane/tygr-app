@@ -1,44 +1,23 @@
 /**
  * Toolbar de filtres de /transactions (UI_GUIDELINES §2.2 toolbar + §2.3).
- * Présentationnelle PURE : reçoit l'état des filtres + les comptes, remonte les
- * changements via `onChange`. Aucun fetch, aucun état interne.
+ * Présentationnelle PURE : reçoit l'état des filtres, remonte les changements via
+ * `onChange`. Aucun fetch, aucun état interne.
  *
- * - Sens : segmented control (segment actif = pill `ink` blanc, §2.3), pattern
- *   identique aux démos existantes (cohérence).
- * - Compte : affiché UNIQUEMENT s'il y a >1 compte connecté (sinon inutile).
- *   Accordéon par TITULAIRE (`CompteSelecteur`, C2) — remplace l'ancien `<Select>`
- *   natif groupé par institution, ingérable dès qu'un titulaire porte des dizaines
- *   de comptes (« banque noyée », feedback 0709).
+ * - Le périmètre de comptes/entités est piloté GLOBALEMENT par le `PerimetreSwitcher`
+ *   de la navbar (topbar) → scope serveur via `withWorkspace`/RLS. La toolbar ne
+ *   duplique DONC PLUS de sélecteur de compte (retrait feedback 0709 : doublon moche
+ *   du sélecteur navbar).
  * - Statut de ventilation : select natif (Tout / Non catégorisé / Partiel / Complet).
+ * - Bornes de date comptable (from/to).
  *
  * Changer un filtre = le parent recharge la page 1 (reset du curseur).
  */
 import { Select } from "@/components/ui/select";
 
-import { CompteSelecteur } from "./comptes-selecteur";
 import type {
   FiltresTransactions,
   StatutCategorisation,
 } from "./types-transactions";
-
-/**
- * Un compte connecté, pour le filtre par compte. Porte `accountName` +
- * `institutionName` (sous-libellé de l'option) et le TITULAIRE (`holderId`/
- * `holderName`) — clé de groupement de l'accordéon `CompteSelecteur` (C2).
- */
-export interface CompteFiltre {
-  bankAccountId: string;
-  accountName: string;
-  institutionName: string | null;
-  /**
-   * Titulaire (Omni-FI Party) du compte, pour l'accordéon de sélection groupé par
-   * titulaire (C2 — `CompteSelecteur`). `null` = compte sans titulaire exploitable
-   * → bucket « Non regroupé ». Ces deux champs satisfont `CompteTitulable`
-   * (`grouperParTitulaire`). Fournis par `listerComptes` (via `account_party_role`).
-   */
-  holderId: string | null;
-  holderName: string | null;
-}
 
 const OPTIONS_STATUT: Array<{ valeur: StatutCategorisation | ""; label: string }> = [
   { valeur: "", label: "Tous statuts" },
@@ -49,13 +28,10 @@ const OPTIONS_STATUT: Array<{ valeur: StatutCategorisation | ""; label: string }
 
 export function TransactionsToolbar({
   filtres,
-  comptes,
   onChange,
   disabled = false,
 }: {
   filtres: FiltresTransactions;
-  /** Comptes connectés (le filtre Compte n'apparaît que si >1). */
-  comptes: CompteFiltre[];
   onChange: (filtres: FiltresTransactions) => void;
   /** Désactive les contrôles pendant un chargement. */
   disabled?: boolean;
@@ -71,20 +47,6 @@ export function TransactionsToolbar({
           lecture Backend ne supporte pas encore ce filtre (pas de champ `sens`,
           .strict). Le filtrer côté client casserait la pagination (pages tronquées).
           À ré-activer dès que Backend l'ajoute (tracé TODOS TX-FILTRE1). */}
-
-      {/* Compte — seulement si plusieurs comptes. Accordéon par TITULAIRE
-          (CompteSelecteur, C2) : remplace le <Select> natif groupé par institution,
-          ingérable dès qu'un titulaire porte des dizaines de comptes. */}
-      {comptes.length > 1 && (
-        <CompteSelecteur
-          comptes={comptes}
-          valeur={filtres.bankAccountId}
-          disabled={disabled}
-          onChange={(bankAccountId) =>
-            onChange({ ...filtres, bankAccountId })
-          }
-        />
-      )}
 
       {/* Statut de ventilation */}
       <Select

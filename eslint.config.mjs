@@ -15,12 +15,16 @@ const eslintConfig = defineConfig([
     // Dépendance tierce vendorée (dist/ buildé en amont) : on ne lint pas le code
     // d'un package, cf. SECURITY_VENDORING.md. (Non auditable ligne à ligne ici.)
     "vendor/**",
-    // Worktrees d'agents concurrents (`.claude/worktrees/<branche>/`) : ils
-    // embarquent leur propre `.next/` buildé. Le motif `.next/**` ci-dessus ne
-    // matche QUE la racine, pas ce `.next` imbriqué → sans cette ligne, ESLint
-    // lint le JS compilé d'un autre worktree (require()/module/_runtime.js) et
-    // fait échouer le hook stop-loss (règle 5) sur du code qui n'est pas le nôtre.
+    // Worktrees d'agents concurrents : ils embarquent leur propre `.next/`
+    // buildé ET une copie du `vendor/` vendoré. Les motifs `.next/**` et
+    // `vendor/**` ci-dessus ne matchent QUE la racine, pas ces dossiers
+    // imbriqués → sans ces lignes, ESLint lint le JS compilé d'un autre
+    // worktree (require()/module/_runtime.js, dist vendoré) et fait échouer le
+    // hook stop-loss (règle 5) sur du code qui n'est pas le nôtre. Les
+    // worktrees vivent soit sous `.claude/worktrees/<branche>/`, soit à la
+    // racine sous `.worktrees/<branche>/` — on couvre les deux emplacements.
     ".claude/**",
+    ".worktrees/**",
   ]),
 
   // Frontière d'accès aux données (CLAUDE.md règle 2, dette P0-a).

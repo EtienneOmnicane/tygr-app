@@ -42,7 +42,6 @@ import type {
 
 import {
   archiverCategorieAction,
-  type CategorieDTO,
   creerCategorieAction,
   importerCategoriesStandardAction,
   listerCategoriesAction,
@@ -94,20 +93,10 @@ export default async function PageTransactions() {
   // banque est inconnue, pour ne jamais afficher de vide.
   const nomCompte = (c: (typeof comptes)[number]) =>
     c.institutionName ?? c.accountName;
-  // Le FILTRE, lui, porte accountName + institutionName (sous-libellé) ET le
-  // TITULAIRE (holderId/holderName) : l'accordéon `CompteSelecteur` (C2) groupe par
-  // titulaire (Omni-FI Party), pas par institution — un titulaire portant des
-  // dizaines de comptes reste navigable (feedback 0709). holderId/holderName sont
-  // déjà retournés par `listerComptes` (via account_party_role).
-  const comptesFiltre = comptes.map((c) => ({
-    bankAccountId: c.bankAccountId,
-    accountName: c.accountName,
-    institutionName: c.institutionName,
-    // `CompteConnecte` porte holder* en OPTIONNELS (?: string | null) ; le contrat
-    // du filtre les veut EXPLICITES (string | null) → on normalise l'absence en null.
-    holderId: c.holderId ?? null,
-    holderName: c.holderName ?? null,
-  }));
+  // Le périmètre de comptes est piloté par le `PerimetreSwitcher` de la navbar
+  // (scope serveur via withWorkspace/RLS) — la toolbar transactions ne porte plus de
+  // sélecteur de compte (retrait feedback 0709 : doublon du sélecteur navbar). On ne
+  // garde donc que `nomParCompte`, nécessaire à l'affichage du compte porteur en table.
   const nomParCompte = new Map(
     comptes.map((c) => [c.bankAccountId, nomCompte(c)]),
   );
@@ -176,16 +165,19 @@ export default async function PageTransactions() {
   // peutAdministrer(role) (surface ABSENTE du DOM pour un non-admin, règle D2). La
   // garde de fond reste le repository (exigerAdminReferentiel), souveraine dans tous
   // les cas. Chaque closure adapte le DTO serveur au contrat UI (CategorieUI).
-  const versUI = (c: CategorieDTO): CategorieUI => ({
-    id: c.id,
-    name: c.name,
-    parentId: c.parentId,
-    isActive: c.isActive,
-  });
   const actionsReferentiel: ActionsReferentielCategories = {
     async listerCategories(): Promise<CategorieUI[]> {
       "use server";
-      return (await listerCategoriesAction()).map(versUI);
+      // Transformation DTO→UI INLINE : une closure "use server" ne peut pas capturer
+      // une fonction locale non-sérialisable (ex. un ancien `versUI` partagé) — Next
+      // la refuse au rendu (« Functions cannot be passed directly to Client
+      // Components »). On mappe donc ici, sans dépendance à une closure parente.
+      return (await listerCategoriesAction()).map((c) => ({
+        id: c.id,
+        name: c.name,
+        parentId: c.parentId,
+        isActive: c.isActive,
+      }));
     },
     async creerCategorie(input) {
       "use server";
@@ -202,7 +194,7 @@ export default async function PageTransactions() {
   };
 
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-text">Transactions</h1>
         <p className="mt-1 text-sm text-text-muted">
@@ -214,7 +206,6 @@ export default async function PageTransactions() {
       <TransactionsFeature
         initial={initial}
         categories={categories}
-        comptes={comptesFiltre}
         actions={actionsTransactions}
         remplacerSplits={remplacerSplitsAction}
         creerCategorie={creerCategorieNature}
