@@ -144,22 +144,15 @@ export default async function PageEcheances() {
     },
   };
 
+  // Le layout §1.1 (side-panel synthèse + zone de données) et l'en-tête sont portés
+  // par `EcheancesFeature` (via `DashboardShell`) — la page monte la feature dans la
+  // zone de données du groupe, sans coquille `max-w` centrée (cf. dashboard).
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-text">Échéances prévisionnelles</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          Anticipez vos encaissements et décaissements à venir : suivez leur statut,
-          leur montant et leur exigibilité, avec une synthèse par horizon.
-        </p>
-      </div>
-
-      <EcheancesFeature
-        initiales={initiales}
-        categories={categories}
-        actions={actions}
-        peutGerer={peutGerer}
-      />
-    </main>
+    <EcheancesFeature
+      initiales={initiales}
+      categories={categories}
+      actions={actions}
+      peutGerer={peutGerer}
+    />
   );
 }

@@ -23,6 +23,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 
+import { DashboardShell } from "@/components/shell/dashboard-shell";
 import type { CategorieUI } from "@/components/ui/category";
 import { EmptyState } from "@/components/ui/states";
 
@@ -214,24 +215,43 @@ export function EcheancesFeature({
   const aucuneEcheance = echeances.length === 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Bandeau d'erreur (§3.4 : fond danger + role alert, jamais un simple rouge). */}
-      {erreur && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-control bg-danger-bg px-4 py-3 text-sm text-danger"
-        >
-          <span aria-hidden>⚠</span>
-          <span>{erreur}</span>
+    <DashboardShell
+      aside={<EcheancesSynthese synthese={synthese} orientation="vertical" />}
+    >
+      <div className="flex flex-col gap-4">
+        {/* En-tête de page — vit DANS la zone de données du shell (§1.1 : le titre est
+            posé sur le fond de page, jamais au-dessus de la coquille asymétrique). */}
+        <header>
+          <h1 className="text-xl font-semibold text-text">
+            Échéances prévisionnelles
+          </h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Anticipez vos encaissements et décaissements à venir : suivez leur statut,
+            leur montant et leur exigibilité, avec une synthèse par horizon.
+          </p>
+        </header>
+
+        {/* Bandeau d'erreur (§3.4 : fond danger + role alert, jamais un simple rouge). */}
+        {erreur && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-control bg-danger-bg px-4 py-3 text-sm text-danger"
+          >
+            <span aria-hidden>⚠</span>
+            <span>{erreur}</span>
+          </div>
+        )}
+
+        {/* Synthèse prévisionnelle : dans le side-panel §1.1 (aside, ≥lg). Le shell
+            masque l'aside sous lg → on la REMONTE inline ici (rangée horizontale via
+            orientation "auto") pour ne pas la perdre sur tablette/mobile. */}
+        <div className="lg:hidden">
+          <EcheancesSynthese synthese={synthese} />
         </div>
-      )}
 
-      {/* Synthèse prévisionnelle (toujours visible, y compris en lecture seule). */}
-      <EcheancesSynthese synthese={synthese} />
-
-      {/* Formulaire (caché en lecture seule) : création OU édition. `key` remonte le
-          composant quand l'échéance éditée change → pré-remplissage par init d'état. */}
-      {peutGerer &&
+        {/* Formulaire (caché en lecture seule) : création OU édition. `key` remonte le
+            composant quand l'échéance éditée change → pré-remplissage par init d'état. */}
+        {peutGerer &&
         (echeanceEnEdition ? (
           <EcheanceForm
             key={echeanceEnEdition.id}
@@ -255,65 +275,72 @@ export function EcheancesFeature({
           />
         ))}
 
-      {/* Sélecteur de direction (vue dirigée §3.1.2). */}
-      <div
-        role="tablist"
-        aria-label="Direction des échéances"
-        className="inline-flex w-fit rounded-control border border-line bg-surface-card p-0.5"
-      >
-        {VUES.map((v) => {
-          const actif = v.valeur === vue;
-          return (
-            <button
-              key={v.valeur}
-              type="button"
-              role="tab"
-              aria-selected={actif}
-              onClick={() => setVue(v.valeur)}
-              className={cn(
-                "rounded-control px-3 py-1.5 text-sm font-medium transition-colors",
-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                actif
-                  ? "bg-primary text-text-onink"
-                  : "text-text-muted hover:text-text",
-              )}
+        {/* Liste dirigée. Le sélecteur de direction EST l'en-tête de la liste :
+            groupés dans UNE section (gap serré) pour qu'ils ne « flottent » plus
+            entre le formulaire et la liste. Masqué dans l'état vide global — pas
+            de direction à filtrer tant qu'aucune échéance n'existe (§3.1.2). */}
+        {aucuneEcheance ? (
+          <EmptyState
+            illustration="calendar"
+            title="Aucune échéance pour l’instant"
+            message={
+              peutGerer
+                ? "Ajoutez une échéance client ou fournisseur pour suivre vos encaissements et décaissements à venir."
+                : "Aucune échéance n’a encore été enregistrée pour ce workspace."
+            }
+          />
+        ) : (
+          <section className="flex flex-col gap-3">
+            <div
+              role="tablist"
+              aria-label="Direction des échéances"
+              className="inline-flex w-fit rounded-control border border-line bg-surface-card p-0.5"
             >
-              {v.label}
-            </button>
-          );
-        })}
-      </div>
+              {VUES.map((v) => {
+                const actif = v.valeur === vue;
+                return (
+                  <button
+                    key={v.valeur}
+                    type="button"
+                    role="tab"
+                    aria-selected={actif}
+                    onClick={() => setVue(v.valeur)}
+                    className={cn(
+                      "rounded-control px-3.5 py-1.5 text-sm font-medium transition-colors",
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                      actif
+                        ? "bg-primary text-text-onink"
+                        : "text-text-muted hover:text-text",
+                    )}
+                  >
+                    {v.label}
+                  </button>
+                );
+              })}
+            </div>
 
-      {/* Liste ou état vide. */}
-      {aucuneEcheance ? (
-        <EmptyState
-          illustration="calendar"
-          title="Aucune échéance pour l’instant"
-          message={
-            peutGerer
-              ? "Ajoutez une échéance client ou fournisseur pour suivre vos encaissements et décaissements à venir."
-              : "Aucune échéance n’a encore été enregistrée pour ce workspace."
-          }
-        />
-      ) : echeancesVue.length === 0 ? (
-        <p className="rounded-control border border-line bg-surface-card px-4 py-6 text-center text-sm text-text-muted">
-          {vue === "encaissement"
-            ? "Aucune échéance à encaisser."
-            : "Aucune échéance à décaisser."}
-        </p>
-      ) : (
-        <EcheancesList
-          echeances={echeancesVue}
-          nomParCategorie={nomParCategorie}
-          peutGerer={peutGerer}
-          onModifier={demarrerEdition}
-          onSupprimer={supprimer}
-          suppressionEnCours={suppressionEnCours}
-          onChangerStatut={changerStatut}
-          statutEnCours={statutEnCours}
-          idEnEdition={echeanceEnEdition?.id ?? null}
-        />
-      )}
-    </div>
+            {echeancesVue.length === 0 ? (
+              <p className="rounded-control border border-line bg-surface-card px-4 py-6 text-center text-sm text-text-muted">
+                {vue === "encaissement"
+                  ? "Aucune échéance à encaisser."
+                  : "Aucune échéance à décaisser."}
+              </p>
+            ) : (
+              <EcheancesList
+                echeances={echeancesVue}
+                nomParCategorie={nomParCategorie}
+                peutGerer={peutGerer}
+                onModifier={demarrerEdition}
+                onSupprimer={supprimer}
+                suppressionEnCours={suppressionEnCours}
+                onChangerStatut={changerStatut}
+                statutEnCours={statutEnCours}
+                idEnEdition={echeanceEnEdition?.id ?? null}
+              />
+            )}
+          </section>
+        )}
+      </div>
+    </DashboardShell>
   );
 }

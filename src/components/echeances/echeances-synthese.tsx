@@ -92,7 +92,19 @@ function BlocHorizon({ jours, lignes }: { jours: number; lignes: SyntheseHorizon
   );
 }
 
-export function EcheancesSynthese({ synthese }: { synthese: SyntheseEcheancesUI }) {
+export function EcheancesSynthese({
+  synthese,
+  orientation = "auto",
+}: {
+  synthese: SyntheseEcheancesUI;
+  /**
+   * Disposition des blocs d'horizon :
+   *   - "auto" (défaut) : empilés en colonne, côte à côte dès `sm` (flux plein largeur).
+   *   - "vertical" : TOUJOURS empilés — pour le side-panel §1.1 (300px), où une
+   *     rangée horizontale déborderait.
+   */
+  orientation?: "auto" | "vertical";
+}) {
   return (
     <section
       aria-label="Synthèse prévisionnelle des échéances"
@@ -109,7 +121,12 @@ export function EcheancesSynthese({ synthese }: { synthese: SyntheseEcheancesUI 
         entre devises.
       </p>
 
-      <div className="flex flex-col gap-3 sm:flex-row">
+      <div
+        className={cn(
+          "flex flex-col gap-3",
+          orientation === "auto" && "sm:flex-row",
+        )}
+      >
         {synthese.map((h) => (
           <BlocHorizon key={h.jours} jours={h.jours} lignes={h.lignes} />
         ))}

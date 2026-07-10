@@ -12,7 +12,7 @@ import { TransactionsLoading } from "@/components/transactions";
 
 export default function TransactionsRouteLoading() {
   return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-text">Transactions</h1>
         <p className="mt-1 text-sm text-text-muted">

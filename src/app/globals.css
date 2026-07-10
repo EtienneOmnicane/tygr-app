@@ -42,20 +42,6 @@
   --color-line: #e8e3d5;
   --color-line-strong: #d8d2c2;
 
-  /* Palette catégorielle du camembert « Analyse par catégorie » (UI_GUIDELINES
-   * §0, bloc chart.cat). Teintes DISTINCTES réservées aux PARTS de donut —
-   * jamais un vert/rouge sémantique (inflow/outflow) sur une catégorie. Au-delà
-   * de 8 catégories, la queue et « Non catégorisé » basculent sur cat-neutral. */
-  --color-chart-cat-1: #2c5fe8;
-  --color-chart-cat-2: #dfa218;
-  --color-chart-cat-3: #0e9488;
-  --color-chart-cat-4: #7c5cbf;
-  --color-chart-cat-5: #5ba8d9;
-  --color-chart-cat-6: #c65b8a;
-  --color-chart-cat-7: #6b8e23;
-  --color-chart-cat-8: #d9772e;
-  --color-chart-cat-neutral: #b3b9c9;
-
   --color-text: #0c1633;
   --color-text-muted: #5c6274;
   --color-text-faint: #8a8f9f;
@@ -71,6 +57,31 @@
 
   --font-sans: var(--font-red-hat);
   --font-mono: var(--font-geist-mono);
+}
+
+/* Palette catégorielle du camembert « Analyse par catégorie » (UI_GUIDELINES §0,
+ * bloc chart.cat). Teintes DISTINCTES réservées aux PARTS de donut — jamais un
+ * vert/rouge sémantique (inflow/outflow) sur une catégorie. Au-delà de 8
+ * catégories, la queue et « Non catégorisé » basculent sur cat-neutral.
+ *
+ * ⚠️ `@theme static` OBLIGATOIRE (émission forcée) : Tailwind v4 ne sort dans
+ * :root QUE les tokens @theme référencés par une classe utilitaire générée. Ces
+ * teintes ne sont JAMAIS des utilitaires (pas de `bg-chart-cat-*`) — elles ne
+ * sont consommées que via `var(--color-chart-cat-*)` dans le TS
+ * (palette-categories.ts, donut, légende), que Tailwind ne scanne pas. Sans
+ * `static`, elles sont tree-shakées → `var()` ne résout rien → le donut retombe
+ * sur le NOIR (fill SVG par défaut) et la pastille de légende devient
+ * transparente. Ne PAS refusionner ce bloc dans le @theme principal. */
+@theme static {
+  --color-chart-cat-1: #2c5fe8;
+  --color-chart-cat-2: #dfa218;
+  --color-chart-cat-3: #0e9488;
+  --color-chart-cat-4: #7c5cbf;
+  --color-chart-cat-5: #5ba8d9;
+  --color-chart-cat-6: #c65b8a;
+  --color-chart-cat-7: #6b8e23;
+  --color-chart-cat-8: #d9772e;
+  --color-chart-cat-neutral: #b3b9c9;
 }
 
 body {

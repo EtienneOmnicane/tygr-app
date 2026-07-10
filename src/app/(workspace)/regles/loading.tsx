@@ -6,7 +6,7 @@
  */
 export default function ChargementRegles() {
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">
+    <main className="w-full flex-1 px-6 py-8">
       <div className="mb-6">
         <div className="h-6 w-56 animate-pulse rounded bg-surface-inset" />
         <div className="mt-2 h-4 w-80 animate-pulse rounded bg-surface-inset" />

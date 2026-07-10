@@ -5,6 +5,34 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Fignolage layout §1.1 — pleine largeur (2026-07-08)
+
+Chantier layout livré (retour Etienne « les div ne remplissent pas assez la page,
+trop petites / vides ») : suppression des caps `max-w` sur les 5 pages de données
+(Transactions, Règles, Banques, Graphiques → pleine largeur ; Échéances → layout
+asymétrique §1.1 avec side-panel synthèse via `DashboardShell`). Deux points
+volontairement différés (`PLAN-layout-pleine-largeur.md`) :
+
+- [ ] **LAYOUT-ECHEANCES-SOLDE1 (P2, effort ~0,5 j) — carte « Solde » du side-panel
+  Échéances non livrée.** §1.1 décrit la Carte 1 du panneau Échéances = solde courant
+  (+ totaux clients/fournisseurs/global). Livré : le panneau porte la synthèse
+  prévisionnelle seule. Ajouter le solde exige un nouveau fetch
+  `soldesCourantsParDevise` sous `withWorkspace` dans `echeances/page.tsx` (la page ne
+  charge aujourd'hui que règles/synthèse/catégories) + gestion multi-devise (une carte
+  par devise, jamais d'addition FX, règle 8) → hors périmètre d'un chantier de layout.
+  **Déclencheur** : prochaine itération Échéances, OU demande Etienne d'un solde
+  contextuel dans le panneau — câbler `soldesCourantsParDevise` et monter une carte
+  solde §1.3 (28px/700 primary) au-dessus de la synthèse dans l'`aside`.
+
+- [ ] **LAYOUT-PANEL-MOBILE1 (P2, effort ~0,5 j) — side-panel Échéances masqué entre
+  768 et 1024px.** `DashboardShell` masque l'`aside` sous `lg` (`hidden lg:flex`,
+  pattern hérité du dashboard). Mitigation livrée : la synthèse est remontée INLINE
+  sous `lg` (`lg:hidden`) → aucune perte de donnée, mais §1.1 prévoit sur 768-1280px un
+  panneau « replié par défaut » (collapsible, ré-ouvrable), pas simplement masqué, et
+  sous 768px une rangée KPI scrollable dédiée. **Déclencheur** : implémentation du
+  side-panel collapsible §1.1 (chevron + état persisté) — le rendre repliable plutôt
+  que `hidden lg:flex`, ce qui bénéficierait aussi au dashboard.
+
 ### Analyse par catégorie (camembert) — KPI d'en-tête (2026-07-08)
 
 Chantier KPI livré (retour Etienne « page très maigre ») : fix libellé sentinelles
