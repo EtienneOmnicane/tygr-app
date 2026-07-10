@@ -877,24 +877,20 @@ Dettes ouvertes héritées du câblage :
       exactement ce ticket ; le bug QA remonté sous l'étiquette « TX-QA-CAT-BADGE1 » y
       est **absorbé** (pas de doublon, règle 9). Recoupe aussi la partie « afficher le
       nom + corriger l'accord pluriel » de **QA-UX-CATEG-COHERENCE1**.
-- [ ] **TECH-DASHBOARD-CASCADE (P2) — aligner la table du DASHBOARD sur la cascade de
-      libellé de `/transactions`** — Effort M (gardien Backend + Front). Date 2026-06-23.
-      La cascade intelligente (marchand → catégorie FR → brut bancaire → repli) +
-      l'anti-doublon + l'infobulle `title` (libellé bancaire d'origine au survol) ont
-      été livrés UNIQUEMENT sur `/transactions` (`feat/prod-merchant-cascade`). Le
-      dashboard (`components/dashboard/transactions-table.tsx`) reste volontairement en
-      mode HISTORIQUE `cascade={false}` (marchand → repli) parce que (1) son DTO
-      `TransactionRecente` (`server/repositories/dashboard.ts`) ne porte PAS encore
-      `bankLabelRaw` — l'ajouter touche le repository dashboard (gardien Backend, à
-      re-scoper côté sécu/perf de la requête) ; (2) sa colonne **Catégorie est fixe**
-      (grille `grid-cols`), donc l'anti-doublon de `/transactions` (sous-texte
-      optionnel masquable) n'y est pas transposable tel quel — il faut repenser la
-      colonne. **Déclencheur** : prochaine itération UX du dashboard, ou retour « le
-      dashboard et la page transactions n'affichent pas le même libellé pour la même
-      opération ». Travail : étendre `TransactionRecente` (+ SELECT) avec `bankLabelRaw`,
-      passer `cascade` (défaut) + `categorieFr` + `bankLabelRaw` au `LibelleTransaction`
-      du dashboard, et arbitrer le sort de la colonne Catégorie (la masquer par ligne
-      quand elle devient le libellé, ou la conserver et accepter le rappel).
+- [x] **TECH-DASHBOARD-CASCADE (P2) — aligner la table du DASHBOARD sur la cascade de
+      libellé de `/transactions`** — Effort M. Date 2026-06-23. **RÉSOLU 2026-07-10**
+      (déclencheur atteint : retour Etienne « j'ai encore des libellés "Opération
+      bancaire" sur le dashboard alors que /transactions n'en a plus »). Fait : (1)
+      `TransactionRecente` (`server/repositories/dashboard.ts`) porte désormais
+      `bankLabelRaw` et la requête `transactionsRecentes` le SELECT (jointure
+      `bank_accounts` inchangée → isolation entity/tenant préservée ; colonne déjà
+      indexée, aucun coût perf) ; (2) la table dashboard (`transactions-table.tsx`)
+      passe `bankLabelRaw={t.bankLabelRaw}` + `categorieFr={null}` (catégorie SAUTÉE
+      dans la cascade car le dashboard a une colonne Catégorie DÉDIÉE → pas d'anti-
+      doublon à transposer) + `title` au survol → cascade effective marchand → brut →
+      repli. On ne tombe plus sur « Opération bancaire » quand un narratif brut existe.
+      Note PII : le narratif OBIE `TransactionInformation` reste hors logs/aria
+      (interdiction règle 8 intacte), affiché seulement dans l'UI du propriétaire.
 
 Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les montants.
 Plan de référence : `PLAN-transactions-page.md`.

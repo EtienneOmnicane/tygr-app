@@ -4,9 +4,10 @@
  * CATÉGORIE · MONTANT — montant aligné à droite, tabular-nums (§0).
  *
  * Sémantique (§3.1) : Credit → `inflow` (vert, +), Debit → `outflow` (rouge, −).
- * La couleur ne porte QUE sur la donnée. `cleanLabel` peut être null (PII jamais
- * affichée, bank_label_raw exclu côté service) → repli typographié discret via
- * `LibelleTransaction` (partagé avec la page /transactions).
+ * La couleur ne porte QUE sur la donnée. Libellé via `LibelleTransaction` (partagé
+ * avec /transactions) : cascade marchand → libellé brut OBIE → repli. La catégorie est
+ * SAUTÉE dans la cascade (`categorieFr={null}`) car le dashboard a une colonne Catégorie
+ * dédiée (anti-doublon). Le narratif brut reste lisible au survol (`title`).
  *
  * Liste vide gérée par le parent (empty state) ; ici on suppose ≥ 1 ligne.
  */
@@ -47,18 +48,25 @@ export function TransactionsTable({
           return (
             <div
               key={t.omnifiTxnId}
+              // Accessibilité de la donnée brute (règle produit 2026-06-23, alignée sur
+              // /transactions) : le narratif bancaire d'origine reste lisible au survol
+              // même quand un marchand l'a remplacé. `undefined` si absent ⇒ React omet
+              // l'attribut (pas d'infobulle vide). Brut hors log/aria (non imposé).
+              title={t.bankLabelRaw ?? undefined}
               className="grid grid-cols-[88px_1fr_140px_140px] items-center gap-4 py-3"
             >
               <span className="text-xs tabular-nums text-text-muted">
                 {formaterDateComptable(t.transactionDate)}
               </span>
-              {/* cascade={false} : le dashboard garde le rendu HISTORIQUE marchand →
-                  repli (sa colonne Catégorie est dédiée et fixe → l'anti-doublon de
-                  /transactions n'y est pas transposable ; et son DTO ne porte pas
-                  encore le brut). Alignement futur = dette TECH-DASHBOARD-CASCADE. */}
+              {/* Cascade ALIGNÉE sur /transactions (dette TECH-DASHBOARD-CASCADE résolue
+                  2026-07-10) : marchand → (catégorie SAUTÉE via categorieFr={null}, car
+                  le dashboard a une colonne Catégorie DÉDIÉE → anti-doublon) → libellé
+                  brut OBIE → repli générique. On ne tombe plus sur « Opération bancaire »
+                  quand un narratif brut existe. */}
               <LibelleTransaction
                 cleanLabel={t.cleanLabel}
-                cascade={false}
+                categorieFr={null}
+                bankLabelRaw={t.bankLabelRaw}
                 className="truncate text-sm"
               />
               <span className="truncate text-xs text-text-muted">

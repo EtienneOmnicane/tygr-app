@@ -415,8 +415,10 @@ export const transactionsCache = pgTable(
     creditDebit: varchar("credit_debit", { length: 6 }).notNull(),
     // Nullable : l'API ne fournit pas toujours de Description (constaté sandbox
     // 2026-06-19 : transactions sans libellé). « Pas de libellé brut » = null est
-    // sémantiquement valide ; cette colonne est PII et n'est JAMAIS lue côté UI
-    // (on affiche clean_label, déjà nullable, sinon un fallback neutre).
+    // sémantiquement valide. Affichage UI : ultime filet de la cascade de libellé
+    // (arbitrage produit 2026-06-23 — le narratif OBIE `TransactionInformation` n'est
+    // pas de la PII nominative). L'interdiction règle 8 reste ABSOLUE côté logs /
+    // messages d'erreur / télémétrie ; jamais dans un aria-label ni la recherche.
     bankLabelRaw: text("bank_label_raw"),
     cleanLabel: varchar("clean_label", { length: 255 }),
     primaryCategory: varchar("primary_category", { length: 120 }),
