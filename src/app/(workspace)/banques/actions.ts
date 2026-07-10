@@ -22,12 +22,14 @@ import { WorkspaceAccessDeniedError } from "@/server/db/tenancy";
 import { creerClientOmniFi, OmniFiApiError } from "@/server/omnifi";
 import {
   ConnexionNonAutoriseeError,
+  ConsentAccountUnknownError,
   ReparationContexteInvalideError,
   WorkspaceSansClientUserIdError,
   demarrerConnexion,
   demarrerReparation,
   finaliserConnexionsDropin,
   resynchroniserConnexion,
+  selectionnerComptes,
   synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
 import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
@@ -418,6 +420,136 @@ export async function resynchroniserConnexionApresReparationAction(
       succes: null,
     };
   }
+}
+
+/**
+ * Sélection de comptes (Account Selection, Epic 1 / L3.2). Identifiants LOCAUX
+ * (UUID de `bank_accounts.id` / `bank_connections.id`), jamais des identifiants
+ * Omni-FI : la traduction se fait serveur, sous RLS. Bornes finies (1..200 comptes)
+ * pour ne pas accepter de payload non contrôlé.
+ */
+const selectionComptesSchema = z
+  .object({
+    connectionId: z.string().uuid(),
+    bankAccountIds: z.array(z.string().uuid()).min(1).max(200),
+  })
+  .strict();
+
+export interface EtatSelectionComptes {
+  erreur: string | null;
+  succes: string | null;
+}
+
+/**
+ * Enregistre la sélection de comptes de l'utilisateur : `PUT /connections/{id}/accounts`
+ * PUIS écriture du consentement `ACCOUNTS_SELECTED` (ordre §2.3 — jamais l'inverse).
+ *
+ * Exit-criteria (règle 3) : authz `withWorkspace` (membership re-validée) + gating
+ * MANAGER/ADMIN dans l'orchestration ; zod strict ; erreurs nommées ; ressource d'un
+ * autre tenant → refus non-énumérant (jamais 403, pas d'oracle d'existence) ; log
+ * structuré corrélé (workspace_id, connection_id).
+ */
+export async function selectionnerComptesAction(
+  connectionId: string,
+  bankAccountIds: string[],
+): Promise<EtatSelectionComptes> {
+  const session = await exigerSessionWorkspace();
+
+  const parsed = selectionComptesSchema.safeParse({ connectionId, bankAccountIds });
+  if (!parsed.success) {
+    console.warn(
+      JSON.stringify({
+        evt: "consent_selection_rejet",
+        action: "selectionner-comptes",
+        workspaceId: session.activeWorkspaceId,
+        motif: "forme",
+      }),
+    );
+    return { erreur: "Paramètres invalides.", succes: null };
+  }
+
+  const client = creerClientOmniFi();
+  const executer = <T>(fn: Parameters<typeof withWorkspace<T>>[1]) =>
+    withWorkspace(session, fn);
+
+  try {
+    const r = await selectionnerComptes(client, executer, {
+      connectionId: parsed.data.connectionId,
+      bankAccountIds: parsed.data.bankAccountIds,
+    });
+    // Log de SUCCÈS corrélé : le consentement est un acte réglementaire, son
+    // émission doit être traçable en exploitation (identifiants opaques seuls).
+    console.info(
+      JSON.stringify({
+        evt: "consent_accounts_selected",
+        action: "selectionner-comptes",
+        workspaceId: session.activeWorkspaceId,
+        connectionId: parsed.data.connectionId,
+        comptes: r.comptesAutorises,
+      }),
+    );
+    return {
+      erreur: null,
+      succes: `Sélection enregistrée — ${r.comptesAutorises} compte(s) autorisé(s).`,
+    };
+  } catch (erreur) {
+    return {
+      erreur: messageSelection(erreur, session.activeWorkspaceId, connectionId),
+      succes: null,
+    };
+  }
+}
+
+/**
+ * Mappe les erreurs de la sélection en message UI non-énumérant + log corrélé.
+ *
+ * `AUDIT_PAYLOAD_INVALID` et `AUDIT_SNAPSHOT_INCOMPLET` sont des DÉFAUTS SERVEUR
+ * (500) : leurs messages nomment des clés de payload / des motifs internes. Ils
+ * sont tracés par leur code machine mais JAMAIS affichés — l'UI voit le message
+ * générique. Un catch-all silencieux serait un défaut de revue (règle 3).
+ */
+function messageSelection(
+  erreur: unknown,
+  workspaceId: string,
+  connectionId: string,
+): string {
+  const code =
+    erreur instanceof Error && "code" in erreur && typeof erreur.code === "string"
+      ? erreur.code
+      : erreur instanceof Error
+        ? erreur.name
+        : "UNKNOWN";
+  const detailApi =
+    erreur instanceof OmniFiApiError
+      ? { status: erreur.status, obieCode: erreur.obieCode }
+      : {};
+  console.warn(
+    JSON.stringify({
+      evt: "consent_selection_echec",
+      action: "selectionner-comptes",
+      workspaceId,
+      connectionId,
+      code,
+      ...detailApi,
+    }),
+  );
+
+  if (
+    erreur instanceof ConnexionNonAutoriseeError ||
+    erreur instanceof WorkspaceAccessDeniedError
+  ) {
+    return MESSAGE_REFUS;
+  }
+  if (erreur instanceof ConsentAccountUnknownError) {
+    // Non-énumérant : ne dit pas LEQUEL des comptes est inconnu.
+    return "Sélection de comptes invalide. Rechargez la page et réessayez.";
+  }
+  if (erreur instanceof WorkspaceSansClientUserIdError) {
+    return MESSAGE_CONFIG;
+  }
+  // AuditPayloadInvalideError / AuditSnapshotIncompletError / OmniFiApiError /
+  // réseau / UnsafeDatabaseRoleError → générique côté UI, tracés par code ci-dessus.
+  return MESSAGE_GENERIQUE;
 }
 
 /**
