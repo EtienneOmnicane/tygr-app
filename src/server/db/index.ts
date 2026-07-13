@@ -228,6 +228,7 @@ export {
   renommerEntite,
   archiverEntite,
   assignerCompteEntite,
+  assignerComptesEntite,
   assignerPartieEntite,
   definirScopesMembre,
   EntiteNonAutoriseError,
@@ -236,6 +237,7 @@ export {
   PartieIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonVideError,
+  AssignationHorsPerimetreError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
 export type {

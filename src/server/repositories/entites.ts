@@ -21,7 +21,7 @@
  * MVP. Vision Globale = membre SANS ligne member_entity_scopes ; Vision Entité = membre
  * AVEC. La gestion entités/scopes/assignation est ADMIN-only (cette garde).
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
@@ -117,6 +117,30 @@ export class EntiteNonVideError extends Error {
   ) {
     super("Entité encore rattachée");
     this.name = "EntiteNonVideError";
+  }
+}
+
+/**
+ * L'écriture viole le WITH CHECK de la policy `entity_scope` (SQLSTATE 42501) — S4 des
+ * cross-reviews.
+ *
+ * Atteignable quand l'appelant porte un PÉRIMÈTRE en base (`member_entity_scopes`) : la
+ * policy `entity_scope` (RESTRICTIVE FOR ALL, migration 0014) exige
+ * `entity_id IS NOT NULL AND entity_id = ANY(scope)` en WITH CHECK — une DÉ-assignation
+ * (`entity_id = NULL`) la viole donc frontalement. Rien n'interdit aujourd'hui de scoper
+ * un ADMIN (`definirScopesMembre` ne vérifie que la membership, jamais le rôle : cf.
+ * PLAN-refonte-entites.md §12), et L5 fait de la dé-assignation une action de première
+ * classe.
+ *
+ * Non mappé, ce code remontait en **500 brut** (digest opaque) sur un chemin d'écriture
+ * ADMIN parfaitement légitime. Fail-closed — aucune fuite — mais l'exit-criterion
+ * « chaque erreur a un nom » l'exigeait.
+ */
+export class AssignationHorsPerimetreError extends Error {
+  readonly code = "ASSIGNMENT_OUT_OF_SCOPE";
+  constructor() {
+    super("Écriture hors du périmètre autorisé");
+    this.name = "AssignationHorsPerimetreError";
   }
 }
 
@@ -670,6 +694,101 @@ export async function assignerCompteEntite<TDb extends AnyPgDatabase>(
     if (e instanceof CompteIntrouvableError) throw e;
     // FK composite (entity_id, workspace_id) → entities : entité absente du workspace.
     if (codePg(e) === "23503") throw new EntiteIntrouvableError(); // foreign_key_violation
+    // WITH CHECK de la policy entity_scope (RESTRICTIVE FOR ALL, 0014) : atteignable
+    // quand l'appelant porte un périmètre en base. Non mappé, il remontait en 500 brut.
+    if (codePg(e) === "42501") throw new AssignationHorsPerimetreError();
+    throw e;
+  }
+}
+
+/**
+ * Assignation EN MASSE compte → entité (L3, dette P1 `ENTITY-ASSIGN-BULK1`).
+ *
+ * Le workspace réel porte ~87 comptes, dont 77 sans nom sous la même banque : les ranger
+ * un par un est la friction la plus lourde de l'écran. Cette fonction en range N d'un
+ * coup, ATOMIQUEMENT — `withWorkspace` est une transaction : si un seul compte échoue,
+ * rien n'est posé.
+ *
+ * Trois pièges, tous fermés ici (constats C2/C3/S4 des cross-reviews) :
+ *
+ * 1. **Un seul UPDATE, pas N.** Le gabarit voisin (`confirmerPropositionAction`) boucle
+ *    `assignerCompteEntite` : avec une borne à 500, cela ferait 500 aller-retours dans
+ *    une transaction WebSocket ouverte — un timeout la couperait en vol, et l'ADMIN
+ *    récolterait une erreur opaque sur l'opération censée être LE gain du lot. On fait
+ *    donc 1 SELECT de pré-check + 1 UPDATE groupé.
+ *
+ * 2. **Le succès partiel SILENCIEUX.** Un UPDATE groupé ne se plaint pas des lignes qu'il
+ *    n'a pas touchées : une ligne hors périmètre RLS est ignorée sans erreur. On
+ *    compare donc `returning().length` au nombre d'ids demandés, et on LÈVE si écart —
+ *    sinon on annoncerait « 500 comptes rangés » en en ayant rangé 480.
+ *
+ * 3. **L'entité ARCHIVÉE reste une cible valide.** Ni la FK composite ni l'UPDATE ne
+ *    regardent `is_active`. Sans contrôle, un batch rangerait 500 comptes dans une entité
+ *    disparue des pickers : ils retomberaient dans « non assigné » à l'écran (cf.
+ *    `estNonAssigne`) tout en gardant leur `entity_id` en base.
+ *
+ * `entityId: null` = dé-assignation en masse (le seul chemin, avec l'unitaire).
+ */
+export async function assignerComptesEntite<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  data: { bankAccountIds: string[]; entityId: string | null },
+): Promise<{ nbAssignes: number }> {
+  exigerAdmin(ctx);
+
+  // Dédoublonnage : sans lui, un id envoyé deux fois fausserait la comparaison de
+  // cardinalité du point (2) et ferait échouer un batch pourtant légitime.
+  const ids = [...new Set(data.bankAccountIds)];
+  if (ids.length === 0) return { nbAssignes: 0 };
+
+  // (3) Cible : une entité archivée n'est pas une cible.
+  if (data.entityId !== null) {
+    const cible = await tx
+      .select({ id: entities.id })
+      .from(entities)
+      .where(
+        and(
+          eq(entities.id, data.entityId),
+          eq(entities.workspaceId, ctx.workspaceId),
+          eq(entities.isActive, true),
+        ),
+      );
+    if (cible.length === 0) throw new EntiteIntrouvableError();
+  }
+
+  // (1) Pré-check : un compte d'un autre tenant est invisible sous RLS → COUNT < attendu
+  //     → 404 nommé AVANT toute écriture (gabarit `definirScopesFinsMembre`).
+  const vus = await tx
+    .select({ id: bankAccounts.id })
+    .from(bankAccounts)
+    .where(
+      and(
+        eq(bankAccounts.workspaceId, ctx.workspaceId),
+        inArray(bankAccounts.id, ids),
+      ),
+    );
+  if (vus.length !== ids.length) throw new CompteIntrouvableError();
+
+  try {
+    const maj = await tx
+      .update(bankAccounts)
+      .set({ entityId: data.entityId })
+      .where(
+        and(
+          eq(bankAccounts.workspaceId, ctx.workspaceId),
+          inArray(bankAccounts.id, ids),
+        ),
+      )
+      .returning({ id: bankAccounts.id });
+
+    // (2) Aucun succès partiel : soit les N sont posés, soit on rollback.
+    if (maj.length !== ids.length) throw new CompteIntrouvableError();
+
+    return { nbAssignes: maj.length };
+  } catch (e) {
+    if (e instanceof CompteIntrouvableError) throw e;
+    if (codePg(e) === "23503") throw new EntiteIntrouvableError();
+    if (codePg(e) === "42501") throw new AssignationHorsPerimetreError();
     throw e;
   }
 }

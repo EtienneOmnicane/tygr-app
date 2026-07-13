@@ -28,7 +28,9 @@ import { z } from "zod";
 
 import { exigerSessionAdministration } from "@/server/auth/session";
 import {
+  AssignationHorsPerimetreError,
   assignerCompteEntite,
+  assignerComptesEntite,
   assignerPartieEntite,
   CompteIntrouvableError,
   creerEntite,
@@ -79,6 +81,19 @@ const assignerCompteSchema = z
     bankAccountId: z.string().uuid(),
     // null = « non assigné ». Une chaîne vide du formulaire est traitée comme null
     // côté action (cf. lecture de formData ci-dessous).
+    entityId: z.string().uuid().nullable(),
+  })
+  .strict();
+
+/**
+ * Assignation EN MASSE (L3, ENTITY-ASSIGN-BULK1). `entityId: null` = dé-assignation.
+ * Borne `.max(500)` alignée sur `confirmerPropositionSchema` : un workspace réel porte
+ * ~87 comptes, 500 laisse de la marge tout en bornant l'abus. `.min(1)` : un batch vide
+ * n'a aucun sens et masquerait un bug d'UI.
+ */
+const assignerComptesSchema = z
+  .object({
+    bankAccountIds: z.array(z.string().uuid()).min(1).max(500),
     entityId: z.string().uuid().nullable(),
   })
   .strict();
@@ -146,6 +161,15 @@ function mapErreur(e: unknown): EtatAction | null {
   // qui bloque (« 12 accounts and 2 members ») plutôt que d'opposer un « impossible » :
   // l'admin doit savoir quoi déplacer. Les compteurs portent sur SON tenant — aucun
   // oracle d'existence (une entité d'un autre tenant renvoie 404, pas ce message).
+  // S4 — WITH CHECK de la policy entity_scope. Sans ce mapping, un ADMIN qui porte un
+  // périmètre en base récoltait un 500 brut en dé-assignant un compte (chemin légitime).
+  if (e instanceof AssignationHorsPerimetreError) {
+    return {
+      erreur:
+        "Your access is limited to part of this group, so this change is out of your scope.",
+      succes: null,
+    };
+  }
   if (e instanceof EntiteNonVideError) {
     const parts: string[] = [];
     if (e.nbComptes > 0) {
@@ -417,5 +441,56 @@ export async function confirmerPropositionAction(
     succes: nomEntite
       ? `Entity “${nomEntite}” created, ${nbComptes} account(s) attached.`
       : `Confirmed: ${nbComptes} account(s) attached.`,
+  };
+}
+
+/**
+ * Assignation EN MASSE compte → entité (L3, dette P1 `ENTITY-ASSIGN-BULK1`).
+ *
+ * ATOMIQUE : `withWorkspace` est une transaction, et `assignerComptesEntite` fait 1 SELECT
+ * de pré-check + 1 UPDATE groupé (jamais N UPDATE en boucle). Si un seul compte du lot est
+ * invalide, RIEN n'est posé — pas de succès partiel silencieux.
+ *
+ * `entityId` vide/absent = dé-assignation en masse (le compte redevient « non assigné »,
+ * donc invisible aux membres à accès restreint : c'est pourquoi l'UI confirme).
+ */
+export async function assignerComptesAction(
+  _etat: EtatAction,
+  formData: FormData,
+): Promise<EtatAction> {
+  const session = await exigerSessionAdministration();
+  const rawEntity = formData.get("entityId");
+  const parsed = assignerComptesSchema.safeParse({
+    bankAccountIds: formData.getAll("bankAccountIds").map((v) => String(v)),
+    entityId: rawEntity ? String(rawEntity) : null,
+  });
+  if (!parsed.success) return { erreur: MESSAGE_INVALIDE, succes: null };
+
+  let nbAssignes = 0;
+  try {
+    const res = await withWorkspace(session, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: parsed.data.bankAccountIds,
+        entityId: parsed.data.entityId,
+      }),
+    );
+    nbAssignes = res.nbAssignes;
+  } catch (e) {
+    const m = mapErreur(e);
+    if (m) return m;
+    throw e;
+  }
+
+  // Succès uniquement. UN SEUL revalidate pour N comptes — l'auto-save unitaire en pose un
+  // PAR ligne, ce qui fait sautiller l'écran (ENTITY-ASSIGN-REVALIDATE1) ; le batch éteint
+  // largement ce défaut.
+  revalidatePath("/admin/entites");
+
+  const s = nbAssignes > 1 ? "s" : "";
+  return {
+    erreur: null,
+    succes: parsed.data.entityId
+      ? `${nbAssignes} account${s} attached to the entity.`
+      : `${nbAssignes} account${s} set back to unassigned.`,
   };
 }

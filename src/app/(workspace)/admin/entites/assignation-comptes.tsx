@@ -26,12 +26,25 @@
  * Tokens & conventions UI_GUIDELINES (§2.2 tableau dense, §3.4 erreur ≠ sortie, §4.4
  * états vides). Pas de dépendance externe (règle 9) : SVG inline, `cn` local.
  */
-import { useCallback, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 
+import { Modal } from "@/components/ui/modal/modal";
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/states";
+import { basculerGroupe, etatSelectionGroupe } from "@/lib/selection-groupe";
 
-import { assignerCompteAction } from "./actions";
+import {
+  assignerCompteAction,
+  assignerComptesAction,
+  type EtatAction,
+} from "./actions";
 import type { EntiteVue } from "./assignation-entites";
 import { estNonAssigne } from "./regles-comptes";
 
@@ -153,19 +166,62 @@ export function AssignationComptes({
   entites: EntiteVue[];
 }) {
   const [recherche, setRecherche] = useState("");
+  /** `""` = toutes les banques. Le filtre sert le geste « tous les comptes de {banque} ». */
+  const [banque, setBanque] = useState("");
+  const [coches, setCoches] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Les banques présentes, dérivées des comptes déjà chargés — aucune requête (le contrat
+  // `CompteAvecEntite` porte déjà `institutionName`).
+  const banques = useMemo(() => {
+    const noms = new Set<string>();
+    for (const c of comptes) {
+      const n = c.institutionName?.trim();
+      if (n) noms.add(n);
+    }
+    return [...noms].sort((a, b) => a.localeCompare(b));
+  }, [comptes]);
 
   // Filtre sur l'identifiant AFFICHÉ (ce que l'ADMIN lit), pas sur `accountName` brut :
   // chercher « State Bank » doit trouver les comptes dont c'est le libellé de repli.
   const comptesFiltres = useMemo(() => {
     const q = recherche.trim().toLowerCase();
-    if (q === "") return comptes;
-    return comptes.filter((c) => libelleCompte(c).toLowerCase().includes(q));
-  }, [recherche, comptes]);
+    return comptes.filter((c) => {
+      if (banque !== "" && c.institutionName?.trim() !== banque) return false;
+      if (q !== "" && !libelleCompte(c).toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [recherche, banque, comptes]);
 
   const groupes = useMemo(
     () => grouperParEntite(comptesFiltres, entites),
     [comptesFiltres, entites],
   );
+
+  /**
+   * ⚠️ La sélection SOUMISE est l'intersection « coché ∩ visible ».
+   *
+   * Sans ça : l'ADMIN coche 50 comptes, filtre sur une banque qui n'en montre que 5, clique
+   * « Assign » — et en range 50. On n'envoie JAMAIS au serveur un compte que l'ADMIN n'a pas
+   * sous les yeux. La sélection n'est pas PURGÉE pour autant : ré-élargir le filtre la fait
+   * réapparaître (cocher, chercher, cocher encore reste possible).
+   */
+  const idsVisibles = useMemo(
+    () => new Set(comptesFiltres.map((c) => c.bankAccountId)),
+    [comptesFiltres],
+  );
+  const selection = useMemo(
+    () => new Set([...coches].filter((id) => idsVisibles.has(id))),
+    [coches, idsVisibles],
+  );
+
+  const basculerCompte = useCallback((id: string) => {
+    setCoches((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const options = useMemo(
     () => [
@@ -205,11 +261,25 @@ export function AssignationComptes({
         onChange={setRecherche}
         nbTotal={comptes.length}
         nbFiltres={comptesFiltres.length}
+        banque={banque}
+        onBanque={setBanque}
+        banques={banques}
       />
+
+      {/* Barre d'action groupée — le gain du lot : ranger N comptes en un geste, au lieu
+          de N menus déroulants (dette P1 ENTITY-ASSIGN-BULK1). N'apparaît que s'il y a
+          quelque chose à ranger. */}
+      {selection.size > 0 && (
+        <BarreAction
+          selection={selection}
+          entites={entites}
+          onEfface={() => setCoches(new Set())}
+        />
+      )}
 
       {comptesFiltres.length === 0 ? (
         <p className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
-          No account matches “{recherche}”.
+          No account matches your filters.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-card border border-line bg-surface-card shadow-card">
@@ -217,6 +287,7 @@ export function AssignationComptes({
               table ne déborde pas (même convention que TransactionsTable, §2.2). */}
           <table className="w-full table-fixed border-collapse text-left">
             <colgroup>
+              <col className="w-[44px]" />
               <col />
               <col className="w-[72px] sm:w-[88px]" />
               <col className="w-[200px] sm:w-[260px]" />
@@ -224,6 +295,9 @@ export function AssignationComptes({
 
             <thead>
               <tr className="border-b border-line-strong bg-surface-card">
+                <th scope="col" className="px-3 py-3 sm:px-4">
+                  <span className="sr-only">Select</span>
+                </th>
                 <th
                   scope="col"
                   className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
@@ -250,6 +324,15 @@ export function AssignationComptes({
             {groupes.map((groupe) => (
               <tbody key={groupe.cle} className="divide-y divide-line">
                 <tr>
+                  <th scope="col" className="border-y border-line bg-surface-inset px-3 py-2 sm:px-4">
+                    <CaseGroupe
+                      groupe={groupe}
+                      coches={selection}
+                      onBascule={() =>
+                        setCoches((prev) => basculerGroupe(prev, groupe.comptes))
+                      }
+                    />
+                  </th>
                   <th
                     scope="colgroup"
                     colSpan={3}
@@ -268,6 +351,8 @@ export function AssignationComptes({
                     key={compte.bankAccountId}
                     compte={compte}
                     options={options}
+                    coche={selection.has(compte.bankAccountId)}
+                    onBascule={basculerCompte}
                   />
                 ))}
               </tbody>
@@ -288,45 +373,269 @@ function BarreRecherche({
   onChange,
   nbTotal,
   nbFiltres,
+  banque,
+  onBanque,
+  banques,
 }: {
   valeur: string;
   onChange: (v: string) => void;
   nbTotal: number;
   nbFiltres: number;
+  banque: string;
+  onBanque: (v: string) => void;
+  banques: string[];
 }) {
-  const filtreActif = valeur.trim() !== "";
+  const filtreActif = valeur.trim() !== "" || banque !== "";
+
+  // Le filtre banque sert LE geste opérationnel du lot : « ranger tous les comptes de la
+  // State Bank dans Sucrière ». 77 des 87 comptes réels partagent la même banque et n'ont
+  // pas de nom — les retrouver un par un dans la recherche est illusoire.
+  const optionsBanque = useMemo(
+    () => [
+      { value: "", label: "All banks" },
+      ...banques.map((b) => ({ value: b, label: b })),
+    ],
+    [banques],
+  );
+
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <label className="relative flex-1 sm:max-w-xs">
-        <span className="sr-only">Search accounts</span>
-        <svg
-          aria-hidden
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-        <input
-          type="search"
-          value={valeur}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="Search accounts…"
-          className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
-            text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
-            focus:ring-2 focus:ring-primary/30"
-        />
-      </label>
-      <p className="text-sm text-text-muted" aria-live="polite">
+      <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="relative flex-1 sm:max-w-xs">
+          <span className="sr-only">Search accounts</span>
+          <svg
+            aria-hidden
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-faint"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+          <input
+            type="search"
+            value={valeur}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Search accounts…"
+            className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
+              text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
+              focus:ring-2 focus:ring-primary/30"
+          />
+        </label>
+
+        {banques.length > 1 && (
+          <Select
+            value={banque}
+            onChange={onBanque}
+            options={optionsBanque}
+            ariaLabel="Filter by bank"
+            className="w-full sm:w-56"
+          />
+        )}
+      </div>
+
+      <p className="shrink-0 text-sm text-text-muted" aria-live="polite">
         {filtreActif
           ? `${nbFiltres} of ${nbTotal} account${nbTotal > 1 ? "s" : ""}`
           : `${nbTotal} account${nbTotal > 1 ? "s" : ""}`}
       </p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Sélection multiple : case de groupe (tri-état) + case de ligne      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Case « tout cocher » d'un groupe. L'état INDÉTERMINÉ n'est pas un attribut HTML : il se
+ * pose sur la propriété DOM, via une ref (même parade que `perimetre-switcher.tsx`).
+ * La règle tri-état vient de `@/lib/selection-groupe` — pure, partagée, testée.
+ */
+function CaseGroupe({
+  groupe,
+  coches,
+  onBascule,
+}: {
+  groupe: GroupeComptes;
+  coches: ReadonlySet<string>;
+  onBascule: () => void;
+}) {
+  const etat = etatSelectionGroupe(groupe.comptes, coches);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = etat === "partiel";
+  }, [etat]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={etat === "tous"}
+      onChange={onBascule}
+      aria-label={`Select every account in ${groupe.titre}`}
+      className="size-4 cursor-pointer rounded border-line accent-primary"
+    />
+  );
+}
+
+/**
+ * Barre d'action groupée. Le `Select` maison ne poste rien (c'est un `<button>`) : on
+ * construit donc un `FormData` et on appelle l'action programmatiquement — même parade que
+ * l'auto-save unitaire.
+ *
+ * La DÉ-assignation en masse passe par une confirmation : repasser N comptes en « non
+ * assigné » les rend INVISIBLES aux membres à accès restreint (fail-closed). Sur un seul
+ * compte c'est déjà silencieux (dette CONFIRM1) ; sur cinquante, c'est un incident.
+ */
+function BarreAction({
+  selection,
+  entites,
+  onEfface,
+}: {
+  selection: ReadonlySet<string>;
+  entites: EntiteVue[];
+  onEfface: () => void;
+}) {
+  const [cible, setCible] = useState<string>("");
+  const [confirmation, setConfirmation] = useState(false);
+  const [statut, setStatut] = useState<Statut>({ phase: "repos" });
+  const [, demarrerTransition] = useTransition();
+
+  const n = selection.size;
+  const nomCible = entites.find((e) => e.id === cible)?.nom;
+  const desassigne = cible === VALEUR_NON_ASSIGNE;
+
+  const options = useMemo(
+    () => [
+      { value: VALEUR_NON_ASSIGNE, label: LIBELLE_NON_ASSIGNE },
+      ...entites.map((e) => ({ value: e.id, label: e.nom })),
+    ],
+    [entites],
+  );
+
+  function envoyer() {
+    setConfirmation(false);
+    setStatut({ phase: "envoi" });
+    demarrerTransition(async () => {
+      const formData = new FormData();
+      for (const id of selection) formData.append("bankAccountIds", id);
+      formData.set("entityId", cible);
+
+      let res: EtatAction;
+      try {
+        res = await assignerComptesAction(
+          { erreur: null, succes: null },
+          formData,
+        );
+      } catch {
+        res = { erreur: "Could not save.", succes: null };
+      }
+
+      if (res.erreur !== null) {
+        setStatut({ phase: "erreur", message: res.erreur });
+        return;
+      }
+      setStatut({ phase: "succes" });
+      // `revalidatePath` re-rend la page : les comptes migrent vers leur nouveau groupe.
+      // On vide la sélection, sinon elle désignerait des lignes qui ont bougé.
+      onEfface();
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-card border border-primary/30 bg-primary-50 px-4 py-3">
+      <p className="text-sm font-medium text-ink tabular-nums">
+        {n} account{n > 1 ? "s" : ""} selected
+      </p>
+
+      <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+        <Select
+          value={cible}
+          onChange={setCible}
+          options={options}
+          ariaLabel="Move selected accounts to"
+          className="w-full sm:w-56"
+        />
+
+        <button
+          type="button"
+          onClick={() => (desassigne ? setConfirmation(true) : envoyer())}
+          disabled={statut.phase === "envoi"}
+          className="h-10 rounded-control bg-primary px-4 text-sm font-semibold text-white
+            transition-colors hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+            focus-visible:ring-primary focus-visible:ring-offset-2
+            disabled:cursor-not-allowed disabled:opacity-[0.48]"
+        >
+          {statut.phase === "envoi" ? "Moving…" : "Move"}
+        </button>
+
+        <button
+          type="button"
+          onClick={onEfface}
+          className="h-10 rounded-control px-3 text-sm font-medium text-text-muted
+            transition-colors hover:text-text focus:outline-none focus-visible:ring-2
+            focus-visible:ring-primary/40"
+        >
+          Clear
+        </button>
+      </div>
+
+      <div className="w-full">
+        <StatutLigne statut={statut} />
+      </div>
+
+      {confirmation && (
+        <Modal
+          open
+          onClose={() => setConfirmation(false)}
+          title="Unassign accounts"
+          size="sm"
+          // Surface destructive : ni Échap ni le clic sur l'overlay ne ferment (§4.4).
+          dismissible={false}
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-text">
+              Set <span className="font-semibold">{n}</span> account
+              {n > 1 ? "s" : ""} back to unassigned? They become{" "}
+              <span className="font-semibold">invisible</span> to members whose
+              access is limited to specific entities — including the people who
+              can see them today.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmation(false)}
+                className="h-10 rounded-control px-4 text-sm font-medium text-text-muted
+                  transition-colors hover:text-text focus:outline-none focus-visible:ring-2
+                  focus-visible:ring-primary/40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={envoyer}
+                className="h-10 rounded-control bg-danger px-4 text-sm font-semibold text-white
+                  transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2
+                  focus-visible:ring-danger focus-visible:ring-offset-2"
+              >
+                Unassign
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {nomCible && !desassigne && statut.phase === "repos" && (
+        <span className="sr-only" aria-live="polite">
+          {n} accounts will move to {nomCible}.
+        </span>
+      )}
     </div>
   );
 }
@@ -413,9 +722,13 @@ function useLigneAssignation(bankAccountId: string, valeurServeur: string) {
 function LigneCompte({
   compte,
   options,
+  coche,
+  onBascule,
 }: {
   compte: CompteVueAssignation;
   options: Array<{ value: string; label: string }>;
+  coche: boolean;
+  onBascule: (id: string) => void;
 }) {
   const valeurServeur = compte.entityId ?? VALEUR_NON_ASSIGNE;
   const { valeur, statut, envoyer } = useLigneAssignation(
@@ -433,6 +746,16 @@ function LigneCompte({
 
   return (
     <tr className="align-middle">
+      <td className="px-3 py-2 sm:px-4">
+        <input
+          type="checkbox"
+          checked={coche}
+          onChange={() => onBascule(compte.bankAccountId)}
+          aria-label={`Select ${libelle}`}
+          className="size-4 cursor-pointer rounded border-line accent-primary"
+        />
+      </td>
+
       <td className="px-3 py-2 sm:px-4">
         <p className="truncate text-sm text-text" title={libelle}>
           {libelle}

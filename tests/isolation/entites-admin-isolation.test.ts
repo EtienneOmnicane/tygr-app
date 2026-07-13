@@ -24,6 +24,7 @@ import { memberEntityScopes } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   assignerCompteEntite,
+  assignerComptesEntite,
   archiverEntite,
   creerEntite,
   definirScopesMembre,
@@ -739,5 +740,146 @@ describe("L2 — Q-ARCHIVAGE : archiver ne doit JAMAIS laisser un droit orphelin
     await expect(
       withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, ENT_B)),
     ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+  });
+});
+
+describe("L3 — assignation EN MASSE (batch) : atomique, jamais partielle", () => {
+  // Dette P1 ENTITY-ASSIGN-BULK1. Le batch fait 1 SELECT de pré-check + 1 UPDATE groupé
+  // (jamais N UPDATE en boucle : 500 aller-retours dans une transaction WebSocket ouverte
+  // se feraient couper par un timeout). Ce qu'on prouve ici : la garde ADMIN, l'absence
+  // d'IDOR, et surtout qu'un lot invalide ne pose RIEN — pas de succès partiel silencieux.
+
+  const idsEnBase = async (ids: string[]) => {
+    await client.exec(`reset role;`);
+    const r = await client.query<{ id: string; entity_id: string | null }>(
+      `select id, entity_id from bank_accounts where id in (${ids
+        .map((i) => `'${i}'`)
+        .join(",")}) order by id`,
+    );
+    await client.exec(`set role tygr_app;`);
+    return r.rows;
+  };
+
+  it("35. un MANAGER ne peut pas assigner en masse", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("36. ⭐ un compte d'un AUTRE tenant dans le lot → 404, et RIEN n'est posé (atomicité)", async () => {
+    // On remet d'abord les deux comptes de WS_A à un état connu.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: null,
+      }),
+    );
+
+    // Lot MIXTE : 1 compte légitime + 1 compte de WS_B (invisible sous RLS).
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A, ACC_B],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+
+    // ACC_A ne DOIT PAS avoir bougé : le pré-check a levé AVANT tout UPDATE, et la
+    // transaction a rollback. Sans la comparaison de cardinalité, l'UPDATE groupé aurait
+    // rangé ACC_A en ignorant ACC_B EN SILENCE → « 2 comptes rangés » pour 1 réel.
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("37. un id INEXISTANT dans le lot → 404, rien n'est posé", async () => {
+    const FANTOME = "00000000-0000-4000-8000-000000000000";
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A, FANTOME],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("38. une entité ARCHIVÉE n'est pas une cible valide (constat C3)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Cible archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    // Ni la FK composite ni l'UPDATE ne regardent is_active : sans le contrôle explicite,
+    // on rangerait N comptes dans une entité disparue des pickers (ils retomberaient dans
+    // « non assigné » à l'écran tout en gardant leur entity_id en base).
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A],
+          entityId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("39. contre-preuve — l'ADMIN range PLUSIEURS comptes en un seul appel", async () => {
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: ENT_ENERGIE,
+      }),
+    );
+    expect(res.nbAssignes).toBe(2);
+
+    const lignes = await idsEnBase([ACC_A, ACC_A_SANS_NOM]);
+    expect(lignes.every((l) => l.entity_id === ENT_ENERGIE)).toBe(true);
+  });
+
+  it("40. dé-assignation EN MASSE (entityId null) — le seul chemin de masse vers « non assigné »", async () => {
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: null,
+      }),
+    );
+    expect(res.nbAssignes).toBe(2);
+
+    const lignes = await idsEnBase([ACC_A, ACC_A_SANS_NOM]);
+    expect(lignes.every((l) => l.entity_id === null)).toBe(true);
+  });
+
+  it("41. un id envoyé DEUX FOIS ne fausse pas la cardinalité (dédoublonnage)", async () => {
+    // Sans le `new Set(...)`, la comparaison `returning().length !== ids.length` verrait
+    // 1 ligne mise à jour pour 2 ids demandés et lèverait à tort sur un batch légitime.
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A],
+        entityId: ENT_SUCRE,
+      }),
+    );
+    expect(res.nbAssignes).toBe(1);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBe(ENT_SUCRE);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A],
+        entityId: null,
+      }),
+    );
   });
 });
