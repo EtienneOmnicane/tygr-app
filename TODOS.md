@@ -793,7 +793,13 @@ tables append-only ni les montants (surfaces de rendu/UX) → différables. **Vi
 NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` avant le merge
 (action pré-merge Human-in-the-Loop, pas une dette).
 
-- [ ] **ENTITY-ASSIGN-BULK1 (P1, effort ~1 j) — assignation en masse compte → entité.**
+- [x] **ENTITY-ASSIGN-BULK1 (P1) — assignation en masse compte → entité.** ✅ **LIVRÉE
+  2026-07-13** (`feature/refonte-entites-ia`, lot L3 de `PLAN-refonte-entites.md`).
+  `assignerComptesEntite` : 1 SELECT de pré-check + **1 UPDATE groupé** (jamais N UPDATE en
+  boucle), atomique, avec comparaison de cardinalité (aucun succès partiel silencieux) et
+  refus d'une entité archivée comme cible. UI : cases par ligne, case de groupe tri-état,
+  filtre par banque, barre d'action groupée, confirmation sur la dé-assignation en masse.
+  7 cas d'isolation (35→41). Énoncé d'origine ci-dessous, conservé pour l'audit trail :
   Le workspace réel porte ~87 comptes, dont 77 sans nom sous la même institution, à rattacher
   aujourd'hui **un par un** (un changement de Select = un appel). Aucune multi-sélection ni
   « assigner tous les comptes de {institution} à {entité} ». C'est la friction opérationnelle
@@ -802,7 +808,10 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   côté client, soit une nouvelle action batch gardée ADMIN + zod + un cas d'isolation dédié si
   batch serveur. **Déclencheur** : mise en service prod / onboarding Etienne sur les 87 comptes.
 
-- [ ] **ENTITY-ASSIGN-REVALIDATE1 (P2, effort ~0,5 j) — `revalidatePath` re-render les 87
+- [ ] **ENTITY-ASSIGN-REVALIDATE1 (P2, effort ~0,5 j) — LARGEMENT ATTÉNUÉE 2026-07-13
+  par le batch (L3)** : ranger N comptes ne pose plus qu'UN `revalidatePath` au lieu de N.
+  Le défaut ne subsiste que sur l'auto-save unitaire, ligne à ligne. Re-évaluer après usage
+  réel avant d'investir. Énoncé d'origine : `revalidatePath` re-render les 87
   lignes à chaque enregistrement.** `assignerCompteAction` pose `revalidatePath("/admin/entites")` :
   après un succès, le compte ne migre vers son groupe qu'au retour serveur, qui re-render toute
   la liste — efface les coches « Enregistré » et réordonne pendant qu'on édite une autre ligne.
@@ -810,8 +819,11 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   locale du compte vers son nouveau groupe + `revalidate` ciblé/différé, ou `useOptimistic`.
   **Déclencheur** : retour d'usage « ça saute quand j'enchaîne les lignes ».
 
-- [ ] **ENTITY-ASSIGN-CONFIRM1 (P2, effort ~0,25 j) — pas de confirmation sur la
-  dé-assignation.** Repasser un compte en « — Non assigné — » le rend invisible aux membres en
+- [ ] **ENTITY-ASSIGN-CONFIRM1 (P2, effort ~0,25 j) — PARTIELLEMENT SOLDÉE 2026-07-13** :
+  la dé-assignation **en masse** (L3) exige désormais une confirmation explicite (modale
+  `dismissible={false}`), et la cible par défaut de la barre d'action n'est plus destructive.
+  Reste dû : la confirmation sur l'auto-save **unitaire** (lot L5). Énoncé d'origine : pas de
+  confirmation sur la dé-assignation. Repasser un compte en « — Non assigné — » le rend invisible aux membres en
   Vision Entité (fail-closed) sur un simple changement de Select. Réversible mais silencieux.
   Ajouter une confirmation (ou un undo transitoire) sur la seule transition vers `null`.
   **Déclencheur** : premier incident « un compte a disparu pour un membre ».
@@ -835,6 +847,32 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   ~200px min → scroll horizontal plutôt qu'un repli responsive ; (c) pas de `loading.tsx` sur
   `/admin/entites` (premier affichage sans skeleton). **Déclencheur** : passe de polish design
   sur l'écran admin.
+
+### Constats résiduels de la cross-review /admin/entites (2026-07-13)
+
+Les trois défauts BLOQUANTS de la revue (garde d'archivage contournable sous ADMIN scopé ;
+garde à sens unique ; mapping SQLSTATE 42501 non prouvé) ont été **corrigés dans le lot**,
+pas consignés — ils touchaient l'isolation (règle 9 : ça se corrige, ça ne se diffère pas).
+Restent deux constats mineurs, sans impact d'isolation :
+
+- [ ] **DEMO-ACTIONS1 (P2, effort ~0,5 j) — les routes `/demo/*` sont PUBLIQUES et montent
+  des composants qui importent de vraies Server Actions ADMIN.** `/demo/assignation-comptes`
+  et `/demo/admin-gestion-entites` rendent les vrais composants (c'est l'objet du Visual QA,
+  Gate 4). Un clic anonyme sur « Create entity » appelle donc `creerEntiteAction`, qui lève
+  `NonAuthentifieError` — **fail-closed, aucune écriture possible**, mais l'erreur n'est pas
+  attrapée et la décision « /demo public » (PR #43) supposait des « routes pures ». Défaut
+  **préexistant** (déjà vrai de `/demo/assignation-comptes` avant ce chantier).
+  Pistes : gater `/demo` hors production via le middleware, ou injecter des handlers inertes
+  dans les démos. **Déclencheur** : mise en service prod (les routes de démo ne doivent pas
+  être servies publiquement en production).
+
+- [ ] **ADMIN-PERIMETRES-MORT1 (P2, effort ~0,25 j) — `admin/perimetres/actions.ts` n'a
+  aucun appelant.** `octroyerScopeAction` / `revoquerScopeAction` (maille fine party/compte,
+  L6a) existent, sont gardées ADMIN et viennent d'être migrées vers
+  `exigerSessionAdministration()` (L0) — mais **aucune page `/admin/perimetres` ne les
+  appelle**. Soit on livre la surface UI (elle pilote `account_scope`, le 3ᵉ axe de
+  périmètre), soit on retire le code. **Déclencheur** : décision produit sur la maille fine
+  (lot L9 du plan Entités), ou revue de dette de fin d'epic.
 
 ### Langue de l'interface — migration FR → EN (2026-07-13)
 

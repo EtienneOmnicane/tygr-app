@@ -40,6 +40,7 @@ import {
   EntiteNonAutoriseError,
   EntiteNonVideError,
   MembreNonScopableError,
+  PerimetreReduitError,
   PartieIntrouvableError,
   renommerEntite,
   archiverEntite,
@@ -163,6 +164,16 @@ function mapErreur(e: unknown): EtatAction | null {
   // oracle d'existence (une entité d'un autre tenant renvoie 404, pas ce message).
   // S4 — WITH CHECK de la policy entity_scope. Sans ce mapping, un ADMIN qui porte un
   // périmètre en base récoltait un 500 brut en dé-assignant un compte (chemin légitime).
+  // R1 — une garde qui exige un dénombrement complet refuse de tourner sous périmètre
+  // réduit. Le message dit POURQUOI, et comment en sortir (l'admin ne peut pas se
+  // déscoper lui-même : c'est un autre admin qui doit lever la restriction).
+  if (e instanceof PerimetreReduitError) {
+    return {
+      erreur:
+        "Your access is limited to part of this group, so this check cannot see the whole workspace. Ask another administrator to lift the restriction first.",
+      succes: null,
+    };
+  }
   if (e instanceof AssignationHorsPerimetreError) {
     return {
       erreur:

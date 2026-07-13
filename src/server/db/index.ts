@@ -238,6 +238,7 @@ export {
   EntiteNomDupliqueError,
   EntiteNonVideError,
   AssignationHorsPerimetreError,
+  PerimetreReduitError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
 export type {

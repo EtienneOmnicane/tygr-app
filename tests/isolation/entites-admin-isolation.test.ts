@@ -32,6 +32,8 @@ import {
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
   EntiteNonVideError,
+  AssignationHorsPerimetreError,
+  PerimetreReduitError,
   CompteIntrouvableError,
   listerComptesAvecEntite,
   listerEntites,
@@ -880,6 +882,129 @@ describe("L3 — assignation EN MASSE (batch) : atomique, jamais partielle", () 
         bankAccountIds: [ACC_A],
         entityId: null,
       }),
+    );
+  });
+});
+
+describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commune", () => {
+  // §12 du plan laisse ouvert le durcissement « interdire de scoper un ADMIN ». En
+  // attendant l'arbitrage, on REFUSE toute opération dont la justesse dépend d'une vue
+  // complète, et on ferme les portes que la première passe avait laissées entrouvertes.
+
+  const estActive = async (id: string) => {
+    await client.exec(`reset role;`);
+    const r = await client.query<{ is_active: boolean }>(
+      `select is_active from entities where id = '${id}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    return r.rows[0]?.is_active;
+  };
+
+  it("42. R1 — la garde d'archivage NE SE CONTOURNE PLUS sous un ADMIN scopé", async () => {
+    // Le défaut : archiverEntite compte les comptes SOUS LA RLS. Scopé, l'ADMIN comptait
+    // 0 compte pour une entité qui en porte 1 → la garde passait → il archivait une entité
+    // encore rattachée. La garde se contournait elle-même.
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R1 — porte un compte" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+    );
+
+    // On scope l'ADMIN sur une AUTRE entité → son COUNT sur bank_accounts est amputé.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [ENT_SUCRE] }),
+    );
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId)),
+    ).rejects.toBeInstanceOf(PerimetreReduitError);
+
+    // Rien n'a été archivé.
+    expect(await estActive(entityId)).toBe(true);
+
+    // Nettoyage — dans CET ordre : tant que l'ADMIN est scopé, ACC_A (rattaché ailleurs)
+    // lui est invisible et la dé-assignation échouerait.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+
+  it("43. ⭐ R2 — on ne peut pas scoper un membre sur une entité ARCHIVÉE (garde à DOUBLE sens)", async () => {
+    // Q-ARCHIVAGE interdisait d'archiver une entité qui porte des droits. Mais la porte
+    // INVERSE restait ouverte : poser un droit sur une entité déjà archivée recrée
+    // exactement le droit orphelin — et l'écran ne rend AUCUNE case pour l'en retirer
+    // (il ne liste que les entités actives). Une garde à sens unique n'est pas une garde.
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R2 — archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+    expect(await estActive(entityId)).toBe(false);
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        definirScopesMembre(tx, ctx, {
+          userId: VIEWER_A,
+          entityIds: [entityId],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+
+    // Aucun droit posé (le DELETE préalable de definirScopesMembre a rollback avec la tx).
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where entity_id = '${entityId}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("44. R3 — l'assignation UNITAIRE refuse aussi une entité archivée (invariant sur les 3 chemins)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R3 — archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+  });
+
+  it("45. R4 — SQLSTATE 42501 (WITH CHECK entity_scope) porte une erreur NOMMÉE, jamais un 500", async () => {
+    // Exit-criterion §10 (« chaque erreur a un nom ») : le mapping existait, la PREUVE
+    // manquait. Un ADMIN scopé qui DÉ-assigne viole le WITH CHECK de entity_scope
+    // (`entity_id IS NOT NULL AND entity_id = ANY(scope)`) → 42501, qui remontait en 500 brut
+    // sur un chemin d'écriture ADMIN parfaitement légitime.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, {
+        bankAccountId: ACC_A,
+        entityId: ENT_SUCRE,
+      }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [ENT_SUCRE] }),
+    );
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, {
+          bankAccountId: ACC_A,
+          entityId: null,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AssignationHorsPerimetreError);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
     );
   });
 });

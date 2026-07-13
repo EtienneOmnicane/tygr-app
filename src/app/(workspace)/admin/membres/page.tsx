@@ -10,6 +10,7 @@
  */
 import { notFound, redirect } from "next/navigation";
 
+import { AvertissementVueRestreinte } from "@/components/admin/avertissement-vue-restreinte";
 import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
@@ -46,7 +47,15 @@ export default async function PageMembres() {
     }
     const entites = await listerEntites(tx, ctx);
     const membres: MembreLigne[] = await listerMembresWorkspace(tx, ctx);
-    return { entites, membres };
+
+    // Même garde fail-safe que /admin/entites (§12) : l'amputation du viewFilter ne couvre
+    // que l'axe JWT. `entity_scope` / `account_scope` sont résolus EN BASE — un ADMIN scopé
+    // lirait des listes partielles. Le périmètre acté (Q-PERIMETRE) est l'ADMIN, pas une
+    // page : les deux écrans disent la même chose de la même situation.
+    const vueRestreinte =
+      ctx.entityScope.mode !== "GLOBALE" || ctx.accountScope.mode !== "GLOBALE";
+
+    return { entites, membres, vueRestreinte };
   });
 
   if (donnees === null) {
@@ -69,6 +78,8 @@ export default async function PageMembres() {
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
       <div className="flex flex-col gap-10">
+        {donnees.vueRestreinte && <AvertissementVueRestreinte />}
+
         <section className="mx-auto w-full max-w-md">
           <h1 className="mb-1 text-lg font-semibold">Workspace members</h1>
           <p className="mb-6 text-sm text-text-muted">

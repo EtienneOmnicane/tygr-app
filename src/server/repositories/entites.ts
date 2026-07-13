@@ -144,6 +144,30 @@ export class AssignationHorsPerimetreError extends Error {
   }
 }
 
+/**
+ * Une garde qui repose sur un DÉNOMBREMENT EXHAUSTIF refuse de s'exécuter sous un
+ * périmètre réduit (constat R1 de la cross-review L0→L3, prouvé sur Postgres).
+ *
+ * `archiverEntite` compte les comptes rattachés SOUS LA RLS. Or les policies
+ * `entity_scope` (0014) et `account_scope` (0016) amputent ce COUNT dès que l'appelant
+ * porte un périmètre : on compterait **0 compte pour une entité qui en porte 12**, la
+ * garde passerait, et on archiverait une entité encore rattachée — exactement ce que
+ * Q-ARCHIVAGE devait interdire. La garde se contournait donc elle-même.
+ *
+ * L0 a neutralisé l'axe `view_filter` (porté par la session). Les deux autres axes sont
+ * résolus EN BASE (`member_entity_scopes`, `user_scopes`) : la session ne PEUT PAS les
+ * neutraliser (§12 du plan, résidu non tranché). Là où la LECTURE peut se contenter de
+ * DIRE qu'elle est partielle (bandeau « Restricted view »), une ÉCRITURE dont la justesse
+ * dépend d'un comptage complet doit REFUSER — fail-closed.
+ */
+export class PerimetreReduitError extends Error {
+  readonly code = "SCOPED_ADMIN_FORBIDDEN";
+  constructor() {
+    super("Opération impossible sous un périmètre réduit");
+    this.name = "PerimetreReduitError";
+  }
+}
+
 /** Le userId visé n'est pas membre du workspace courant (donc non scopable). */
 export class MembreNonScopableError extends Error {
   readonly code = "MEMBER_NOT_IN_WORKSPACE";
@@ -262,6 +286,50 @@ function codePg(e: unknown): string | undefined {
     cur = (cur as { cause?: unknown }).cause;
   }
   return undefined;
+}
+
+/**
+ * La cible d'une assignation doit être une entité ACTIVE du tenant (`null` = dé-assignation,
+ * toujours permise) — constat R3 de la cross-review.
+ *
+ * Ni la FK composite `(entity_id, workspace_id) → entities` ni l'UPDATE ne regardent
+ * `is_active` : sans ce contrôle, on peut ranger des comptes dans une entité ARCHIVÉE. Ils
+ * retomberaient alors dans « non assigné » à l'écran (cf. `estNonAssigne`) tout en gardant
+ * leur `entity_id` en base — un écart silencieux entre ce qu'on voit et ce qui est.
+ *
+ * Factorisé pour que l'invariant soit vrai sur les TROIS chemins d'écriture (compte
+ * unitaire, partie, batch), et pas seulement sur celui où on y a pensé.
+ */
+async function exigerEntiteCibleActive<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  entityId: string | null,
+): Promise<void> {
+  if (entityId === null) return;
+  const cible = await tx
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        eq(entities.workspaceId, ctx.workspaceId),
+        eq(entities.isActive, true),
+      ),
+    );
+  if (cible.length === 0) throw new EntiteIntrouvableError();
+}
+
+/**
+ * Refuse toute opération dont la justesse exige une vue COMPLÈTE du tenant, quand
+ * l'appelant porte un périmètre (cf. `PerimetreReduitError`). Fail-closed.
+ */
+function exigerVueComplete(ctx: WorkspaceContext): void {
+  if (
+    ctx.entityScope.mode !== "GLOBALE" ||
+    ctx.accountScope.mode !== "GLOBALE"
+  ) {
+    throw new PerimetreReduitError();
+  }
 }
 
 function exigerAdmin(ctx: WorkspaceContext): void {
@@ -622,6 +690,22 @@ export async function archiverEntite<TDb extends AnyPgDatabase>(
   entityId: string,
 ): Promise<void> {
   exigerAdmin(ctx);
+  // Le comptage ci-dessous doit être EXHAUSTIF pour que la garde ait un sens : sous un
+  // périmètre réduit il serait amputé, et on archiverait une entité encore rattachée.
+  exigerVueComplete(ctx);
+
+  // VERROU (constat R7 — TOCTOU). La garde est un check-then-act : en READ COMMITTED, un
+  // `definirScopesMembre` concurrent peut poser un droit ENTRE le comptage (qui voit 0) et
+  // l'UPDATE — produisant exactement l'état interdit (entité archivée + droit orphelin).
+  // On verrouille la ligne d'entité ; `definirScopesMembre` prend le MÊME verrou avant
+  // d'insérer, donc les deux transactions se sérialisent au lieu de se croiser.
+  await tx
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(eq(entities.id, entityId), eq(entities.workspaceId, ctx.workspaceId)),
+    )
+    .for("update");
 
   const [comptes] = await tx
     .select({ n: sql<number>`count(*)::int` })
@@ -678,6 +762,7 @@ export async function assignerCompteEntite<TDb extends AnyPgDatabase>(
   data: { bankAccountId: string; entityId: string | null },
 ): Promise<void> {
   exigerAdmin(ctx);
+  await exigerEntiteCibleActive(tx, ctx, data.entityId);
   try {
     const maj = await tx
       .update(bankAccounts)
@@ -741,20 +826,8 @@ export async function assignerComptesEntite<TDb extends AnyPgDatabase>(
   const ids = [...new Set(data.bankAccountIds)];
   if (ids.length === 0) return { nbAssignes: 0 };
 
-  // (3) Cible : une entité archivée n'est pas une cible.
-  if (data.entityId !== null) {
-    const cible = await tx
-      .select({ id: entities.id })
-      .from(entities)
-      .where(
-        and(
-          eq(entities.id, data.entityId),
-          eq(entities.workspaceId, ctx.workspaceId),
-          eq(entities.isActive, true),
-        ),
-      );
-    if (cible.length === 0) throw new EntiteIntrouvableError();
-  }
+  // (3) Cible : une entité archivée n'est pas une cible (invariant partagé).
+  await exigerEntiteCibleActive(tx, ctx, data.entityId);
 
   // (1) Pré-check : un compte d'un autre tenant est invisible sous RLS → COUNT < attendu
   //     → 404 nommé AVANT toute écriture (gabarit `definirScopesFinsMembre`).
@@ -818,6 +891,7 @@ export async function assignerPartieEntite<TDb extends AnyPgDatabase>(
   data: { partyId: string; entityId: string | null },
 ): Promise<void> {
   exigerAdmin(ctx);
+  await exigerEntiteCibleActive(tx, ctx, data.entityId);
   try {
     const maj = await tx
       .update(parties)
@@ -885,6 +959,37 @@ export async function definirScopesMembre<TDb extends AnyPgDatabase>(
 
   // Dédoublonnage défensif (la PK composite l'exigerait sinon).
   const uniques = [...new Set(data.entityIds)];
+
+  // Q-ARCHIVAGE, second sens (constat R2 de la cross-review, prouvé).
+  //
+  // `archiverEntite` refuse d'archiver une entité qui porte encore des droits. Mais la
+  // porte inverse restait grande ouverte : rien n'empêchait de POSER un droit sur une
+  // entité DÉJÀ archivée — ni la FK composite, ni cette fonction, ne regardaient
+  // `is_active`. La séquence n'a rien d'exotique et ne demande qu'un seul admin :
+  // cocher l'entité sur la carte d'un membre sans enregistrer, archiver l'entité
+  // (alors vide, donc autorisé), puis cliquer « Save » — l'état local du formulaire
+  // survit au re-render et re-poste l'entité archivée.
+  //
+  // Résultat : exactement le droit orphelin que Q-ARCHIVAGE devait interdire — le membre
+  // voit les comptes de l'entité archivée, et l'écran ne rend AUCUNE case pour l'en
+  // retirer (il ne liste que les entités actives). Une garde à sens unique n'est pas une
+  // garde.
+  // `.for("update")` : MÊME verrou que `archiverEntite` (R7). Sans lui, les deux
+  // opérations pourraient s'entrelacer et produire l'état qu'elles interdisent chacune de
+  // leur côté — une entité archivée portant un droit de membre.
+  const actives = await tx
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.workspaceId, ctx.workspaceId),
+        eq(entities.isActive, true),
+        inArray(entities.id, uniques),
+      ),
+    )
+    .for("update");
+  if (actives.length !== uniques.length) throw new EntiteIntrouvableError();
+
   try {
     await tx.insert(memberEntityScopes).values(
       uniques.map((entityId) => ({

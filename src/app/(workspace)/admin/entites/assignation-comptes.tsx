@@ -68,6 +68,19 @@ export interface CompteVueAssignation {
 /** Valeur du `Select` pour « non assigné ». La Server Action mappe "" → null. */
 const VALEUR_NON_ASSIGNE = "";
 
+/**
+ * Sentinelle « aucune cible choisie » de la barre d'action groupée.
+ *
+ * Sans elle, la cible par défaut serait `VALEUR_NON_ASSIGNE` (`""`) : le bouton d'action
+ * d'un écran de RANGEMENT proposerait, par défaut, l'opération DESTRUCTIVE (rendre N
+ * comptes invisibles aux membres restreints). Aucune option ne porte cette valeur → le
+ * `Select` affiche son `placeholder`, et le bouton reste inerte tant qu'on n'a pas choisi.
+ */
+const AUCUNE_CIBLE = "__aucune__";
+
+/** Borne serveur (zod `.max(500)`) — reflétée ici pour ne pas expédier un lot voué au rejet. */
+const MAX_BATCH = 500;
+
 /** Clé du groupe « non assigné », distincte d'un entityId (uuid). */
 const GROUPE_NON_ASSIGNE = "__non_assigne__";
 
@@ -214,6 +227,16 @@ export function AssignationComptes({
     [coches, idsVisibles],
   );
 
+  /**
+   * R5 — le message de succès NE PEUT PAS vivre dans la barre d'action : `envoyer()` vide
+   * la sélection au succès, donc `selection.size` retombe à 0 et la barre est DÉMONTÉE
+   * dans le même commit React. Le « Saved » n'était jamais peint, et le message du serveur
+   * (« 50 accounts attached… ») était jeté : après avoir rangé 50 comptes, l'admin
+   * n'obtenait aucun accusé de réception. L'état vit donc ici, au-dessus du tableau, où il
+   * survit à la disparition de la barre.
+   */
+  const [messageBatch, setMessageBatch] = useState<string | null>(null);
+
   const basculerCompte = useCallback((id: string) => {
     setCoches((prev) => {
       const next = new Set(prev);
@@ -274,7 +297,29 @@ export function AssignationComptes({
           selection={selection}
           entites={entites}
           onEfface={() => setCoches(new Set())}
+          onSucces={(message) => setMessageBatch(message)}
         />
+      )}
+
+      {/* Accusé de réception du batch (R5). `role="status"` : annoncé sans voler le focus.
+          Il porte le message du SERVEUR (nombre réellement rangé), pas une supposition. */}
+      {messageBatch !== null && (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-control bg-success-bg px-3 py-2 text-sm text-success"
+        >
+          <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0">
+            <path
+              d="M3.5 8.5l3 3 6-7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {messageBatch}
+        </p>
       )}
 
       {comptesFiltres.length === 0 ? (
@@ -497,19 +542,27 @@ function BarreAction({
   selection,
   entites,
   onEfface,
+  onSucces,
 }: {
   selection: ReadonlySet<string>;
   entites: EntiteVue[];
   onEfface: () => void;
+  /** Remonte le message du SERVEUR au parent : la barre, elle, va disparaître (R5). */
+  onSucces: (message: string) => void;
 }) {
-  const [cible, setCible] = useState<string>("");
+  // Cible NEUTRE au départ : le geste par défaut d'un écran de rangement ne peut pas être
+  // la dé-assignation (N1).
+  const [cible, setCible] = useState<string>(AUCUNE_CIBLE);
   const [confirmation, setConfirmation] = useState(false);
   const [statut, setStatut] = useState<Statut>({ phase: "repos" });
   const [, demarrerTransition] = useTransition();
 
   const n = selection.size;
-  const nomCible = entites.find((e) => e.id === cible)?.nom;
+  const choisie = cible !== AUCUNE_CIBLE;
   const desassigne = cible === VALEUR_NON_ASSIGNE;
+  // Le serveur borne à 500 (zod). On ne laisse pas partir un lot voué au « Invalid input. »
+  // sans que l'admin comprenne pourquoi (N2).
+  const tropDeComptes = n > MAX_BATCH;
 
   const options = useMemo(
     () => [
@@ -541,7 +594,10 @@ function BarreAction({
         setStatut({ phase: "erreur", message: res.erreur });
         return;
       }
-      setStatut({ phase: "succes" });
+      // Le message vient du SERVEUR (nombre réellement rangé). On le remonte AVANT de vider
+      // la sélection : `onEfface()` démonte cette barre, tout état de succès local serait
+      // perdu sans jamais être peint (R5).
+      if (res.succes !== null) onSucces(res.succes);
       // `revalidatePath` re-rend la page : les comptes migrent vers leur nouveau groupe.
       // On vide la sélection, sinon elle désignerait des lignes qui ont bougé.
       onEfface();
@@ -559,6 +615,7 @@ function BarreAction({
           value={cible}
           onChange={setCible}
           options={options}
+          placeholder="Move to…"
           ariaLabel="Move selected accounts to"
           className="w-full sm:w-56"
         />
@@ -566,7 +623,12 @@ function BarreAction({
         <button
           type="button"
           onClick={() => (desassigne ? setConfirmation(true) : envoyer())}
-          disabled={statut.phase === "envoi"}
+          disabled={!choisie || tropDeComptes || statut.phase === "envoi"}
+          title={
+            tropDeComptes
+              ? `Select at most ${MAX_BATCH} accounts at once.`
+              : undefined
+          }
           className="h-10 rounded-control bg-primary px-4 text-sm font-semibold text-white
             transition-colors hover:bg-primary-600 focus:outline-none focus-visible:ring-2
             focus-visible:ring-primary focus-visible:ring-offset-2
@@ -631,10 +693,10 @@ function BarreAction({
         </Modal>
       )}
 
-      {nomCible && !desassigne && statut.phase === "repos" && (
-        <span className="sr-only" aria-live="polite">
-          {n} accounts will move to {nomCible}.
-        </span>
+      {tropDeComptes && (
+        <p role="alert" className="w-full text-xs text-danger">
+          Too many accounts selected ({n}). Move at most {MAX_BATCH} at a time.
+        </p>
       )}
     </div>
   );

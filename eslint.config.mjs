@@ -95,10 +95,13 @@ const eslintConfig = defineConfig([
       "no-restricted-imports": [
         "error",
         {
-          patterns: [FRONTIERE_DONNEES],
-          paths: [
+          patterns: [
+            FRONTIERE_DONNEES,
             {
-              name: "@/server/auth/session",
+              // `paths` ne matche QUE le spécifieur exact : un import RELATIF
+              // (`../../../../server/auth/session`) passait à travers. `group` matche le
+              // chemin, quelle que soit sa forme (constat R6 de la cross-review, mesuré).
+              group: ["**/server/auth/session"],
               importNames: ["exigerSessionWorkspace"],
               message:
                 "Surface d'administration : utiliser `exigerSessionAdministration()` (session amputée du viewFilter). `exigerSessionWorkspace()` laisserait le filtre d'affichage du header amputer les lectures ET bloquer les écritures (PLAN-refonte-entites.md §3.3).",
