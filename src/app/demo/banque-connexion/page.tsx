@@ -94,7 +94,22 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="6. Réparation — bouton « Reconnecter »"
+          titre="6. Échec DU WIDGET NATIF (onError du CDN)"
+          description="Le widget/la banque a refusé. Avant le correctif, onError était aliasé sur onClose : le widget se fermait SANS UN MOT. Le message vient de messageErreurWidget (registre S2) — jamais le texte amont du CDN (anglais, PII possible) ; le code machine, lui, part au log. Une ANNULATION (onExit), elle, reste silencieuse : rien ne s'affiche ici, c'est voulu."
+        >
+          <WidgetFeedback erreurWidget="La session de connexion a expiré. Recommencez la connexion." />
+          <WidgetFeedback erreurWidget="L’accès à cette banque est temporairement bloqué après trop de tentatives. Réessayez plus tard." />
+          <WidgetFeedback erreurWidget="La connexion bancaire a échoué. Réessayez dans un instant." />
+          {/* Le script CDN n'a même pas pu se charger (403, CSP, bloqueur, hors-ligne,
+              requête gelée). Le CDN ne peut PAS signaler celui-là (il n'est jamais
+              arrivé) : c'est le hook (`error`) + un WATCHDOG qui l'exposent. Le message
+              dit « rechargez » et non « réessayez » : le hook laisse le <script> mort
+              dans le <head>, donc un réessai sans rechargement ne peut pas aboutir. */}
+          <WidgetFeedback erreurWidget="Le module de connexion bancaire n’a pas pu se charger. Rechargez la page ; si le problème persiste, contactez le support." />
+        </Bloc>
+
+        <Bloc
+          titre="7. Réparation — bouton « Reconnecter »"
           description="Le re-sync a redemandé une vérification de sécurité (OTP) pour une ou plusieurs banques. Sous le message de synchro, un bouton « Reconnecter » par connexion rouvre le widget natif en mode REPAIR. Action secondaire (lien d'action), jamais en rouge."
         >
           <WidgetFeedback
@@ -105,7 +120,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="7. Réparation — ouverture en cours (bouton désactivé)"
+          titre="8. Réparation — ouverture en cours (bouton désactivé)"
           description="Entre le clic « Reconnecter » et l'obtention du token REPAIR : le bouton passe en « Ouverture… » et se désactive (anti-double-clic). Deux connexions à réparer."
         >
           <WidgetFeedback
@@ -120,7 +135,18 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="8. Désalignement EndUser (403) — « Reconnecter cette banque »"
+          titre="9. Réparation — widget déjà ouvert (désactivé, SANS « Ouverture… »)"
+          description="Un widget (onboarding ou réparation) est ouvert, ou un LinkToken est en vol : « Reconnecter » est désactivé — on ne peut pas ouvrir deux widgets, et le clic démonterait le widget ouvert sous les pieds de l'utilisateur. Le libellé reste « Reconnecter » : rien ne s'ouvre de ce côté-là, écrire « Ouverture… » mentirait (les deux sens sont portés par deux props distinctes)."
+        >
+          <WidgetFeedback
+            reparation={[{ connectionId: "cx_demo_1", jobId: "job_demo_1" }]}
+            onReconnecter={() => {}}
+            widgetOuvert
+          />
+        </Bloc>
+
+        <Bloc
+          titre="10. Désalignement EndUser (403) — « Reconnecter cette banque »"
           description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n'est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l'utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
         >
           <WidgetFeedback
