@@ -44,7 +44,7 @@ import { cn } from "@/components/ui/states/primitives";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import type { EtatFinalisation } from "@/app/(workspace)/banques/actions";
 import { synchroniserConnexionsAction } from "@/app/(workspace)/banques/actions";
-import { registreSynchro } from "@/components/dashboard/registre-synchro";
+import { registreSynchro } from "@/components/sync/registre-synchro";
 
 export function SyncButton({ role }: { role: WorkspaceRole }) {
   const router = useRouter();

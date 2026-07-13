@@ -383,6 +383,40 @@ OUVERTE (un statut inconnu n'est plus un mensonge de typage).
   Effort : ~1-1,5j. Tant que ce n'est pas fait, le message « relancez dans quelques minutes »
   est le contrat assumé avec l'utilisateur.
 
+#### Dettes ouvertes par la revue contradictoire de la PR #202 (2026-07-13)
+
+Le faux « Comptes à jour » est fermé sur les 3 parcours qui le produisaient (dashboard,
+/banques, chemin réparation) : le TEXTE vient désormais du serveur et le TON de
+`registreSynchro` (pur, testé), le vert exigeant zéro réserve. Restent 3 trous NOMMÉS, aucun
+ne touchant l'isolation, l'append-only ni les montants (donc consignables, cf. règle 9) :
+
+- [ ] **SYNC-FAILED-COOLDOWN1 (P1, déclencheur : première remontée support « ma banque
+  affiche à jour alors qu'elle a planté ») — un dernier job FAILED sous cooldown ressort en
+  RATE_LIMITED, donc en VERT.** Mode de défaillance : 1er clic → scrape FAILED → message
+  d'échec correct. 2ᵉ clic dans les 15 min → `cooldownActif` → `jobEnCoursNonTerminal` rend
+  `null` (le job est terminal) → RATE_LIMITED → aucune réserve → « à jour » en vert, alors
+  que le dernier scrape a échoué et que les données affichées datent du scrape précédent.
+  C'est le MÊME motif que le 2ᵉ clic corrigé ici, sur l'autre branche. Fix pressenti :
+  `jobEnCoursNonTerminal` tient déjà le statut en main — lui faire remonter un dernier job
+  FAILED comme réserve (sans repasser en `continue` : on veut lire le cache ET le dire).
+  Effort : ~2h + tests. PRÉEXISTANT à la PR #202, non introduit par elle.
+
+- [ ] **SYNC-MFA-COOLDOWN1 (P2, déclencheur : chantier MFA/réparation) — un job en
+  `OTP_REQUESTED` sous cooldown ne propose PAS « Reconnecter ».** Il ressort en RATE_LIMITED
+  (« déjà synchronisée récemment »), sans `reparation` : l'utilisateur n'a aucun chemin vers
+  la vérification qui l'attend. `jobEnCoursNonTerminal` (orchestration.ts) est l'endroit exact
+  où ça se referme — la fonction tient le `jobId` et le statut OTP, et les jette aujourd'hui
+  (choix DÉLIBÉRÉ de cette PR : ne pas élargir la sémantique du chemin MFA dans un fix de
+  timeout). Effort : ~2h. PRÉEXISTANT.
+
+- [ ] **SYNC-STATUT-SCRAPING1 (P2, déclencheur : l'amont émet `SCRAPING` sur l'API) — le
+  widget afficherait « initialisation » pendant un vrai scrape.** `PHASE_PAR_STATUT`
+  (machine-mfa.ts) ne mappe que les statuts de `OmniFiSyncStatusConnu` ; `SCRAPING` (que le
+  backend Django persiste, là où l'API renvoie `RETRIEVING`) tomberait sur le repli
+  `initialisation` au lieu de `synchronisation`. Purement cosmétique (aucun `undefined`,
+  aucun faux terminal). À traiter le jour où l'on OBSERVE `SCRAPING` sur le fil — pas avant :
+  l'ajouter à l'union fermée sans preuve serait inventer un contrat amont. Effort : 15 min.
+
 ### Sync réel Omni-FI — déclenchement de scraping (POST /sync) livré (2026-06-25)
 
 Le bouton « Synchroniser mes comptes » DÉCLENCHE désormais un sync réel

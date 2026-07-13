@@ -59,10 +59,18 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="2. Succès SANS redirection — bandeau + lien"
-          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard."
+          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre : le partiel est NEUTRE (une phrase d'échec en vert, c'était le faux message de victoire), le complet est vert."
         >
-          <WidgetFeedback succes="Connexion établie — 2 compte(s) rattaché(s) sur 3 banque(s). 1 connexion(s) n'ont pas pu être finalisées." />
-          <WidgetFeedback succes="Connexion établie — 3 compte(s) rattaché(s) sur 1 banque(s)." />
+          {/* PARTIEL — registre `neutre` : le message DIT l'échec, le ton ne le contredit pas. */}
+          <WidgetFeedback
+            registre="neutre"
+            succes="Connexion établie — 2 compte(s) rattaché(s) sur 3 banque(s). 1 connexion(s) n'ont pas pu être finalisées."
+          />
+          {/* COMPLET — zéro réserve : le seul cas qui mérite le vert. */}
+          <WidgetFeedback
+            registre="succes"
+            succes="Connexion établie — 3 compte(s) rattaché(s) sur 1 banque(s)."
+          />
         </Bloc>
 
         <Bloc

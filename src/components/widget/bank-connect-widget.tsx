@@ -50,6 +50,7 @@ import {
   type EtatFinalisation,
 } from "@/app/(workspace)/banques/actions";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
+import { registreSynchro } from "@/components/sync/registre-synchro";
 import {
   ROUTE_DASHBOARD,
   WidgetFeedback,
@@ -371,6 +372,10 @@ export function BankConnectWidget({
         erreurFinalisation={finalisation.erreur}
         info={finalisation.info}
         succes={finalisation.succes}
+        // TON du message : le vert exige zéro réserve. Cet écran appelle la MÊME action que
+        // le dashboard (`synchroniserConnexionsAction`) et rendait, lui aussi, la phrase
+        // d'échec d'une banque morte EN VERT — le fail-soft laisse `erreur` à null.
+        registre={registreSynchro(finalisation)}
         redirection={redirection}
         reparation={reparation}
         onReconnecter={lancerReparation}

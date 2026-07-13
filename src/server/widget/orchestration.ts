@@ -650,6 +650,10 @@ export async function attendreFinSync(
       console.warn(
         JSON.stringify({
           evt: "omnifi_sync_incomplet",
+          // `cause` discrimine les DEUX situations qui portent cet événement (l'autre étant
+          // le job constaté en cours sous cooldown, sans attente) : sans elle, les deux
+          // payloads sont indistinguables en requête de log.
+          cause: "PLAFOND_POLLING",
           connectionId,
           jobId,
           dernierStatut: status,
@@ -1525,6 +1529,16 @@ export interface ResultatResynchronisationConnexion {
    * vivrait alors encore sur cet écran).
    */
   incomplet?: boolean;
+  /**
+   * Le job de sync a ÉCHOUÉ « dur » (FAILED) après la réparation — fail-soft : les comptes
+   * ont été persistés, mais aucune transaction n'a pu être lue.
+   *
+   * Sans ce signal, l'appelant ne pouvait pas distinguer ce cas d'une réparation réussie
+   * (`comptesRattaches` est renseigné dans les DEUX cas — les comptes sont persistés AVANT
+   * le job) et publiait « Connexion rétablie » en VERT sur un scrape qui venait de planter.
+   * Absent quand le job n'a pas échoué.
+   */
+  echecSync?: boolean;
 }
 
 /**
@@ -1603,7 +1617,12 @@ export async function resynchroniserConnexion(
     // FAILED « dur » du job : fail-soft, on remonte ce qui a été persisté (comptes), 0 tx.
     // ⚠️ Ne couvre PLUS le timeout de polling : un job encore en cours devient INCOMPLET
     // (on lit quand même) — cf. `interpreterAttente`.
-    return { comptesRattaches, transactionsImportees: 0 };
+    //
+    // `echecSync` est INDISPENSABLE : sans lui, l'appelant ne distinguait pas ce cas d'une
+    // réparation réussie et publiait « Connexion rétablie » — un succès VERT sur un scrape
+    // qui vient de planter (revue PR #202, C5). Le compteur de comptes ne dit rien de la
+    // synchro : les comptes sont persistés AVANT le job.
+    return { comptesRattaches, transactionsImportees: 0, echecSync: true };
   }
   // Le job tournait-il encore au plafond ? On lit quand même (les transactions déjà
   // scrapées sont disponibles, l'upsert est idempotent), mais on remonte le PARTIEL.

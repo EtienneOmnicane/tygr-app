@@ -243,7 +243,17 @@ export async function finaliserConnexionDropinAction(
     // WIDGET-RD1 : drapeau de succès TOTAL. `echecs` est le nb de publicTokens
     // reçus n'ayant pas pu être finalisés (cf. ResultatConnexionMulti). Zéro échec
     // = succès complet → le Front peut rediriger ; sinon partiel → il reste sur place.
-    return { erreur: null, succes, complet: r.echecs === 0 };
+    //
+    // `echecs` est publié EN PLUS de `complet` : ce sont deux consommateurs distincts
+    // (`complet` pilote la redirection, `echecs` interdit le vert). L'omettre laissait le
+    // registre voir « zéro réserve » sur une finalisation partielle — le piège du sous-type
+    // structurel, côté PRODUCTEUR cette fois (revue PR #202, C6).
+    return {
+      erreur: null,
+      succes,
+      complet: r.echecs === 0,
+      ...(r.echecs > 0 ? { echecs: r.echecs } : {}),
+    };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),
@@ -502,6 +512,13 @@ export async function resynchroniserConnexionApresReparationAction(
     if (r.transactionsImportees > 0) {
       succes += ` ${r.transactionsImportees} transaction(s) importée(s).`;
     }
+    if (r.echecSync) {
+      // Le scrape a PLANTÉ après la réparation. Les comptes sont bien rattachés (ils le sont
+      // AVANT le job), mais aucune transaction n'a pu être lue : sans ce dire, on publiait
+      // « Connexion rétablie » en VERT sur un échec (revue PR #202, C5).
+      succes +=
+        " En revanche, la récupération des transactions a échoué — réessayez plus tard.";
+    }
     if (r.incomplet) {
       // Le scrape tourne ENCORE : on a importé du partiel. Le dire ici AUSSI, sinon la
       // réparation afficherait un succès plein sur une ingestion incomplète.
@@ -518,12 +535,19 @@ export async function resynchroniserConnexionApresReparationAction(
         erreur: null,
         succes,
         ...(r.incomplet ? { incomplet: true } : {}),
+        ...(r.echecSync ? { echecs: 1 } : {}),
         reparation: [
           { connectionId: parsed.data.connectionId, jobId: r.reparationJobId },
         ],
       };
     }
-    return { erreur: null, succes, ...(r.incomplet ? { incomplet: true } : {}) };
+    return {
+      erreur: null,
+      succes,
+      ...(r.incomplet ? { incomplet: true } : {}),
+      // Signal STRUCTURÉ, pas seulement une phrase : c'est lui qui interdit le vert.
+      ...(r.echecSync ? { echecs: 1 } : {}),
+    };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "resync-connexion"),

@@ -110,6 +110,24 @@ function phaseDepuisStatut(s: OmniFiSyncStatus): PhaseWidget {
 }
 
 /**
+ * Le statut du fil vaut-il CE statut connu ? À utiliser partout à la place d'un `===` nu.
+ *
+ * Raison — la même que pour la table ci-dessus, et elle est facile à oublier : le statut du
+ * fil est une union OUVERTE, donc `statut === "OTP_REQUESTED"` n'est PLUS vérifié par
+ * TypeScript (comparer une `string` à n'importe quel littéral est légal ; TS2367 ne mord
+ * plus). Une coquille passerait en silence — et ici les conséquences sont pires que d'afficher
+ * la mauvaise phase : la détection de rejet d'OTP ne se déclencherait jamais, le re-prompt
+ * après un mauvais code non plus. Le 2ᵉ argument est typé sur l'union FERMÉE : la coquille
+ * échoue au typecheck.
+ */
+function estStatut(
+  s: OmniFiSyncStatus | null,
+  connu: OmniFiSyncStatusConnu,
+): boolean {
+  return s === connu;
+}
+
+/**
  * Réducteur pur. Calcule le nouvel état à partir d'un snapshot de job (polling)
  * ou d'un resend réussi. Idempotent sur un même snapshot (sauf détection de
  * rejet, qui dépend de la transition de UserInput).
@@ -141,8 +159,8 @@ export function transition(etat: EtatMfa, ev: EvenementMfa): EtatMfa {
   // Ce compteur ne sert qu'à l'UX (re-prompt / désactivation locale).
   let echecsOtp = etat.echecsOtp;
   const rejet =
-    etat.statut === "OTP_REQUESTED" &&
-    statut === "OTP_REQUESTED" &&
+    estStatut(etat.statut, "OTP_REQUESTED") &&
+    estStatut(statut, "OTP_REQUESTED") &&
     etat.dernierUserInput != null &&
     !job.userInputPresent;
   if (rejet) echecsOtp += 1;
@@ -167,7 +185,7 @@ export function transition(etat: EtatMfa, ev: EvenementMfa): EtatMfa {
         ? Date.parse(job.mfaResendRequestedAt) + job.mfaResendCooldownSeconds * 1000
         : etat.cooldownJusqua,
     mfa:
-      statut === "OTP_REQUESTED" || statut === "OTP_WAITING"
+      estStatut(statut, "OTP_REQUESTED") || estStatut(statut, "OTP_WAITING")
         ? {
             type: job.mfaType,
             length: job.mfaLength,
@@ -175,7 +193,9 @@ export function transition(etat: EtatMfa, ev: EvenementMfa): EtatMfa {
             deliveryTargets: job.deliveryTargets,
           }
         : etat.mfa,
-    codeEchec: statut === "FAILED" ? (job.errorType ?? "FAILED") : etat.codeEchec,
+    codeEchec: estStatut(statut, "FAILED")
+      ? (job.errorType ?? "FAILED")
+      : etat.codeEchec,
   };
 }
 
