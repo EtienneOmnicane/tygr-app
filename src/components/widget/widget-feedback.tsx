@@ -19,6 +19,9 @@
  */
 import Link from "next/link";
 
+import { cn } from "@/components/ui/states/primitives";
+import type { RegistreSynchro } from "@/components/sync/registre-synchro";
+
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
 export const ROUTE_DASHBOARD = "/";
 
@@ -43,6 +46,7 @@ export function WidgetFeedback({
   erreurFinalisation,
   info,
   succes,
+  registre,
   redirection,
   reparation,
   onReconnecter,
@@ -70,6 +74,17 @@ export function WidgetFeedback({
   info?: string | null;
   /** Message de succès (déjà construit côté serveur). */
   succes?: string | null;
+  /**
+   * TON du message `succes` — décidé par `registreSynchro` à partir des signaux STRUCTURÉS
+   * du serveur, jamais en parsant la phrase.
+   *
+   * ⚠️ Le vert doit être DEMANDÉ, il n'est jamais le défaut (fail-safe). Cet écran rendait
+   * `succes` en `text-success` dès qu'il était non nul : comme l'action est FAIL-SOFT (une
+   * banque en `SCRAPER_ERROR` laisse `erreur` à `null` et écrit l'échec DANS `succes`), la
+   * phrase d'échec s'affichait EN VERT. Un appelant qui omet cette prop obtient donc du
+   * NEUTRE — jamais une fausse victoire.
+   */
+  registre?: RegistreSynchro;
   /** `true` quand une redirection vers le Dashboard est en cours (succès complet). */
   redirection?: boolean;
   /**
@@ -137,7 +152,17 @@ export function WidgetFeedback({
           vers le Dashboard (§2.3 lien d'action) ; l'utilisateur reste maître. */}
       {!redirection && succes && (
         <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-sm text-success">{succes}</span>
+          {/* Le TON suit les signaux structurés, pas la simple présence du message : une
+              banque en échec dur (fail-soft ⇒ `erreur` reste null, l'échec est écrit DANS
+              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre. */}
+          <span
+            className={cn(
+              "text-sm",
+              registre === "succes" ? "text-success" : "text-text-muted",
+            )}
+          >
+            {succes}
+          </span>
           <Link
             href={ROUTE_DASHBOARD}
             className="text-sm font-semibold text-primary transition-colors

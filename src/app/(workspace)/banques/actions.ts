@@ -65,6 +65,28 @@ export interface EtatFinalisation {
    */
   complet?: boolean;
   /**
+   * SYNCHRONISATION INCOMPLÈTE : ≥1 banque dont le job de scraping tournait ENCORE quand
+   * le plafond de polling a été atteint (un scrape bancaire peut durer plusieurs minutes).
+   * Les transactions DÉJÀ disponibles ont été importées — mais il en manque probablement.
+   *
+   * Ni une erreur (rien n'a planté, on a ramené des données), ni un succès plein :
+   * annoncer « Comptes à jour » ici serait un FAUX MESSAGE DE VICTOIRE (c'était le bug —
+   * l'UI affichait le succès sur `comptesRattaches > 0` avec `transactionsImportees: 0`).
+   * L'UI doit inviter à RELANCER. Absent quand tout est complet.
+   */
+  incomplet?: boolean;
+  /**
+   * Nombre de banques en ÉCHEC DUR sur ce passage (job FAILED, 4xx/5xx, panne réseau) —
+   * fail-soft : les autres banques ont été synchronisées.
+   *
+   * Signal STRUCTURÉ, et pas seulement une phrase dans `succes` : le dashboard ne lisait
+   * pas le message (il affichait « Comptes à jour. » en dur dès que `succes` était non
+   * nul), donc une banque en `SCRAPER_ERROR` ressortait en VERT. Un consommateur doit
+   * pouvoir décider de son REGISTRE sans parser du texte — cf. `registreSynchro`.
+   * Absent quand aucune banque n'a échoué.
+   */
+  echecs?: number;
+  /**
    * Connexions dont le re-sync exige une RÉPARATION MFA (le scraping a redemandé un
    * OTP). Signal pour que l'UI rouvre le widget natif `@omni-fi/react-link` en mode
    * REPAIR (link-token portant ConnectionId + JobId) — on ne pilote PAS la MFA côté
@@ -221,7 +243,17 @@ export async function finaliserConnexionDropinAction(
     // WIDGET-RD1 : drapeau de succès TOTAL. `echecs` est le nb de publicTokens
     // reçus n'ayant pas pu être finalisés (cf. ResultatConnexionMulti). Zéro échec
     // = succès complet → le Front peut rediriger ; sinon partiel → il reste sur place.
-    return { erreur: null, succes, complet: r.echecs === 0 };
+    //
+    // `echecs` est publié EN PLUS de `complet` : ce sont deux consommateurs distincts
+    // (`complet` pilote la redirection, `echecs` interdit le vert). L'omettre laissait le
+    // registre voir « zéro réserve » sur une finalisation partielle — le piège du sous-type
+    // structurel, côté PRODUCTEUR cette fois (revue PR #202, C6).
+    return {
+      erreur: null,
+      succes,
+      complet: r.echecs === 0,
+      ...(r.echecs > 0 ? { echecs: r.echecs } : {}),
+    };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "finaliser-dropin"),
@@ -264,6 +296,11 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
         aReconnecter: r.aReconnecter.length,
         rateLimited: r.rateLimited.length,
         aReparer: r.aReparer.length,
+        // Banques dont le scrape tournait encore au plafond : explique un
+        // `transactionsImportees` partiel sans qu'on ait à deviner (valeurs d'énumération
+        // amont, jamais de PII).
+        incompletes: r.incompletes.length,
+        statutsIncomplets: r.incompletes.map((c) => c.dernierStatut),
       }),
     );
 
@@ -303,7 +340,12 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     // « À jour » exclut AUSSI les banques désalignées (`aReconnecter`) : elles n'ont
     // rien remonté (comptes silencieusement vides côté Omni-FI), donc les compter
     // comme à jour serait exactement le bug qu'on corrige. Unité BANQUE conservée.
-    const banquesOk = r.connexions - r.echecs - r.aReconnecter.length;
+    // MÊME raisonnement pour les banques INCOMPLÈTES (`incompletes`) : leur scrape tourne
+    // ENCORE côté banque, on n'a ramené qu'une partie des transactions. Les compter « à
+    // jour » serait le faux message de victoire qu'on corrige ici (prod 2026-07-13 :
+    // « Comptes à jour » affiché avec 0 transaction importée).
+    const banquesOk =
+      r.connexions - r.echecs - r.aReconnecter.length - r.incompletes.length;
     let base = `Synchronisation effectuée — ${banquesOk} banque(s) à jour, ${r.comptesRattaches} compte(s) mis à jour.`;
     if (r.transactionsImportees > 0) {
       base += ` ${r.transactionsImportees} transaction(s) importée(s).`;
@@ -313,6 +355,16 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     // plus). Distinct du cooldown (pas une erreur) et de la réparation (action requise).
     if (r.echecs > 0) {
       base += ` ${r.echecs} banque(s) n'ont pas pu être synchronisées — réessayez plus tard.`;
+    }
+    // INCOMPLET : le scrape tourne ENCORE chez la banque (il peut durer plusieurs
+    // minutes, bien au-delà de notre plafond d'attente). On a importé ce qui était déjà
+    // disponible — on le DIT, et on invite à relancer. Ni rouge (rien n'a échoué, on a
+    // des données) ni triomphal (il en manque) : c'est le remplaçant du faux « à jour ».
+    if (r.incompletes.length > 0) {
+      base +=
+        ` ${r.incompletes.length} banque(s) sont encore en cours de synchronisation` +
+        ` — les transactions déjà disponibles ont été importées ;` +
+        ` relancez dans quelques minutes pour récupérer le reste.`;
     }
     // DÉSALIGNEMENT ENDUSER (403) : état ACTIONNABLE distinct — on le DIT clairement et on
     // remonte le signal structuré pour que l'UI propose « Reconnecter cette banque ». Sans
@@ -340,6 +392,13 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       erreur: null,
       succes: base,
       ...(desync ? { info: desync } : {}),
+      // Signal structuré : l'UI doit remplacer le vert « Comptes à jour » par un message
+      // neutre « synchronisation incomplète, relancez ».
+      ...(r.incompletes.length > 0 ? { incomplet: true } : {}),
+      // Idem pour les échecs DURS : sans ce signal, le dashboard rendait un vert triomphal
+      // par-dessus une banque morte (il n'affichait pas `succes`, où l'échec est pourtant
+      // écrit). Le message reste la source du TEXTE ; ce compteur décide du TON.
+      ...(r.echecs > 0 ? { echecs: r.echecs } : {}),
       ...(r.aReparer.length > 0 ? { reparation: r.aReparer } : {}),
       ...(r.rateLimited.length > 0 ? { rateLimited: r.rateLimited } : {}),
       ...(r.aReconnecter.length > 0
@@ -453,6 +512,20 @@ export async function resynchroniserConnexionApresReparationAction(
     if (r.transactionsImportees > 0) {
       succes += ` ${r.transactionsImportees} transaction(s) importée(s).`;
     }
+    if (r.echecSync) {
+      // Le scrape a PLANTÉ après la réparation. Les comptes sont bien rattachés (ils le sont
+      // AVANT le job), mais aucune transaction n'a pu être lue : sans ce dire, on publiait
+      // « Connexion rétablie » en VERT sur un échec (revue PR #202, C5).
+      succes +=
+        " En revanche, la récupération des transactions a échoué — réessayez plus tard.";
+    }
+    if (r.incomplet) {
+      // Le scrape tourne ENCORE : on a importé du partiel. Le dire ici AUSSI, sinon la
+      // réparation afficherait un succès plein sur une ingestion incomplète.
+      succes +=
+        " La synchronisation est encore en cours — relancez dans quelques minutes" +
+        " pour récupérer le reste.";
+    }
     if (r.reparationJobId) {
       // Rare : la banque a redemandé une vérification → on re-signale la réparation
       // (avec le NOUVEAU jobId) pour que l'UI laisse le bouton « Reconnecter » ré-armé.
@@ -461,12 +534,20 @@ export async function resynchroniserConnexionApresReparationAction(
       return {
         erreur: null,
         succes,
+        ...(r.incomplet ? { incomplet: true } : {}),
+        ...(r.echecSync ? { echecs: 1 } : {}),
         reparation: [
           { connectionId: parsed.data.connectionId, jobId: r.reparationJobId },
         ],
       };
     }
-    return { erreur: null, succes };
+    return {
+      erreur: null,
+      succes,
+      ...(r.incomplet ? { incomplet: true } : {}),
+      // Signal STRUCTURÉ, pas seulement une phrase : c'est lui qui interdit le vert.
+      ...(r.echecSync ? { echecs: 1 } : {}),
+    };
   } catch (erreur) {
     return {
       erreur: messageDepuis(erreur, session.activeWorkspaceId, "resync-connexion"),
