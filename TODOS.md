@@ -409,6 +409,24 @@ ne touchant l'isolation, l'append-only ni les montants (donc consignables, cf. r
   (choix DÉLIBÉRÉ de cette PR : ne pas élargir la sémantique du chemin MFA dans un fix de
   timeout). Effort : ~2h. PRÉEXISTANT.
 
+- [ ] **SYNC-INCOMPLET-DURABLE1 (P1, ARBITRÉ le 2026-07-13 — option (b) retenue, PR dédiée) —
+  persister l'incomplétude, au lieu de la signaler par un canal volatil.** Aujourd'hui
+  « Synchronisation incomplète » est un état React ÉPHÉMÈRE (perdu au reload), tandis que
+  `last_synced_at` est PERSISTANT : après rechargement, l'utilisateur passif voit des pastilles
+  de fraîcheur VERTES et plus aucune trace du partiel. L'incomplétude est donc dite par un canal
+  volatil et masquée par un canal durable.
+  **Option (a) — ne pas appeler `marquerSynchronise` sur le chemin INCOMPLET — a été ÉCARTÉE**,
+  et la raison doit survivre à cette décision : le SOLDE vient de `GET /accounts` (via
+  `upsertCompte`), un chemin DISTINCT du job de scrape qui alimente les transactions. La pastille
+  qualifie le solde, or le solde VIENT d'être relu — (a) dégraderait un signal JUSTE (fraîcheur)
+  pour compenser l'absence d'un autre (complétude). On écrase deux notions sur un seul champ ;
+  la sortie est de les SÉPARER.
+  Portée : colonnes `sync_partiel_depuis` + `sync_dernier_statut` sur `bank_connections`
+  (éditable, non append-only ; `tenant_isolation` déjà en place ⇒ pas de nouvelle policy, mais
+  écriture OBLIGATOIREMENT sous `executer`/`withWorkspace`), remise à NULL au prochain sync
+  COMPLETED, badge durable côté dashboard, cas ajouté à la suite isolation. Migration Drizzle.
+  Effort : ~2-3h. Exige un plan écrit AVANT toute ligne (règle 1 : changement de schéma).
+
 - [ ] **SYNC-STATUT-SCRAPING1 (P2, déclencheur : l'amont émet `SCRAPING` sur l'API) — le
   widget afficherait « initialisation » pendant un vrai scrape.** `PHASE_PAR_STATUT`
   (machine-mfa.ts) ne mappe que les statuts de `OmniFiSyncStatusConnu` ; `SCRAPING` (que le
