@@ -22,7 +22,10 @@
  *   2. LinkToken présent → on monte le launcher ; il injecte le token dans
  *      `useOmniFILink` et `open()` dès `isReady`.
  *   3. onSuccess → on extrait les `publicToken` de chaque connexion et on appelle
- *      `finaliserConnexionDropinAction(publicTokens)`. onExit/onError → réarme.
+ *      `finaliserConnexionDropinAction(publicTokens)`.
+ *      onExit (ANNULATION) → réarme en silence ; onErreur (ÉCHEC) → réarme ET affiche
+ *      la cause. Ces deux-là étaient aliasés sur le même handler : tout échec du widget
+ *      se traduisait par une fermeture muette (corrigé le 2026-07-13).
  *   4. Finalisation COMPLÈTE (toutes les banques rattachées) → on emmène
  *      l'utilisateur sur le Dashboard (`/`), où ses comptes fraîchement connectés
  *      apparaissent. Finalisation PARTIELLE → on RESTE ici pour montrer ce qui a
@@ -107,6 +110,14 @@ export function BankConnectWidget({
   // Verrou anti-double-déclenchement : une fois la redirection lancée, on neutralise
   // l'UI (le launcher peut, en théorie, ré-émettre). `router.push` est async.
   const [redirection, setRedirection] = useState(false);
+  // Échec REMONTÉ PAR LE WIDGET lui-même (`onError` du CDN), déjà mappé en message
+  // affichable. État DÉDIÉ, et pas un recyclage de `finalisation.erreur` : celle-ci
+  // n'est purgée qu'au démarrage d'un parcours, donc l'erreur y survivrait aux cycles
+  // de réparation et écraserait un succès partiel affiché. Purgé aux TROIS points
+  // d'entrée d'un nouvel essai : le formulaire d'onboarding, `lancerReparation` et
+  // `synchroniser` (ce dernier est LE geste de repli juste après un échec du widget —
+  // l'oublier affichait le rouge de l'échec à côté du vert du succès de synchro).
+  const [erreurWidget, setErreurWidget] = useState<string | null>(null);
   // Connexions à RÉPARER (signal serveur). Les boutons « Reconnecter » s'affichent
   // tant qu'une connexion y figure ; on la retire quand sa réparation a abouti.
   const [reparation, setReparation] = useState<ConnexionAReparer[]>([]);
@@ -122,7 +133,16 @@ export function BankConnectWidget({
   const [repairEnCours, setRepairEnCours] = useState(false);
   // Onboarding et réparation partagent l'UNIQUE point de montage du launcher (on ne
   // peut pas ouvrir deux widgets) : l'onboarding ne monte pas si une réparation est ouverte.
-  const tokenActif = !ferme && !repair ? demarrage.linkToken : null;
+  //
+  // ⚠️ `!demarrageEnCours` est ce qui empêche de rouvrir le widget sur un LinkToken MORT.
+  // `useActionState` conserve l'état PRÉCÉDENT pendant le pending : entre le clic de
+  // réarmement (`setFerme(false)`) et la réponse de la Server Action, `demarrage.linkToken`
+  // vaut encore l'ANCIEN token — or il est à usage unique et déjà consommé. Sans cette
+  // garde, le launcher se remontait aussitôt et appelait `open()` dessus → le CDN
+  // répondait LINK_TOKEN_USED/EXPIRED → `onError` → fermeture silencieuse. C'était la
+  // cause première du bug « le widget se ferme sans message », et non la banque.
+  const tokenActif =
+    !ferme && !repair && !demarrageEnCours ? demarrage.linkToken : null;
 
   function finaliser(publicTokens: string[]) {
     // Flux NOMINAL : à la fin du parcours (onSuccess), la finalisation serveur
@@ -151,6 +171,11 @@ export function BankConnectWidget({
     // comme repli si le widget n'a pas finalisé (cf. OMNIFI_API_FEEDBACK.md §5).
     // Idempotent côté serveur (pas de doublon). Pas de redirection auto ici : c'est
     // une action de rattrapage déclenchée par l'utilisateur, il reste maître.
+    //
+    // TROISIÈME point d'entrée d'un nouvel essai — et le plus naturel juste APRÈS un
+    // échec du widget (c'est le repli documenté ci-dessus). Sans cette purge, un succès
+    // de synchro s'afficherait EN MÊME TEMPS que le rouge de l'échec précédent.
+    setErreurWidget(null);
     startFinalisation(async () => {
       const r = await synchroniserConnexionsAction();
       setFinalisation(r);
@@ -167,6 +192,15 @@ export function BankConnectWidget({
     // sur la banque), puis on monte le MÊME launcher avec ce token. Le widget gère
     // l'OTP en interne. On NE redirige pas et on NE touche pas l'onboarding.
     setRepairEnCours(true);
+    // Nouvel essai → purge l'échec widget précédent (cf. état dédié `erreurWidget`).
+    setErreurWidget(null);
+    // ⚠️ ABANDON du token d'onboarding. Ouvrir une réparation démonte le launcher
+    // d'onboarding (via `tokenActif`) SANS que le widget n'émette `onExit` — donc sans
+    // que `ferme` ne soit posé. Si on ne le pose pas ICI, refermer la réparation ferait
+    // RESSUSCITER `demarrage.linkToken` (déjà consommé) : remontage, `open()` sur un
+    // jeton mort, et un rouge « session expirée » surgi d'une simple annulation. Le
+    // token d'onboarding est perdu de toute façon — on l'acte.
+    setFerme(true);
     startFinalisation(async () => {
       const r = await creerLinkTokenRepairAction(
         cx.connectionId,
@@ -229,18 +263,38 @@ export function BankConnectWidget({
           une réparation est ouverte. En REPAIR, le widget gère l'OTP en interne ; son
           `onSuccess` ne sert pas à finaliser un publicToken (le job MFA existant se
           termine) → on ignore les tokens et on RE-LIT la connexion par son id. */}
+      {/* `key` = ceinture : `open()` n'est appelé qu'au MONTAGE (l'effet du hook dépend
+          de `[isReady, open]`, tous deux stables). Sans clé, un changement de token
+          réutiliserait l'instance en place et le widget resterait ouvert sur l'ANCIEN
+          token. Un token = un montage. */}
       {repair ? (
         <OmniFiLinkLauncher
+          key={repair.token}
           token={repair.token}
           onConnexions={() => apresReparation(repair.connectionId)}
-          onClose={fermerReparation}
+          onExit={fermerReparation}
+          onErreur={(e) => {
+            // ÉCHEC en RÉPARATION : on démonte le launcher, mais la connexion RESTE
+            // dans `reparation` → le bouton « Reconnecter » demeure cliquable pour
+            // un nouvel essai. On dit ce qui a échoué (≠ fermeture muette).
+            setRepair(null);
+            setErreurWidget(e.message);
+          }}
         />
       ) : (
         tokenActif && (
           <OmniFiLinkLauncher
+            key={tokenActif}
             token={tokenActif}
             onConnexions={finaliser}
-            onClose={() => setFerme(true)}
+            onExit={() => setFerme(true)}
+            onErreur={(e) => {
+              // ÉCHEC en ONBOARDING : démonter (`ferme` → `tokenActif` null) réarme le
+              // bouton « Connecter une banque », et le message dit pourquoi. Le prochain
+              // clic repartira d'un LinkToken FRAIS (cf. garde `!demarrageEnCours`).
+              setFerme(true);
+              setErreurWidget(e.message);
+            }}
           />
         )
       )}
@@ -252,6 +306,8 @@ export function BankConnectWidget({
             // fermeture précédente (le LinkToken renvoyé sera de nouveau « actif »).
             setFerme(false);
             setFinalisation(ETAT_FINALISATION_VIDE);
+            // Nouvel essai → l'échec précédent du widget n'a plus lieu d'être affiché.
+            setErreurWidget(null);
             demarrer(fd);
           }}
         >
@@ -288,7 +344,16 @@ export function BankConnectWidget({
         <button
           type="button"
           onClick={synchroniser}
-          disabled={Boolean(tokenActif) || redirection || Boolean(repair) || repairEnCours}
+          disabled={
+            Boolean(tokenActif) ||
+            redirection ||
+            Boolean(repair) ||
+            repairEnCours ||
+            // Cohérence de l'invariant « un seul parcours à la fois » : pendant que le
+            // LinkToken est en vol, `tokenActif` est encore null — sans ce terme, c'était
+            // la SEULE action à échapper à l'invariant.
+            demarrageEnCours
+          }
           title="Relit vos connexions chez votre banque et met à jour vos comptes (y compris ceux qui n’apparaîtraient pas encore)."
           className="inline-flex h-10 items-center gap-1.5 rounded-control px-2 text-sm
             font-semibold text-primary transition-colors hover:text-primary-600
@@ -302,12 +367,23 @@ export function BankConnectWidget({
 
       <WidgetFeedback
         erreurDemarrage={demarrage.erreur}
+        erreurWidget={erreurWidget}
         erreurFinalisation={finalisation.erreur}
         succes={finalisation.succes}
         redirection={redirection}
         reparation={reparation}
         onReconnecter={lancerReparation}
-        reparationEnCours={repairEnCours || Boolean(repair)}
+        // Deux signaux DISTINCTS, à ne pas fondre en un seul : celui-ci ne pilote que le
+        // libellé « Ouverture… » (une réparation démarre vraiment).
+        reparationEnCours={repairEnCours}
+        // Celui-ci DÉSACTIVE : on ne peut pas ouvrir deux widgets. « Connecter une banque »
+        // et « Synchroniser » sont déjà bornés par cet invariant ; « Reconnecter » ne
+        // l'était pas — seule action capable de démonter un widget ouvert sous les pieds de
+        // l'utilisateur. `demarrageEnCours` compte aussi : pendant que le LinkToken est en
+        // vol, `tokenActif` est encore null, et lancer une réparation à cet instant ferait
+        // AVALER en silence le token frais qui arrive (l'utilisateur clique « Connecter une
+        // banque »… et rien ne s'ouvre).
+        widgetOuvert={Boolean(tokenActif) || Boolean(repair) || demarrageEnCours}
         aReconnecter={aReconnecter}
       />
     </div>
