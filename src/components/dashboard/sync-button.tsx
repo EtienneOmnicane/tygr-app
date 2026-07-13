@@ -26,6 +26,13 @@
  * États (plan §3.3) : repos / en cours / succès / erreur / réparation. Couleurs : succès
  * `text-success`, erreur `text-danger` (JAMAIS un rouge de donnée, §3.4) ; le bouton lui-
  * même est un « lien d'action » `text-primary` (§2.3). Aucune couleur de donnée ici.
+ *
+ * ⚠️ CONTRAT D'AFFICHAGE (revue PR #202) — deux sources, à ne jamais confondre :
+ *  - le TEXTE du message est celui du SERVEUR (`erreur` / `succes` / `info`). Aucun statut
+ *    en dur ici : ce bouton affichait « Comptes à jour. » sans lire `succes`, si bien qu'une
+ *    banque en échec dur (fail-soft ⇒ `erreur` reste `null`) ressortait en VERT ;
+ *  - le TON vient de `registreSynchro` (module pur, testé), qui décide à partir des signaux
+ *    STRUCTURÉS — jamais en parsant la phrase. Le vert exige zéro réserve.
  */
 import { useState, useTransition } from "react";
 import Link from "next/link";
@@ -35,30 +42,21 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import { peutModifier } from "@/lib/permissions";
 import { cn } from "@/components/ui/states/primitives";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
+import type { EtatFinalisation } from "@/app/(workspace)/banques/actions";
 import { synchroniserConnexionsAction } from "@/app/(workspace)/banques/actions";
-
-/**
- * Retour utile pour le rendu (sous-ensemble d'`EtatFinalisation`).
- *
- * ⚠️ Ce type est STRUCTUREL : omettre un champ d'`EtatFinalisation` ne provoque AUCUNE erreur
- * de compilation — le champ est simplement IGNORÉ en silence. C'est exactement ce qui est
- * arrivé à `info` : ce bouton (l'écran d'accueil, donc le chemin le plus emprunté) restait
- * MUET sur « aucune banque à synchroniser » alors que /banques, lui, l'affichait. Avant
- * d'ajouter un champ à `EtatFinalisation`, vérifier qu'il est relayé ICI aussi.
- */
-type Retour = {
-  erreur: string | null;
-  succes: string | null;
-  info?: string | null;
-  incomplet?: boolean;
-  reparation?: Array<{ connectionId: string; jobId: string }>;
-  aReconnecter?: Array<{ connectionId: string }>;
-};
+import { registreSynchro } from "@/components/dashboard/registre-synchro";
 
 export function SyncButton({ role }: { role: WorkspaceRole }) {
   const router = useRouter();
   const [enCours, demarrer] = useTransition();
-  const [retour, setRetour] = useState<Retour | null>(null);
+  // On consomme le type SOURCE (`EtatFinalisation`), jamais une re-déclaration locale.
+  // C'était la dette SYNC-TYPE-STRUCTUREL1 : un sous-type structurel accepte un objet qui
+  // porte PLUS de champs, donc omettre un signal n'échouait pas au typecheck — il était
+  // ignoré EN SILENCE. `info` en avait déjà fait les frais (bouton muet sur « aucune banque
+  // à synchroniser ») ; `echecs` et `rateLimited` y étaient encore, d'où le vert triomphal
+  // par-dessus une banque morte. En pointant le type source, tout nouveau signal est
+  // visible ici — et le rendu ci-dessous décide de son registre au lieu de l'ignorer.
+  const [retour, setRetour] = useState<EtatFinalisation | null>(null);
 
   // VIEWER : bouton VISIBLE mais inerte (span aria-disabled + tooltip), jamais un
   // <button> mort — même pattern que `bank-cta.tsx`. La barrière réelle est serveur.
@@ -94,11 +92,10 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
   // Une banque a-t-elle un accès désaligné (403) → à RECONNECTER ? Distinct de la
   // réparation MFA : ici on relance un parcours de connexion complet depuis /banques.
   const aReconnecter = (retour?.aReconnecter?.length ?? 0) > 0;
-  // Le scrape tournait-il ENCORE côté banque quand on a rendu la main ? Alors on a importé
-  // des données PARTIELLES : interdit d'afficher le vert « Comptes à jour » (faux message
-  // de victoire — c'est le bug corrigé ici). Aucune action de l'utilisateur n'est requise
-  // à part relancer plus tard → registre NEUTRE, jamais `danger`.
-  const incomplet = retour?.incomplet === true;
+  // TON du message (logique pure, testée) : le vert est réservé à une synchro SANS la
+  // moindre réserve. Échec dur, scrape encore en cours, cooldown, réparation, reconnexion
+  // → registre NEUTRE. Le TEXTE, lui, vient intégralement du serveur (ci-dessous).
+  const registre = registreSynchro(retour ?? null);
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -119,17 +116,37 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
         {enCours ? "Synchronisation…" : "Synchroniser"}
       </button>
 
-      {/* Feedback inline court, sous le bouton (la carte SOLDE reste compacte).
-          Erreur = danger + role=alert ; réparation/succès = status. */}
-      {retour?.erreur && (
-        <p role="alert" className="text-right text-xs text-danger">
-          {retour.erreur}
+      {/* MESSAGE DE STATUT — le TEXTE vient du SERVEUR, jamais d'un littéral posé ici.
+          C'était la cause racine du faux message de victoire : l'action construit déjà la
+          phrase EXACTE (banques à jour, échecs, scrape en cours, cooldown, réparations…),
+          et ce bouton la jetait pour afficher « Comptes à jour. » en dur, en vert, dès que
+          `succes` était non nul. /banques, lui, l'affichait — d'où deux écrans qui se
+          contredisaient sur la même synchro. Le TON vient de `registreSynchro` (pur, testé) :
+          vert UNIQUEMENT si aucune réserve ne subsiste. */}
+      {registre === "erreur" && (
+        <p role="alert" className="max-w-xs text-right text-xs text-danger">
+          {retour?.erreur}
         </p>
       )}
 
-      {!retour?.erreur && aReparer && (
-        <p role="status" className="text-right text-xs text-text-muted">
-          Une vérification de sécurité est requise.{" "}
+      {(registre === "succes" || registre === "neutre") && (
+        <p
+          role="status"
+          className={cn(
+            "max-w-xs text-right text-xs",
+            registre === "succes" ? "text-success" : "text-text-muted",
+          )}
+        >
+          {retour?.succes}
+        </p>
+      )}
+
+      {/* CTA — l'ACTION à mener, jamais un statut (le message ci-dessus l'a déjà dit, et il
+          COMPTE les banques concernées). Un texte de statut en dur ici doublerait le message
+          serveur et finirait par le contredire : on ne garde que le lien. Réparation MFA et
+          accès désaligné mènent au MÊME écran — un seul lien suffit. */}
+      {registre !== "erreur" && (aReparer || aReconnecter) && (
+        <p className="text-right text-xs">
           <Link
             href="/banques"
             className="font-semibold text-primary underline-offset-2 hover:underline
@@ -138,37 +155,6 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
           >
             Reconnecter
           </Link>
-        </p>
-      )}
-
-      {!retour?.erreur && aReconnecter && (
-        <p role="status" className="text-right text-xs text-text-muted">
-          L’accès d’une banque n’est plus valide.{" "}
-          <Link
-            href="/banques"
-            className="font-semibold text-primary underline-offset-2 hover:underline
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-              focus-visible:ring-offset-2 rounded-[2px]"
-          >
-            Reconnecter cette banque
-          </Link>
-        </p>
-      )}
-
-      {/* SYNCHRONISATION INCOMPLÈTE — le scrape tourne encore chez la banque (il peut durer
-          plusieurs minutes). Des transactions ONT été importées, mais il en manque : dire
-          « Comptes à jour » ici serait mentir. Registre neutre (`text-muted`) : ni rouge
-          (rien n'a échoué), ni vert (ce n'est pas fini). Prime sur le message de succès. */}
-      {!retour?.erreur && !aReparer && !aReconnecter && incomplet && (
-        <p role="status" className="max-w-xs text-right text-xs text-text-muted">
-          Synchronisation incomplète — données partielles importées. Relancez dans
-          quelques minutes.
-        </p>
-      )}
-
-      {!retour?.erreur && !aReparer && !aReconnecter && !incomplet && retour?.succes && (
-        <p role="status" className="text-right text-xs text-success">
-          Comptes à jour.
         </p>
       )}
 

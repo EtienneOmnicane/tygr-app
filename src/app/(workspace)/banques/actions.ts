@@ -76,6 +76,17 @@ export interface EtatFinalisation {
    */
   incomplet?: boolean;
   /**
+   * Nombre de banques en ÉCHEC DUR sur ce passage (job FAILED, 4xx/5xx, panne réseau) —
+   * fail-soft : les autres banques ont été synchronisées.
+   *
+   * Signal STRUCTURÉ, et pas seulement une phrase dans `succes` : le dashboard ne lisait
+   * pas le message (il affichait « Comptes à jour. » en dur dès que `succes` était non
+   * nul), donc une banque en `SCRAPER_ERROR` ressortait en VERT. Un consommateur doit
+   * pouvoir décider de son REGISTRE sans parser du texte — cf. `registreSynchro`.
+   * Absent quand aucune banque n'a échoué.
+   */
+  echecs?: number;
+  /**
    * Connexions dont le re-sync exige une RÉPARATION MFA (le scraping a redemandé un
    * OTP). Signal pour que l'UI rouvre le widget natif `@omni-fi/react-link` en mode
    * REPAIR (link-token portant ConnectionId + JobId) — on ne pilote PAS la MFA côté
@@ -372,9 +383,12 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       succes: base,
       ...(desync ? { info: desync } : {}),
       // Signal structuré : l'UI doit remplacer le vert « Comptes à jour » par un message
-      // neutre « synchronisation incomplète, relancez » (le texte seul ne suffit pas —
-      // le dashboard n'affiche pas `succes` en entier).
+      // neutre « synchronisation incomplète, relancez ».
       ...(r.incompletes.length > 0 ? { incomplet: true } : {}),
+      // Idem pour les échecs DURS : sans ce signal, le dashboard rendait un vert triomphal
+      // par-dessus une banque morte (il n'affichait pas `succes`, où l'échec est pourtant
+      // écrit). Le message reste la source du TEXTE ; ce compteur décide du TON.
+      ...(r.echecs > 0 ? { echecs: r.echecs } : {}),
       ...(r.aReparer.length > 0 ? { reparation: r.aReparer } : {}),
       ...(r.rateLimited.length > 0 ? { rateLimited: r.rateLimited } : {}),
       ...(r.aReconnecter.length > 0
