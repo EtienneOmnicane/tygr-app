@@ -784,6 +784,86 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   ce chantier L3 mergé → l'UI devient le maillon manquant pour activer une Vision Entité en
   pratique. Ne touche ni l'isolation ni les montants (surface de rendu).
 
+### Redesign « Assignation des comptes » L7 — dette d'ergonomie (2026-07-10)
+
+Section `/admin/entites` → tableau dense groupé par entité + auto-save livrée
+(`feat/admin-entites-assignation-comptes`, commit `d66bbe0` ; read `listerComptesAvecEntite`
+gardé ADMIN + 25 tests d'isolation verts). Aucune de ces dettes ne touche l'isolation, les
+tables append-only ni les montants (surfaces de rendu/UX) → différables. **Visual QA (Gate 4)
+NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` avant le merge
+(action pré-merge Human-in-the-Loop, pas une dette).
+
+- [ ] **ENTITY-ASSIGN-BULK1 (P1, effort ~1 j) — assignation en masse compte → entité.**
+  Le workspace réel porte ~87 comptes, dont 77 sans nom sous la même institution, à rattacher
+  aujourd'hui **un par un** (un changement de Select = un appel). Aucune multi-sélection ni
+  « assigner tous les comptes de {institution} à {entité} ». C'est la friction opérationnelle
+  la plus lourde de l'écran. Ajouter une action groupée (cases par ligne + barre d'action, OU
+  bouton par en-tête de groupe/institution) réutilisant `assignerCompteEntite` — soit N appels
+  côté client, soit une nouvelle action batch gardée ADMIN + zod + un cas d'isolation dédié si
+  batch serveur. **Déclencheur** : mise en service prod / onboarding Etienne sur les 87 comptes.
+
+- [ ] **ENTITY-ASSIGN-REVALIDATE1 (P2, effort ~0,5 j) — `revalidatePath` re-render les 87
+  lignes à chaque enregistrement.** `assignerCompteAction` pose `revalidatePath("/admin/entites")` :
+  après un succès, le compte ne migre vers son groupe qu'au retour serveur, qui re-render toute
+  la liste — efface les coches « Enregistré » et réordonne pendant qu'on édite une autre ligne.
+  Cohérent (serveur = vérité) mais sautillant en auto-save dense. Piste : migration optimiste
+  locale du compte vers son nouveau groupe + `revalidate` ciblé/différé, ou `useOptimistic`.
+  **Déclencheur** : retour d'usage « ça saute quand j'enchaîne les lignes ».
+
+- [ ] **ENTITY-ASSIGN-CONFIRM1 (P2, effort ~0,25 j) — pas de confirmation sur la
+  dé-assignation.** Repasser un compte en « — Non assigné — » le rend invisible aux membres en
+  Vision Entité (fail-closed) sur un simple changement de Select. Réversible mais silencieux.
+  Ajouter une confirmation (ou un undo transitoire) sur la seule transition vers `null`.
+  **Déclencheur** : premier incident « un compte a disparu pour un membre ».
+
+- [ ] **ENTITY-ASSIGN-STICKY1 (P2, effort ~0,25 j) — en-têtes de tableau/groupe non
+  collants.** Sur 87 lignes qui défilent, les colonnes « Compte / Devise / Entité » et les
+  en-têtes de groupe disparaissent — contradictoire avec l'objectif de scannabilité. Poser
+  `sticky top-0` sur le `<thead>` (et éventuellement les `<th scope="colgroup">`).
+  **Déclencheur** : Visual QA ou retour d'usage sur le défilement.
+
+- [ ] **ENTITY-ASSIGN-SCALE1 (P2, effort ~0,5 j) — pas de pagination + jointure INNER
+  fail-closed.** Le read charge et rend tous les comptes d'un coup (87 OK ; problématique à
+  quelques centaines). De plus la jointure `bank_connections` est INNER : un compte dont la
+  connexion manque disparaîtrait de la liste (théorique — `connection_id` NOT NULL — mais
+  fail-closed non voulu). Piste : pagination keyset (cf. TX-FILTRE1) + LEFT JOIN avec repli.
+  **Déclencheur** : un workspace dépasse ~200 comptes.
+
+- [ ] **ENTITY-ASSIGN-POLISH1 (P2, effort ~0,25 j) — finitions visuelles.** (a) Devise
+  affichée en code ISO brut (« MUR »/« USD ») au lieu du symbole `Rs`/`$`/`€` (raccord
+  `format-montant` — même si aucun montant ici) ; (b) mobile : `overflow-x-auto` + Select
+  ~200px min → scroll horizontal plutôt qu'un repli responsive ; (c) pas de `loading.tsx` sur
+  `/admin/entites` (premier affichage sans skeleton). **Déclencheur** : passe de polish design
+  sur l'écran admin.
+
+### Langue de l'interface — migration FR → EN (2026-07-13)
+
+- [ ] **I18N-EN1 (P2, effort ~3-5 j, gardien Front) — migrer TOUTE l'interface en anglais.**
+  **Quoi** : l'app est intégralement en français (copie en dur dans les composants, les
+  Server Actions et les messages d'erreur). **Aucun socle i18n n'existe** : ni `next-intl`,
+  ni `react-i18next`, ni dossier `messages/`/`locales/`. **Pourquoi** : décision PO
+  (2026-07-13) — les utilisateurs finaux (Financial Managers des BU mauriciennes)
+  travaillent **en anglais** ; le français n'est qu'un artefact de développement. C'est donc
+  une **dette de destination**, pas une préférence.
+  **Chantier NOMMÉ À PART** (règles 7/9 — pas d'expansion de scope dans les refontes en
+  cours). Deux options à trancher au démarrage : (a) remplacement direct des chaînes (pas de
+  dépendance nouvelle, mais aucune bascule possible), (b) socle i18n (`next-intl`) + clés —
+  plus lourd, justifié seulement si un jour on doit servir FR **et** EN.
+  ⚠️ **Points d'attention relevés en recon** : les primitives **partagées** portent des
+  micro-chaînes FR en dur (`Select` « Aucune option. » `select.tsx:313` ; `Modal`
+  `aria-label="Fermer"` `modal.tsx:145` ; `AppErrorState` « Réessayer »
+  `app-error-state.tsx:62`) — elles fuiraient dans **toute** page traduite. Le vocabulaire de
+  sécurité (« Vision Globale » / « Vision Entité ») vit sur **deux** écrans admin
+  (`/admin/entites` **et** `/admin/membres`) : le traduire d'un seul côté ferait parler deux
+  dialectes à la même notion.
+  **Contrainte immédiate (applicable dès maintenant)** : tout nouveau développement
+  **n'ajoute aucune nouvelle copie FR en dur**. La refonte `/admin/entites`
+  (`PLAN-refonte-entites.md`, Q-LANG) sert de **pilote** : écran ADMIN-only, surface étroite,
+  faible risque de régression.
+  **Déclencheur** : avant l'onboarding des premiers utilisateurs finaux (mise en service
+  prod réelle). Ne touche ni l'isolation, ni les tables append-only, ni les montants
+  (surface de rendu).
+
 ### Outillage migrations DB — db:migrate câblé + drift résolu (2026-06-19)
 
 `/investigate` : `/transactions` plantait au runtime sur « relation "categories"
