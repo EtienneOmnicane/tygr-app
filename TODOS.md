@@ -819,7 +819,11 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   locale du compte vers son nouveau groupe + `revalidate` ciblé/différé, ou `useOptimistic`.
   **Déclencheur** : retour d'usage « ça saute quand j'enchaîne les lignes ».
 
-- [ ] **ENTITY-ASSIGN-CONFIRM1 (P2, effort ~0,25 j) — PARTIELLEMENT SOLDÉE 2026-07-13** :
+- [x] **ENTITY-ASSIGN-CONFIRM1 (P2) — ✅ SOLDÉE 2026-07-13 (L3 + L5).** La dé-assignation
+  exige une confirmation explicite, en MASSE (L3) comme à l'UNITÉ (L5) — modale
+  `dismissible={false}`, qui DIT que le compte deviendra invisible aux membres à accès
+  restreint. La cible par défaut de la barre d'action groupée n'est plus destructive.
+  Énoncé d'origine :
   la dé-assignation **en masse** (L3) exige désormais une confirmation explicite (modale
   `dismissible={false}`), et la cible par défaut de la barre d'action n'est plus destructive.
   Reste dû : la confirmation sur l'auto-save **unitaire** (lot L5). Énoncé d'origine : pas de
@@ -828,8 +832,10 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   Ajouter une confirmation (ou un undo transitoire) sur la seule transition vers `null`.
   **Déclencheur** : premier incident « un compte a disparu pour un membre ».
 
-- [ ] **ENTITY-ASSIGN-STICKY1 (P2, effort ~0,25 j) — en-têtes de tableau/groupe non
-  collants.** Sur 87 lignes qui défilent, les colonnes « Compte / Devise / Entité » et les
+- [x] **ENTITY-ASSIGN-STICKY1 (P2) — ✅ SOLDÉE 2026-07-13 (L5).** `sticky` sur le `<tr>`
+  de `<thead>` (z-20) ET sur les en-têtes de groupe (z-10, sous le premier) : sur 87 lignes
+  qui défilent, on garde à l'écran la colonne qu'on lit ET l'entité dans laquelle on range.
+  Énoncé d'origine : en-têtes de tableau/groupe non collants. Sur 87 lignes qui défilent, les colonnes « Compte / Devise / Entité » et les
   en-têtes de groupe disparaissent — contradictoire avec l'objectif de scannabilité. Poser
   `sticky top-0` sur le `<thead>` (et éventuellement les `<th scope="colgroup">`).
   **Déclencheur** : Visual QA ou retour d'usage sur le défilement.
@@ -841,7 +847,12 @@ NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` 
   fail-closed non voulu). Piste : pagination keyset (cf. TX-FILTRE1) + LEFT JOIN avec repli.
   **Déclencheur** : un workspace dépasse ~200 comptes.
 
-- [ ] **ENTITY-ASSIGN-POLISH1 (P2, effort ~0,25 j) — finitions visuelles.** (a) Devise
+- [x] **ENTITY-ASSIGN-POLISH1 (P2) — ✅ SOLDÉE 2026-07-13 (L5).** (a) devise en SYMBOLE
+  (`Rs`/`$`/`€`) via `indicateurDevise` — la source unique `format-montant` (aucun montant
+  n'est affiché : on n'emprunte que l'indicateur) ; (c) `loading.tsx` écrit EN DERNIER, une
+  fois la forme de l'écran définitive (bandeau, liste d'entités, bannière, tableau) — sinon
+  il aurait fallu le réécrire à chaque lot. (b) mobile : `overflow-x-auto` conservé sur une
+  table passée à 4 colonnes. Énoncé d'origine : finitions visuelles. (a) Devise
   affichée en code ISO brut (« MUR »/« USD ») au lieu du symbole `Rs`/`$`/`€` (raccord
   `format-montant` — même si aucun montant ici) ; (b) mobile : `overflow-x-auto` + Select
   ~200px min → scroll horizontal plutôt qu'un repli responsive ; (c) pas de `loading.tsx` sur

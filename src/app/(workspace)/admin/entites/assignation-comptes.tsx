@@ -38,6 +38,7 @@ import {
 import { Modal } from "@/components/ui/modal/modal";
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/states";
+import { indicateurDevise } from "@/lib/format-montant";
 import { basculerGroupe, etatSelectionGroupe } from "@/lib/selection-groupe";
 
 import {
@@ -346,8 +347,11 @@ export function AssignationComptes({
               <col className="w-[200px] sm:w-[260px]" />
             </colgroup>
 
+            {/* STICKY1 — sur 87 lignes qui défilent, les en-têtes disparaissaient : on ne
+                savait plus quelle colonne on lisait. `sticky` sur le <tr> (pas le <thead>,
+                qui ne se positionne pas), gabarit `transactions-table.tsx`. */}
             <thead>
-              <tr className="border-b border-line-strong bg-surface-card">
+              <tr className="sticky top-0 z-20 border-b border-line-strong bg-surface-card">
                 <th scope="col" className="px-3 py-3 sm:px-4">
                   <span className="sr-only">Select</span>
                 </th>
@@ -376,7 +380,9 @@ export function AssignationComptes({
                 tableau (une seule <table>, donc une seule structure de colonnes). */}
             {groupes.map((groupe) => (
               <tbody key={groupe.cle} className="divide-y divide-line">
-                <tr>
+                {/* L'en-tête de groupe colle SOUS celui du tableau (z inférieur) : on garde
+                    à l'écran l'entité dans laquelle on est en train de ranger. */}
+                <tr className="sticky top-[41px] z-10">
                   <th scope="col" className="border-y border-line bg-surface-inset px-3 py-2 sm:px-4">
                     <CaseGroupe
                       groupe={groupe}
@@ -806,6 +812,19 @@ function LigneCompte({
     valeurServeur,
   );
 
+  // CONFIRM1 — repasser un compte en « non assigné » le rend INVISIBLE aux membres à accès
+  // restreint (fail-closed). C'était silencieux : un simple changement de menu suffisait,
+  // en auto-save. Le batch confirme déjà (L3) ; l'unitaire le fait maintenant aussi.
+  const [confirmation, setConfirmation] = useState(false);
+
+  /** Intercepte la seule transition DESTRUCTIVE : « était assigné » → « non assigné ». */
+  function choisir(entityId: string) {
+    const desassigne =
+      entityId === VALEUR_NON_ASSIGNE && compte.entityId !== null;
+    if (desassigne) setConfirmation(true);
+    else envoyer(entityId);
+  }
+
   // `id` dérivé du bankAccountId : unique par ligne (sinon `aria-activedescendant` et
   // le `listboxId` du Select collisionneraient d'une ligne à l'autre).
   const idSelect = `compte-entite-${compte.bankAccountId}`;
@@ -835,8 +854,10 @@ function LigneCompte({
         )}
       </td>
 
+      {/* POLISH1 (a) — symbole (Rs / $ / €) plutôt que le code ISO brut, via la SOURCE
+          UNIQUE `format-montant` (aucun montant ici : on n'emprunte que l'indicateur). */}
       <td className="px-3 py-2 text-sm text-text-muted sm:px-4">
-        {compte.currency}
+        {indicateurDevise(compte.currency) ?? compte.currency}
       </td>
 
       <td className="px-3 py-2 sm:px-4">
@@ -849,13 +870,57 @@ function LigneCompte({
           <Select
             id={idSelect}
             value={valeur}
-            onChange={envoyer}
+            onChange={choisir}
             options={options}
             size="sm"
             className="w-full"
           />
           <StatutLigne statut={statut} />
         </div>
+
+        {confirmation && (
+          <Modal
+            open
+            onClose={() => setConfirmation(false)}
+            title="Unassign account"
+            size="sm"
+            // Surface destructive : ni Échap ni le clic sur l'overlay ne ferment (§4.4).
+            dismissible={false}
+          >
+            <div className="flex flex-col gap-4">
+              <p className="text-sm text-text">
+                Set <span className="font-semibold">{libelle}</span> back to
+                unassigned? It becomes{" "}
+                <span className="font-semibold">invisible</span> to members whose
+                access is limited to specific entities — including those who can
+                see it today.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmation(false)}
+                  className="h-10 rounded-control px-4 text-sm font-medium text-text-muted
+                    transition-colors hover:text-text focus:outline-none focus-visible:ring-2
+                    focus-visible:ring-primary/40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmation(false);
+                    envoyer(VALEUR_NON_ASSIGNE);
+                  }}
+                  className="h-10 rounded-control bg-danger px-4 text-sm font-semibold text-white
+                    transition-colors hover:opacity-90 focus:outline-none focus-visible:ring-2
+                    focus-visible:ring-danger focus-visible:ring-offset-2"
+                >
+                  Unassign
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
       </td>
     </tr>
   );
