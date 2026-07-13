@@ -30,6 +30,7 @@ import {
   EntiteIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
+  EntiteNonVideError,
   CompteIntrouvableError,
   listerComptesAvecEntite,
   listerEntites,
@@ -630,5 +631,113 @@ describe("L0 — la surface d'ADMINISTRATION ne s'exécute JAMAIS sous périmèt
     );
     await client.exec(`set role tygr_app;`);
     expect(r.rows[0]?.entity_id).toBe(ENT_SUCRE);
+  });
+});
+
+describe("L2 — garde ADMIN sur renommer/archiver (trou de couverture F1)", () => {
+  // `renommerEntite` et `archiverEntite` portent bien `exigerAdmin` depuis toujours, mais
+  // AUCUN test ne les exerçait sous une session MANAGER : les cas 4-5 les appellent avec
+  // sAdminB (cross-tenant, mais un ADMIN). Le trou était sans conséquence tant qu'aucun
+  // bouton ne les atteignait — L2 les câble. Règle 2 : tout nouvel endpoint ajoute ses cas.
+
+  it("29. un MANAGER ne peut pas RENOMMER une entité", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        renommerEntite(tx, ctx, { entityId: ENT_SUCRE, name: "Piraté" }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("30. un MANAGER ne peut pas ARCHIVER une entité", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        archiverEntite(tx, ctx, ENT_ENERGIE),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+});
+
+describe("L2 — Q-ARCHIVAGE : archiver ne doit JAMAIS laisser un droit orphelin", () => {
+  // Le mode de défaillance qu'on ferme : `archiverEntite` ne pose qu'un `is_active=false`.
+  // Il ne purge ni `bank_accounts.entity_id`, ni `member_entity_scopes`. Or le résolveur
+  // (`tenancy.ts`) lit `member_entity_scopes` SANS filtre `is_active` → un membre scopé sur
+  // l'entité archivée CONTINUE de voir ses comptes, pendant que l'entité disparaît des
+  // écrans d'admin : plus aucune surface pour constater le droit résiduel, ni le révoquer.
+  // Fuite intra-groupe par PERSISTANCE DE DROIT. On refuse donc d'archiver une entité
+  // encore rattachée (les deux remèdes alternatifs sont fail-OPEN, cf. EntiteNonVideError).
+
+  it("31. archiver une entité qui porte des COMPTES est refusé (et dit combien)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — comptes" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+    );
+
+    const erreur = await withWorkspace(sAdminA, (tx, ctx) =>
+      archiverEntite(tx, ctx, entityId).catch((e: unknown) => e),
+    );
+    expect(erreur).toBeInstanceOf(EntiteNonVideError);
+    expect((erreur as EntiteNonVideError).nbComptes).toBe(1);
+    expect((erreur as EntiteNonVideError).nbMembres).toBe(0);
+
+    // L'entité est TOUJOURS active : le refus n'a rien écrit.
+    const apres = await withWorkspace(sAdminA, (tx, ctx) => listerEntites(tx, ctx));
+    expect(apres.find((e) => e.id === entityId)?.isActive).toBe(true);
+
+    // Nettoyage : on rend ACC_A à son état non assigné pour les tests suivants.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+
+  it("32. ⭐ archiver une entité sur laquelle un MEMBRE est scopé est refusé — c'est LE cas de sécurité", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — droits" }),
+    );
+    // VIEWER_A voit UNIQUEMENT cette entité. Si on l'archivait, il continuerait d'en voir
+    // les comptes (le GUC entity_scope ignore is_active) sans que l'ADMIN puisse le voir.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: VIEWER_A, entityIds: [entityId] }),
+    );
+
+    const erreur = await withWorkspace(sAdminA, (tx, ctx) =>
+      archiverEntite(tx, ctx, entityId).catch((e: unknown) => e),
+    );
+    expect(erreur).toBeInstanceOf(EntiteNonVideError);
+    expect((erreur as EntiteNonVideError).nbMembres).toBe(1);
+    expect((erreur as EntiteNonVideError).nbComptes).toBe(0);
+
+    // Le droit est INTACT en base : on a refusé, on n'a pas « à moitié » archivé.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where entity_id = '${entityId}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(1);
+
+    // Nettoyage : on rend VIEWER_A à l'accès global.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: VIEWER_A, entityIds: [] }),
+    );
+  });
+
+  it("33. contre-preuve — une entité VIDE (aucun compte, aucun droit) s'archive normalement", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — vide" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    const apres = await withWorkspace(sAdminA, (tx, ctx) => listerEntites(tx, ctx));
+    expect(apres.find((e) => e.id === entityId)?.isActive).toBe(false);
+  });
+
+  it("34. une entité d'un AUTRE tenant reste un 404 — jamais un « non vide » (aucun oracle)", async () => {
+    // ENT_B (workspace B) porte peut-être des comptes ; sous RLS, le comptage renvoie 0 et
+    // l'UPDATE ne touche aucune ligne → 404 neutre. Une entité inconnue et une entité d'un
+    // autre tenant se comportent EXACTEMENT pareil : on n'apprend rien de l'autre tenant.
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, ENT_B)),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
   });
 });

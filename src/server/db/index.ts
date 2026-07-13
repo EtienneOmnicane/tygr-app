@@ -235,6 +235,7 @@ export {
   CompteIntrouvableError,
   PartieIntrouvableError,
   EntiteNomDupliqueError,
+  EntiteNonVideError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
 export type {

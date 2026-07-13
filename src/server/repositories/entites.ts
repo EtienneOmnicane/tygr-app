@@ -88,6 +88,38 @@ export class EntiteNomDupliqueError extends Error {
   }
 }
 
+/**
+ * Archivage refusé : l'entité porte encore des COMPTES ou des DROITS de membres
+ * (Q-ARCHIVAGE, PLAN-refonte-entites.md §3.4).
+ *
+ * Pourquoi refuser plutôt qu'archiver en silence : `archiverEntite` ne pose qu'un
+ * `is_active = false`. Il ne purge NI `bank_accounts.entity_id`, NI
+ * `member_entity_scopes`. Or le résolveur de périmètre (`tenancy.ts`) lit
+ * `member_entity_scopes` SANS filtre `is_active` → un membre scopé sur l'entité
+ * archivée CONTINUE de voir ses comptes, tandis que l'entité disparaît des écrans
+ * d'administration : l'ADMIN croit avoir retiré l'accès, et n'a plus aucune surface
+ * pour constater qu'il subsiste. Fuite intra-groupe par PERSISTANCE DE DROIT.
+ *
+ * Les deux autres remèdes envisagés sont pires : purger les scopes ferait basculer un
+ * membre scopé sur cette seule entité en accès GLOBAL (le GUC n'est pas posé quand la
+ * liste est vide → la policy court-circuite : fail-OPEN) ; filtrer `is_active` dans le
+ * résolveur produit exactement le même fail-open. `entity_scope` n'a pas de sentinelle,
+ * contrairement à `account_scope`.
+ *
+ * On exige donc que l'ADMIN vide l'entité d'abord. Les compteurs sont portés par
+ * l'erreur pour que l'UI dise CE QUI bloque, et non « impossible ».
+ */
+export class EntiteNonVideError extends Error {
+  readonly code = "ENTITY_NOT_EMPTY";
+  constructor(
+    readonly nbComptes: number,
+    readonly nbMembres: number,
+  ) {
+    super("Entité encore rattachée");
+    this.name = "EntiteNonVideError";
+  }
+}
+
 /** Le userId visé n'est pas membre du workspace courant (donc non scopable). */
 export class MembreNonScopableError extends Error {
   readonly code = "MEMBER_NOT_IN_WORKSPACE";
@@ -548,8 +580,17 @@ export async function renommerEntite<TDb extends AnyPgDatabase>(
 
 /**
  * Archive une entité (is_active=false) — JAMAIS de DELETE (ON DELETE RESTRICT côté FK,
- * et l'archivage est l'opération métier). Le compte garde son entity_id ; l'entité
- * disparaît des pickers (filtrage is_active côté lecture Front). 0 ligne → 404.
+ * et l'archivage est l'opération métier). 0 ligne → 404.
+ *
+ * ⚠️ REFUSE d'archiver une entité qui porte encore des COMPTES ou des DROITS de membres
+ * (Q-ARCHIVAGE ; cf. `EntiteNonVideError` pour le mode de défaillance complet). En deux
+ * mots : archiver ne révoque RIEN — un membre scopé sur l'entité continuerait de voir ses
+ * comptes, sans que l'ADMIN dispose d'aucune surface pour le constater.
+ *
+ * L'ordre des contrôles n'est pas anodin : le comptage tourne SOUS la RLS. Pour une
+ * entité d'un autre tenant il renvoie 0/0 (invisible), on tombe donc sur l'UPDATE, qui
+ * ne touche aucune ligne → `EntiteIntrouvableError` (404). Aucun oracle d'existence :
+ * une entité inconnue et une entité d'un autre tenant se comportent à l'identique.
  */
 export async function archiverEntite<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
@@ -557,6 +598,33 @@ export async function archiverEntite<TDb extends AnyPgDatabase>(
   entityId: string,
 ): Promise<void> {
   exigerAdmin(ctx);
+
+  const [comptes] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(bankAccounts)
+    .where(
+      and(
+        eq(bankAccounts.entityId, entityId),
+        eq(bankAccounts.workspaceId, ctx.workspaceId),
+      ),
+    );
+
+  const [membres] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(memberEntityScopes)
+    .where(
+      and(
+        eq(memberEntityScopes.entityId, entityId),
+        eq(memberEntityScopes.workspaceId, ctx.workspaceId),
+      ),
+    );
+
+  const nbComptes = comptes?.n ?? 0;
+  const nbMembres = membres?.n ?? 0;
+  if (nbComptes > 0 || nbMembres > 0) {
+    throw new EntiteNonVideError(nbComptes, nbMembres);
+  }
+
   const maj = await tx
     .update(entities)
     .set({ isActive: false })

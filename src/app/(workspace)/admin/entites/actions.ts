@@ -36,6 +36,7 @@ import {
   EntiteIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
+  EntiteNonVideError,
   MembreNonScopableError,
   PartieIntrouvableError,
   renommerEntite,
@@ -141,6 +142,23 @@ function mapErreur(e: unknown): EtatAction | null {
   if (e instanceof EntiteNomDupliqueError) {
     return { erreur: "An entity already has this name.", succes: null };
   }
+  // Q-ARCHIVAGE : on refuse d'archiver une entité encore rattachée. Le message NOMME ce
+  // qui bloque (« 12 accounts and 2 members ») plutôt que d'opposer un « impossible » :
+  // l'admin doit savoir quoi déplacer. Les compteurs portent sur SON tenant — aucun
+  // oracle d'existence (une entité d'un autre tenant renvoie 404, pas ce message).
+  if (e instanceof EntiteNonVideError) {
+    const parts: string[] = [];
+    if (e.nbComptes > 0) {
+      parts.push(`${e.nbComptes} account${e.nbComptes > 1 ? "s" : ""}`);
+    }
+    if (e.nbMembres > 0) {
+      parts.push(`${e.nbMembres} member${e.nbMembres > 1 ? "s" : ""}`);
+    }
+    return {
+      erreur: `This entity still holds ${parts.join(" and ")}. Move them elsewhere first — archiving would not revoke anyone's access.`,
+      succes: null,
+    };
+  }
   return null;
 }
 
@@ -168,6 +186,8 @@ export async function creerEntiteAction(
     if (m) return m;
     throw e;
   }
+  // Succès uniquement : la page re-rend (compteurs du bandeau, liste d'entités, pickers).
+  revalidatePath("/admin/entites");
   return { erreur: null, succes: `Entity “${parsed.data.name}” created.` };
 }
 
@@ -194,6 +214,7 @@ export async function renommerEntiteAction(
     if (m) return m;
     throw e;
   }
+  revalidatePath("/admin/entites");
   return { erreur: null, succes: "Entity renamed." };
 }
 
@@ -216,6 +237,7 @@ export async function archiverEntiteAction(
     if (m) return m;
     throw e;
   }
+  revalidatePath("/admin/entites");
   return { erreur: null, succes: "Entity archived." };
 }
 

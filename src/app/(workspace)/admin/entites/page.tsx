@@ -38,6 +38,7 @@ import {
   type CompteVueAssignation,
 } from "./assignation-comptes";
 import { BandeauRecap } from "./bandeau-recap";
+import { GestionEntites, type EntiteGeree } from "./gestion-entites";
 import { compterNonAssignes } from "./regles-comptes";
 import {
   AssignationEntites,
@@ -110,9 +111,24 @@ export default async function PageEntites() {
 
   // Restreint aux entités actives (les archivées disparaissent des pickers, cf.
   // archiverEntite côté repo).
-  const entitesActives: EntiteVue[] = donnees.entites
-    .filter((e) => e.isActive)
-    .map((e) => ({ id: e.id, nom: e.name, code: e.code }));
+  const actives = donnees.entites.filter((e) => e.isActive);
+
+  const entitesActives: EntiteVue[] = actives.map((e) => ({
+    id: e.id,
+    nom: e.name,
+    code: e.code,
+  }));
+
+  // L2 — la liste GÉRABLE porte en plus le nombre de comptes (agrégat SQL déjà calculé
+  // par listerEntites : aucune requête de plus). Elle montre TOUTES les entités actives,
+  // y compris celles à 0 compte — que le tableau, lui, ne rend pas (il masque les groupes
+  // vides). Sans elle, une entité fraîchement créée serait ingérable (Q-ENTITE-VIDE).
+  const entitesGerees: EntiteGeree[] = actives.map((e) => ({
+    id: e.id,
+    nom: e.name,
+    code: e.code,
+    nbComptes: e.nbComptes,
+  }));
 
   // Cibles d'entité pour le sas de propositions (entités actives, mêmes que pickers).
   const entitesCibles: EntiteCible[] = entitesActives.map((e) => ({
@@ -149,6 +165,11 @@ export default async function PageEntites() {
           nbNonAssignes={nbNonAssignes}
           nbMembres={donnees.membres.length}
         />
+
+        {/* L2 — créer / renommer / archiver. Surface DÉDIÉE (Q-ENTITE-VIDE) : piloter une
+            entité depuis un en-tête de groupe du tableau la rendrait ingérable dès qu'elle
+            ne porte aucun compte, puisque les groupes vides ne sont pas rendus. */}
+        <GestionEntites entites={entitesGerees} />
 
         {/* ÉTAPE 1 — LE CŒUR. Passe AVANT l'accès des membres : on range les comptes,
             PUIS on donne les clés. L'ordre inverse (l'ancien) faisait décider qui voit
