@@ -26,6 +26,7 @@ import type {
   OmniFiAccount,
   OmniFiBalance,
   OmniFiSyncJob,
+  OmniFiSyncStatusConnu,
 } from "@/server/omnifi";
 import { OmniFiApiError } from "@/server/omnifi";
 import { and, eq, inArray } from "drizzle-orm";
@@ -533,10 +534,23 @@ const POLL_SYNC_INTERVAL_MS = 3_000;
 /** Plafond d'attente d'un job (au-delà : on abandonne CE compte, fail-soft). */
 const POLL_SYNC_PLAFOND_MS = 120_000;
 
-/** États terminaux d'un SyncJob (cf. OmniFiSyncStatus). */
-const SYNC_STATUTS_TERMINAUX = new Set<OmniFiSyncJob["Status"]>(["COMPLETED", "FAILED"]);
+/**
+ * États terminaux d'un SyncJob. Typés `ReadonlySet<string>` en SORTIE (le statut du fil
+ * est une union OUVERTE — l'amont dérive, cf. `OmniFiSyncStatus`) mais construits sur
+ * `OmniFiSyncStatusConnu` : la LISTE reste vérifiée au typecheck (une coquille échoue),
+ * tandis qu'un statut INCONNU peut être interrogé sans cast. Un inconnu n'est donc ni
+ * terminal ni MFA → il est poll jusqu'au plafond, puis rendu INCOMPLET (jamais assimilé
+ * à un succès, jamais à un échec dur).
+ */
+const SYNC_STATUTS_TERMINAUX: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
+  "COMPLETED",
+  "FAILED",
+]);
 /** États MFA : le re-sync attend un OTP — non fournissable côté serveur (widget natif). */
-const SYNC_STATUTS_MFA = new Set<OmniFiSyncJob["Status"]>(["OTP_REQUESTED", "OTP_WAITING"]);
+const SYNC_STATUTS_MFA: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
+  "OTP_REQUESTED",
+  "OTP_WAITING",
+]);
 
 /**
  * Issue de l'attente d'un job de sync. `status` = état terminal observé, ou
@@ -549,6 +563,13 @@ export interface ResultatAttenteSync {
   jobId: string;
   persistenceStats?: OmniFiSyncJob["PersistenceStats"];
   errorType?: string | null;
+  /**
+   * Dernier statut AMONT observé, posé au TIMEOUT. C'est une valeur d'ÉNUMÉRATION
+   * (jamais de PII) : elle explique pourquoi on n'a pas attendu la fin (« RETRIEVING » =
+   * le scrape tourne encore) et rend VISIBLE un statut inconnu de nos types — le seul
+   * signal qui nous préviendra d'une dérive de l'amont.
+   */
+  dernierStatut?: string;
 }
 
 /** Sommeil non bloquant (injectable indirectement via le plafond pour les tests). */
@@ -616,7 +637,26 @@ export async function attendreFinSync(
 
     // État non terminal : on continue à poller jusqu'au plafond.
     if (Date.now() - debut >= POLL_SYNC_PLAFOND_MS) {
-      return { status: "TIMEOUT", jobId };
+      // INCOMPLET — PAS un échec. Le job tourne TOUJOURS côté banque : constat prod
+      // 2026-07-13, un scrape est resté en `RETRIEVING` plus de 6 min, soit 3× ce
+      // plafond. Or les transactions DÉJÀ scrapées sont lisibles IMMÉDIATEMENT (67
+      // disponibles pendant que le job courait encore) : l'appelant doit donc ingérer ce
+      // qui existe (lecture idempotente / upsert append-only), au lieu de tout jeter.
+      //
+      // On NE logue PAS `omnifi_sync_completed` : ce n'est pas une complétion, et le
+      // confondre fausserait la preuve d'observabilité. Événement DISTINCT, sans PII —
+      // `dernierStatut` est une valeur d'énumération amont, `connectionId`/`jobId` des
+      // UUID opaques.
+      console.warn(
+        JSON.stringify({
+          evt: "omnifi_sync_incomplet",
+          connectionId,
+          jobId,
+          dernierStatut: status,
+          attenteMs: POLL_SYNC_PLAFOND_MS,
+        }),
+      );
+      return { status: "TIMEOUT", jobId, dernierStatut: status };
     }
   }
 }
@@ -630,12 +670,16 @@ export async function attendreFinSync(
  *    dernier état connu) ; `nextSyncAt` informe du délai ;
  *  - NEEDS_REPAIR : le re-sync est repassé en OTP_REQUESTED → l'UI doit rouvrir le
  *    widget natif en mode REPAIR (link-token avec ConnectionId + JobId) ;
- *  - SKIP_FAILED : job FAILED ou timeout de polling → compté en échec (fail-soft).
+ *  - INCOMPLET : le job tournait ENCORE au plafond de polling (scrape long, ou statut
+ *    amont inconnu) → on lit quand même les transactions déjà disponibles, et on remonte
+ *    la nature PARTIELLE (l'UI invite à relancer) ;
+ *  - SKIP_FAILED : job FAILED → compté en échec (fail-soft).
  */
 type IssueTrigger =
   | { kind: "DECLENCHE" }
   | { kind: "RATE_LIMITED"; nextSyncAt: string | null }
   | { kind: "NEEDS_REPAIR"; jobId: string }
+  | { kind: "INCOMPLET"; jobId: string; dernierStatut: string }
   | { kind: "SKIP_FAILED"; errorType?: string | null };
 
 /**
@@ -760,7 +804,15 @@ function interpreterAttente(r: ResultatAttenteSync): IssueTrigger {
     case "FAILED":
       return { kind: "SKIP_FAILED", errorType: r.errorType };
     case "TIMEOUT":
-      return { kind: "SKIP_FAILED", errorType: "POLL_TIMEOUT" };
+      // Le job n'a PAS fini dans le plafond — mais il n'a pas échoué pour autant. L'ancien
+      // `SKIP_FAILED (POLL_TIMEOUT)` faisait sauter la connexion : 0 transaction importée
+      // alors que 67 étaient lisibles (bug prod 2026-07-13). On rend INCOMPLET : la lecture
+      // suit, et la nature partielle remonte jusqu'à l'UI.
+      return {
+        kind: "INCOMPLET",
+        jobId: r.jobId,
+        dernierStatut: r.dernierStatut ?? "INCONNU",
+      };
   }
 }
 
@@ -815,6 +867,19 @@ export interface ResultatSynchronisation {
    * sera possible (ISO 8601, ou null si inconnu). Vide = aucun cas.
    */
   rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }>;
+  /**
+   * SYNCHRONISATION INCOMPLÈTE — le job de scraping tournait ENCORE quand le plafond de
+   * polling (120 s) a été atteint : un scrape bancaire peut durer plusieurs minutes
+   * (observé en prod le 2026-07-13 : 6 min+ en `RETRIEVING`, soit 3× le plafond).
+   *
+   * Ce n'est NI un échec (rien n'a planté, et les transactions déjà scrapées ONT été
+   * importées — la lecture ne dépend pas de la complétion du job), NI un succès plein
+   * (il en manque probablement). Sans ce signal, l'UI annonçait « Comptes à jour » avec
+   * 0 transaction importée : un faux message de victoire. `dernierStatut` = valeur
+   * d'énumération amont (jamais de PII) ; il vaut « INCONNU » si l'amont a émis un
+   * statut hors de nos types. Vide = aucun cas.
+   */
+  incompletes: Array<{ connectionId: string; jobId: string; dernierStatut: string }>;
   /**
    * Connexions qui ont ÉCHOUÉ « dur » pendant ce passage (erreur Omni-FI 4xx/5xx hors
    * 429/already-running, désalignement, panne réseau, etc.) — traitées en FAIL-SOFT :
@@ -1093,6 +1158,7 @@ export async function synchroniserConnexionsDepuisOmnifi(
   let transactionsImportees = 0;
   const aReparer: Array<{ connectionId: string; jobId: string }> = [];
   const rateLimited: Array<{ connectionId: string; nextSyncAt: string | null }> = [];
+  const incompletes: ResultatSynchronisation["incompletes"] = [];
   const echecsDetail: ResultatSynchronisation["echecsDetail"] = [];
   const aReconnecter: ResultatSynchronisation["aReconnecter"] = [];
 
@@ -1137,8 +1203,10 @@ export async function synchroniserConnexionsDepuisOmnifi(
         continue;
       }
       if (issue.kind === "SKIP_FAILED") {
-        // FAILED / timeout de polling : on n'ingère pas cette connexion (fail-soft) ;
-        // le code machine est tracé par attendreFinSync, jamais de PII ici.
+        // FAILED « dur » du job : on n'ingère pas cette connexion (fail-soft) ; le code
+        // machine est tracé par attendreFinSync, jamais de PII ici. ⚠️ Ce chemin ne
+        // couvre PLUS le timeout de polling (désormais INCOMPLET, cf. ci-dessous) : un
+        // job qui tourne encore n'est pas un job qui a échoué.
         continue;
       }
       if (issue.kind === "RATE_LIMITED") {
@@ -1146,8 +1214,25 @@ export async function synchroniserConnexionsDepuisOmnifi(
         // (le user voit au moins le dernier état connu) → on NE `continue` pas.
         rateLimited.push({ connectionId: cx.ConnectionId, nextSyncAt: issue.nextSyncAt });
       }
-      // issue.kind === "DECLENCHE" (sync COMPLETED) OU "RATE_LIMITED" (lecture du cache) :
-      // dans les deux cas on lit les transactions des comptes de CETTE connexion.
+      if (issue.kind === "INCOMPLET") {
+        // Le job de scraping tournait ENCORE au plafond de polling. On NE `continue` PAS —
+        // même politique que RATE_LIMITED : les transactions DÉJÀ scrapées sont lisibles
+        // tout de suite, et l'upsert est idempotent/append-only, donc les ingérer est sûr
+        // ET utile. C'était le bug : le `continue` d'ici jetait 67 transactions
+        // disponibles pour n'en importer aucune (prod 2026-07-13).
+        //
+        // La connexion est enregistrée comme PARTIELLE : elle ne sera PAS comptée « à
+        // jour » côté action (sinon on afficherait un faux message de victoire), et l'UI
+        // invitera à relancer.
+        incompletes.push({
+          connectionId: cx.ConnectionId,
+          jobId: issue.jobId,
+          dernierStatut: issue.dernierStatut,
+        });
+      }
+      // issue.kind === "DECLENCHE" (sync COMPLETED), "RATE_LIMITED" (lecture du cache) OU
+      // "INCOMPLET" (job encore en cours) : dans les TROIS cas on lit les transactions des
+      // comptes de CETTE connexion — la lecture ne dépend pas de la complétion du job.
 
       // Ingestion des transactions des comptes DÉCOUVERTS pour cette connexion. On résout
       // (omnifiAccountId → bankAccountId local) DANS le tx scopé (RLS), filtré aux comptes
@@ -1256,6 +1341,7 @@ export async function synchroniserConnexionsDepuisOmnifi(
     transactionsImportees,
     aReparer,
     rateLimited,
+    incompletes,
     echecs: echecsDetail.length,
     echecsDetail,
     aReconnecter,
@@ -1371,6 +1457,14 @@ export interface ResultatResynchronisationConnexion {
    * place, ré-armé sur CE jobId. Absent = pas de réparation en attente.
    */
   reparationJobId?: string;
+  /**
+   * Le job de scraping tournait ENCORE au plafond de polling : les transactions déjà
+   * disponibles ont été importées, mais il en manque probablement. Même sémantique que
+   * `ResultatSynchronisation.incompletes` — remonté ici aussi, sinon le chemin RÉPARATION
+   * afficherait un succès plein sur une ingestion partielle (le bug qu'on corrige, qui
+   * vivrait alors encore sur cet écran).
+   */
+  incomplet?: boolean;
 }
 
 /**
@@ -1446,17 +1540,23 @@ export async function resynchroniserConnexion(
     return { comptesRattaches, transactionsImportees: 0, reparationJobId: issue.jobId };
   }
   if (issue.kind === "SKIP_FAILED") {
-    // FAILED / timeout : fail-soft, on remonte ce qui a été persisté (comptes), 0 tx.
+    // FAILED « dur » du job : fail-soft, on remonte ce qui a été persisté (comptes), 0 tx.
+    // ⚠️ Ne couvre PLUS le timeout de polling : un job encore en cours devient INCOMPLET
+    // (on lit quand même) — cf. `interpreterAttente`.
     return { comptesRattaches, transactionsImportees: 0 };
   }
-  // DECLENCHE (COMPLETED) ou RATE_LIMITED (lecture du cache) : on lit les transactions.
+  // Le job tournait-il encore au plafond ? On lit quand même (les transactions déjà
+  // scrapées sont disponibles, l'upsert est idempotent), mais on remonte le PARTIEL.
+  const incomplet = issue.kind === "INCOMPLET";
+  // DECLENCHE (COMPLETED), RATE_LIMITED (lecture du cache) ou INCOMPLET (job en cours) :
+  // dans les trois cas on lit les transactions — la lecture ne dépend pas de la complétion.
 
   // 2. (c) Ingestion des transactions des comptes sélectionnés de cette connexion.
   const omnifiIds = comptes
     .filter((c) => c.Status == null || c.Status === "Enabled")
     .map((c) => c.AccountId);
   if (omnifiIds.length === 0) {
-    return { comptesRattaches, transactionsImportees: 0 };
+    return { comptesRattaches, transactionsImportees: 0, ...(incomplet ? { incomplet } : {}) };
   }
 
   const comptesAIngerer = await executer(async (tx) =>
@@ -1484,7 +1584,7 @@ export async function resynchroniserConnexion(
     transactionsImportees += r.transactionsTraitees;
   }
 
-  return { comptesRattaches, transactionsImportees };
+  return { comptesRattaches, transactionsImportees, ...(incomplet ? { incomplet } : {}) };
 }
 
 /* ------------------------------------------------------------------ */

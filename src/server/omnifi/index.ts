@@ -40,6 +40,7 @@ export type {
   OmniFiPublicTokenExchangeData,
   OmniFiSyncJob,
   OmniFiSyncStatus,
+  OmniFiSyncStatusConnu,
   OmniFiMfaInputData,
   OmniFiMfaResendData,
   OmniFiSyncJobAccountsData,

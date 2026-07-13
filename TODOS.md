@@ -352,6 +352,37 @@ clés, pas de l'hôte — confirmé tuteur). Branche `feat/verrou-prod-hote-part
   /clients/end-users/{id}` (→ 404 HTML). Résidu inerte (identifiant sans donnée bancaire,
   bac à sable). Le purger si Omni-FI ajoute une route de suppression, sinon l'ignorer.
 
+### Sync incomplet — lecture partielle livrée, ingestion pilotée par webhook à faire (2026-07-13)
+
+Incident prod : « le sync importe 0 transaction » alors que la donnée était lisible chez
+Omni-FI (67 transactions sur le 1er compte). Cause RÉELLE (le diagnostic initial pointait un
+statut `INTERRUPTED` — **qui n'existe pas** : absent de la doc, du backend Django et du
+runtime) : un scrape peut durer BIEN plus longtemps que le plafond de polling de 120 s
+(observé : `RETRIEVING` pendant 6 min+, soit 3×). Le job n'étant ni terminal ni en échec, le
+`TIMEOUT` était traduit en `SKIP_FAILED (POLL_TIMEOUT)` → la connexion était **sautée** →
+aucune transaction ingérée, alors que les données partielles étaient disponibles. Aggravant :
+la contrainte amont `unique_active_sync_job_per_account` fait retomber chaque nouveau clic sur
+le MÊME job en cours → le symptôme était **permanent**, pas intermittent.
+
+Corrigé (branche `fix/sync-timeout-lecture-partielle`) : le timeout devient `INCOMPLET` (on
+LIT quand même — la lecture ne dépend pas de la complétion du job, l'upsert est idempotent/
+append-only), la nature partielle remonte jusqu'à l'UI, et l'union des statuts amont est
+OUVERTE (un statut inconnu n'est plus un mensonge de typage).
+
+- [ ] **SYNC-WEBHOOK-INGEST1 (P1, déclencheur : premier scrape qui dépasse durablement les
+  120 s en prod — donc DÉJÀ atteint ; à traiter avant d'élargir la base d'utilisateurs) —
+  ingestion déclenchée par le webhook `sync.completed` au lieu du polling synchrone.**
+  Le correctif ci-dessus rend le partiel HONNÊTE, il ne le rend pas COMPLET : tant que
+  l'ingestion vit dans une Server Action, elle ne peut pas attendre un scrape de plusieurs
+  minutes (timeout de plateforme), donc l'utilisateur devra toujours relancer pour obtenir la
+  fin des transactions. La vraie sortie est événementielle : Omni-FI publie déjà
+  `sync.completed` / `sync.failed` (`docs/documentation_api.md` § Webhooks) — il faut router
+  ces événements vers l'ingestion. Portée : route `/api/webhooks/omnifi` (la résolution
+  `connection → workspace_id` sous `tygr_service` est une exception DÉJÀ documentée en
+  CLAUDE.md règle 2), idempotence (rejeu d'événement), cas ajouté à la suite isolation IDOR.
+  Effort : ~1-1,5j. Tant que ce n'est pas fait, le message « relancez dans quelques minutes »
+  est le contrat assumé avec l'utilisateur.
+
 ### Sync réel Omni-FI — déclenchement de scraping (POST /sync) livré (2026-06-25)
 
 Le bouton « Synchroniser mes comptes » DÉCLENCHE désormais un sync réel

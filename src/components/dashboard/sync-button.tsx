@@ -50,6 +50,7 @@ type Retour = {
   erreur: string | null;
   succes: string | null;
   info?: string | null;
+  incomplet?: boolean;
   reparation?: Array<{ connectionId: string; jobId: string }>;
   aReconnecter?: Array<{ connectionId: string }>;
 };
@@ -93,6 +94,11 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
   // Une banque a-t-elle un accès désaligné (403) → à RECONNECTER ? Distinct de la
   // réparation MFA : ici on relance un parcours de connexion complet depuis /banques.
   const aReconnecter = (retour?.aReconnecter?.length ?? 0) > 0;
+  // Le scrape tournait-il ENCORE côté banque quand on a rendu la main ? Alors on a importé
+  // des données PARTIELLES : interdit d'afficher le vert « Comptes à jour » (faux message
+  // de victoire — c'est le bug corrigé ici). Aucune action de l'utilisateur n'est requise
+  // à part relancer plus tard → registre NEUTRE, jamais `danger`.
+  const incomplet = retour?.incomplet === true;
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -149,7 +155,18 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
         </p>
       )}
 
-      {!retour?.erreur && !aReparer && !aReconnecter && retour?.succes && (
+      {/* SYNCHRONISATION INCOMPLÈTE — le scrape tourne encore chez la banque (il peut durer
+          plusieurs minutes). Des transactions ONT été importées, mais il en manque : dire
+          « Comptes à jour » ici serait mentir. Registre neutre (`text-muted`) : ni rouge
+          (rien n'a échoué), ni vert (ce n'est pas fini). Prime sur le message de succès. */}
+      {!retour?.erreur && !aReparer && !aReconnecter && incomplet && (
+        <p role="status" className="max-w-xs text-right text-xs text-text-muted">
+          Synchronisation incomplète — données partielles importées. Relancez dans
+          quelques minutes.
+        </p>
+      )}
+
+      {!retour?.erreur && !aReparer && !aReconnecter && !incomplet && retour?.succes && (
         <p role="status" className="text-right text-xs text-success">
           Comptes à jour.
         </p>

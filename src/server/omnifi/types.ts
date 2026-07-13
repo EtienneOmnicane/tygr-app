@@ -237,7 +237,12 @@ export interface OmniFiPublicTokenExchangeData {
 
 /* --- GET /sync/job/{JobId} (ApiKey | SessionToken) — machine d'états MFA --- */
 
-export type OmniFiSyncStatus =
+/**
+ * Statuts CONNUS d'un SyncJob (doc § Sync Engine + observés au runtime le 2026-07-13).
+ * Sert à VÉRIFIER nos listes (terminaux, MFA) à la construction : une coquille dans un
+ * `new Set<OmniFiSyncStatusConnu>([…])` échoue au typecheck.
+ */
+export type OmniFiSyncStatusConnu =
   | "PENDING"
   | "STARTED"
   | "LOGGING_IN"
@@ -248,6 +253,23 @@ export type OmniFiSyncStatus =
   | "ENRICHING"
   | "COMPLETED"
   | "FAILED";
+
+/**
+ * Statut tel qu'il ARRIVE SUR LE FIL — union volontairement OUVERTE.
+ *
+ * L'amont émet des statuts que ni la doc ni nos types ne connaissent, et il DÉRIVE :
+ * au 2026-07-13, le backend Omni-FI persiste `SCRAPING` (source Django, `SyncJob.Status`)
+ * là où l'API renvoie `RETRIEVING` — deux vérités pour un même champ. Fermer cette union
+ * serait un MENSONGE de typage : un statut inconnu traverserait un `switch` réputé
+ * exhaustif et en ressortirait `undefined` EN PRODUCTION, sans qu'aucun gate ne le voie
+ * (mode de défaillance déjà payé sur le `"UNKNOWN"` du SDK widget).
+ *
+ * Conséquence pour l'appelant : tout code qui DÉCIDE sur ce champ doit traiter l'inconnu
+ * explicitement (cf. `attendreFinSync` : un statut non reconnu n'est ni terminal ni MFA →
+ * il est poll jusqu'au plafond, puis rendu en TIMEOUT/INCOMPLET — jamais silencieusement
+ * assimilé à un succès).
+ */
+export type OmniFiSyncStatus = OmniFiSyncStatusConnu | (string & {});
 
 export interface OmniFiMfaDeliveryTarget {
   Kind: "email" | "phone";
