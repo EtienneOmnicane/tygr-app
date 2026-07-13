@@ -17,6 +17,8 @@
 import { useMemo, useState } from "react";
 import { useActionState } from "react";
 
+import { Select, type OptionSelect } from "@/components/ui/select";
+
 import { confirmerPropositionAction, type EtatAction } from "./actions";
 
 function cn(...classes: Array<string | false | null | undefined>): string {
@@ -120,6 +122,23 @@ function CarteProposition({
     return true;
   }, [comptesCoches, cible, creationNouvelle, proposition]);
 
+  // Options du sélecteur « Entité cible » : création (sentinelle "__new__",
+  // désactivée si la party n'a pas de nom) puis les entités actives.
+  const optionsCible = useMemo<OptionSelect[]>(
+    () => [
+      {
+        value: "__new__",
+        label:
+          proposition.partyName === null
+            ? "Créer une entité (nom requis — indisponible)"
+            : `Créer l’entité « ${proposition.partyName} »`,
+        disabled: proposition.partyName === null,
+      },
+      ...entites.map((e) => ({ value: e.id, label: e.nom })),
+    ],
+    [proposition.partyName, entites],
+  );
+
   function toggleCompte(id: string) {
     setComptesCoches((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
@@ -163,26 +182,16 @@ function CarteProposition({
         </div>
 
         {/* Cible d'entité */}
-        <label className="flex flex-col gap-1 text-sm">
+        <div className="flex flex-col gap-1 text-sm">
           <span className="text-text-muted">Entité cible</span>
-          <select
+          <Select
             value={cible}
-            onChange={(e) => setCible(e.target.value)}
-            className="h-10 rounded-control border border-line bg-white px-3 text-sm
-              focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="__new__" disabled={proposition.partyName === null}>
-              {proposition.partyName === null
-                ? "Créer une entité (nom requis — indisponible)"
-                : `Créer l’entité « ${proposition.partyName} »`}
-            </option>
-            {entites.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.nom}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={setCible}
+            options={optionsCible}
+            ariaLabel="Entité cible"
+            className="w-full"
+          />
+        </div>
 
         {/* Comptes de la party */}
         {proposition.comptes.length > 0 && (
