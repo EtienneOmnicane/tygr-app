@@ -125,7 +125,7 @@ export function FormulaireProvisioning({
       ) : (
       <fieldset className="flex flex-col gap-2.5 border-t border-line pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <legend className="text-sm font-medium">Périmètre</legend>
+          <legend className="text-sm font-medium">Access</legend>
           {!sansEntite && (
             <div
               role="radiogroup"
@@ -171,7 +171,7 @@ export function FormulaireProvisioning({
               ? "Access to the whole group (all entities)."
               : entiteSansCase
                 ? "Pick at least one entity, or switch back to whole-group access."
-                : `Vision restreinte à ${selection.length} entité${selection.length > 1 ? "s" : ""}.`}
+                : `Access limited to ${selection.length} ${selection.length > 1 ? "entities" : "entity"}.`}
         </p>
 
         {!sansEntite && (

@@ -493,6 +493,7 @@ function BarreRecherche({
             options={optionsBanque}
             ariaLabel="Filter by bank"
             className="w-full sm:w-56"
+          libelleVide="No option."
           />
         )}
       </div>
@@ -632,6 +633,7 @@ function BarreAction({
           placeholder="Move to…"
           ariaLabel="Move selected accounts to"
           className="w-full sm:w-56"
+        libelleVide="No option."
         />
 
         <button
@@ -874,6 +876,7 @@ function LigneCompte({
             options={options}
             size="sm"
             className="w-full"
+          libelleVide="No option."
           />
           <StatutLigne statut={statut} />
         </div>

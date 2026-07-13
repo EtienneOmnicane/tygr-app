@@ -177,6 +177,27 @@ function CarteMembre({
  * d'écriture refuseraient de s'exécuter sous une vue partielle).
  */
 function CarteMembreAdmin({ membre }: { membre: MembreVue }) {
+  /**
+   * CHEMIN DE RÉPARATION d'un périmètre HÉRITÉ (constat de la revue finale).
+   *
+   * Depuis §12, scoper un ADMIN est refusé — mais la garde n'EFFACE pas les états déjà en
+   * base (une ligne posée avant la règle, ou par l'UI pré-§12 qui le permettait justement).
+   * Un tel ADMIN voit le bandeau « Restricted view » et ses gardes d'écriture le bloquent.
+   *
+   * Or les messages d'erreur lui disaient : « Ask another administrator to lift the
+   * restriction » — et cet autre administrateur n'avait AUCUN contrôle pour le faire. La
+   * boucle était fermée sans issue : seul un UPDATE direct en base réparait. Prescrire une
+   * action que l'interface ne permet pas est un piège opérationnel.
+   *
+   * `entityIds = []` (aucun hidden posté) est le chemin de réparation, explicitement permis
+   * par la garde (elle ne mord que sur un périmètre NON VIDE).
+   */
+  const [etat, action, enCours] = useActionState(
+    definirScopesAction,
+    ETAT_INITIAL,
+  );
+  const aUnScopeHerite = membre.scopeInitial.length > 0;
+
   return (
     <li className="rounded-card bg-surface-card p-5 shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -202,10 +223,43 @@ function CarteMembreAdmin({ membre }: { membre: MembreVue }) {
           </span>
         </div>
 
-        <p className="text-xs text-text-muted">
-          Always sees the whole group — an administrator cannot be limited to
-          specific entities.
-        </p>
+        {aUnScopeHerite ? (
+          <form action={action} className="flex flex-col items-end gap-1.5">
+            <input type="hidden" name="userId" value={membre.userId} />
+            {/* Aucun `entityIds` posté ⇒ getAll → [] ⇒ retrait du périmètre. */}
+            <p className="text-xs text-warning">
+              Carries a restriction inherited from an earlier setup — it limits
+              their own admin screens.
+            </p>
+            <div aria-live="polite" className="min-h-[1rem] text-xs">
+              {etat.erreur !== null && (
+                <span role="alert" className="text-danger">
+                  {etat.erreur}
+                </span>
+              )}
+              {etat.succes !== null && (
+                <span role="status" className="text-success">
+                  Restriction cleared.
+                </span>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={enCours}
+              className="h-9 rounded-control bg-primary px-3 text-xs font-semibold text-white
+                transition-colors hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+                focus-visible:ring-primary focus-visible:ring-offset-2
+                disabled:cursor-not-allowed disabled:opacity-[0.48]"
+            >
+              {enCours ? "Clearing…" : "Clear restriction"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-xs text-text-muted">
+            Always sees the whole group — an administrator cannot be limited to
+            specific entities.
+          </p>
+        )}
       </div>
     </li>
   );

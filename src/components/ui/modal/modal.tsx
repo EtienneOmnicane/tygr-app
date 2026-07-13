@@ -45,6 +45,7 @@ export function Modal({
   footer,
   size = "sm",
   dismissible = true,
+  libelleFermer = "Fermer",
 }: {
   open: boolean;
   /** Fermeture demandée (croix, Escape, clic-overlay). No-op si `dismissible=false`. */
@@ -57,6 +58,13 @@ export function Modal({
   size?: keyof typeof LARGEURS;
   /** false = surface destructive : Escape/overlay ne ferment pas (action explicite). */
   dismissible?: boolean;
+  /**
+   * Libellé du bouton de fermeture. Défaut FR — les pages encore françaises ne changent
+   * pas. Les surfaces déjà migrées (admin) passent leur propre libellé : sans ça, un écran
+   * anglais afficherait « Fermer » à son lecteur d'écran (décision Q-LANG §9, en attendant
+   * le chantier I18N-EN1).
+   */
+  libelleFermer?: string;
 }) {
   const panneauRef = useRef<HTMLDivElement>(null);
   const dernierFocusRef = useRef<HTMLElement | null>(null);
@@ -142,7 +150,7 @@ export function Modal({
             <button
               type="button"
               onClick={onClose}
-              aria-label="Fermer"
+              aria-label={libelleFermer}
               className="absolute right-5 top-1/2 -translate-y-1/2 cursor-pointer rounded-control p-1
                 text-text-muted transition-colors hover:text-text
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"

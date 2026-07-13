@@ -353,7 +353,24 @@ async function exigerEntiteCibleActive<TDb extends AnyPgDatabase>(
         eq(entities.workspaceId, ctx.workspaceId),
         eq(entities.isActive, true),
       ),
-    );
+    )
+    // ⚠️ VERROU OBLIGATOIRE (TOCTOU — constat de la revue finale, PROUVÉ sur Postgres).
+    //
+    // Sans lui, ce contrôle est un check-then-act : en READ COMMITTED, un `archiverEntite`
+    // concurrent s'intercale entre la lecture d'`is_active` et l'UPDATE des comptes. Il ne
+    // VOIT PAS l'assignation en cours (non commitée), compte donc 0 compte, passe sa propre
+    // garde, et archive — puis notre UPDATE pose l'entity_id. État final : une entité
+    // ARCHIVÉE qui porte un compte, c'est-à-dire exactement ce que `EntiteNonVideError` ET
+    // ce contrôle-ci existent chacun pour interdire.
+    //
+    // `archiverEntite` et `definirScopesMembre` prennent DÉJÀ ce verrou : les trois chemins
+    // doivent le prendre, sinon on ne sérialise qu'une paire sur deux. Un verrou posé sur
+    // un seul côté d'une course ne sérialise rien.
+    //
+    // ⚠️ La suite d'isolation tourne sous PGlite (MONO-CONNEXION) : elle ne peut pas
+    // exercer ce cas. Preuve faite à la main sur le Postgres Docker du projet ; dette
+    // d'outillage consignée (TEST-CONCURRENCE1).
+    .for("update");
   if (cible.length === 0) throw new EntiteIntrouvableError();
 }
 

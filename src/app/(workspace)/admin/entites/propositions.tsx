@@ -175,16 +175,54 @@ function PanneauVerification({
   // les props que `revalidatePath` vient de rafraîchir (§11-S3).
   const [mutations, setMutations] = useState(0);
 
+  /**
+   * Le message de succès NE PEUT PAS vivre dans la carte : la confirmation incrémente
+   * `mutations`, donc la `key` change, donc React REMONTE la carte — `useActionState`
+   * repart à `ETAT_INITIAL` et `etat.succes` n'est jamais peint. La carte disparaît même
+   * de la liste (ses comptes sont désormais rattachés). Sans ce relais, l'admin ne recevrait
+   * AUCUN accusé de réception. C'est le défaut R5, corrigé sur la barre de batch et qu'on
+   * ne réintroduit pas ici.
+   *
+   * Les ERREURS, elles, restent dans la carte : pas de remontage quand l'action échoue.
+   */
+  const [messageSucces, setMessageSucces] = useState<string | null>(null);
+
   const aTraiter = propositions.filter((p) => comptesRattachables(p).length > 0);
 
   return (
-    <Modal open onClose={onFerme} title="Suggested attachments" size="xl">
+    <Modal
+      open
+      onClose={onFerme}
+      title="Suggested attachments"
+      size="xl"
+      libelleFermer="Close"
+    >
       <div className="flex flex-col gap-4">
         <p className="text-sm text-text-muted">
           Each suggestion groups the accounts your bank reports under the same
           owner. Review them and attach — or leave an account out: it simply
           stays unassigned.
         </p>
+
+        {/* Accusé de réception : porte le message du SERVEUR (nombre réellement rattaché). */}
+        {messageSucces !== null && (
+          <p
+            role="status"
+            className="flex items-center gap-2 rounded-control bg-success-bg px-3 py-2 text-sm text-success"
+          >
+            <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0">
+              <path
+                d="M3.5 8.5l3 3 6-7"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {messageSucces}
+          </p>
+        )}
 
         {aTraiter.length === 0 ? (
           <p className="rounded-card border border-dashed border-line p-8 text-center text-sm text-text-muted">
@@ -198,7 +236,10 @@ function PanneauVerification({
                 key={`${p.partyId}-${mutations}`}
                 proposition={p}
                 entites={entites}
-                onConfirme={() => setMutations((n) => n + 1)}
+                onConfirme={(message) => {
+                  setMessageSucces(message);
+                  setMutations((n) => n + 1);
+                }}
               />
             ))}
           </ul>
@@ -232,7 +273,8 @@ function CarteSuggestion({
 }: {
   proposition: PropositionVue;
   entites: EntiteCible[];
-  onConfirme: () => void;
+  /** Remonte le message du SERVEUR au panneau : la carte, elle, va être remontée (R5). */
+  onConfirme: (message: string) => void;
 }) {
   const nomPropose = proposition.partyName;
   const rattachables = comptesRattachables(proposition);
@@ -254,10 +296,24 @@ function CarteSuggestion({
     return entites.find((e) => normaliser(e.nom) === cible) ?? null;
   }, [nomPropose, proposition.entiteExistanteId, entites]);
 
+  /**
+   * ⚠️ `doublon` N'ENTRE PAS dans la valeur par défaut.
+   *
+   * Le pré-sélectionner serait une AUTO-FUSION — précisément ce que le principe Q2-bis
+   * interdit (« on SURFACE les doublons et on laisse l'admin BASCULER avec sa connaissance
+   * métier »). Il est détecté par un rapprochement FLOU (casse repliée), calculé côté
+   * client : c'est un jugement, pas un fait, et il revient à l'humain.
+   *
+   * En faire le défaut viderait aussi de son sens le bouton « Use “X” » de la bannière (il
+   * deviendrait un no-op), et un admin qui clique le CTA primaire sans lire rattacherait N
+   * comptes à une entité qu'il n'a jamais choisie.
+   *
+   * `entiteExistanteId`, lui, est un match EXACT calculé côté SERVEUR : c'est un fait, pas
+   * une supposition — il reste donc un défaut légitime.
+   */
   const [cible, setCible] = useState<string>(
     proposition.entiteDejaRattacheeId ??
       proposition.entiteExistanteId ??
-      doublon?.id ??
       CREER,
   );
 
@@ -271,7 +327,7 @@ function CarteSuggestion({
       // La mutation est remontée dans le WRAPPER de l'action (jamais dans un useEffect —
       // règle `react-hooks/set-state-in-effect`) → la carte est remontée avec des props
       // fraîches.
-      if (res.succes !== null) onConfirme();
+      if (res.succes !== null) onConfirme(res.succes);
       return res;
     },
     ETAT_INITIAL,
@@ -280,10 +336,14 @@ function CarteSuggestion({
   const creationNouvelle = cible === CREER;
 
   /**
-   * Dérivé des PROPS (`rattachables`), pas d'un état monté qui pourrait être périmé.
-   * Le bouton n'est actif que s'il y a un VRAI changement à appliquer : l'ancien restait
-   * actif même sans rien à faire, d'où l'impression de « réassigner à l'infini sans
-   * effet » (Lot 3 du plan v1).
+   * Le bouton n'est actif que s'il y a un VRAI changement à appliquer — l'ancien restait
+   * actif même sans rien à faire, d'où l'impression de « réassigner à l'infini sans effet »
+   * (Lot 3 du plan v1).
+   *
+   * ⚠️ `coches` est un ÉTAT, pas une prop. Ce qui le garde frais, c'est le COMPTEUR DE
+   * MUTATIONS dans la `key` : il remonte la carte après chaque confirmation, et
+   * l'initialiseur re-dérive `coches` de `rattachables` (une prop). Ne pas retirer ce
+   * compteur en croyant `peutConfirmer` immunisé — c'est LUI qui l'immunise.
    */
   const peutConfirmer =
     !enCours &&
@@ -365,6 +425,7 @@ function CarteSuggestion({
             options={optionsCible}
             ariaLabel="Attach to"
             className="w-full"
+          libelleVide="No option."
           />
         </div>
 

@@ -441,10 +441,18 @@ export async function confirmerPropositionAction(
         entityId,
       });
 
-      // 3. Assigner chaque compte de la party (bank_accounts.entity_id) via la gate.
-      for (const bankAccountId of parsed.data.bankAccountIds) {
-        await assignerCompteEntite(tx, ctx, { bankAccountId, entityId });
-      }
+      // 3. Assigner les comptes de la party EN UNE FOIS (gabarit ensembliste).
+      //
+      // Ce chemin BOUCLAIT `assignerCompteEntite` : avec la borne à 500, et depuis que R3 y
+      // a ajouté un contrôle `is_active`, cela faisait jusqu'à 1000 aller-retours dans une
+      // transaction WebSocket ouverte — exactement ce que le plan (§5-L3) condamne et que le
+      // batch évite. On réutilise donc `assignerComptesEntite` : 1 SELECT de pré-check +
+      // 1 UPDATE groupé, mêmes gardes (entité active, pas de succès partiel silencieux),
+      // même atomicité. Une seule voie d'assignation multiple dans tout le repo.
+      await assignerComptesEntite(tx, ctx, {
+        bankAccountIds: parsed.data.bankAccountIds,
+        entityId,
+      });
     });
   } catch (e) {
     const m = mapErreur(e);

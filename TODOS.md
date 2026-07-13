@@ -885,6 +885,42 @@ Restent deux constats mineurs, sans impact d'isolation :
   périmètre), soit on retire le code. **Déclencheur** : décision produit sur la maille fine
   (lot L9 du plan Entités), ou revue de dette de fin d'epic.
 
+### Outillage de test — la concurrence n'est PAS prouvée par PGlite (2026-07-13)
+
+- [ ] **TEST-CONCURRENCE1 (P1, effort ~1 j, gardien Backend) — la suite d'isolation ne peut
+  structurellement pas attraper un TOCTOU.** ⚠️ **Découverte de la cross-review finale, et
+  c'est la dette la plus importante de ce chantier.**
+  **Quoi** : `tests/isolation/*` tourne sous **PGlite**, qui est **MONO-CONNEXION**. Aucun
+  test ne peut donc ouvrir deux transactions concurrentes — toute la classe des bugs
+  *check-then-act* (lire une condition, agir dessus, pendant qu'une autre transaction la
+  change) est **invisible** à la suite, alors même qu'elle est verte.
+  **Preuve que ce n'est pas théorique** : la revue finale a trouvé, en rejouant le SQL des
+  repos sur le **Postgres Docker** du projet, un TOCTOU réel — `exigerEntiteCibleActive`
+  lisait `is_active` sans verrou pendant qu'`archiverEntite` archivait, produisant l'état
+  interdit « entité ARCHIVÉE portant un compte ». Corrigé (`.for("update")`), mais **la
+  correction n'est couverte par aucun test** : la suite ne peut pas l'exercer.
+  **À faire** : une suite de concurrence sur le Postgres Docker (déjà décrit dans CLAUDE.md,
+  « Dev local — stack de validation »), avec 2 connexions réelles, exerçant au minimum les
+  paires : `archiverEntite` ↔ `assignerComptesEntite`, `archiverEntite` ↔
+  `definirScopesMembre`. Sans elle, tout verrou `FOR UPDATE` posé dans ce repo est une
+  affirmation non vérifiée.
+  **Déclencheur** : IMMÉDIAT (P1) — avant le premier déploiement de production, parce que la
+  classe de bugs concernée produit des états interdits que les gardes applicatives croient
+  avoir fermés. Ne touche ni l'append-only ni les montants ; c'est une dette d'OUTILLAGE, pas
+  d'isolation (les invariants, eux, sont posés).
+
+- [ ] **SCOPE-FIN-CULDESAC1 (P2, effort ~0,25 j) — `revoquerScopeFin` ne peut jamais réparer
+  un ADMIN portant ≥2 scopes fins hérités.** Il retire UNE cible puis délègue à
+  `definirScopesFinsMembre`, qui refuse tout jeu NON VIDE sur un ADMIN (§12) : chaque
+  révocation unitaire laisse un reste non vide → `AdminNonScopableError` → aucune révocation
+  ne peut aboutir. Seul l'appel groupé « listes vides » répare.
+  **Inatteignable aujourd'hui** : `/admin/perimetres` n'a aucune surface UI
+  (`ADMIN-PERIMETRES-MORT1`), et l'axe ENTITÉ dispose désormais de son bouton de réparation
+  (« Clear restriction » sur la carte d'un ADMIN). Mais c'est un piège ARMÉ pour le jour où
+  la maille fine sera livrée. **À faire à ce moment-là** : autoriser une révocation qui
+  RÉDUIT strictement le périmètre d'un ADMIN, ou n'exposer que le retrait total.
+  **Déclencheur** : ouverture de la surface `/admin/perimetres`.
+
 ### Vigilance — promotion de rôle et périmètre (2026-07-13)
 
 - [ ] **ROLE-PROMOTION-SCOPE1 (P2, effort ~0,25 j, gardien Backend) — si un jour on ajoute

@@ -281,7 +281,13 @@ function ModaleCreer({ onFerme }: { onFerme: () => void }) {
   );
 
   return (
-    <Modal open onClose={onFerme} title="Create entity" size="sm">
+    <Modal
+      open
+      onClose={onFerme}
+      title="Create entity"
+      size="sm"
+      libelleFermer="Close"
+    >
       <form action={action} className="flex flex-col gap-4">
         <ChampTexte
           nom="name"
@@ -326,7 +332,13 @@ function ModaleRenommer({
   );
 
   return (
-    <Modal open onClose={onFerme} title="Rename entity" size="sm">
+    <Modal
+      open
+      onClose={onFerme}
+      title="Rename entity"
+      size="sm"
+      libelleFermer="Close"
+    >
       <form action={action} className="flex flex-col gap-4">
         <input type="hidden" name="entityId" value={entite.id} />
         <ChampTexte
@@ -372,6 +384,7 @@ function ModaleArchiver({
       onClose={onFerme}
       title="Archive entity"
       size="sm"
+      libelleFermer="Close"
       dismissible={false}
     >
       <form action={action} className="flex flex-col gap-4">
