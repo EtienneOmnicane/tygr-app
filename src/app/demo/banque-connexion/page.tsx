@@ -80,7 +80,21 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="5. Réparation — bouton « Reconnecter »"
+          titre="5. « Aucune banque à synchroniser » — le silence corrigé"
+          description="AVANT : le sync renvoyait { erreur: null, succes: null } quand aucune connexion n'était à traiter → spinner puis RIEN, sans que l'utilisateur sache pourquoi (incident 2026-07-13 : 2 banques en base introuvables chez Omni-FI, 1 banque chez Omni-FI jamais rattachée ici). Registre « information » : ni rouge (rien n'a échoué), ni vert (rien n'a réussi). Chaque signal porte son action."
+        >
+          <WidgetFeedback info="Aucune banque à synchroniser. 1 banque(s) connectée(s) chez votre fournisseur ne sont pas rattachées à cet espace — finalisez la connexion via « Connecter une banque ». 2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque »." />
+          <WidgetFeedback info="Aucune banque connectée à synchroniser — connectez-en une pour commencer." />
+          {/* Désync signalée MALGRÉ un succès : sans ça, une banque morte resterait
+              invisible derrière le message vert, comptes affichés comme à jour. */}
+          <WidgetFeedback
+            succes="Synchronisation effectuée — 1 banque(s) à jour, 10 compte(s) mis à jour."
+            info="2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque »."
+          />
+        </Bloc>
+
+        <Bloc
+          titre="6. Réparation — bouton « Reconnecter »"
           description="Le re-sync a redemandé une vérification de sécurité (OTP) pour une ou plusieurs banques. Sous le message de synchro, un bouton « Reconnecter » par connexion rouvre le widget natif en mode REPAIR. Action secondaire (lien d'action), jamais en rouge."
         >
           <WidgetFeedback
@@ -91,7 +105,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="6. Réparation — ouverture en cours (bouton désactivé)"
+          titre="7. Réparation — ouverture en cours (bouton désactivé)"
           description="Entre le clic « Reconnecter » et l'obtention du token REPAIR : le bouton passe en « Ouverture… » et se désactive (anti-double-clic). Deux connexions à réparer."
         >
           <WidgetFeedback
@@ -106,7 +120,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="7. Désalignement EndUser (403) — « Reconnecter cette banque »"
+          titre="8. Désalignement EndUser (403) — « Reconnecter cette banque »"
           description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n'est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l'utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
         >
           <WidgetFeedback

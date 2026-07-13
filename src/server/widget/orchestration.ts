@@ -781,6 +781,26 @@ async function nextSyncDepuisLatest(
 export interface ResultatSynchronisation {
   connexions: number;
   comptesRattaches: number;
+  /**
+   * DÉSYNCHRONISATION (a) — connexions ACTIVES chez Omni-FI mais ABSENTES de
+   * `bank_connections` : le sync ne les traite pas (décision produit — ajouter une banque
+   * passe par le widget). Elles étaient ignorées EN SILENCE, ce qui rendait le résultat
+   * « 0 connexion » inexplicable pour l'utilisateur. L'action à mener est de FINALISER la
+   * connexion via le widget.
+   */
+  nonRattachees: number;
+  /**
+   * DÉSYNCHRONISATION (b) — connexions de CETTE base qui ne sont plus utilisables côté
+   * Omni-FI : soit l'amont ne les renvoie PLUS DU TOUT (accès révoqué, EndUser recréé), soit
+   * il les renvoie avec un statut NON ACTIF (expirée, en erreur). Les deux appellent la même
+   * action — reconnecter — donc un seul compteur (le log garde la distinction).
+   *
+   * Leurs comptes restent affichés avec un `last_synced_at` ancien : sans ce signal,
+   * l'utilisateur les croit à jour. Fail-safe : si le listing amont a pu être tronqué, les
+   * « disparues » ne sont PAS comptées (accuser à tort une banque saine est pire que taire
+   * un signal).
+   */
+  inutilisables: number;
   /** Transactions importées (toutes pages, tous comptes) lors de cette synchro. */
   transactionsImportees: number;
   /**
@@ -878,11 +898,23 @@ export async function synchroniserConnexionsDepuisOmnifi(
   client: OmniFiClient,
   executer: ExecuterWorkspace,
 ): Promise<ResultatSynchronisation> {
-  // 1. Garde de rôle + ClientUserId (scopé, frontière tenant).
-  const clientUserId = await executer(async (tx, ctx) => {
-    if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
-    return clientUserIdDuWorkspace(tx, ctx.workspaceId);
-  });
+  // 1. Garde de rôle + ClientUserId (scopé, frontière tenant). On capture AUSSI la
+  //    PORTÉE effective de la transaction (diagnostic ci-dessous) : le sync DOIT tourner
+  //    en Vision Globale (CLAUDE.md, ENTITY-WRITE-SCOPE1). Si un scope entité/compte fuite
+  //    ici, `upsertCompte` écrit sous une policy RESTRICTIVE (USING **et** WITH CHECK) et
+  //    ne rattache plus rien — sans lever d'erreur visible.
+  const { clientUserId, workspaceId, entityScopeMode, accountScopeMode, droitComptes } =
+    await executer(async (tx, ctx) => {
+      if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+      return {
+        clientUserId: await clientUserIdDuWorkspace(tx, ctx.workspaceId),
+        workspaceId: ctx.workspaceId,
+        entityScopeMode: ctx.entityScope.mode,
+        accountScopeMode: ctx.accountScope.mode,
+        droitComptes:
+          ctx.accountScope.mode === "COMPTES" ? ctx.accountScope.accountIds.length : null,
+      };
+    });
 
   // 2. Lister les connexions actives de cet EndUser (ApiKey), pagination suivie.
   const connexions: Array<{
@@ -892,10 +924,27 @@ export async function synchroniserConnexionsDepuisOmnifi(
     /** Cooldown amont (« 1 sync / 15 min ») : garde anti-429 du déclenchement (étape 3). */
     NextSyncAvailableAt: string | null;
   }> = [];
+  // DIAGNOSTIC : on compte ce que l'amont renvoie AVANT notre filtre de statut, et on
+  // collecte les statuts DISTINCTS (valeurs d'énumération — aucune PII). Sans ça,
+  // « 0 connexion » est ambigu : l'amont n'a rien renvoyé, OU notre filtre a tout écarté
+  // (un statut inattendu — « ACTIVE », « Connected »… — suffirait à tout jeter).
+  let connexionsApiBrutes = 0;
+  const statutsVus = new Set<string>();
+  // Tous les ConnectionId vus chez l'amont, QUEL QUE SOIT leur statut : sert à détecter
+  // les connexions de notre base que l'amont ne connaît plus (désynchronisation (b)). Les
+  // comparer aux seules connexions ACTIVES ferait passer une connexion amont simplement
+  // inactive pour une connexion disparue.
+  const idsAmont = new Set<string>();
+  // Total de connexions ANNONCÉ par l'amont (`Meta.TotalRecords`). C'est lui qui PROUVERA que
+  // le listing a été vu en entier — cf. `listingAmontComplet` après la boucle.
+  let totalRecordsAnnonce: number | undefined;
   let pageC = 1;
   for (;;) {
     const env = await client.listerConnexions(clientUserId, { page: pageC });
     for (const c of env.Data.Connections ?? []) {
+      connexionsApiBrutes += 1;
+      statutsVus.add(String(c.Status ?? "∅"));
+      idsAmont.add(c.ConnectionId);
       // On ne rattache que les connexions exploitables (actives).
       if (c.Status === "active" || c.Status === "Active") {
         // GET /connections porte InstitutionName → on le propage pour le persister
@@ -909,8 +958,14 @@ export async function synchroniserConnexionsDepuisOmnifi(
         });
       }
     }
-    const totalPages = env.Meta?.TotalPages ?? 1;
-    if (!env.Links?.Next || pageC >= totalPages) break;
+    totalRecordsAnnonce = env.Meta?.TotalRecords ?? totalRecordsAnnonce;
+    // Pagination pilotée par `Meta.TotalPages`, PAS par `Links.Next`.
+    // Contrat RUNTIME vérifié le 2026-07-13 (la doc ne mentionne ni `Meta` ni `Links`, elle a
+    // tort) : l'amont renvoie `Meta: {TotalPages, TotalRecords}` et `Links: {Self}` — **sans
+    // `Next`** en page unique. S'arrêter sur `!Links.Next` faisait donc rater TOUTES les
+    // pages 2+ : au-delà d'une page, le sync ignorait des connexions en silence.
+    const totalPages = env.Meta?.TotalPages;
+    if (totalPages === undefined || pageC >= totalPages) break;
     pageC += 1;
   }
 
@@ -924,17 +979,109 @@ export async function synchroniserConnexionsDepuisOmnifi(
   // Le SELECT est SCOPÉ (DANS executer → RLS workspace courant) : il ne peut retourner que
   // les omnifi_connection_id de CE tenant. Filtrer sur un ensemble non scopé réintroduirait
   // une voie cross-tenant — la garde est volontairement fail-closed (un id inconnu = exclu).
-  const connexionsConnues = await executer(async (tx) => {
-    const lignes = await tx
-      .select({ omnifiConnectionId: bankConnections.omnifiConnectionId })
-      .from(bankConnections);
-    return new Set(lignes.map((l) => l.omnifiConnectionId));
-  });
+  const lignesBase = await executer(async (tx) =>
+    tx
+      .select({
+        omnifiConnectionId: bankConnections.omnifiConnectionId,
+        status: bankConnections.status,
+      })
+      .from(bankConnections),
+  );
+  const connexionsConnues = new Set(lignesBase.map((l) => l.omnifiConnectionId));
+  // Base des COMPTEURS de désynchronisation (≠ du filtre de traitement ci-dessus, qui reste
+  // inchangé) : on n'invite à « reconnecter » que des connexions que NOUS tenons encore pour
+  // actives. Une connexion révoquée délibérément par l'utilisateur disparaîtra légitimement
+  // de l'amont — la compter reviendrait à lui réclamer de reconnecter ce qu'il vient de
+  // couper. (Aujourd'hui le statut local est toujours "active" : la garde est posée pour le
+  // jour où la révocation `DELETE /connections/{id}` arrivera.)
+  const connuesActives = lignesBase
+    .filter((l) => l.status === "active")
+    .map((l) => l.omnifiConnectionId);
   // On ne garde que les connexions présentes en base. Une connexion exclue ici ne génère
   // AUCUN appel Omni-FI en aval (ni listerComptesConnexion, ni declencherSync) et n'est PAS
   // comptée dans `connexions` (le compteur reflète les banques réellement traitées).
   const connexionsATraiter = connexions.filter((cx) =>
     connexionsConnues.has(cx.ConnectionId),
+  );
+
+  // ── PREUVE DE COMPLÉTUDE DU LISTING AMONT ──────────────────────────────────────────
+  // On n'accuse une banque de « ne plus répondre » (→ « reconnectez-la ») que si on a vu TOUT
+  // l'amont. La complétude se DÉMONTRE, elle ne se suppose pas : on compare ce qu'on a
+  // réellement vu au total que l'amont ANNONCE (`Meta.TotalRecords`, présent en runtime).
+  //
+  // Un `?? 1` sur `TotalPages` serait un piège : `Meta` absent ⇒ « 1 page » ⇒ sortie par la
+  // branche « fin normale » ⇒ listing déclaré COMPLET alors qu'on ne sait rien. On aurait
+  // alors envoyé l'utilisateur ré-authentifier des banques parfaitement saines — sur-compter
+  // accuse à tort, sous-compter ne fait que taire un signal. Aucune annonce = aucune preuve
+  // = on se tait.
+  //
+  // Double garde : même si `TotalPages` mentait (fin annoncée trop tôt), `TotalRecords`
+  // rattraperait — on aurait vu moins de connexions qu'annoncé ⇒ incomplet ⇒ pas d'accusation.
+  const listingAmontComplet =
+    totalRecordsAnnonce !== undefined && connexionsApiBrutes >= totalRecordsAnnonce;
+
+  // ── DÉSYNCHRONISATIONS base ↔ amont ────────────────────────────────────────────────
+  // Elles étaient ignorées EN SILENCE. C'est ce silence qui a produit le « spinner puis
+  // rien » : les 2 connexions locales n'existaient plus chez Omni-FI, la seule connexion
+  // amont n'était pas en base → intersection vide → 0 connexion traitée → aucun message.
+  // On les COMPTE (jamais de nom de banque ni d'id : message non-énumérant, règle 3).
+  const idsActifsAmont = new Set(connexions.map((c) => c.ConnectionId));
+
+  // (a) Connectée chez Omni-FI, jamais rattachée ici → action : FINALISER via le widget.
+  const nonRattachees = connexions.filter(
+    (cx) => !connexionsConnues.has(cx.ConnectionId),
+  ).length;
+
+  // (b) De NOTRE base, mais plus utilisable côté Omni-FI. DEUX causes distinctes…
+  //   • `disparues`      : l'amont ne la renvoie plus DU TOUT (accès révoqué, EndUser recréé) ;
+  //   • `inexploitables` : l'amont la renvoie, mais avec un statut non actif (expirée, en erreur).
+  // …et UNE SEULE action utilisateur : reconnecter. On les fusionne donc dans le message (un
+  // signal = une action) tout en gardant la distinction au LOG, où elle sert au diagnostic.
+  //
+  // Sans le cas `inexploitables`, une banque connue des DEUX côtés mais inactive amont ne
+  // tombait dans AUCUN compteur : le message devenait « Aucune banque connectée — connectez-en
+  // une » alors que l'utilisateur en a une, affichée juste au-dessus. Faux, et mauvaise action.
+  const disparues = connuesActives.filter((id) => !idsAmont.has(id)).length;
+  const inexploitables = connuesActives.filter(
+    (id) => idsAmont.has(id) && !idsActifsAmont.has(id),
+  ).length;
+  // FAIL-SAFE : « disparue » n'a de sens que si on a vu TOUT l'amont (cf. `listingAmontComplet`).
+  // `inexploitables`, lui, se fonde sur ce qu'on a RÉELLEMENT vu → toujours fiable.
+  const inutilisables = (listingAmontComplet ? disparues : 0) + inexploitables;
+
+  // DIAGNOSTIC (« spinner puis rien ») — une seule ligne qui TRANCHE entre les causes,
+  // parce que le compteur final `connexions: 0` les confond toutes. Aucune PII : on ne
+  // logge que des COMPTES et des valeurs d'énumération, jamais un ConnectionId, un
+  // libellé bancaire ou le ClientUserId (règle 8).
+  //
+  // Lecture du verdict :
+  //   apiBrutes === 0                      → l'amont ne renvoie RIEN (EndUser/clés/env)
+  //   apiBrutes > 0 && apiActives === 0    → notre filtre de STATUT écarte tout (cf. statutsVus)
+  //   apiActives > 0 && enBase === 0       → `bank_connections` vide pour ce workspace
+  //   apiActives > 0 && enBase > 0 && aTraiter === 0 → MISMATCH d'ids (EndUser recréé)
+  //   aTraiter > 0 && comptesRattaches 0   → PORTÉE : l'écriture est bornée (cf. scopes)
+  //
+  // `entityScope`/`accountScope` DOIVENT valoir "GLOBALE" ici : l'ingestion tourne en
+  // Vision Globale (CLAUDE.md ENTITY-WRITE-SCOPE1). Toute autre valeur = régression
+  // d'isolation entité → dette INTERDITE, à corriger immédiatement.
+  console.info(
+    JSON.stringify({
+      evt: "sync_diag",
+      workspaceId,
+      entityScope: entityScopeMode,
+      accountScope: accountScopeMode,
+      droitComptes,
+      apiBrutes: connexionsApiBrutes,
+      statutsVus: [...statutsVus],
+      apiActives: connexions.length,
+      enBase: connexionsConnues.size,
+      aTraiter: connexionsATraiter.length,
+      nonRattachees,
+      disparues,
+      inexploitables,
+      inutilisables,
+      listingAmontComplet,
+    }),
   );
 
   // 3. Pour CHAQUE connexion : (a) découvrir + persister les comptes, (b) DÉCLENCHER
@@ -1104,6 +1251,8 @@ export async function synchroniserConnexionsDepuisOmnifi(
     // workspace sans connexion → 0 → message neutre côté action).
     connexions: connexionsATraiter.length,
     comptesRattaches,
+    nonRattachees,
+    inutilisables,
     transactionsImportees,
     aReparer,
     rateLimited,

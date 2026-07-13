@@ -303,6 +303,7 @@ export function BankConnectWidget({
       <WidgetFeedback
         erreurDemarrage={demarrage.erreur}
         erreurFinalisation={finalisation.erreur}
+        info={finalisation.info}
         succes={finalisation.succes}
         redirection={redirection}
         reparation={reparation}

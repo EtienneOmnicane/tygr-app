@@ -37,10 +37,19 @@ import { cn } from "@/components/ui/states/primitives";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import { synchroniserConnexionsAction } from "@/app/(workspace)/banques/actions";
 
-/** Retour utile pour le rendu (sous-ensemble d'`EtatFinalisation`). */
+/**
+ * Retour utile pour le rendu (sous-ensemble d'`EtatFinalisation`).
+ *
+ * ⚠️ Ce type est STRUCTUREL : omettre un champ d'`EtatFinalisation` ne provoque AUCUNE erreur
+ * de compilation — le champ est simplement IGNORÉ en silence. C'est exactement ce qui est
+ * arrivé à `info` : ce bouton (l'écran d'accueil, donc le chemin le plus emprunté) restait
+ * MUET sur « aucune banque à synchroniser » alors que /banques, lui, l'affichait. Avant
+ * d'ajouter un champ à `EtatFinalisation`, vérifier qu'il est relayé ICI aussi.
+ */
 type Retour = {
   erreur: string | null;
   succes: string | null;
+  info?: string | null;
   reparation?: Array<{ connectionId: string; jobId: string }>;
   aReconnecter?: Array<{ connectionId: string }>;
 };
@@ -143,6 +152,17 @@ export function SyncButton({ role }: { role: WorkspaceRole }) {
       {!retour?.erreur && !aReparer && !aReconnecter && retour?.succes && (
         <p role="status" className="text-right text-xs text-success">
           Comptes à jour.
+        </p>
+      )}
+
+      {/* INFORMATION actionnable — le canal qui manquait ICI. Sans lui, une synchro sans rien
+          à traiter (`{erreur:null, succes:null}`) ne rendait AUCUN nœud : clic → spinner →
+          rien, sur l'écran d'accueil. Il s'affiche AUSSI à côté d'un succès : une banque qui
+          ne répond plus resterait sinon invisible derrière le vert « Comptes à jour ».
+          Registre neutre (`text-muted`) : ni rouge (rien n'a échoué), ni vert (rien n'a réussi). */}
+      {retour?.info && (
+        <p role="status" className="max-w-xs text-right text-xs text-text-muted">
+          {retour.info}
         </p>
       )}
     </div>

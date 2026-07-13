@@ -40,6 +40,7 @@ export interface ConnexionAReconnecter {
 export function WidgetFeedback({
   erreurDemarrage,
   erreurFinalisation,
+  info,
   succes,
   redirection,
   reparation,
@@ -51,6 +52,13 @@ export function WidgetFeedback({
   erreurDemarrage?: string | null;
   /** Erreur de finalisation/synchro — message déjà mappé S2. */
   erreurFinalisation?: string | null;
+  /**
+   * INFORMATION actionnable (désynchronisation base ↔ Omni-FI, « aucune banque à
+   * synchroniser »). Registre VOLONTAIREMENT distinct : ni rouge (rien n'a échoué), ni vert
+   * (rien n'a réussi). Sans ce canal, ces états partaient en `{erreur:null, succes:null}` —
+   * c'est-à-dire en SILENCE, laissant l'utilisateur devant un spinner sans réponse.
+   */
+  info?: string | null;
   /** Message de succès (déjà construit côté serveur). */
   succes?: string | null;
   /** `true` quand une redirection vers le Dashboard est en cours (succès complet). */
@@ -110,6 +118,19 @@ export function WidgetFeedback({
             Voir mon tableau de bord →
           </Link>
         </div>
+      )}
+
+      {/* INFORMATION actionnable : « aucune banque à synchroniser », banque connectée chez
+          Omni-FI mais jamais rattachée ici, banque d'ici qui ne répond plus. `role="status"`
+          + `text-muted` — jamais le rouge (rien n'a échoué), jamais le vert (rien n'a
+          réussi). Même registre que l'invite `aReconnecter` ci-dessous : un fait + une
+          action. Ce canal existe parce que ces états partaient auparavant en SILENCE.
+          Placé APRÈS le succès : le résultat principal se lit d'abord, le complément
+          actionnable ensuite (une synchro peut réussir ET signaler une banque morte). */}
+      {info && (
+        <p role="status" className="text-sm text-text-muted">
+          {info}
+        </p>
       )}
 
       {/* Boutons de RÉPARATION : une connexion dont le re-sync a redemandé un OTP. Le

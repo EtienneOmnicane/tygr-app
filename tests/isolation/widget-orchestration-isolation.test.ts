@@ -88,8 +88,15 @@ function clientFactice(over: {
           { ConnectionId: over.exchange?.ConnectionId ?? "conn-omnifi-1", InstitutionId: over.exchange?.InstitutionId ?? "mcb", InstitutionName: "MCB", CustomerType: "CORPORATE", Status: "active", CreatedAt: "2026-06-16T00:00:00Z" },
         ],
       },
-      Links: {},
-      Meta: { TotalPages: 1 },
+      // Enveloppe FIDÈLE au runtime (vérifiée le 2026-07-13 sur api-stage) :
+      //   Meta  = { TotalPages, TotalRecords }  ← TotalRecords PROUVE la complétude du listing
+      //   Links = { Self }                       ← PAS de `Next` en page unique
+      // Le mock omettait `TotalRecords` : il validait une enveloppe que l'amont n'envoie pas.
+      Links: { Self: "https://api-stage.omni-fi.co/connections?page=1" },
+      Meta: {
+        TotalPages: 1,
+        TotalRecords: (over.connections ?? [{ ConnectionId: "conn-omnifi-1" }]).length,
+      },
     }),
     // GET /accounts?connectionId= (flux drop-in) : enveloppe { Data, Links, Meta }.
     listerComptesConnexion: vi.fn().mockResolvedValue({
@@ -467,6 +474,101 @@ describe("synchroniserConnexionsDepuisOmnifi — contournement GET /connections 
       (await tx.select().from(bankConnections)).some((x) => x.omnifiConnectionId === "conn-sync-A"),
     );
     expect(vuB).toBe(false);
+  });
+
+  // ── Compteurs de DÉSYNCHRONISATION (incident « spinner puis rien », 2026-07-13) ────────
+  // Ils pilotent un message affiché à l'utilisateur : un compteur faux produit une phrase
+  // fausse — et « reconnectez vos banques » adressé à une banque SAINE est un dégât réel.
+
+  // NB : la base est PARTAGÉE entre les tests de ce fichier → `inutilisables` compte aussi
+  // les connexions semées par les tests précédents. On mesure donc un DELTA (la propriété
+  // qu'on veut vraiment prouver : « cette connexion-ci est-elle comptée ? »), pas une valeur
+  // absolue qui dépendrait de l'ordre d'exécution.
+  async function inutilisablesActuels(): Promise<number> {
+    const vide = clientFactice({ connections: [] });
+    const r = await synchroniserConnexionsDepuisOmnifi(vide, execWs(ADMIN_A, WS_A));
+    return r.inutilisables;
+  }
+
+  it("CAS DE L'INCIDENT : base et amont disjoints → les DEUX désyncs sont comptées", async () => {
+    // État exact du 13/07 : 1 connexion en base introuvable chez Omni-FI, 1 connexion chez
+    // Omni-FI jamais rattachée ici → intersection vide → 0 connexion traitée. Avant, ce cas
+    // renvoyait `{erreur:null, succes:null}` : spinner puis RIEN.
+    const base = await inutilisablesActuels();
+    await semerConnexionEnBase("conn-morte", "oa-morte");
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-jamais-rattachee", InstitutionId: "bankone", Status: "active" }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(0);
+    expect(r.nonRattachees).toBe(1); // vue chez Omni-FI, absente de la base → « finalisez »
+    expect(r.inutilisables).toBe(base + 1); // conn-morte : en base, absente de l'amont
+  });
+
+  it("connexion connue des DEUX côtés mais INACTIVE amont → « inutilisable », jamais ignorée", async () => {
+    // Trou trouvé en cross-review : la connexion est en base ET renvoyée par l'amont, mais
+    // avec un statut non actif → elle n'était comptée NULLE PART. Le message devenait
+    // « Aucune banque connectée — connectez-en une » alors que l'utilisateur en a une,
+    // affichée juste au-dessus, et que la bonne action est de la RECONNECTER.
+    const base = await inutilisablesActuels();
+    await semerConnexionEnBase("conn-expiree", "oa-expiree");
+    const c = clientFactice({
+      connections: [{ ConnectionId: "conn-expiree", InstitutionId: "mcb", Status: "expired" }],
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(0); // non traitée (statut non actif)
+    expect(r.nonRattachees).toBe(0); // elle EST en base
+    expect(r.inutilisables).toBe(base + 1); // ← le trou : ce +1 manquait, l'UI mentait
+  });
+
+  it("FAIL-SAFE : l'amont N'ANNONCE PAS son total → n'accuse AUCUNE banque de ne plus répondre", async () => {
+    // LE CAS QUI COMPTE (trouvé en cross-review) : sans `Meta`, un `?? 1` sur TotalPages
+    // conclurait « 1 page, donc listing complet » et compterait les connexions de la base
+    // comme disparues → « ces banques ne répondent plus, reconnectez-les » sur des banques
+    // parfaitement SAINES. La complétude doit se DÉMONTRER (`TotalRecords`), pas se supposer.
+    await semerConnexionEnBase("conn-sans-preuve", "oa-sans-preuve");
+    const c = clientFactice({ connections: [] });
+    (c.listerConnexions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      Data: { Connections: [] }, // ni Meta, ni Links → aucune preuve de complétude
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.connexions).toBe(0);
+    expect(r.inutilisables).toBe(0); // ← surtout PAS 1 : on ne sait pas, donc on se tait
+  });
+
+  it("FAIL-SAFE : moins de connexions VUES qu'annoncées → pas d'accusation (TotalPages ment)", async () => {
+    // Double garde : même si `TotalPages` annonce la fin trop tôt, `TotalRecords` rattrape —
+    // on a vu 1 connexion alors que l'amont en annonce 5 ⇒ listing incomplet ⇒ on se tait.
+    await semerConnexionEnBase("conn-non-vue", "oa-non-vue");
+    const c = clientFactice({ connections: [] });
+    (c.listerConnexions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      Data: { Connections: [{ ConnectionId: "autre", InstitutionId: "mcb", Status: "active" }] },
+      Meta: { TotalPages: 1, TotalRecords: 5 }, // « fin de listing »… sur 5 connexions annoncées
+      Links: { Self: "…" },
+    });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(r.inutilisables).toBe(0); // 1 vue < 5 annoncées → incomplet → aucune accusation
+  });
+
+  it("pagination : suit Meta.TotalPages (et NON Links.Next, absent en page unique)", async () => {
+    // Dette fermée au passage : `Links.Next` est ABSENT du contrat réel (`Links: {Self}`) →
+    // s'en servir comme condition d'arrêt faisait rater TOUTES les pages 2+. Au-delà d'une
+    // page, le sync ignorait des connexions EN SILENCE.
+    const c = clientFactice({ connections: [] });
+    (c.listerConnexions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        Data: { Connections: [{ ConnectionId: "p1", InstitutionId: "mcb", Status: "active" }] },
+        Meta: { TotalPages: 2, TotalRecords: 2 },
+        Links: { Self: "…" }, // pas de Next — et pourtant il RESTE une page
+      })
+      .mockResolvedValueOnce({
+        Data: { Connections: [{ ConnectionId: "p2", InstitutionId: "sbm", Status: "active" }] },
+        Meta: { TotalPages: 2, TotalRecords: 2 },
+        Links: { Self: "…" },
+      });
+    const r = await synchroniserConnexionsDepuisOmnifi(c, execWs(ADMIN_A, WS_A));
+    expect(c.listerConnexions).toHaveBeenCalledTimes(2); // la page 2 EST lue
+    expect(r.nonRattachees).toBe(2); // les DEUX connexions amont sont vues
   });
 
   it("persiste InstitutionName depuis GET /connections (DASH-INST1)", async () => {
