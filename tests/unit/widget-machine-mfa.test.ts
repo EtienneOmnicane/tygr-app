@@ -63,6 +63,17 @@ describe("progression d'états", () => {
     expect(e.codeEchec).toBe("LOGIN_FAILED");
     expect(pollingActif(e)).toBe(false);
   });
+
+  it("DÉRIVE AMONT — statut hors de nos types → `initialisation`, jamais un faux terminal", () => {
+    // Le statut du fil est une union OUVERTE : l'amont émet des valeurs que ni la doc ni nos
+    // types ne connaissent (le backend persiste `SCRAPING` là où l'API documente
+    // `RETRIEVING`). Un inconnu ne doit ni faire planter, ni passer pour `termine`/`echec`
+    // — et surtout jamais rendre `undefined` (le mode de défaillance payé sur le "UNKNOWN"
+    // du SDK widget).
+    const e = appliquer(etatInitial(), job({ status: "SCRAPING" }));
+    expect(e.phase).toBe("initialisation");
+    expect(e.phase).not.toBeUndefined();
+  });
 });
 
 describe("détection de rejet OTP", () => {

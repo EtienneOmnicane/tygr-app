@@ -19,7 +19,7 @@
  * les détient hors de la machine). On ne manipule que la forme PUBLIQUE du job
  * (JobPublic, exposée par les Server Actions runtime), pas le SyncJob serveur.
  */
-import type { OmniFiSyncStatus } from "@/server/omnifi";
+import type { OmniFiSyncStatus, OmniFiSyncStatusConnu } from "@/server/omnifi";
 import type { JobPublic } from "@/app/(workspace)/banques/widget-runtime";
 
 export const MAX_RESENDS = 3;
@@ -77,19 +77,36 @@ export type EvenementMfa =
   | { type: "JOB"; job: JobPublic; maintenant: number } // nouveau snapshot de polling
   | { type: "RESEND_OK"; mfaResendRequestedAt: string; cooldownSeconds: number | null; maintenant: number };
 
-const PHASES_SYNC: ReadonlySet<OmniFiSyncStatus> = new Set([
-  "RETRIEVING",
-  "PARSING",
-  "ENRICHING",
-]);
+/**
+ * Phase UI par statut CONNU. La table est typée sur `OmniFiSyncStatusConnu` — l'union
+ * FERMÉE — donc une coquille (`RETRIEVIN`) échoue au TYPECHECK.
+ *
+ * Ce n'est pas de la coquetterie : depuis que le statut du fil est une union OUVERTE
+ * (`OmniFiSyncStatusConnu | (string & {})`, parce que l'amont DÉRIVE — il persiste
+ * `SCRAPING` là où l'API documente `RETRIEVING`), une comparaison `s === "OTP_REQUESTED"`
+ * n'est PLUS vérifiée par TS : comparer à n'importe quelle chaîne devient légal (TS2367 ne
+ * mord plus). Une faute de frappe passerait donc en silence, et la phase MFA ne se
+ * déclencherait jamais — sans qu'aucun gate ne le voie. Même parade que les Sets de
+ * `orchestration.ts` : on INTERROGE avec l'union ouverte, on CONSTRUIT avec la fermée.
+ */
+const PHASE_PAR_STATUT: Partial<Record<OmniFiSyncStatusConnu, PhaseWidget>> = {
+  OTP_REQUESTED: "mfa_requis",
+  OTP_WAITING: "mfa_validation",
+  COMPLETED: "termine",
+  FAILED: "echec",
+  RETRIEVING: "synchronisation",
+  PARSING: "synchronisation",
+  ENRICHING: "synchronisation",
+};
 
+/**
+ * Phase UI depuis le statut du fil (union ouverte). Un statut INCONNU de nos types (dérive
+ * amont) retombe sur `initialisation` : jamais `undefined`, et surtout jamais un faux
+ * `termine`/`echec`. Les statuts connus non mappés (PENDING, STARTED, LOGGING_IN) prennent
+ * le même repli — c'est bien une phase d'initialisation.
+ */
 function phaseDepuisStatut(s: OmniFiSyncStatus): PhaseWidget {
-  if (s === "OTP_REQUESTED") return "mfa_requis";
-  if (s === "OTP_WAITING") return "mfa_validation";
-  if (s === "COMPLETED") return "termine";
-  if (s === "FAILED") return "echec";
-  if (PHASES_SYNC.has(s)) return "synchronisation";
-  return "initialisation";
+  return PHASE_PAR_STATUT[s as OmniFiSyncStatusConnu] ?? "initialisation";
 }
 
 /**
