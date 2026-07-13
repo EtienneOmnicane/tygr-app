@@ -738,6 +738,36 @@ export async function declencherEtAttendre(
   // signifie qu'un sync a tourné récemment → NE PAS déclencher (évite un 429 inutile
   // à chaque clic). On relira quand même l'état courant en aval.
   if (cooldownActif(nextSyncAvailableAt)) {
+    // Mais un cooldown ne dit PAS que les données sont à jour — seulement qu'un sync est
+    // parti récemment. S'il TOURNE ENCORE, ce qu'on va lire est PARTIEL.
+    //
+    // C'est le 2ᵉ clic, et il est provoqué par NOTRE PROPRE message (« relancez dans
+    // quelques minutes ») — or « quelques minutes » tombe SOUS le cooldown de 15 min. Sans
+    // cette vérification, ce clic ressortait en RATE_LIMITED, donc sans le drapeau
+    // `incomplet`, donc en « Comptes à jour » : le faux message de victoire renaissait
+    // exactement sur le geste qu'on venait de prescrire (revue PR #202, constat 1).
+    //
+    // Couvre les DEUX comportements amont, qu'il pose `NextSyncAvailableAt` dès le
+    // déclenchement ou non : ici on ne déduit rien du cooldown, on VÉRIFIE l'état du job.
+    const enCours = await jobEnCoursNonTerminal(client, connectionId, clientUserId);
+    if (enCours) {
+      // Sans PII : identifiants opaques Omni-FI + valeur d'énumération amont. Pas d'`attenteMs`
+      // — contrairement au TIMEOUT de polling, on n'a rien attendu : on a CONSTATÉ.
+      console.warn(
+        JSON.stringify({
+          evt: "omnifi_sync_incomplet",
+          connectionId,
+          jobId: enCours.jobId,
+          dernierStatut: enCours.dernierStatut,
+          cause: "JOB_EN_COURS_SOUS_COOLDOWN",
+        }),
+      );
+      return {
+        kind: "INCOMPLET",
+        jobId: enCours.jobId,
+        dernierStatut: enCours.dernierStatut,
+      };
+    }
     return { kind: "RATE_LIMITED", nextSyncAt: nextSyncAvailableAt };
   }
 
@@ -813,6 +843,36 @@ function interpreterAttente(r: ResultatAttenteSync): IssueTrigger {
         jobId: r.jobId,
         dernierStatut: r.dernierStatut ?? "INCONNU",
       };
+  }
+}
+
+/**
+ * Un job de scraping tourne-t-il ENCORE sur cette connexion ? (best-effort)
+ *
+ * On le lit sur le DERNIER job : ni terminal (COMPLETED/FAILED), ni MFA ⇒ il court toujours,
+ * donc tout ce qu'on lira côté transactions est PARTIEL.
+ *
+ * Les statuts MFA sont EXCLUS à dessein : un job en `OTP_REQUESTED` n'est pas « en cours de
+ * scraping », il ATTEND l'utilisateur. Le classer INCOMPLET masquerait une RÉPARATION requise
+ * derrière un rassurant « c'est en cours » — la MFA reste le chemin d'`attendreFinSync`
+ * (→ NEEDS_REPAIR), et sous cooldown on retombe sur RATE_LIMITED, comme avant.
+ *
+ * BEST-EFFORT : toute erreur de lecture rend `null` ⇒ on garde le comportement RATE_LIMITED
+ * existant. Ce diagnostic ne doit JAMAIS faire échouer une synchro qui, sinon, aboutirait.
+ */
+async function jobEnCoursNonTerminal(
+  client: OmniFiClient,
+  connectionId: string,
+  clientUserId: string,
+): Promise<{ jobId: string; dernierStatut: string } | null> {
+  try {
+    const latest = await client.getLatestSyncJob(connectionId, clientUserId);
+    if (!latest.JobId) return null;
+    const status = latest.Status;
+    if (SYNC_STATUTS_TERMINAUX.has(status) || SYNC_STATUTS_MFA.has(status)) return null;
+    return { jobId: latest.JobId, dernierStatut: status };
+  } catch {
+    return null;
   }
 }
 

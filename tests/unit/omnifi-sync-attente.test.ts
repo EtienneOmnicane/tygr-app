@@ -247,3 +247,121 @@ describe("declencherEtAttendre — un job qui tourne encore n'est PAS un échec"
     expect(issue).toEqual({ kind: "DECLENCHE" });
   });
 });
+
+/**
+ * LE 2ᵉ CLIC — le geste que notre propre message provoque (« relancez dans quelques
+ * minutes »), et qui tombe SOUS le cooldown amont de 15 min.
+ *
+ * Sans la vérification du job en cours, ce clic sortait en RATE_LIMITED à la garde, donc
+ * sans le drapeau `incomplet`, donc en « Comptes à jour » : le faux message de victoire
+ * renaissait exactement sur le geste qu'on venait de prescrire (revue PR #202, constat 1).
+ * Un cooldown dit qu'un sync est PARTI récemment — jamais qu'il est FINI.
+ */
+describe("declencherEtAttendre — cooldown actif : un job qui tourne ≠ des comptes à jour", () => {
+  /** `NextSyncAvailableAt` dans le futur ⇒ cooldown actif (2ᵉ clic, 2 min après le 1er). */
+  const COOLDOWN_FUTUR = new Date(Date.now() + 13 * 60_000).toISOString();
+
+  function clientSousCooldown(latest: Record<string, unknown> | Error) {
+    const declencherSync = vi.fn();
+    const getLatestSyncJob =
+      latest instanceof Error
+        ? vi.fn().mockRejectedValue(latest)
+        : vi.fn().mockResolvedValue(latest);
+    return {
+      client: { declencherSync, getLatestSyncJob } as unknown as OmniFiClient,
+      declencherSync,
+    };
+  }
+
+  it("job encore en RETRIEVING derrière le cooldown → INCOMPLET, sans re-poller 120 s", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { client, declencherSync } = clientSousCooldown({
+      JobId: JOB_ID,
+      Status: "RETRIEVING",
+    });
+
+    const issue = await declencherEtAttendre(
+      client,
+      CONNECTION_ID,
+      CLIENT_USER_ID,
+      COOLDOWN_FUTUR,
+    );
+
+    // L'invariant : le 2ᵉ clic reste HONNÊTE (données partielles), il ne repasse pas au vert.
+    expect(issue).toEqual({
+      kind: "INCOMPLET",
+      jobId: JOB_ID,
+      dernierStatut: "RETRIEVING",
+    });
+    expect(issue.kind).not.toBe("RATE_LIMITED");
+    // La garde amont tient toujours : on ne re-déclenche PAS sous cooldown (pas de 429),
+    // et on n'attend pas 120 s pour rien — on CONSTATE l'état du job.
+    expect(declencherSync).not.toHaveBeenCalled();
+  });
+
+  it("dernier job TERMINAL (COMPLETED) → RATE_LIMITED : le cooldown seul reste un cooldown", async () => {
+    // Contre-preuve : on ne transforme pas TOUT cooldown en « incomplet ». Si le scrape
+    // précédent est allé au bout, les données SONT à jour — le comportement ne change pas.
+    const { client } = clientSousCooldown({ JobId: JOB_ID, Status: "COMPLETED" });
+
+    const issue = await declencherEtAttendre(
+      client,
+      CONNECTION_ID,
+      CLIENT_USER_ID,
+      COOLDOWN_FUTUR,
+    );
+
+    expect(issue).toEqual({ kind: "RATE_LIMITED", nextSyncAt: COOLDOWN_FUTUR });
+  });
+
+  it("CAS LIMITE — job en OTP_REQUESTED sous cooldown → RATE_LIMITED, JAMAIS INCOMPLET", async () => {
+    // Un job MFA n'est pas « en cours de scraping » : il ATTEND l'utilisateur. Le classer
+    // INCOMPLET masquerait une RÉPARATION requise derrière un rassurant « c'est en cours »
+    // — c'est le sous-type structurel qui avait déjà piégé la PR #201. Le chemin MFA reste
+    // celui d'`attendreFinSync` (→ NEEDS_REPAIR).
+    const { client } = clientSousCooldown({ JobId: JOB_ID, Status: "OTP_REQUESTED" });
+
+    const issue = await declencherEtAttendre(
+      client,
+      CONNECTION_ID,
+      CLIENT_USER_ID,
+      COOLDOWN_FUTUR,
+    );
+
+    expect(issue.kind).toBe("RATE_LIMITED");
+    expect(issue.kind).not.toBe("INCOMPLET");
+  });
+
+  it("CAS LIMITE — lecture du dernier job en ERREUR → RATE_LIMITED (best-effort, jamais fatal)", async () => {
+    // Ce diagnostic ne doit jamais faire échouer une synchro qui, sinon, aboutirait :
+    // on retombe sur le comportement existant.
+    const { client } = clientSousCooldown(new Error("réseau"));
+
+    const issue = await declencherEtAttendre(
+      client,
+      CONNECTION_ID,
+      CLIENT_USER_ID,
+      COOLDOWN_FUTUR,
+    );
+
+    expect(issue).toEqual({ kind: "RATE_LIMITED", nextSyncAt: COOLDOWN_FUTUR });
+  });
+
+  it("log `omnifi_sync_incomplet` SANS PII (identifiants opaques + énumération)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { client } = clientSousCooldown({ JobId: JOB_ID, Status: "RETRIEVING" });
+
+    await declencherEtAttendre(client, CONNECTION_ID, CLIENT_USER_ID, COOLDOWN_FUTUR);
+
+    const charge = JSON.parse(warnSpy.mock.calls[0][0] as string);
+    expect(charge).toMatchObject({
+      evt: "omnifi_sync_incomplet",
+      connectionId: CONNECTION_ID,
+      jobId: JOB_ID,
+      dernierStatut: "RETRIEVING",
+      cause: "JOB_EN_COURS_SOUS_COOLDOWN",
+    });
+    // Règle 8 : aucun SessionToken / ClientUserId / libellé bancaire.
+    expect(JSON.stringify(charge)).not.toContain(CLIENT_USER_ID);
+  });
+});
