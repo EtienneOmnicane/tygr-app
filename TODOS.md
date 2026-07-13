@@ -885,6 +885,23 @@ Restent deux constats mineurs, sans impact d'isolation :
   périmètre), soit on retire le code. **Déclencheur** : décision produit sur la maille fine
   (lot L9 du plan Entités), ou revue de dette de fin d'epic.
 
+### Vigilance — promotion de rôle et périmètre (2026-07-13)
+
+- [ ] **ROLE-PROMOTION-SCOPE1 (P2, effort ~0,25 j, gardien Backend) — si un jour on ajoute
+  la PROMOTION de rôle, purger ou refuser le périmètre.** Depuis §12 (2026-07-13), un ADMIN
+  ne peut PAS être restreint à un périmètre (`AdminNonScopableError`, posée sur les deux
+  axes : `definirScopesMembre` et `definirScopesFinsMembre` ; héritée par `octroyerScopeFin`
+  et `creerMembreAvecScopes`).
+  **Le trou n'est pas atteignable aujourd'hui** : il n'existe AUCUN chemin de promotion de
+  rôle dans l'app — le rôle est fixé à la création du membre, aucun `UPDATE
+  workspace_members.role` n'existe dans les repositories (vérifié). Mais le jour où on
+  ajoutera « changer le rôle d'un membre », promouvoir un MANAGER **scopé** en ADMIN
+  recréerait exactement l'état que §12 interdit : ses lectures seraient partielles (bandeau
+  « Restricted view ») et ses gardes d'écriture le bloqueraient (`PerimetreReduitError`).
+  **À faire à ce moment-là** : soit purger les scopes dans la MÊME transaction que la
+  promotion, soit la refuser tant que le membre est scopé (et exiger un déscopage préalable).
+  **Déclencheur** : ouverture d'une surface de changement de rôle.
+
 ### Langue de l'interface — migration FR → EN (2026-07-13)
 
 - [ ] **I18N-EN1 (P2, effort ~3-5 j, gardien Front) — migrer TOUTE l'interface en anglais.**
