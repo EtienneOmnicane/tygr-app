@@ -784,6 +784,188 @@ périmètre du socle (anti-scope-creep, règle 7). Aucune ne touche l'isolation 
   ce chantier L3 mergé → l'UI devient le maillon manquant pour activer une Vision Entité en
   pratique. Ne touche ni l'isolation ni les montants (surface de rendu).
 
+### Redesign « Assignation des comptes » L7 — dette d'ergonomie (2026-07-10)
+
+Section `/admin/entites` → tableau dense groupé par entité + auto-save livrée
+(`feat/admin-entites-assignation-comptes`, commit `d66bbe0` ; read `listerComptesAvecEntite`
+gardé ADMIN + 25 tests d'isolation verts). Aucune de ces dettes ne touche l'isolation, les
+tables append-only ni les montants (surfaces de rendu/UX) → différables. **Visual QA (Gate 4)
+NON encore passée sur le redesign** : à faire sur `/demo/assignation-comptes` avant le merge
+(action pré-merge Human-in-the-Loop, pas une dette).
+
+- [x] **ENTITY-ASSIGN-BULK1 (P1) — assignation en masse compte → entité.** ✅ **LIVRÉE
+  2026-07-13** (`feature/refonte-entites-ia`, lot L3 de `PLAN-refonte-entites.md`).
+  `assignerComptesEntite` : 1 SELECT de pré-check + **1 UPDATE groupé** (jamais N UPDATE en
+  boucle), atomique, avec comparaison de cardinalité (aucun succès partiel silencieux) et
+  refus d'une entité archivée comme cible. UI : cases par ligne, case de groupe tri-état,
+  filtre par banque, barre d'action groupée, confirmation sur la dé-assignation en masse.
+  7 cas d'isolation (35→41). Énoncé d'origine ci-dessous, conservé pour l'audit trail :
+  Le workspace réel porte ~87 comptes, dont 77 sans nom sous la même institution, à rattacher
+  aujourd'hui **un par un** (un changement de Select = un appel). Aucune multi-sélection ni
+  « assigner tous les comptes de {institution} à {entité} ». C'est la friction opérationnelle
+  la plus lourde de l'écran. Ajouter une action groupée (cases par ligne + barre d'action, OU
+  bouton par en-tête de groupe/institution) réutilisant `assignerCompteEntite` — soit N appels
+  côté client, soit une nouvelle action batch gardée ADMIN + zod + un cas d'isolation dédié si
+  batch serveur. **Déclencheur** : mise en service prod / onboarding Etienne sur les 87 comptes.
+
+- [ ] **ENTITY-ASSIGN-REVALIDATE1 (P2, effort ~0,5 j) — LARGEMENT ATTÉNUÉE 2026-07-13
+  par le batch (L3)** : ranger N comptes ne pose plus qu'UN `revalidatePath` au lieu de N.
+  Le défaut ne subsiste que sur l'auto-save unitaire, ligne à ligne. Re-évaluer après usage
+  réel avant d'investir. Énoncé d'origine : `revalidatePath` re-render les 87
+  lignes à chaque enregistrement.** `assignerCompteAction` pose `revalidatePath("/admin/entites")` :
+  après un succès, le compte ne migre vers son groupe qu'au retour serveur, qui re-render toute
+  la liste — efface les coches « Enregistré » et réordonne pendant qu'on édite une autre ligne.
+  Cohérent (serveur = vérité) mais sautillant en auto-save dense. Piste : migration optimiste
+  locale du compte vers son nouveau groupe + `revalidate` ciblé/différé, ou `useOptimistic`.
+  **Déclencheur** : retour d'usage « ça saute quand j'enchaîne les lignes ».
+
+- [x] **ENTITY-ASSIGN-CONFIRM1 (P2) — ✅ SOLDÉE 2026-07-13 (L3 + L5).** La dé-assignation
+  exige une confirmation explicite, en MASSE (L3) comme à l'UNITÉ (L5) — modale
+  `dismissible={false}`, qui DIT que le compte deviendra invisible aux membres à accès
+  restreint. La cible par défaut de la barre d'action groupée n'est plus destructive.
+  Énoncé d'origine :
+  la dé-assignation **en masse** (L3) exige désormais une confirmation explicite (modale
+  `dismissible={false}`), et la cible par défaut de la barre d'action n'est plus destructive.
+  Reste dû : la confirmation sur l'auto-save **unitaire** (lot L5). Énoncé d'origine : pas de
+  confirmation sur la dé-assignation. Repasser un compte en « — Non assigné — » le rend invisible aux membres en
+  Vision Entité (fail-closed) sur un simple changement de Select. Réversible mais silencieux.
+  Ajouter une confirmation (ou un undo transitoire) sur la seule transition vers `null`.
+  **Déclencheur** : premier incident « un compte a disparu pour un membre ».
+
+- [x] **ENTITY-ASSIGN-STICKY1 (P2) — ✅ SOLDÉE 2026-07-13 (L5).** `sticky` sur le `<tr>`
+  de `<thead>` (z-20) ET sur les en-têtes de groupe (z-10, sous le premier) : sur 87 lignes
+  qui défilent, on garde à l'écran la colonne qu'on lit ET l'entité dans laquelle on range.
+  Énoncé d'origine : en-têtes de tableau/groupe non collants. Sur 87 lignes qui défilent, les colonnes « Compte / Devise / Entité » et les
+  en-têtes de groupe disparaissent — contradictoire avec l'objectif de scannabilité. Poser
+  `sticky top-0` sur le `<thead>` (et éventuellement les `<th scope="colgroup">`).
+  **Déclencheur** : Visual QA ou retour d'usage sur le défilement.
+
+- [ ] **ENTITY-ASSIGN-SCALE1 (P2, effort ~0,5 j) — pas de pagination + jointure INNER
+  fail-closed.** Le read charge et rend tous les comptes d'un coup (87 OK ; problématique à
+  quelques centaines). De plus la jointure `bank_connections` est INNER : un compte dont la
+  connexion manque disparaîtrait de la liste (théorique — `connection_id` NOT NULL — mais
+  fail-closed non voulu). Piste : pagination keyset (cf. TX-FILTRE1) + LEFT JOIN avec repli.
+  **Déclencheur** : un workspace dépasse ~200 comptes.
+
+- [x] **ENTITY-ASSIGN-POLISH1 (P2) — ✅ SOLDÉE 2026-07-13 (L5).** (a) devise en SYMBOLE
+  (`Rs`/`$`/`€`) via `indicateurDevise` — la source unique `format-montant` (aucun montant
+  n'est affiché : on n'emprunte que l'indicateur) ; (c) `loading.tsx` écrit EN DERNIER, une
+  fois la forme de l'écran définitive (bandeau, liste d'entités, bannière, tableau) — sinon
+  il aurait fallu le réécrire à chaque lot. (b) mobile : `overflow-x-auto` conservé sur une
+  table passée à 4 colonnes. Énoncé d'origine : finitions visuelles. (a) Devise
+  affichée en code ISO brut (« MUR »/« USD ») au lieu du symbole `Rs`/`$`/`€` (raccord
+  `format-montant` — même si aucun montant ici) ; (b) mobile : `overflow-x-auto` + Select
+  ~200px min → scroll horizontal plutôt qu'un repli responsive ; (c) pas de `loading.tsx` sur
+  `/admin/entites` (premier affichage sans skeleton). **Déclencheur** : passe de polish design
+  sur l'écran admin.
+
+### Constats résiduels de la cross-review /admin/entites (2026-07-13)
+
+Les trois défauts BLOQUANTS de la revue (garde d'archivage contournable sous ADMIN scopé ;
+garde à sens unique ; mapping SQLSTATE 42501 non prouvé) ont été **corrigés dans le lot**,
+pas consignés — ils touchaient l'isolation (règle 9 : ça se corrige, ça ne se diffère pas).
+Restent deux constats mineurs, sans impact d'isolation :
+
+- [ ] **DEMO-ACTIONS1 (P2, effort ~0,5 j) — les routes `/demo/*` sont PUBLIQUES et montent
+  des composants qui importent de vraies Server Actions ADMIN.** `/demo/assignation-comptes`
+  et `/demo/admin-gestion-entites` rendent les vrais composants (c'est l'objet du Visual QA,
+  Gate 4). Un clic anonyme sur « Create entity » appelle donc `creerEntiteAction`, qui lève
+  `NonAuthentifieError` — **fail-closed, aucune écriture possible**, mais l'erreur n'est pas
+  attrapée et la décision « /demo public » (PR #43) supposait des « routes pures ». Défaut
+  **préexistant** (déjà vrai de `/demo/assignation-comptes` avant ce chantier).
+  Pistes : gater `/demo` hors production via le middleware, ou injecter des handlers inertes
+  dans les démos. **Déclencheur** : mise en service prod (les routes de démo ne doivent pas
+  être servies publiquement en production).
+
+- [ ] **ADMIN-PERIMETRES-MORT1 (P2, effort ~0,25 j) — `admin/perimetres/actions.ts` n'a
+  aucun appelant.** `octroyerScopeAction` / `revoquerScopeAction` (maille fine party/compte,
+  L6a) existent, sont gardées ADMIN et viennent d'être migrées vers
+  `exigerSessionAdministration()` (L0) — mais **aucune page `/admin/perimetres` ne les
+  appelle**. Soit on livre la surface UI (elle pilote `account_scope`, le 3ᵉ axe de
+  périmètre), soit on retire le code. **Déclencheur** : décision produit sur la maille fine
+  (lot L9 du plan Entités), ou revue de dette de fin d'epic.
+
+### Outillage de test — la concurrence n'est PAS prouvée par PGlite (2026-07-13)
+
+- [ ] **TEST-CONCURRENCE1 (P1, effort ~1 j, gardien Backend) — la suite d'isolation ne peut
+  structurellement pas attraper un TOCTOU.** ⚠️ **Découverte de la cross-review finale, et
+  c'est la dette la plus importante de ce chantier.**
+  **Quoi** : `tests/isolation/*` tourne sous **PGlite**, qui est **MONO-CONNEXION**. Aucun
+  test ne peut donc ouvrir deux transactions concurrentes — toute la classe des bugs
+  *check-then-act* (lire une condition, agir dessus, pendant qu'une autre transaction la
+  change) est **invisible** à la suite, alors même qu'elle est verte.
+  **Preuve que ce n'est pas théorique** : la revue finale a trouvé, en rejouant le SQL des
+  repos sur le **Postgres Docker** du projet, un TOCTOU réel — `exigerEntiteCibleActive`
+  lisait `is_active` sans verrou pendant qu'`archiverEntite` archivait, produisant l'état
+  interdit « entité ARCHIVÉE portant un compte ». Corrigé (`.for("update")`), mais **la
+  correction n'est couverte par aucun test** : la suite ne peut pas l'exercer.
+  **À faire** : une suite de concurrence sur le Postgres Docker (déjà décrit dans CLAUDE.md,
+  « Dev local — stack de validation »), avec 2 connexions réelles, exerçant au minimum les
+  paires : `archiverEntite` ↔ `assignerComptesEntite`, `archiverEntite` ↔
+  `definirScopesMembre`. Sans elle, tout verrou `FOR UPDATE` posé dans ce repo est une
+  affirmation non vérifiée.
+  **Déclencheur** : IMMÉDIAT (P1) — avant le premier déploiement de production, parce que la
+  classe de bugs concernée produit des états interdits que les gardes applicatives croient
+  avoir fermés. Ne touche ni l'append-only ni les montants ; c'est une dette d'OUTILLAGE, pas
+  d'isolation (les invariants, eux, sont posés).
+
+- [ ] **SCOPE-FIN-CULDESAC1 (P2, effort ~0,25 j) — `revoquerScopeFin` ne peut jamais réparer
+  un ADMIN portant ≥2 scopes fins hérités.** Il retire UNE cible puis délègue à
+  `definirScopesFinsMembre`, qui refuse tout jeu NON VIDE sur un ADMIN (§12) : chaque
+  révocation unitaire laisse un reste non vide → `AdminNonScopableError` → aucune révocation
+  ne peut aboutir. Seul l'appel groupé « listes vides » répare.
+  **Inatteignable aujourd'hui** : `/admin/perimetres` n'a aucune surface UI
+  (`ADMIN-PERIMETRES-MORT1`), et l'axe ENTITÉ dispose désormais de son bouton de réparation
+  (« Clear restriction » sur la carte d'un ADMIN). Mais c'est un piège ARMÉ pour le jour où
+  la maille fine sera livrée. **À faire à ce moment-là** : autoriser une révocation qui
+  RÉDUIT strictement le périmètre d'un ADMIN, ou n'exposer que le retrait total.
+  **Déclencheur** : ouverture de la surface `/admin/perimetres`.
+
+### Vigilance — promotion de rôle et périmètre (2026-07-13)
+
+- [ ] **ROLE-PROMOTION-SCOPE1 (P2, effort ~0,25 j, gardien Backend) — si un jour on ajoute
+  la PROMOTION de rôle, purger ou refuser le périmètre.** Depuis §12 (2026-07-13), un ADMIN
+  ne peut PAS être restreint à un périmètre (`AdminNonScopableError`, posée sur les deux
+  axes : `definirScopesMembre` et `definirScopesFinsMembre` ; héritée par `octroyerScopeFin`
+  et `creerMembreAvecScopes`).
+  **Le trou n'est pas atteignable aujourd'hui** : il n'existe AUCUN chemin de promotion de
+  rôle dans l'app — le rôle est fixé à la création du membre, aucun `UPDATE
+  workspace_members.role` n'existe dans les repositories (vérifié). Mais le jour où on
+  ajoutera « changer le rôle d'un membre », promouvoir un MANAGER **scopé** en ADMIN
+  recréerait exactement l'état que §12 interdit : ses lectures seraient partielles (bandeau
+  « Restricted view ») et ses gardes d'écriture le bloqueraient (`PerimetreReduitError`).
+  **À faire à ce moment-là** : soit purger les scopes dans la MÊME transaction que la
+  promotion, soit la refuser tant que le membre est scopé (et exiger un déscopage préalable).
+  **Déclencheur** : ouverture d'une surface de changement de rôle.
+
+### Langue de l'interface — migration FR → EN (2026-07-13)
+
+- [ ] **I18N-EN1 (P2, effort ~3-5 j, gardien Front) — migrer TOUTE l'interface en anglais.**
+  **Quoi** : l'app est intégralement en français (copie en dur dans les composants, les
+  Server Actions et les messages d'erreur). **Aucun socle i18n n'existe** : ni `next-intl`,
+  ni `react-i18next`, ni dossier `messages/`/`locales/`. **Pourquoi** : décision PO
+  (2026-07-13) — les utilisateurs finaux (Financial Managers des BU mauriciennes)
+  travaillent **en anglais** ; le français n'est qu'un artefact de développement. C'est donc
+  une **dette de destination**, pas une préférence.
+  **Chantier NOMMÉ À PART** (règles 7/9 — pas d'expansion de scope dans les refontes en
+  cours). Deux options à trancher au démarrage : (a) remplacement direct des chaînes (pas de
+  dépendance nouvelle, mais aucune bascule possible), (b) socle i18n (`next-intl`) + clés —
+  plus lourd, justifié seulement si un jour on doit servir FR **et** EN.
+  ⚠️ **Points d'attention relevés en recon** : les primitives **partagées** portent des
+  micro-chaînes FR en dur (`Select` « Aucune option. » `select.tsx:313` ; `Modal`
+  `aria-label="Fermer"` `modal.tsx:145` ; `AppErrorState` « Réessayer »
+  `app-error-state.tsx:62`) — elles fuiraient dans **toute** page traduite. Le vocabulaire de
+  sécurité (« Vision Globale » / « Vision Entité ») vit sur **deux** écrans admin
+  (`/admin/entites` **et** `/admin/membres`) : le traduire d'un seul côté ferait parler deux
+  dialectes à la même notion.
+  **Contrainte immédiate (applicable dès maintenant)** : tout nouveau développement
+  **n'ajoute aucune nouvelle copie FR en dur**. La refonte `/admin/entites`
+  (`PLAN-refonte-entites.md`, Q-LANG) sert de **pilote** : écran ADMIN-only, surface étroite,
+  faible risque de régression.
+  **Déclencheur** : avant l'onboarding des premiers utilisateurs finaux (mise en service
+  prod réelle). Ne touche ni l'isolation, ni les tables append-only, ni les montants
+  (surface de rendu).
+
 ### Outillage migrations DB — db:migrate câblé + drift résolu (2026-06-19)
 
 `/investigate` : `/transactions` plantait au runtime sur « relation "categories"

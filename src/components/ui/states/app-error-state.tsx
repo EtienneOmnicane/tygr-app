@@ -18,11 +18,14 @@ import { StateCard, StateIllustration } from "./primitives";
 export function AppErrorState({
   reference,
   onRetry,
+  libelleReessayer = "Réessayer",
 }: {
   /** Identifiant opaque de corrélation (digest Next), jamais un message brut. */
   reference?: string;
   /** Re-tente le rendu du segment (unstable_retry/reset de l'error boundary). */
   onRetry?: () => void;
+  /** Libellé du bouton de reprise. Défaut FR (cf. `libelleFermer` du Modal, Q-LANG §9). */
+  libelleReessayer?: string;
 }) {
   return (
     <StateCard
@@ -59,7 +62,7 @@ export function AppErrorState({
             hover:bg-primary-600 focus:outline-none focus-visible:ring-2
             focus-visible:ring-primary focus-visible:ring-offset-2"
         >
-          Réessayer
+          {libelleReessayer}
         </button>
       )}
     </StateCard>

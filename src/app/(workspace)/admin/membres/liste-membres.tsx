@@ -22,9 +22,9 @@ function cn(...classes: Array<string | false | null | undefined>): string {
 }
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = {
-  ADMIN: "Administrateur",
-  MANAGER: "Gestionnaire",
-  VIEWER: "Lecteur",
+  ADMIN: "Administrator",
+  MANAGER: "Manager",
+  VIEWER: "Viewer",
 };
 
 // Tokens existants uniquement (cf. globals.css : pas de token `info`).
@@ -39,7 +39,7 @@ function libellePerimetre(
   scopeInitial: string[],
   entitesParId: Record<string, string>,
 ): string {
-  if (scopeInitial.length === 0) return "Vision Globale";
+  if (scopeInitial.length === 0) return "Whole group";
   const noms = scopeInitial.map((id) => entitesParId[id]).filter(Boolean);
   // Repli si un id n'est pas dans la map (ex. entité archivée, absente des actives).
   if (noms.length === 0) {
@@ -75,10 +75,10 @@ export function ListeMembres({
               Email
             </th>
             <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-              Rôle
+              Role
             </th>
             <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-              Périmètre
+              Access
             </th>
           </tr>
         </thead>

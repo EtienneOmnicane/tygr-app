@@ -28,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "@/server/db/schema";
 import { userScopes } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
+import { AdminNonScopableError } from "@/server/repositories/entites";
 import {
   CompteIntrouvableError,
   definirScopesFinsMembre,
@@ -457,5 +458,58 @@ describe("ingestion non bloquée — Vision Globale (GUC scope non posé) reste 
       cur = cur.cause;
     }
     expect(msg).toMatch(/foreign key|violates|constraint|policy|row-level/i);
+  });
+});
+
+describe("§12 — un ADMIN n'est jamais restreint, sur l'axe COMPTE/PARTY non plus", () => {
+  // Etienne a nommé `definirScopesMembre` (axe ENTITÉ). La même garde vaut ici, sur l'axe
+  // COMPTE/PARTY (`user_scopes` → `account_scope`) : le principe est le même (« on refuse la
+  // combinaison ADMIN + scopé »), et l'omettre laisserait un ADMIN se scoper FINEMENT — ses
+  // lectures resteraient partielles, et ses gardes d'écriture (PerimetreReduitError teste
+  // AUSSI ctx.accountScope) le bloqueraient, sans chemin pour se réparer. Cul-de-sac.
+
+  it("17. ⭐ definirScopesFinsMembre REFUSE de scoper un ADMIN", async () => {
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        definirScopesFinsMembre(tx, ctx, {
+          userId: ADMIN_A,
+          partyIds: [PARTY_SUCRE],
+          accountIds: [],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AdminNonScopableError);
+    expect(await compterScopesOwner(ADMIN_A)).toBe(0);
+  });
+
+  it("18. octroyerScopeFin refuse aussi — il DÉLÈGUE à definirScopesFinsMembre (garde héritée)", async () => {
+    // Preuve que la garde n'est pas contournable par le chemin unitaire : `octroyerScopeFin`
+    // lit le jeu courant puis rappelle le remplace-set. Un seul point de vérité.
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        octroyerScopeFin(tx, ctx, ADMIN_A, { partyId: PARTY_SUCRE }),
+      ),
+    ).rejects.toBeInstanceOf(AdminNonScopableError);
+    expect(await compterScopesOwner(ADMIN_A)).toBe(0);
+  });
+
+  it("19. RETIRER le périmètre d'un ADMIN reste permis (chemin de réparation d'un état hérité)", async () => {
+    // On pose un scope hérité SOUS L'OWNER (l'API le refuse désormais), puis on prouve que
+    // l'ADMIN peut être réparé. Sans cette nuance, un ADMIN scopé serait piégé.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into user_scopes (workspace_id, user_id, party_id, bank_account_id)
+       values ('${WS_A}','${ADMIN_A}','${PARTY_SUCRE}', null)`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(await compterScopesOwner(ADMIN_A)).toBe(1);
+
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesFinsMembre(tx, ctx, {
+        userId: ADMIN_A,
+        partyIds: [],
+        accountIds: [],
+      }),
+    );
+    expect(await compterScopesOwner(ADMIN_A)).toBe(0);
   });
 });

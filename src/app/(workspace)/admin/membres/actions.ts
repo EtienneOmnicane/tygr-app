@@ -12,8 +12,9 @@ import argon2 from "argon2";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionAdministration } from "@/server/auth/session";
 import {
+  AdminNonScopableError,
   creerMembreAvecScopes,
   EntiteIntrouvableError,
   MembreNonScopableError,
@@ -40,22 +41,22 @@ const provisioningSchema = z
   })
   .strict();
 
-const MESSAGE_REFUS = "Action non autorisée.";
-const MESSAGE_INVALIDE = "Champs invalides.";
+const MESSAGE_REFUS = "You are not allowed to do this.";
+const MESSAGE_INVALIDE = "Invalid input.";
 
 /** Libellé du périmètre pour le message de succès (aucune donnée sensible). */
 function suffixePerimetre(scopesDefinis: boolean, nbEntites: number): string {
   if (scopesDefinis) {
-    return ` Périmètre : ${nbEntites} entité${nbEntites > 1 ? "s" : ""}.`;
+    return ` Access: ${nbEntites} ${nbEntites > 1 ? "entities" : "entity"}.`;
   }
-  return " Périmètre : Vision Globale.";
+  return " Access: the whole group.";
 }
 
 export async function provisionnerMembre(
   _etat: EtatProvisioning,
   formData: FormData,
 ): Promise<EtatProvisioning> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
 
   const parsed = provisioningSchema.safeParse({
     email: formData.get("email"),
@@ -92,6 +93,12 @@ export async function provisionnerMembre(
     // Une entité inconnue / d'un autre tenant (FK composite) ou un membre non scopable
     // → saisie invalide (générique, pas d'oracle d'existence). La tx a rollback → aucun
     // utilisateur ni membership n'a persisté (atomicité prouvée par la suite d'isolation).
+    // §12 — créer un ADMIN AVEC un périmètre est refusé (creerMembreAvecScopes chaîne
+    // definirScopesMembre, il hérite donc de la garde). Message explicite : l'admin a coché
+    // des entités pour un rôle qui voit tout — dire la règle, pas « champs invalides ».
+    if (erreur instanceof AdminNonScopableError) {
+      return { erreur: "Administrators always see the whole group — they cannot be limited to specific entities.", succes: null };
+    }
     if (
       erreur instanceof EntiteIntrouvableError ||
       erreur instanceof MembreNonScopableError
@@ -108,7 +115,7 @@ export async function provisionnerMembre(
     // Déjà membre du workspace : rien n'a changé (anti-écrasement mot de passe + périmètre).
     return {
       erreur: null,
-      succes: `${email} est déjà membre — aucune modification (mot de passe et périmètre inchangés).`,
+      succes: `${email} is already a member — nothing changed (password and access left untouched).`,
     };
   }
 
@@ -121,12 +128,12 @@ export async function provisionnerMembre(
   if (resultat.utilisateurCree) {
     return {
       erreur: null,
-      succes: `${email} créé et rattaché comme ${parsed.data.role}.${perimetre}`,
+      succes: `${email} created and added as ${parsed.data.role}.${perimetre}`,
     };
   }
   // Utilisateur préexistant rattaché au workspace : mot de passe conservé.
   return {
     erreur: null,
-    succes: `Utilisateur existant rattaché comme ${parsed.data.role} — mot de passe inchangé.${perimetre}`,
+    succes: `Existing user added as ${parsed.data.role} — password left untouched.${perimetre}`,
   };
 }

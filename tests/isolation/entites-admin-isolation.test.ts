@@ -24,12 +24,17 @@ import { memberEntityScopes } from "@/server/db/schema";
 import { createWithWorkspace } from "@/server/db/tenancy";
 import {
   assignerCompteEntite,
+  assignerComptesEntite,
   archiverEntite,
   creerEntite,
   definirScopesMembre,
   EntiteIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
+  EntiteNonVideError,
+  AssignationHorsPerimetreError,
+  PerimetreReduitError,
+  AdminNonScopableError,
   CompteIntrouvableError,
   listerComptesAvecEntite,
   listerEntites,
@@ -559,5 +564,541 @@ describe("listerComptesAvecEntite — lecture ADMIN-only, bornée au tenant (L7)
       listerComptesAvecEntite(tx, ctx),
     );
     expect(encore.map((c) => c.bankAccountId)).toEqual(ordre);
+  });
+});
+
+describe("L0 — la surface d'ADMINISTRATION ne s'exécute JAMAIS sous périmètre réduit", () => {
+  // PLAN-refonte-entites.md §3.3. Le `PerimetreSwitcher` est monté dans le layout
+  // `(workspace)` : il est donc PRÉSENT sur /admin/entites elle-même, et son `viewFilter`
+  // vit dans le JWT — il PERSISTE de page en page. Or la policy `account_scope`
+  // (RESTRICTIVE FOR ALL, 0016/0017) porte sa clause `view_filter` en USING *et* en
+  // WITH CHECK.
+  //
+  // Ces 4 cas prouvent sur Postgres réel le DÉFAUT (le filtre ampute la LECTURE et bloque
+  // l'ÉCRITURE) puis la PARADE (la session amputée restaure les deux) — c'est-à-dire
+  // exactement ce que pose `exigerSessionAdministration()`.
+  //
+  // Pourquoi tester la composition et non la fonction : `exigerSessionAdministration()`
+  // dépend de `auth()` (runtime Next), inappelable ici. On teste donc la MÉCANIQUE
+  // équivalente — une session AVEC vs SANS `viewFilter`. Que les surfaces admin appellent
+  // bien la bonne fonction est garanti à la compilation par ESLint (`no-restricted-imports`
+  // sur `src/app/**/admin/**`), avec contre-preuve : réintroduire `exigerSessionWorkspace`
+  // sous `admin/` fait échouer le lint.
+
+  it("25. DÉFAUT — un viewFilter AMPUTE la lecture admin (le récap mentirait)", async () => {
+    // WS_A porte 2 comptes (ACC_A + ACC_A_SANS_NOM). Filtré sur un seul, l'ADMIN ne voit
+    // que celui-là : un compteur « comptes non assignés » dérivé de cette liste serait
+    // FAUX — et c'est le reste-à-faire de l'écran (défaut n° 3 du diagnostic).
+    const filtre = await withWorkspace(
+      { ...sAdminA, viewFilter: [ACC_A] },
+      (tx, ctx) => listerComptesAvecEntite(tx, ctx),
+    );
+    expect(filtre.map((c) => c.bankAccountId)).toEqual([ACC_A]);
+  });
+
+  it("26. PARADE — la session AMPUTÉE voit TOUS les comptes du tenant", async () => {
+    const complet = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(complet.map((c) => c.bankAccountId).sort()).toEqual(
+      [ACC_A, ACC_A_SANS_NOM].sort(),
+    );
+  });
+
+  it("27. DÉFAUT — un viewFilter BLOQUE l'écriture sur un compte hors filtre", async () => {
+    // Le piège de la DEMI-correction : amputer la lecture sans amputer l'écriture ferait
+    // voir 87 comptes à l'ADMIN, puis échouer le batch de L3 EN ENTIER (atomicité) sur
+    // « Ressource introuvable. » — pour des comptes qu'il a sous les yeux.
+    await expect(
+      withWorkspace({ ...sAdminA, viewFilter: [ACC_A] }, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, {
+          bankAccountId: ACC_A_SANS_NOM, // hors du filtre d'affichage
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+  });
+
+  it("28. PARADE — sans viewFilter, la même écriture ABOUTIT (vérifié en base)", async () => {
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, {
+        bankAccountId: ACC_A_SANS_NOM,
+        entityId: ENT_SUCRE,
+      }),
+    );
+
+    // Contrôle sous l'OWNER (bypass RLS) : on prouve l'état RÉEL en base, pas ce que la
+    // RLS veut bien nous montrer.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ entity_id: string | null }>(
+      `select entity_id from bank_accounts where id = '${ACC_A_SANS_NOM}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.entity_id).toBe(ENT_SUCRE);
+  });
+});
+
+describe("L2 — garde ADMIN sur renommer/archiver (trou de couverture F1)", () => {
+  // `renommerEntite` et `archiverEntite` portent bien `exigerAdmin` depuis toujours, mais
+  // AUCUN test ne les exerçait sous une session MANAGER : les cas 4-5 les appellent avec
+  // sAdminB (cross-tenant, mais un ADMIN). Le trou était sans conséquence tant qu'aucun
+  // bouton ne les atteignait — L2 les câble. Règle 2 : tout nouvel endpoint ajoute ses cas.
+
+  it("29. un MANAGER ne peut pas RENOMMER une entité", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        renommerEntite(tx, ctx, { entityId: ENT_SUCRE, name: "Piraté" }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("30. un MANAGER ne peut pas ARCHIVER une entité", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        archiverEntite(tx, ctx, ENT_ENERGIE),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+});
+
+describe("L2 — Q-ARCHIVAGE : archiver ne doit JAMAIS laisser un droit orphelin", () => {
+  // Le mode de défaillance qu'on ferme : `archiverEntite` ne pose qu'un `is_active=false`.
+  // Il ne purge ni `bank_accounts.entity_id`, ni `member_entity_scopes`. Or le résolveur
+  // (`tenancy.ts`) lit `member_entity_scopes` SANS filtre `is_active` → un membre scopé sur
+  // l'entité archivée CONTINUE de voir ses comptes, pendant que l'entité disparaît des
+  // écrans d'admin : plus aucune surface pour constater le droit résiduel, ni le révoquer.
+  // Fuite intra-groupe par PERSISTANCE DE DROIT. On refuse donc d'archiver une entité
+  // encore rattachée (les deux remèdes alternatifs sont fail-OPEN, cf. EntiteNonVideError).
+
+  it("31. archiver une entité qui porte des COMPTES est refusé (et dit combien)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — comptes" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+    );
+
+    const erreur = await withWorkspace(sAdminA, (tx, ctx) =>
+      archiverEntite(tx, ctx, entityId).catch((e: unknown) => e),
+    );
+    expect(erreur).toBeInstanceOf(EntiteNonVideError);
+    expect((erreur as EntiteNonVideError).nbComptes).toBe(1);
+    expect((erreur as EntiteNonVideError).nbMembres).toBe(0);
+
+    // L'entité est TOUJOURS active : le refus n'a rien écrit.
+    const apres = await withWorkspace(sAdminA, (tx, ctx) => listerEntites(tx, ctx));
+    expect(apres.find((e) => e.id === entityId)?.isActive).toBe(true);
+
+    // Nettoyage : on rend ACC_A à son état non assigné pour les tests suivants.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+
+  it("32. ⭐ archiver une entité sur laquelle un MEMBRE est scopé est refusé — c'est LE cas de sécurité", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — droits" }),
+    );
+    // VIEWER_A voit UNIQUEMENT cette entité. Si on l'archivait, il continuerait d'en voir
+    // les comptes (le GUC entity_scope ignore is_active) sans que l'ADMIN puisse le voir.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: VIEWER_A, entityIds: [entityId] }),
+    );
+
+    const erreur = await withWorkspace(sAdminA, (tx, ctx) =>
+      archiverEntite(tx, ctx, entityId).catch((e: unknown) => e),
+    );
+    expect(erreur).toBeInstanceOf(EntiteNonVideError);
+    expect((erreur as EntiteNonVideError).nbMembres).toBe(1);
+    expect((erreur as EntiteNonVideError).nbComptes).toBe(0);
+
+    // Le droit est INTACT en base : on a refusé, on n'a pas « à moitié » archivé.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where entity_id = '${entityId}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(1);
+
+    // Nettoyage : on rend VIEWER_A à l'accès global.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: VIEWER_A, entityIds: [] }),
+    );
+  });
+
+  it("33. contre-preuve — une entité VIDE (aucun compte, aucun droit) s'archive normalement", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Archivage — vide" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    const apres = await withWorkspace(sAdminA, (tx, ctx) => listerEntites(tx, ctx));
+    expect(apres.find((e) => e.id === entityId)?.isActive).toBe(false);
+  });
+
+  it("34. une entité d'un AUTRE tenant reste un 404 — jamais un « non vide » (aucun oracle)", async () => {
+    // ENT_B (workspace B) porte peut-être des comptes ; sous RLS, le comptage renvoie 0 et
+    // l'UPDATE ne touche aucune ligne → 404 neutre. Une entité inconnue et une entité d'un
+    // autre tenant se comportent EXACTEMENT pareil : on n'apprend rien de l'autre tenant.
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, ENT_B)),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+  });
+});
+
+describe("L3 — assignation EN MASSE (batch) : atomique, jamais partielle", () => {
+  // Dette P1 ENTITY-ASSIGN-BULK1. Le batch fait 1 SELECT de pré-check + 1 UPDATE groupé
+  // (jamais N UPDATE en boucle : 500 aller-retours dans une transaction WebSocket ouverte
+  // se feraient couper par un timeout). Ce qu'on prouve ici : la garde ADMIN, l'absence
+  // d'IDOR, et surtout qu'un lot invalide ne pose RIEN — pas de succès partiel silencieux.
+
+  const idsEnBase = async (ids: string[]) => {
+    await client.exec(`reset role;`);
+    const r = await client.query<{ id: string; entity_id: string | null }>(
+      `select id, entity_id from bank_accounts where id in (${ids
+        .map((i) => `'${i}'`)
+        .join(",")}) order by id`,
+    );
+    await client.exec(`set role tygr_app;`);
+    return r.rows;
+  };
+
+  it("35. un MANAGER ne peut pas assigner en masse", async () => {
+    await expect(
+      withWorkspace(sManagerA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteNonAutoriseError);
+  });
+
+  it("36. ⭐ un compte d'un AUTRE tenant dans le lot → 404, et RIEN n'est posé (atomicité)", async () => {
+    // On remet d'abord les deux comptes de WS_A à un état connu.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: null,
+      }),
+    );
+
+    // Lot MIXTE : 1 compte légitime + 1 compte de WS_B (invisible sous RLS).
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A, ACC_B],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+
+    // ACC_A ne DOIT PAS avoir bougé : le pré-check a levé AVANT tout UPDATE, et la
+    // transaction a rollback. Sans la comparaison de cardinalité, l'UPDATE groupé aurait
+    // rangé ACC_A en ignorant ACC_B EN SILENCE → « 2 comptes rangés » pour 1 réel.
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("37. un id INEXISTANT dans le lot → 404, rien n'est posé", async () => {
+    const FANTOME = "00000000-0000-4000-8000-000000000000";
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A, FANTOME],
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("38. une entité ARCHIVÉE n'est pas une cible valide (constat C3)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "Cible archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    // Ni la FK composite ni l'UPDATE ne regardent is_active : sans le contrôle explicite,
+    // on rangerait N comptes dans une entité disparue des pickers (ils retomberaient dans
+    // « non assigné » à l'écran tout en gardant leur entity_id en base).
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerComptesEntite(tx, ctx, {
+          bankAccountIds: [ACC_A],
+          entityId,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBeNull();
+  });
+
+  it("39. contre-preuve — l'ADMIN range PLUSIEURS comptes en un seul appel", async () => {
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: ENT_ENERGIE,
+      }),
+    );
+    expect(res.nbAssignes).toBe(2);
+
+    const lignes = await idsEnBase([ACC_A, ACC_A_SANS_NOM]);
+    expect(lignes.every((l) => l.entity_id === ENT_ENERGIE)).toBe(true);
+  });
+
+  it("40. dé-assignation EN MASSE (entityId null) — le seul chemin de masse vers « non assigné »", async () => {
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A_SANS_NOM],
+        entityId: null,
+      }),
+    );
+    expect(res.nbAssignes).toBe(2);
+
+    const lignes = await idsEnBase([ACC_A, ACC_A_SANS_NOM]);
+    expect(lignes.every((l) => l.entity_id === null)).toBe(true);
+  });
+
+  it("41. un id envoyé DEUX FOIS ne fausse pas la cardinalité (dédoublonnage)", async () => {
+    // Sans le `new Set(...)`, la comparaison `returning().length !== ids.length` verrait
+    // 1 ligne mise à jour pour 2 ids demandés et lèverait à tort sur un batch légitime.
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A, ACC_A],
+        entityId: ENT_SUCRE,
+      }),
+    );
+    expect(res.nbAssignes).toBe(1);
+
+    const [a] = await idsEnBase([ACC_A]);
+    expect(a.entity_id).toBe(ENT_SUCRE);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: [ACC_A],
+        entityId: null,
+      }),
+    );
+  });
+});
+
+describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commune", () => {
+  // §12 du plan laisse ouvert le durcissement « interdire de scoper un ADMIN ». En
+  // attendant l'arbitrage, on REFUSE toute opération dont la justesse dépend d'une vue
+  // complète, et on ferme les portes que la première passe avait laissées entrouvertes.
+
+  const estActive = async (id: string) => {
+    await client.exec(`reset role;`);
+    const r = await client.query<{ is_active: boolean }>(
+      `select is_active from entities where id = '${id}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    return r.rows[0]?.is_active;
+  };
+
+  it("42. R1 — la garde d'archivage NE SE CONTOURNE PLUS sous un ADMIN scopé", async () => {
+    // Le défaut : archiverEntite compte les comptes SOUS LA RLS. Scopé, l'ADMIN comptait
+    // 0 compte pour une entité qui en porte 1 → la garde passait → il archivait une entité
+    // encore rattachée. La garde se contournait elle-même.
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R1 — porte un compte" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+    );
+
+    // On scope l'ADMIN sur une AUTRE entité → son COUNT sur bank_accounts est amputé.
+    //
+    // ⚠️ Le scope est posé SOUS L'OWNER, pas via l'API : depuis §12, `definirScopesMembre`
+    // REFUSE de scoper un ADMIN (cas 46). On simule donc un état HÉRITÉ — une ligne déjà en
+    // base (donnée legacy, insertion directe). C'est précisément ce que les fail-safes
+    // doivent couvrir : la garde applicative empêche de CRÉER l'état, elle n'efface pas
+    // ceux qui existent déjà. Défense en profondeur.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
+    );
+    await client.exec(`set role tygr_app;`);
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId)),
+    ).rejects.toBeInstanceOf(PerimetreReduitError);
+
+    // Rien n'a été archivé.
+    expect(await estActive(entityId)).toBe(true);
+
+    // Nettoyage — dans CET ordre : tant que l'ADMIN est scopé, ACC_A (rattaché ailleurs)
+    // lui est invisible et la dé-assignation échouerait.
+    // `entityIds: []` RESTE PERMIS sur un ADMIN : c'est le chemin de RÉPARATION d'un scope
+    // hérité (la garde §12 ne mord que sur un périmètre NON VIDE).
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+
+  it("43. ⭐ R2 — on ne peut pas scoper un membre sur une entité ARCHIVÉE (garde à DOUBLE sens)", async () => {
+    // Q-ARCHIVAGE interdisait d'archiver une entité qui porte des droits. Mais la porte
+    // INVERSE restait ouverte : poser un droit sur une entité déjà archivée recrée
+    // exactement le droit orphelin — et l'écran ne rend AUCUNE case pour l'en retirer
+    // (il ne liste que les entités actives). Une garde à sens unique n'est pas une garde.
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R2 — archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+    expect(await estActive(entityId)).toBe(false);
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        definirScopesMembre(tx, ctx, {
+          userId: VIEWER_A,
+          entityIds: [entityId],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+
+    // Aucun droit posé (le DELETE préalable de definirScopesMembre a rollback avec la tx).
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where entity_id = '${entityId}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("44. R3 — l'assignation UNITAIRE refuse aussi une entité archivée (invariant sur les 3 chemins)", async () => {
+    const { entityId } = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerEntite(tx, ctx, { name: "R3 — archivée" }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId));
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId }),
+      ),
+    ).rejects.toBeInstanceOf(EntiteIntrouvableError);
+  });
+
+  it("45. R4 — SQLSTATE 42501 (WITH CHECK entity_scope) porte une erreur NOMMÉE, jamais un 500", async () => {
+    // Exit-criterion §10 (« chaque erreur a un nom ») : le mapping existait, la PREUVE
+    // manquait. Un ADMIN scopé qui DÉ-assigne viole le WITH CHECK de entity_scope
+    // (`entity_id IS NOT NULL AND entity_id = ANY(scope)`) → 42501, qui remontait en 500 brut
+    // sur un chemin d'écriture ADMIN parfaitement légitime.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, {
+        bankAccountId: ACC_A,
+        entityId: ENT_SUCRE,
+      }),
+    );
+    // Scope hérité, posé sous l'owner (l'API le refuse depuis §12 — cf. cas 42).
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
+    );
+    await client.exec(`set role tygr_app;`);
+
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, {
+          bankAccountId: ACC_A,
+          entityId: null,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AssignationHorsPerimetreError);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+});
+
+describe("§12 — un ADMIN n'est JAMAIS restreint à un périmètre (Etienne, 2026-07-13)", () => {
+  // Ferme la CAUSE. Les fail-safes (PerimetreReduitError, bandeau « Restricted view »)
+  // traitaient les CONSÉQUENCES d'un ADMIN scopé ; rien n'empêchait de créer l'état — et
+  // l'écran /admin/entites expose lui-même l'action qui le permet : un ADMIN pouvait se
+  // scoper LUI-MÊME et casser sa propre vue d'administration.
+  //
+  // Rôle et périmètre restent ORTHOGONAUX : on refuse la seule COMBINAISON ADMIN + scopé.
+  // Les fail-safes RESTENT (défense en profondeur) : la garde empêche de créer l'état, elle
+  // n'efface pas ceux qui existent déjà (cf. cas 42 et 45, qui les posent sous l'owner).
+
+  it("46. ⭐ definirScopesMembre REFUSE de scoper un ADMIN (axe ENTITÉ)", async () => {
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        definirScopesMembre(tx, ctx, {
+          userId: ADMIN_A,
+          entityIds: [ENT_SUCRE],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AdminNonScopableError);
+
+    // Rien n'a été posé — et surtout : le DELETE préalable du remplace-set a rollback avec
+    // la transaction, donc un ADMIN déjà scopé (état hérité) ne se retrouve pas à moitié
+    // nettoyé par une tentative refusée.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${ADMIN_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("47. RETIRER le périmètre d'un ADMIN reste permis — c'est le chemin de réparation", async () => {
+    // Un ADMIN scopé par une donnée héritée doit pouvoir être réparé. La garde ne mord donc
+    // que sur un périmètre NON VIDE. Sans cette nuance, un ADMIN scopé serait piégé : ses
+    // gardes d'écriture le bloquent, et il ne pourrait pas se déscoper.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
+    );
+    await client.exec(`set role tygr_app;`);
+
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${ADMIN_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("48. un MANAGER, lui, reste parfaitement scopable (rôle et périmètre restent orthogonaux)", async () => {
+    // Contre-preuve : on n'a pas cassé le modèle. Seule la COMBINAISON ADMIN + scopé est
+    // refusée ; le périmètre reste un mécanisme normal pour les autres rôles.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, {
+        userId: MANAGER_A,
+        entityIds: [ENT_SUCRE],
+      }),
+    );
+
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${MANAGER_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(1);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: MANAGER_A, entityIds: [] }),
+    );
   });
 });

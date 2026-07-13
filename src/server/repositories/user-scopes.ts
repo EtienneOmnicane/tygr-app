@@ -42,6 +42,7 @@ import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 // RÉUTILISE plutôt que d'en redéclarer un homonyme (évite un clash de ré-export dans
 // le barrel @/server/db ET garantit qu'une action générique les mappe une seule fois).
 import {
+  AdminNonScopableError,
   CompteIntrouvableError,
   MembreNonScopableError,
   PartieIntrouvableError,
@@ -182,8 +183,12 @@ export async function definirScopesFinsMembre<TDb extends AnyPgDatabase>(
 
   // 1. Le user visé est-il membre du workspace COURANT ? (scopé RLS → un user d'un
   //    autre tenant est invisible ici, donc traité comme non-membre → 404.)
+  //    On projette AUSSI son rôle : la garde §12 porte sur la CIBLE, pas sur l'acteur.
   const membre = await tx
-    .select({ userId: workspaceMembers.userId })
+    .select({
+      userId: workspaceMembers.userId,
+      role: workspaceMembers.role,
+    })
     .from(workspaceMembers)
     .where(
       and(
@@ -193,6 +198,22 @@ export async function definirScopesFinsMembre<TDb extends AnyPgDatabase>(
     )
     .limit(1);
   if (membre.length === 0) throw new MembreNonScopableError();
+
+  // §12 — un ADMIN n'est jamais restreint à un périmètre.
+  //
+  // Etienne a nommé `definirScopesMembre` (l'axe ENTITÉ). La même garde est posée ici, sur
+  // l'axe COMPTE/PARTY (`user_scopes` → `account_scope`), parce que le principe est le même
+  // — « on refuse la combinaison ADMIN + scopé » — et que l'omettre laisserait un ADMIN se
+  // scoper FINEMENT : ses lectures resteraient partielles, et ses gardes d'écriture
+  // (`PerimetreReduitError`, qui teste AUSSI `ctx.accountScope`) le bloqueraient sans qu'il
+  // dispose d'aucun chemin pour se réparer. Fermer un seul axe créerait un cul-de-sac.
+  //
+  // Le retrait d'un périmètre (listes vides) reste permis : c'est le chemin de réparation.
+  const cibleVide =
+    uniques(data.partyIds).length === 0 && uniques(data.accountIds).length === 0;
+  if (membre[0].role === "ADMIN" && !cibleVide) {
+    throw new AdminNonScopableError();
+  }
 
   const partyIds = uniques(data.partyIds);
   const accountIds = uniques(data.accountIds);

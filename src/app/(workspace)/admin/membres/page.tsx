@@ -10,10 +10,11 @@
  */
 import { notFound, redirect } from "next/navigation";
 
+import { AvertissementVueRestreinte } from "@/components/admin/avertissement-vue-restreinte";
 import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionAdministration,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { listerEntites, listerMembresWorkspace, withWorkspace } from "@/server/db";
@@ -24,12 +25,13 @@ import {
 } from "./formulaire-provisioning";
 import { ListeMembres, type MembreLigne } from "./liste-membres";
 
-export const metadata = { title: "Membres — Dodo" };
+export const metadata = { title: "Members — Dodo" };
 
 export default async function PageMembres() {
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    // L0 (§3.3) : surface d'administration → session amputée du viewFilter.
+    session = await exigerSessionAdministration();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
@@ -45,7 +47,15 @@ export default async function PageMembres() {
     }
     const entites = await listerEntites(tx, ctx);
     const membres: MembreLigne[] = await listerMembresWorkspace(tx, ctx);
-    return { entites, membres };
+
+    // Même garde fail-safe que /admin/entites (§12) : l'amputation du viewFilter ne couvre
+    // que l'axe JWT. `entity_scope` / `account_scope` sont résolus EN BASE — un ADMIN scopé
+    // lirait des listes partielles. Le périmètre acté (Q-PERIMETRE) est l'ADMIN, pas une
+    // page : les deux écrans disent la même chose de la même situation.
+    const vueRestreinte =
+      ctx.entityScope.mode !== "GLOBALE" || ctx.accountScope.mode !== "GLOBALE";
+
+    return { entites, membres, vueRestreinte };
   });
 
   if (donnees === null) {
@@ -63,22 +73,26 @@ export default async function PageMembres() {
     donnees.entites.map((e) => [e.id, e.name]),
   );
 
+  // Pleine largeur — même gabarit que /admin/entites (UI_GUIDELINES §1.1 : « Admin — la
+  // table pleine largeur EST l'écran »). Les deux écrans admin restent cohérents.
   return (
-    <main className="flex flex-1 justify-center p-6">
-      <div className="flex w-full max-w-3xl flex-col gap-10">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      <div className="flex flex-col gap-10">
+        {donnees.vueRestreinte && <AvertissementVueRestreinte />}
+
         <section className="mx-auto w-full max-w-md">
-          <h1 className="mb-1 text-lg font-semibold">Membres du workspace</h1>
+          <h1 className="mb-1 text-lg font-semibold">Workspace members</h1>
           <p className="mb-6 text-sm text-text-muted">
-            Créez un utilisateur, rattachez-le à cet espace et définissez son périmètre.
+            Create a user, add them to this workspace and choose what they can see.
           </p>
           <FormulaireProvisioning entites={entitesActives} />
         </section>
 
         <section>
-          <h2 className="mb-1 text-lg font-semibold">Membres actuels</h2>
+          <h2 className="mb-1 text-lg font-semibold">Current members</h2>
           <p className="mb-4 text-sm text-text-muted">
-            {donnees.membres.length} membre{donnees.membres.length > 1 ? "s" : ""} dans
-            cet espace.
+            {donnees.membres.length} member{donnees.membres.length > 1 ? "s" : ""} in
+            this workspace.
           </p>
           <ListeMembres membres={donnees.membres} entitesParId={entitesParId} />
         </section>

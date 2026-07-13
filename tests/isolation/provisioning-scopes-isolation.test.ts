@@ -30,6 +30,7 @@ import {
   ProvisioningNonAutoriseError,
 } from "@/server/repositories/provisioning";
 import { EntiteIntrouvableError } from "@/server/repositories/entites";
+import { AdminNonScopableError } from "@/server/repositories/entites";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -265,5 +266,48 @@ describe("chaînage création + scopes — ADMIN-only, atomique, tenant-scopé",
       return r.rows[0].n;
     });
     expect(nbMemberships).toBe(2);
+  });
+});
+
+describe("§12 — créer un ADMIN AVEC un périmètre est refusé (garde héritée)", () => {
+  it("7. ⭐ creerMembreAvecScopes refuse un ADMIN scopé — et RIEN ne persiste (atomicité)", async () => {
+    // creerMembreAvecScopes CHAÎNE definirScopesMembre : il hérite donc de la garde §12,
+    // sans la redéclarer. Un seul point de vérité. Et comme tout vit dans la MÊME
+    // transaction, le refus rollback la création du user ET de la membership : on ne
+    // laisse pas un ADMIN à moitié créé.
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        creerMembreAvecScopes(tx, ctx, {
+          email: "admin.scope@a.mu",
+          fullName: "Admin Scopé",
+          passwordHash: "hash",
+          role: "ADMIN",
+          entityIds: [ENT_SUCRE],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AdminNonScopableError);
+
+    // Ni user, ni membership, ni scope : la transaction a rollback.
+    await client.exec(`reset role;`);
+    const u = await client.query<{ n: number }>(
+      `select count(*)::int as n from users where email = 'admin.scope@a.mu'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(u.rows[0]?.n).toBe(0);
+  });
+
+  it("8. contre-preuve — créer un ADMIN SANS périmètre passe normalement", async () => {
+    // On n'a pas cassé le provisioning d'ADMIN : seule la COMBINAISON est refusée.
+    const res = await withWorkspace(sAdminA, (tx, ctx) =>
+      creerMembreAvecScopes(tx, ctx, {
+        email: "admin.global@a.mu",
+        fullName: "Admin Global",
+        passwordHash: "hash",
+        role: "ADMIN",
+        entityIds: [],
+      }),
+    );
+    expect(res.membershipCreee).toBe(true);
+    expect(res.scopesDefinis).toBe(false);
   });
 });

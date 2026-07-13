@@ -11,6 +11,12 @@
  * - Authz : withWorkspace re-valide la membership ; la garde ADMIN est dans le repo
  *   (ctx.role). Une ressource d'un autre tenant → 404 (erreur nommée non-énumérante),
  *   jamais 403. Le message UI renvoyé est GÉNÉRIQUE (pas d'oracle d'existence).
+ * - Périmètre (L0, PLAN-refonte-entites.md §3.3) : TOUTES les actions passent par
+ *   `exigerSessionAdministration()`, JAMAIS `exigerSessionWorkspace()` — la session est
+ *   amputée du `viewFilter`. Sans ça, le WITH CHECK de la policy `account_scope`
+ *   (RESTRICTIVE FOR ALL, 0016/0017) refuserait l'UPDATE d'un compte hors du filtre
+ *   d'affichage choisi dans le header : l'ADMIN VOIT le compte et ne peut PAS le ranger.
+ *   Une règle ESLint interdit l'import de `exigerSessionWorkspace` sous `admin/`.
  * - Validation : Zod .strict() (bornes alignées DB) ; rejet bruyant « Champs invalides ».
  * - Erreurs : chaque erreur nommée du repo est mappée ; toute autre exception remonte
  *   (mappée 500 en amont), pas de catch-all silencieux.
@@ -20,9 +26,11 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionAdministration } from "@/server/auth/session";
 import {
+  AssignationHorsPerimetreError,
   assignerCompteEntite,
+  assignerComptesEntite,
   assignerPartieEntite,
   CompteIntrouvableError,
   creerEntite,
@@ -30,7 +38,10 @@ import {
   EntiteIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
+  AdminNonScopableError,
+  EntiteNonVideError,
   MembreNonScopableError,
+  PerimetreReduitError,
   PartieIntrouvableError,
   renommerEntite,
   archiverEntite,
@@ -42,8 +53,8 @@ export interface EtatAction {
   succes: string | null;
 }
 
-const MESSAGE_REFUS = "Action non autorisée.";
-const MESSAGE_INVALIDE = "Champs invalides.";
+const MESSAGE_REFUS = "You are not allowed to do this.";
+const MESSAGE_INVALIDE = "Invalid input.";
 
 /* ------------------------------------------------------------------ */
 /* Schémas Zod stricts (plan §4.1)                                     */
@@ -72,6 +83,19 @@ const assignerCompteSchema = z
     bankAccountId: z.string().uuid(),
     // null = « non assigné ». Une chaîne vide du formulaire est traitée comme null
     // côté action (cf. lecture de formData ci-dessous).
+    entityId: z.string().uuid().nullable(),
+  })
+  .strict();
+
+/**
+ * Assignation EN MASSE (L3, ENTITY-ASSIGN-BULK1). `entityId: null` = dé-assignation.
+ * Borne `.max(500)` alignée sur `confirmerPropositionSchema` : un workspace réel porte
+ * ~87 comptes, 500 laisse de la marge tout en bornant l'abus. `.min(1)` : un batch vide
+ * n'a aucun sens et masquerait un bug d'UI.
+ */
+const assignerComptesSchema = z
+  .object({
+    bankAccountIds: z.array(z.string().uuid()).min(1).max(500),
     entityId: z.string().uuid().nullable(),
   })
   .strict();
@@ -130,10 +154,51 @@ function mapErreur(e: unknown): EtatAction | null {
     e instanceof PartieIntrouvableError ||
     e instanceof MembreNonScopableError
   ) {
-    return { erreur: "Ressource introuvable.", succes: null };
+    return { erreur: "Not found.", succes: null };
   }
   if (e instanceof EntiteNomDupliqueError) {
-    return { erreur: "Une entité porte déjà ce nom.", succes: null };
+    return { erreur: "An entity already has this name.", succes: null };
+  }
+  // Q-ARCHIVAGE : on refuse d'archiver une entité encore rattachée. Le message NOMME ce
+  // qui bloque (« 12 accounts and 2 members ») plutôt que d'opposer un « impossible » :
+  // l'admin doit savoir quoi déplacer. Les compteurs portent sur SON tenant — aucun
+  // oracle d'existence (une entité d'un autre tenant renvoie 404, pas ce message).
+  // S4 — WITH CHECK de la policy entity_scope. Sans ce mapping, un ADMIN qui porte un
+  // périmètre en base récoltait un 500 brut en dé-assignant un compte (chemin légitime).
+  // §12 — un ADMIN n'est jamais restreint à un périmètre. Le message dit la RÈGLE, pas
+  // « interdit » : l'admin doit comprendre que ce n'est pas un droit qui lui manque.
+  if (e instanceof AdminNonScopableError) {
+    return { erreur: "Administrators always see the whole group — they cannot be limited to specific entities.", succes: null };
+  }
+  // R1 — une garde qui exige un dénombrement complet refuse de tourner sous périmètre
+  // réduit. Le message dit POURQUOI, et comment en sortir (l'admin ne peut pas se
+  // déscoper lui-même : c'est un autre admin qui doit lever la restriction).
+  if (e instanceof PerimetreReduitError) {
+    return {
+      erreur:
+        "Your access is limited to part of this group, so this check cannot see the whole workspace. Ask another administrator to lift the restriction first.",
+      succes: null,
+    };
+  }
+  if (e instanceof AssignationHorsPerimetreError) {
+    return {
+      erreur:
+        "Your access is limited to part of this group, so this change is out of your scope.",
+      succes: null,
+    };
+  }
+  if (e instanceof EntiteNonVideError) {
+    const parts: string[] = [];
+    if (e.nbComptes > 0) {
+      parts.push(`${e.nbComptes} account${e.nbComptes > 1 ? "s" : ""}`);
+    }
+    if (e.nbMembres > 0) {
+      parts.push(`${e.nbMembres} member${e.nbMembres > 1 ? "s" : ""}`);
+    }
+    return {
+      erreur: `This entity still holds ${parts.join(" and ")}. Move them elsewhere first — archiving would not revoke anyone's access.`,
+      succes: null,
+    };
   }
   return null;
 }
@@ -146,7 +211,7 @@ export async function creerEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = creerEntiteSchema.safeParse({
     name: formData.get("name"),
     code: formData.get("code") || undefined,
@@ -162,14 +227,16 @@ export async function creerEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: `Entité « ${parsed.data.name} » créée.` };
+  // Succès uniquement : la page re-rend (compteurs du bandeau, liste d'entités, pickers).
+  revalidatePath("/admin/entites");
+  return { erreur: null, succes: `Entity “${parsed.data.name}” created.` };
 }
 
 export async function renommerEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = renommerEntiteSchema.safeParse({
     entityId: formData.get("entityId"),
     name: formData.get("name"),
@@ -188,14 +255,15 @@ export async function renommerEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: "Entité renommée." };
+  revalidatePath("/admin/entites");
+  return { erreur: null, succes: "Entity renamed." };
 }
 
 export async function archiverEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = archiverEntiteSchema.safeParse({
     entityId: formData.get("entityId"),
   });
@@ -210,14 +278,15 @@ export async function archiverEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: "Entité archivée." };
+  revalidatePath("/admin/entites");
+  return { erreur: null, succes: "Entity archived." };
 }
 
 export async function assignerCompteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Une valeur vide/absente du select = « non assigné » (null).
   const rawEntity = formData.get("entityId");
   const parsed = assignerCompteSchema.safeParse({
@@ -250,8 +319,8 @@ export async function assignerCompteAction(
   return {
     erreur: null,
     succes: parsed.data.entityId
-      ? "Compte assigné à l'entité."
-      : "Compte repassé en non assigné.",
+      ? "Account attached to the entity."
+      : "Account set back to unassigned.",
   };
 }
 
@@ -259,7 +328,7 @@ export async function assignerPartieAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Une valeur vide/absente du select = « non rattachée » (null).
   const rawEntity = formData.get("entityId");
   const parsed = assignerPartieSchema.safeParse({
@@ -283,8 +352,8 @@ export async function assignerPartieAction(
   return {
     erreur: null,
     succes: parsed.data.entityId
-      ? "Partie rattachée à l'entité."
-      : "Partie repassée en non rattachée.",
+      ? "Party attached to the entity."
+      : "Party set back to unattached.",
   };
 }
 
@@ -292,7 +361,7 @@ export async function definirScopesAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Multi-sélection : getAll renvoie toutes les entités cochées (0..N).
   const parsed = definirScopesSchema.safeParse({
     userId: formData.get("userId"),
@@ -316,8 +385,8 @@ export async function definirScopesAction(
     erreur: null,
     succes:
       parsed.data.entityIds.length === 0
-        ? "Périmètre défini : Vision Globale (toutes entités)."
-        : `Périmètre défini : ${parsed.data.entityIds.length} entité(s).`,
+        ? "Access set: the whole group."
+        : `Access set: ${parsed.data.entityIds.length} entity(ies).`,
   };
 }
 
@@ -341,7 +410,7 @@ export async function confirmerPropositionAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const rawEntity = formData.get("entityId");
   const rawName = formData.get("nouvelleEntiteName");
   const parsed = confirmerPropositionSchema.safeParse({
@@ -372,10 +441,18 @@ export async function confirmerPropositionAction(
         entityId,
       });
 
-      // 3. Assigner chaque compte de la party (bank_accounts.entity_id) via la gate.
-      for (const bankAccountId of parsed.data.bankAccountIds) {
-        await assignerCompteEntite(tx, ctx, { bankAccountId, entityId });
-      }
+      // 3. Assigner les comptes de la party EN UNE FOIS (gabarit ensembliste).
+      //
+      // Ce chemin BOUCLAIT `assignerCompteEntite` : avec la borne à 500, et depuis que R3 y
+      // a ajouté un contrôle `is_active`, cela faisait jusqu'à 1000 aller-retours dans une
+      // transaction WebSocket ouverte — exactement ce que le plan (§5-L3) condamne et que le
+      // batch évite. On réutilise donc `assignerComptesEntite` : 1 SELECT de pré-check +
+      // 1 UPDATE groupé, mêmes gardes (entité active, pas de succès partiel silencieux),
+      // même atomicité. Une seule voie d'assignation multiple dans tout le repo.
+      await assignerComptesEntite(tx, ctx, {
+        bankAccountIds: parsed.data.bankAccountIds,
+        entityId,
+      });
     });
   } catch (e) {
     const m = mapErreur(e);
@@ -383,11 +460,66 @@ export async function confirmerPropositionAction(
     throw e;
   }
 
+  // S3 — la confirmation ne posait AUCUN revalidatePath : le TABLEAU des comptes (devenu
+  // l'objet CENTRAL de l'écran depuis L1) gardait des props périmées après un rattachement.
+  revalidatePath("/admin/entites");
+
   const nbComptes = parsed.data.bankAccountIds.length;
   return {
     erreur: null,
     succes: nomEntite
-      ? `Entité « ${nomEntite} » créée et ${nbComptes} compte(s) rattaché(s).`
-      : `Proposition confirmée : ${nbComptes} compte(s) rattaché(s).`,
+      ? `Entity “${nomEntite}” created, ${nbComptes} account(s) attached.`
+      : `Confirmed: ${nbComptes} account(s) attached.`,
+  };
+}
+
+/**
+ * Assignation EN MASSE compte → entité (L3, dette P1 `ENTITY-ASSIGN-BULK1`).
+ *
+ * ATOMIQUE : `withWorkspace` est une transaction, et `assignerComptesEntite` fait 1 SELECT
+ * de pré-check + 1 UPDATE groupé (jamais N UPDATE en boucle). Si un seul compte du lot est
+ * invalide, RIEN n'est posé — pas de succès partiel silencieux.
+ *
+ * `entityId` vide/absent = dé-assignation en masse (le compte redevient « non assigné »,
+ * donc invisible aux membres à accès restreint : c'est pourquoi l'UI confirme).
+ */
+export async function assignerComptesAction(
+  _etat: EtatAction,
+  formData: FormData,
+): Promise<EtatAction> {
+  const session = await exigerSessionAdministration();
+  const rawEntity = formData.get("entityId");
+  const parsed = assignerComptesSchema.safeParse({
+    bankAccountIds: formData.getAll("bankAccountIds").map((v) => String(v)),
+    entityId: rawEntity ? String(rawEntity) : null,
+  });
+  if (!parsed.success) return { erreur: MESSAGE_INVALIDE, succes: null };
+
+  let nbAssignes = 0;
+  try {
+    const res = await withWorkspace(session, (tx, ctx) =>
+      assignerComptesEntite(tx, ctx, {
+        bankAccountIds: parsed.data.bankAccountIds,
+        entityId: parsed.data.entityId,
+      }),
+    );
+    nbAssignes = res.nbAssignes;
+  } catch (e) {
+    const m = mapErreur(e);
+    if (m) return m;
+    throw e;
+  }
+
+  // Succès uniquement. UN SEUL revalidate pour N comptes — l'auto-save unitaire en pose un
+  // PAR ligne, ce qui fait sautiller l'écran (ENTITY-ASSIGN-REVALIDATE1) ; le batch éteint
+  // largement ce défaut.
+  revalidatePath("/admin/entites");
+
+  const s = nbAssignes > 1 ? "s" : "";
+  return {
+    erreur: null,
+    succes: parsed.data.entityId
+      ? `${nbAssignes} account${s} attached to the entity.`
+      : `${nbAssignes} account${s} set back to unassigned.`,
   };
 }

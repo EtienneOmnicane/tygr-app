@@ -54,7 +54,7 @@ const COMPTES_DEMO: CompteVueAssignation[] = [
     accountName: "",
     institutionName: "SBM",
     currency: "MUR",
-    entityId: null, // non assigné : invisible en Vision Entité (fail-closed)
+    entityId: null, // non assigné : invisible aux membres à accès restreint (fail-closed)
   },
   {
     bankAccountId: "00000000-0000-4000-8000-0000000000a4",
@@ -69,6 +69,40 @@ const COMPTES_DEMO: CompteVueAssignation[] = [
       "Absa — Compte à libellé très long pour éprouver la troncature du nom de compte",
     institutionName: "Absa",
     currency: "MUR",
+    entityId: null,
+  },
+
+  // L3 — le cas RÉEL : une grappe de comptes SANS NOM, sous la MÊME banque, tous non
+  // assignés (77 sur 87 en production). C'est exactement ce que le lot doit rendre
+  // rangeable : sans sélection multiple ni filtre banque, il faut 77 menus déroulants.
+  // Cette grappe fait aussi que le groupe « — Unassigned — » compte plusieurs lignes,
+  // donc que la case de groupe passe réellement en état INDÉTERMINÉ.
+  {
+    bankAccountId: "5b31a7c0-0000-4000-8000-0000000000b1",
+    accountName: "",
+    institutionName: "SBM",
+    currency: "MUR",
+    entityId: null,
+  },
+  {
+    bankAccountId: "9f42d1e8-0000-4000-8000-0000000000b2",
+    accountName: "",
+    institutionName: "SBM",
+    currency: "MUR",
+    entityId: null,
+  },
+  {
+    bankAccountId: "c70e5b93-0000-4000-8000-0000000000b3",
+    accountName: "",
+    institutionName: "SBM",
+    currency: "USD",
+    entityId: null,
+  },
+  {
+    bankAccountId: "e18b6a24-0000-4000-8000-0000000000b4",
+    accountName: "",
+    institutionName: "SBM",
+    currency: "EUR",
     entityId: null,
   },
 ];
@@ -96,9 +130,12 @@ export default function DemoAssignationComptes() {
               Assignation des comptes
             </h2>
             <p className="mb-6 text-sm text-text-muted">
-              Rattachez chaque compte bancaire à une entité, ou repassez-le en
-              « non assigné ». Un compte non assigné reste invisible aux membres
-              en Vision Entité.
+              Rattachez chaque compte à une entité, ou repassez-le en « non
+              assigné » — un compte non assigné reste invisible aux membres à
+              accès restreint. L3 : cochez plusieurs lignes (ou une case de
+              groupe, qui passe en état indéterminé dès qu’une ligne est
+              décochée) puis rangez-les en un geste. La cible « — Unassigned — »
+              exige une confirmation.
             </p>
             <AssignationComptes
               comptes={COMPTES_DEMO}

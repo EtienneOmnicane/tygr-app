@@ -46,13 +46,20 @@ export function FormulaireProvisioning({
   // repasse en Globale (confort de saisie).
   const [mode, setMode] = useState<"GLOBALE" | "ENTITE">("GLOBALE");
   const [selection, setSelection] = useState<string[]>([]);
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (le serveur refuse :
+  // `AdminNonScopableError`). Le rôle passe donc en état contrôlé, pour ne PAS proposer un
+  // geste voué au rejet : on explique la règle à la place du sélecteur.
+  const [role, setRole] = useState<"ADMIN" | "MANAGER" | "VIEWER">("VIEWER");
 
   const sansEntite = entites.length === 0;
-  const estGlobale = mode === "GLOBALE" || sansEntite;
+  const estAdmin = role === "ADMIN";
+  // Un ADMIN est TOUJOURS global : ni le mode ni la sélection ne s'appliquent à lui.
+  const estGlobale = estAdmin || mode === "GLOBALE" || sansEntite;
   // Champs cachés réellement envoyés (convention serveur : Globale ⇒ []).
   const entityIdsAEnvoyer = estGlobale ? [] : selection;
   // Garde-fou produit : mode ENTITE sans aucune case → envoyer [] rouvrirait tout.
-  const entiteSansCase = mode === "ENTITE" && !sansEntite && selection.length === 0;
+  const entiteSansCase =
+    !estAdmin && mode === "ENTITE" && !sansEntite && selection.length === 0;
 
   function toggleEntite(id: string) {
     setSelection((prev) =>
@@ -63,7 +70,7 @@ export function FormulaireProvisioning({
   return (
     <form action={action} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium">Nom complet</span>
+        <span className="text-sm font-medium">Full name</span>
         <input name="fullName" required maxLength={120} disabled={enCours} className={champClass} />
       </label>
       <label className="flex flex-col gap-1.5">
@@ -79,7 +86,7 @@ export function FormulaireProvisioning({
         />
       </label>
       <label className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium">Mot de passe initial</span>
+        <span className="text-sm font-medium">Initial password</span>
         <input
           name="motDePasse"
           type="password"
@@ -88,26 +95,41 @@ export function FormulaireProvisioning({
           maxLength={200}
           disabled={enCours}
           className={champClass}
-          placeholder="12 caractères minimum"
+          placeholder="12 characters minimum"
         />
       </label>
       <label className="flex flex-col gap-1.5">
-        <span className="text-sm font-medium">Rôle</span>
-        <select name="role" defaultValue="VIEWER" disabled={enCours} className={champClass}>
-          <option value="VIEWER">Lecteur (lecture seule)</option>
-          <option value="MANAGER">Gestionnaire</option>
-          <option value="ADMIN">Administrateur</option>
+        <span className="text-sm font-medium">Role</span>
+        <select
+          name="role"
+          value={role}
+          onChange={(e) =>
+            setRole(e.target.value as "ADMIN" | "MANAGER" | "VIEWER")
+          }
+          disabled={enCours}
+          className={champClass}
+        >
+          <option value="VIEWER">Viewer (read-only)</option>
+          <option value="MANAGER">Manager</option>
+          <option value="ADMIN">Administrator</option>
         </select>
       </label>
 
       {/* Périmètre entité (optionnel) ------------------------------------------- */}
+      {estAdmin ? (
+        <p className="border-t border-line pt-4 text-sm text-text-muted">
+          <span className="font-medium text-text">Access:</span> the whole group.
+          An administrator cannot be limited to specific entities — administering
+          means seeing everything.
+        </p>
+      ) : (
       <fieldset className="flex flex-col gap-2.5 border-t border-line pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <legend className="text-sm font-medium">Périmètre</legend>
+          <legend className="text-sm font-medium">Access</legend>
           {!sansEntite && (
             <div
               role="radiogroup"
-              aria-label="Périmètre du membre"
+              aria-label="Member access"
               className="flex rounded-control border border-line p-0.5 text-xs"
             >
               <button
@@ -122,7 +144,7 @@ export function FormulaireProvisioning({
                   estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
                 )}
               >
-                Vision Globale
+                Whole group
               </button>
               <button
                 type="button"
@@ -136,7 +158,7 @@ export function FormulaireProvisioning({
                   !estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
                 )}
               >
-                Vision Entité
+                Selected entities
               </button>
             </div>
           )}
@@ -144,12 +166,12 @@ export function FormulaireProvisioning({
 
         <p className={cn("text-xs", entiteSansCase ? "text-danger" : "text-text-muted")}>
           {sansEntite
-            ? "Aucune entité — le membre aura une Vision Globale (accès à tout le groupe)."
+            ? "No entity yet — the member will have access to the whole group."
             : estGlobale
-              ? "Accès à l’ensemble du groupe (toutes les entités)."
+              ? "Access to the whole group (all entities)."
               : entiteSansCase
-                ? "Sélectionnez au moins une entité, ou repassez en Vision Globale."
-                : `Vision restreinte à ${selection.length} entité${selection.length > 1 ? "s" : ""}.`}
+                ? "Pick at least one entity, or switch back to whole-group access."
+                : `Access limited to ${selection.length} ${selection.length > 1 ? "entities" : "entity"}.`}
         </p>
 
         {!sansEntite && (
@@ -197,6 +219,7 @@ export function FormulaireProvisioning({
           <input key={id} type="hidden" name="entityIds" value={id} />
         ))}
       </fieldset>
+      )}
 
       {etat.erreur !== null && (
         <p role="alert" className="text-xs text-danger">
@@ -223,7 +246,7 @@ export function FormulaireProvisioning({
             className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
           />
         )}
-        {enCours ? "Création…" : "Créer et rattacher"}
+        {enCours ? "Creating…" : "Create and add"}
       </button>
     </form>
   );

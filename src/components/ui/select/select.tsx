@@ -50,6 +50,7 @@ export function Select({
   size = "md",
   id,
   ariaLabel,
+  libelleVide = "Aucune option.",
   className,
 }: {
   value: string;
@@ -67,6 +68,8 @@ export function Select({
   id?: string;
   /** Nom accessible quand il n'y a pas de `<label>` visible. */
   ariaLabel?: string;
+  /** Message quand la liste est vide. Défaut FR (cf. `libelleFermer` du Modal, Q-LANG §9). */
+  libelleVide?: string;
   /** Classes de layout additionnelles sur le trigger (largeur…). */
   className?: string;
 }) {
@@ -310,7 +313,7 @@ export function Select({
         >
           {optionsPlates.length === 0 ? (
             <p className="px-2 py-4 text-center text-sm text-text-muted">
-              Aucune option.
+              {libelleVide}
             </p>
           ) : (
             groupesNorm.map((groupe, gi) => (

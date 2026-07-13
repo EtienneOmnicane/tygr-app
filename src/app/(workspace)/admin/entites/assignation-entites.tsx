@@ -51,9 +51,9 @@ export interface MembreVue {
 
 // ── Helpers présentationnels ─────────────────────────────────────────────────
 const ROLE_LABEL: Record<RoleMembre, string> = {
-  ADMIN: "Administrateur",
-  MANAGER: "Gestionnaire",
-  VIEWER: "Lecteur",
+  ADMIN: "Administrator",
+  MANAGER: "Manager",
+  VIEWER: "Viewer",
 };
 
 // Tokens existants uniquement (cf. globals.css : pas de `info`).
@@ -106,7 +106,7 @@ export function AssignationEntites({
       {/* Barre d'outils : recherche */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative flex-1 sm:max-w-xs">
-          <span className="sr-only">Rechercher un membre</span>
+          <span className="sr-only">Search members</span>
           <svg
             aria-hidden
             viewBox="0 0 24 24"
@@ -124,14 +124,14 @@ export function AssignationEntites({
             type="search"
             value={recherche}
             onChange={(e) => setRecherche(e.target.value)}
-            placeholder="Rechercher un membre…"
+            placeholder="Search members…"
             className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
               text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
               focus:ring-2 focus:ring-primary/30"
           />
         </label>
         <p className="text-sm text-text-muted">
-          {membres.length} membre{membres.length > 1 ? "s" : ""}
+          {membres.length} member{membres.length > 1 ? "s" : ""}
         </p>
       </div>
 
@@ -143,7 +143,7 @@ export function AssignationEntites({
 
         {membresFiltres.length === 0 && (
           <li className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
-            Aucun membre ne correspond à « {recherche} ».
+            No member matches “{recherche}”.
           </li>
         )}
       </ul>
@@ -156,6 +156,116 @@ export function AssignationEntites({
 /* ------------------------------------------------------------------ */
 
 function CarteMembre({
+  membre,
+  entites,
+}: {
+  membre: MembreVue;
+  entites: EntiteVue[];
+}) {
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (le serveur le refuse :
+  // `AdminNonScopableError`). On ne PROPOSE donc pas le geste : laisser l'écran offrir des
+  // cases à cocher pour les faire rejeter ensuite serait un piège. On explique la règle.
+  if (membre.role === "ADMIN") {
+    return <CarteMembreAdmin membre={membre} />;
+  }
+  return <CarteMembreScopable membre={membre} entites={entites} />;
+}
+
+/**
+ * Carte d'un ADMIN : pas de sélecteur de périmètre. Administrer porte sur le tenant
+ * entier ; un périmètre y est un contresens (et casserait ses propres écrans — ses gardes
+ * d'écriture refuseraient de s'exécuter sous une vue partielle).
+ */
+function CarteMembreAdmin({ membre }: { membre: MembreVue }) {
+  /**
+   * CHEMIN DE RÉPARATION d'un périmètre HÉRITÉ (constat de la revue finale).
+   *
+   * Depuis §12, scoper un ADMIN est refusé — mais la garde n'EFFACE pas les états déjà en
+   * base (une ligne posée avant la règle, ou par l'UI pré-§12 qui le permettait justement).
+   * Un tel ADMIN voit le bandeau « Restricted view » et ses gardes d'écriture le bloquent.
+   *
+   * Or les messages d'erreur lui disaient : « Ask another administrator to lift the
+   * restriction » — et cet autre administrateur n'avait AUCUN contrôle pour le faire. La
+   * boucle était fermée sans issue : seul un UPDATE direct en base réparait. Prescrire une
+   * action que l'interface ne permet pas est un piège opérationnel.
+   *
+   * `entityIds = []` (aucun hidden posté) est le chemin de réparation, explicitement permis
+   * par la garde (elle ne mord que sur un périmètre NON VIDE).
+   */
+  const [etat, action, enCours] = useActionState(
+    definirScopesAction,
+    ETAT_INITIAL,
+  );
+  const aUnScopeHerite = membre.scopeInitial.length > 0;
+
+  return (
+    <li className="rounded-card bg-surface-card p-5 shadow-card">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden
+            className="flex size-9 shrink-0 items-center justify-center rounded-full
+              bg-surface-inset text-xs font-semibold text-text-muted"
+          >
+            {initiales(membre.nomComplet)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{membre.nomComplet}</p>
+            <p className="truncate text-xs text-text-muted">{membre.email}</p>
+          </div>
+          <span
+            className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+              ROLE_BADGE[membre.role],
+            )}
+          >
+            {ROLE_LABEL[membre.role]}
+          </span>
+        </div>
+
+        {aUnScopeHerite ? (
+          <form action={action} className="flex flex-col items-end gap-1.5">
+            <input type="hidden" name="userId" value={membre.userId} />
+            {/* Aucun `entityIds` posté ⇒ getAll → [] ⇒ retrait du périmètre. */}
+            <p className="text-xs text-warning">
+              Carries a restriction inherited from an earlier setup — it limits
+              their own admin screens.
+            </p>
+            <div aria-live="polite" className="min-h-[1rem] text-xs">
+              {etat.erreur !== null && (
+                <span role="alert" className="text-danger">
+                  {etat.erreur}
+                </span>
+              )}
+              {etat.succes !== null && (
+                <span role="status" className="text-success">
+                  Restriction cleared.
+                </span>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={enCours}
+              className="h-9 rounded-control bg-primary px-3 text-xs font-semibold text-white
+                transition-colors hover:bg-primary-600 focus:outline-none focus-visible:ring-2
+                focus-visible:ring-primary focus-visible:ring-offset-2
+                disabled:cursor-not-allowed disabled:opacity-[0.48]"
+            >
+              {enCours ? "Clearing…" : "Clear restriction"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-xs text-text-muted">
+            Always sees the whole group — an administrator cannot be limited to
+            specific entities.
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function CarteMembreScopable({
   membre,
   entites,
 }: {
@@ -228,7 +338,7 @@ function CarteMembre({
         {/* Bascule Vision Globale / Vision Entité */}
         <div
           role="radiogroup"
-          aria-label={`Périmètre de ${membre.nomComplet}`}
+          aria-label={`Access for ${membre.nomComplet}`}
           className="flex rounded-control border border-line p-0.5 text-xs"
         >
           <button
@@ -245,7 +355,7 @@ function CarteMembre({
                 : "text-text-muted hover:text-text",
             )}
           >
-            Vision Globale
+            Whole group
           </button>
           <button
             type="button"
@@ -261,7 +371,7 @@ function CarteMembre({
                 : "text-text-muted hover:text-text",
             )}
           >
-            Vision Entité
+            Selected entities
           </button>
         </div>
       </div>
@@ -274,10 +384,10 @@ function CarteMembre({
         )}
       >
         {estGlobale
-          ? `Accès à l’ensemble du groupe (${entites.length} entité${entites.length > 1 ? "s" : ""})`
+          ? `Access to the whole group (${entites.length} ${entites.length > 1 ? "entities" : "entity"})`
           : entiteSansCase
-            ? "Sélectionnez au moins une entité, ou repassez en Vision Globale."
-            : `Vision restreinte à ${nbEntites} entité${nbEntites > 1 ? "s" : ""}`}
+            ? "Pick at least one entity, or switch back to whole-group access."
+            : `Access limited to ${nbEntites} ${nbEntites > 1 ? "entities" : "entity"}`}
       </p>
 
       {/* Formulaire : cases + champs cachés + bouton, le tout posté à l'action */}
@@ -293,7 +403,7 @@ function CarteMembre({
           disabled={estGlobale || enCours}
         >
           <legend className="sr-only">
-            Entités assignées à {membre.nomComplet}
+            Entities assigned to {membre.nomComplet}
           </legend>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {entites.map((entite) => {
@@ -328,7 +438,7 @@ function CarteMembre({
             })}
             {entites.length === 0 && (
               <p className="col-span-full text-xs text-text-muted">
-                Aucune entité n’a encore été créée pour ce groupe.
+                No entity has been created for this group yet.
               </p>
             )}
           </div>
@@ -348,7 +458,7 @@ function CarteMembre({
               </span>
             )}
             {etat.erreur === null && etat.succes === null && modifie && (
-              <span className="text-text-faint">Modification non enregistrée.</span>
+              <span className="text-text-faint">Unsaved changes.</span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -360,7 +470,7 @@ function CarteMembre({
                 transition-colors hover:text-text focus:outline-none focus-visible:ring-2
                 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-48"
             >
-              Réinitialiser
+              Reset
             </button>
             <button
               type="submit"
@@ -376,7 +486,7 @@ function CarteMembre({
                   className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
                 />
               )}
-              {enCours ? "Enregistrement…" : "Enregistrer"}
+              {enCours ? "Saving…" : "Save"}
             </button>
           </div>
         </div>

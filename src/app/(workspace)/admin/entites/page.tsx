@@ -18,10 +18,11 @@
  */
 import { notFound, redirect } from "next/navigation";
 
+import { AvertissementVueRestreinte } from "@/components/admin/avertissement-vue-restreinte";
 import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionAdministration,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import {
@@ -36,23 +37,29 @@ import {
   AssignationComptes,
   type CompteVueAssignation,
 } from "./assignation-comptes";
+import { BandeauRecap } from "./bandeau-recap";
+import { GestionEntites, type EntiteGeree } from "./gestion-entites";
+import { compterNonAssignes } from "./regles-comptes";
 import {
   AssignationEntites,
   type EntiteVue,
   type MembreVue,
 } from "./assignation-entites";
 import {
-  PropositionsPartyEntite,
+  BanniereSuggestions,
   type EntiteCible,
   type PropositionVue,
 } from "./propositions";
 
-export const metadata = { title: "Entités — Dodo" };
+export const metadata = { title: "Entities — Dodo" };
 
 export default async function PageEntites() {
+  // L0 (§3.3) : session AMPUTÉE du viewFilter. Le sélecteur de périmètre du header est
+  // monté sur CETTE page ; sans amputation, la policy account_scope filtrerait les comptes
+  // et le récap mentirait (« 0 non assigné » alors que 77 le sont).
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    session = await exigerSessionAdministration();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
@@ -84,7 +91,18 @@ export default async function PageEntites() {
       ctx,
     );
 
-    return { entites, membres, propositions, comptes };
+    // GARDE FAIL-SAFE (§12). Depuis l'arbitrage du 2026-07-13, scoper un ADMIN est REFUSÉ
+    // (`AdminNonScopableError`) : la cause est fermée. Cette garde reste néanmoins — elle
+    // couvre les états HÉRITÉS (une ligne `member_entity_scopes` déjà en base, posée avant
+    // la règle, ou par une insertion directe). L'amputation du viewFilter (L0) ne peut rien
+    // pour eux : `entity_scope` / `account_scope` sont résolus EN BASE, pas dans la session.
+    // On refuse de MENTIR : l'écran DIT qu'il est partiel plutôt que d'afficher un « 0 non
+    // assigné » faux. Défense en profondeur : la garde applicative empêche de créer l'état,
+    // elle n'efface pas ceux qui existent déjà.
+    const vueRestreinte =
+      ctx.entityScope.mode !== "GLOBALE" || ctx.accountScope.mode !== "GLOBALE";
+
+    return { entites, membres, propositions, comptes, vueRestreinte };
   });
 
   if (donnees === null) {
@@ -93,9 +111,24 @@ export default async function PageEntites() {
 
   // Restreint aux entités actives (les archivées disparaissent des pickers, cf.
   // archiverEntite côté repo).
-  const entitesActives: EntiteVue[] = donnees.entites
-    .filter((e) => e.isActive)
-    .map((e) => ({ id: e.id, nom: e.name, code: e.code }));
+  const actives = donnees.entites.filter((e) => e.isActive);
+
+  const entitesActives: EntiteVue[] = actives.map((e) => ({
+    id: e.id,
+    nom: e.name,
+    code: e.code,
+  }));
+
+  // L2 — la liste GÉRABLE porte en plus le nombre de comptes (agrégat SQL déjà calculé
+  // par listerEntites : aucune requête de plus). Elle montre TOUTES les entités actives,
+  // y compris celles à 0 compte — que le tableau, lui, ne rend pas (il masque les groupes
+  // vides). Sans elle, une entité fraîchement créée serait ingérable (Q-ENTITE-VIDE).
+  const entitesGerees: EntiteGeree[] = actives.map((e) => ({
+    id: e.id,
+    nom: e.name,
+    code: e.code,
+    nbComptes: e.nbComptes,
+  }));
 
   // Cibles d'entité pour le sas de propositions (entités actives, mêmes que pickers).
   const entitesCibles: EntiteCible[] = entitesActives.map((e) => ({
@@ -103,46 +136,85 @@ export default async function PageEntites() {
     nom: e.nom,
   }));
 
+  // L1 — compteurs du bandeau. ZÉRO requête : tout se dérive des listes déjà lues dans le
+  // withWorkspace ci-dessus. Le « non assigné » vient de la règle PARTAGÉE avec le tableau
+  // (regles-comptes.ts) : bandeau et groupement ne peuvent pas se contredire (constat C1).
+  const idsEntitesActives = new Set(entitesActives.map((e) => e.id));
+  const nbNonAssignes = compterNonAssignes(donnees.comptes, idsEntitesActives);
+
   return (
-    <main className="flex flex-1 justify-center p-6">
-      <div className="flex w-full max-w-3xl flex-col gap-10">
-        <section>
-          <h1 className="mb-1 text-lg font-semibold">
-            Propositions d’entités (Parties Omni-FI)
-          </h1>
-          <p className="mb-6 text-sm text-text-muted">
-            Chaque proposition est dérivée d’une « Party » Omni-FI. Rien n’est
-            enregistré tant que vous n’avez pas confirmé : créez l’entité proposée
-            ou choisissez-en une existante, puis rattachez ses comptes.
+    // Pleine largeur (UI_GUIDELINES §1.1 : « Admin — la table pleine largeur EST l'écran »).
+    // Même gabarit que /transactions. L'ancien max-w-3xl écrasait un tableau de 87 lignes
+    // dans une colonne étroite.
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      <div className="flex flex-col gap-8">
+        {/* L0 §12 — l'écran DIT qu'il est partiel plutôt que d'afficher des chiffres faux.
+            (L'axe viewFilter, lui, est déjà neutralisé par exigerSessionAdministration.) */}
+        {donnees.vueRestreinte && <AvertissementVueRestreinte />}
+
+        <header>
+          <h1 className="text-xl font-semibold text-ink">Entities</h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Group your bank accounts into entities, then choose who can see what.
           </p>
-          <PropositionsPartyEntite
+        </header>
+
+        <BandeauRecap
+          nbEntites={entitesActives.length}
+          nbComptes={donnees.comptes.length}
+          nbNonAssignes={nbNonAssignes}
+          nbMembres={donnees.membres.length}
+        />
+
+        {/* L2 — créer / renommer / archiver. Surface DÉDIÉE (Q-ENTITE-VIDE) : piloter une
+            entité depuis un en-tête de groupe du tableau la rendrait ingérable dès qu'elle
+            ne porte aucun compte, puisque les groupes vides ne sont pas rendus. */}
+        <GestionEntites entites={entitesGerees} />
+
+        {/* ÉTAPE 1 — LE CŒUR. Passe AVANT l'accès des membres : on range les comptes,
+            PUIS on donne les clés. L'ordre inverse (l'ancien) faisait décider qui voit
+            quoi avant même que quoi que ce soit soit rangé. */}
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">
+              Step 1 — Organise accounts
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Attach each bank account to an entity. An account left unassigned
+              stays invisible to members with restricted access.
+            </p>
+          </div>
+
+          {/* L4 — les suggestions ne sont plus une SECTION jargonneuse en tête d'écran :
+              une bannière, ici, là où le geste a du sens. Elle disparaît quand il n'y a
+              rien à suggérer. Le détail vit dans un panneau qu'on ouvre pour vérifier.
+              🔒 INVARIANT : rien n'est écrit sans confirmation explicite (ENTITY-PARTY1). */}
+          <BanniereSuggestions
             propositions={donnees.propositions}
             entites={entitesCibles}
           />
-        </section>
 
-        <section>
-          <h2 className="mb-1 text-lg font-semibold">Assignation des entités</h2>
-          <p className="mb-6 text-sm text-text-muted">
-            Définissez le périmètre de chaque membre : accès à l’ensemble du groupe
-            (Vision Globale) ou restreint à certaines entités (Vision Entité).
-          </p>
-          <AssignationEntites
-            entites={entitesActives}
-            membres={donnees.membres}
-          />
-        </section>
-
-        <section>
-          <h2 className="mb-1 text-lg font-semibold">Assignation des comptes</h2>
-          <p className="mb-6 text-sm text-text-muted">
-            Rattachez chaque compte bancaire à une entité, ou repassez-le en
-            « non assigné ». Un compte non assigné reste invisible aux membres en
-            Vision Entité.
-          </p>
           <AssignationComptes
             comptes={donnees.comptes}
             entites={entitesActives}
+          />
+        </section>
+
+        {/* ÉTAPE 2 — l'accès des membres, une fois les comptes rangés. */}
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">
+              Step 2 — Who sees what
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Choose each member’s access: the whole group, or only the entities
+              you pick.
+            </p>
+          </div>
+
+          <AssignationEntites
+            entites={entitesActives}
+            membres={donnees.membres}
           />
         </section>
       </div>

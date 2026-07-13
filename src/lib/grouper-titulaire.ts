@@ -123,49 +123,23 @@ export function grouperParTitulaire<T extends CompteTitulable>(
 }
 
 /* ------------------------------------------------------------------ */
-/* Sélection de groupe (S2 — case « tout cocher » tri-état)            */
+/* Sélection de groupe — DÉMÉNAGÉE vers lib/selection-groupe.ts        */
 /* ------------------------------------------------------------------ */
 
-export type EtatSelectionGroupe = "aucun" | "partiel" | "tous";
-
 /**
- * État de la case de groupe (tri-état S2), dérivé de la sélection courante.
- * Groupe vide → « aucun » (jamais « tous » : une case cochée sur un groupe sans
- * compte serait un mensonge). PURE, zéro React.
- */
-export function etatSelectionGroupe(
-  comptesDuGroupe: CompteTitulable[],
-  coches: ReadonlySet<string>,
-): EtatSelectionGroupe {
-  let n = 0;
-  for (const c of comptesDuGroupe) {
-    if (coches.has(c.bankAccountId)) n += 1;
-  }
-  if (n === 0) return "aucun";
-  return n === comptesDuGroupe.length ? "tous" : "partiel";
-}
-
-/**
- * Bascule la sélection d'un groupe : « tous » cochés → décoche le groupe ;
- * « aucun »/« partiel » → coche TOUT le groupe. IMMUTABLE (retourne un NOUVEAU
- * Set, l'entrée n'est jamais mutée).
+ * `etatSelectionGroupe` / `basculerGroupe` vivent désormais dans
+ * `@/lib/selection-groupe` : elles ne dépendent que d'un `bankAccountId` et n'ont jamais
+ * rien eu à voir avec les TITULAIRES. Les laisser ici obligeait l'écran d'assignation
+ * d'ENTITÉS à importer un module de parties (dette de nommage, constat C2 de la
+ * cross-review L3).
  *
- * DISPLAY-ONLY (règle 2) : n'ajoute QUE des `bankAccountId` de `comptesDuGroupe`
- * — lesquels proviennent de `comptes` (la liste scopée RLS du membre). Aucun id
- * externe ne peut entrer dans la sélection par ce chemin ; le serveur intersecte
- * de toute façon DROIT ∩ filtre.
+ * Ré-export de compatibilité : `perimetre-switcher.tsx` et sa suite de tests continuent
+ * d'importer depuis ce module sans changement. Le NOUVEAU code importe directement depuis
+ * `@/lib/selection-groupe`.
  */
-export function basculerGroupe(
-  coches: ReadonlySet<string>,
-  comptesDuGroupe: CompteTitulable[],
-): Set<string> {
-  const next = new Set(coches);
-  const tousCoches =
-    comptesDuGroupe.length > 0 &&
-    comptesDuGroupe.every((c) => next.has(c.bankAccountId));
-  for (const c of comptesDuGroupe) {
-    if (tousCoches) next.delete(c.bankAccountId);
-    else next.add(c.bankAccountId);
-  }
-  return next;
-}
+export {
+  basculerGroupe,
+  etatSelectionGroupe,
+  type EtatSelectionGroupe,
+  type SelectionnableParId,
+} from "@/lib/selection-groupe";
