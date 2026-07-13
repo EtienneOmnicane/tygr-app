@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import { exigerSessionAdministration } from "@/server/auth/session";
 import {
+  AdminNonScopableError,
   creerMembreAvecScopes,
   EntiteIntrouvableError,
   MembreNonScopableError,
@@ -92,6 +93,12 @@ export async function provisionnerMembre(
     // Une entité inconnue / d'un autre tenant (FK composite) ou un membre non scopable
     // → saisie invalide (générique, pas d'oracle d'existence). La tx a rollback → aucun
     // utilisateur ni membership n'a persisté (atomicité prouvée par la suite d'isolation).
+    // §12 — créer un ADMIN AVEC un périmètre est refusé (creerMembreAvecScopes chaîne
+    // definirScopesMembre, il hérite donc de la garde). Message explicite : l'admin a coché
+    // des entités pour un rôle qui voit tout — dire la règle, pas « champs invalides ».
+    if (erreur instanceof AdminNonScopableError) {
+      return { erreur: "Administrators always see the whole group — they cannot be limited to specific entities.", succes: null };
+    }
     if (
       erreur instanceof EntiteIntrouvableError ||
       erreur instanceof MembreNonScopableError

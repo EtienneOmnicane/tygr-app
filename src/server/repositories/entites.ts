@@ -168,6 +168,35 @@ export class PerimetreReduitError extends Error {
   }
 }
 
+/**
+ * On refuse de poser un PÉRIMÈTRE sur un ADMIN (décision Etienne, 2026-07-13 — §12 du plan).
+ *
+ * Ferme la CAUSE que les gardes précédentes ne faisaient que contenir. Un ADMIN scopé
+ * lisait des listes partielles sans le savoir (bandeau « Restricted view ») et voyait ses
+ * gardes d'écriture refuser (`PerimetreReduitError`) — deux fail-safes utiles, mais qui
+ * traitaient les conséquences. Rien n'empêchait de CRÉER l'état ; l'écran `/admin/entites`
+ * expose lui-même l'action qui le permet, et un ADMIN pouvait donc **se scoper lui-même**
+ * puis casser sa propre vue d'administration.
+ *
+ * Rôle et périmètre restent ORTHOGONAUX dans le modèle (un scope n'est pas un rôle) : on
+ * n'interdit que la COMBINAISON `ADMIN` + périmètre non vide, sans cas d'usage au MVP.
+ * Retirer un périmètre (`entityIds = []`) reste évidemment permis — c'est le chemin de
+ * réparation d'un ADMIN scopé par une donnée héritée.
+ *
+ * La garde porte sur le rôle de la CIBLE (`data.userId`), jamais sur `ctx.role` (qui est
+ * l'ADMIN qui agit — il est ADMIN par construction, `exigerAdmin` vient de le vérifier).
+ *
+ * Les fail-safes restent EN PLUS (défense en profondeur) : la garde applicative empêche de
+ * créer l'état, elle n'efface pas les états hérités déjà en base.
+ */
+export class AdminNonScopableError extends Error {
+  readonly code = "ADMIN_NOT_SCOPABLE";
+  constructor() {
+    super("Un administrateur ne peut pas être restreint à un périmètre");
+    this.name = "AdminNonScopableError";
+  }
+}
+
 /** Le userId visé n'est pas membre du workspace courant (donc non scopable). */
 export class MembreNonScopableError extends Error {
   readonly code = "MEMBER_NOT_IN_WORKSPACE";
@@ -943,12 +972,22 @@ export async function definirScopesMembre<TDb extends AnyPgDatabase>(
 
   // 1. Le user visé est-il membre du workspace COURANT ? (scopé RLS → un user d'un
   //    autre tenant est invisible ici, donc traité comme non-membre → 404.)
+  //    On projette AUSSI son rôle : la garde §12 porte sur la CIBLE, pas sur l'acteur.
   const membre = await tx
-    .select({ userId: workspaceMembers.userId })
+    .select({
+      userId: workspaceMembers.userId,
+      role: workspaceMembers.role,
+    })
     .from(workspaceMembers)
     .where(eq(workspaceMembers.userId, data.userId))
     .limit(1);
   if (membre.length === 0) throw new MembreNonScopableError();
+
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (cf. `AdminNonScopableError`).
+  // `entityIds = []` (retrait du périmètre) reste permis : c'est le chemin de réparation.
+  if (membre[0].role === "ADMIN" && data.entityIds.length > 0) {
+    throw new AdminNonScopableError();
+  }
 
   // 2. Remplacement atomique du jeu de scopes (DELETE puis INSERT dans la même tx).
   await tx

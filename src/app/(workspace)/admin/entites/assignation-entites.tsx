@@ -162,6 +162,62 @@ function CarteMembre({
   membre: MembreVue;
   entites: EntiteVue[];
 }) {
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (le serveur le refuse :
+  // `AdminNonScopableError`). On ne PROPOSE donc pas le geste : laisser l'écran offrir des
+  // cases à cocher pour les faire rejeter ensuite serait un piège. On explique la règle.
+  if (membre.role === "ADMIN") {
+    return <CarteMembreAdmin membre={membre} />;
+  }
+  return <CarteMembreScopable membre={membre} entites={entites} />;
+}
+
+/**
+ * Carte d'un ADMIN : pas de sélecteur de périmètre. Administrer porte sur le tenant
+ * entier ; un périmètre y est un contresens (et casserait ses propres écrans — ses gardes
+ * d'écriture refuseraient de s'exécuter sous une vue partielle).
+ */
+function CarteMembreAdmin({ membre }: { membre: MembreVue }) {
+  return (
+    <li className="rounded-card bg-surface-card p-5 shadow-card">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden
+            className="flex size-9 shrink-0 items-center justify-center rounded-full
+              bg-surface-inset text-xs font-semibold text-text-muted"
+          >
+            {initiales(membre.nomComplet)}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{membre.nomComplet}</p>
+            <p className="truncate text-xs text-text-muted">{membre.email}</p>
+          </div>
+          <span
+            className={cn(
+              "ml-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+              ROLE_BADGE[membre.role],
+            )}
+          >
+            {ROLE_LABEL[membre.role]}
+          </span>
+        </div>
+
+        <p className="text-xs text-text-muted">
+          Always sees the whole group — an administrator cannot be limited to
+          specific entities.
+        </p>
+      </div>
+    </li>
+  );
+}
+
+function CarteMembreScopable({
+  membre,
+  entites,
+}: {
+  membre: MembreVue;
+  entites: EntiteVue[];
+}) {
   // Mode initial dérivé de la convention serveur : [] = Globale.
   const [mode, setMode] = useState<"GLOBALE" | "ENTITE">(
     membre.scopeInitial.length === 0 ? "GLOBALE" : "ENTITE",

@@ -34,6 +34,7 @@ import {
   EntiteNonVideError,
   AssignationHorsPerimetreError,
   PerimetreReduitError,
+  AdminNonScopableError,
   CompteIntrouvableError,
   listerComptesAvecEntite,
   listerEntites,
@@ -912,9 +913,18 @@ describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commun
     );
 
     // On scope l'ADMIN sur une AUTRE entité → son COUNT sur bank_accounts est amputé.
-    await withWorkspace(sAdminA, (tx, ctx) =>
-      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [ENT_SUCRE] }),
+    //
+    // ⚠️ Le scope est posé SOUS L'OWNER, pas via l'API : depuis §12, `definirScopesMembre`
+    // REFUSE de scoper un ADMIN (cas 46). On simule donc un état HÉRITÉ — une ligne déjà en
+    // base (donnée legacy, insertion directe). C'est précisément ce que les fail-safes
+    // doivent couvrir : la garde applicative empêche de CRÉER l'état, elle n'efface pas
+    // ceux qui existent déjà. Défense en profondeur.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
     );
+    await client.exec(`set role tygr_app;`);
 
     await expect(
       withWorkspace(sAdminA, (tx, ctx) => archiverEntite(tx, ctx, entityId)),
@@ -925,6 +935,8 @@ describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commun
 
     // Nettoyage — dans CET ordre : tant que l'ADMIN est scopé, ACC_A (rattaché ailleurs)
     // lui est invisible et la dé-assignation échouerait.
+    // `entityIds: []` RESTE PERMIS sur un ADMIN : c'est le chemin de RÉPARATION d'un scope
+    // hérité (la garde §12 ne mord que sur un périmètre NON VIDE).
     await withWorkspace(sAdminA, (tx, ctx) =>
       definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
     );
@@ -986,9 +998,13 @@ describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commun
         entityId: ENT_SUCRE,
       }),
     );
-    await withWorkspace(sAdminA, (tx, ctx) =>
-      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [ENT_SUCRE] }),
+    // Scope hérité, posé sous l'owner (l'API le refuse depuis §12 — cf. cas 42).
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
     );
+    await client.exec(`set role tygr_app;`);
 
     await expect(
       withWorkspace(sAdminA, (tx, ctx) =>
@@ -1005,6 +1021,84 @@ describe("Correctifs de cross-review (L0→L3) — l'ADMIN SCOPÉ, racine commun
     );
     await withWorkspace(sAdminA, (tx, ctx) =>
       assignerCompteEntite(tx, ctx, { bankAccountId: ACC_A, entityId: null }),
+    );
+  });
+});
+
+describe("§12 — un ADMIN n'est JAMAIS restreint à un périmètre (Etienne, 2026-07-13)", () => {
+  // Ferme la CAUSE. Les fail-safes (PerimetreReduitError, bandeau « Restricted view »)
+  // traitaient les CONSÉQUENCES d'un ADMIN scopé ; rien n'empêchait de créer l'état — et
+  // l'écran /admin/entites expose lui-même l'action qui le permet : un ADMIN pouvait se
+  // scoper LUI-MÊME et casser sa propre vue d'administration.
+  //
+  // Rôle et périmètre restent ORTHOGONAUX : on refuse la seule COMBINAISON ADMIN + scopé.
+  // Les fail-safes RESTENT (défense en profondeur) : la garde empêche de créer l'état, elle
+  // n'efface pas ceux qui existent déjà (cf. cas 42 et 45, qui les posent sous l'owner).
+
+  it("46. ⭐ definirScopesMembre REFUSE de scoper un ADMIN (axe ENTITÉ)", async () => {
+    await expect(
+      withWorkspace(sAdminA, (tx, ctx) =>
+        definirScopesMembre(tx, ctx, {
+          userId: ADMIN_A,
+          entityIds: [ENT_SUCRE],
+        }),
+      ),
+    ).rejects.toBeInstanceOf(AdminNonScopableError);
+
+    // Rien n'a été posé — et surtout : le DELETE préalable du remplace-set a rollback avec
+    // la transaction, donc un ADMIN déjà scopé (état hérité) ne se retrouve pas à moitié
+    // nettoyé par une tentative refusée.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${ADMIN_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("47. RETIRER le périmètre d'un ADMIN reste permis — c'est le chemin de réparation", async () => {
+    // Un ADMIN scopé par une donnée héritée doit pouvoir être réparé. La garde ne mord donc
+    // que sur un périmètre NON VIDE. Sans cette nuance, un ADMIN scopé serait piégé : ses
+    // gardes d'écriture le bloquent, et il ne pourrait pas se déscoper.
+    await client.exec(`reset role;`);
+    await client.exec(
+      `insert into member_entity_scopes (workspace_id, user_id, entity_id)
+       values ('${WS_A}','${ADMIN_A}','${ENT_SUCRE}')`,
+    );
+    await client.exec(`set role tygr_app;`);
+
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: ADMIN_A, entityIds: [] }),
+    );
+
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${ADMIN_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(0);
+  });
+
+  it("48. un MANAGER, lui, reste parfaitement scopable (rôle et périmètre restent orthogonaux)", async () => {
+    // Contre-preuve : on n'a pas cassé le modèle. Seule la COMBINAISON ADMIN + scopé est
+    // refusée ; le périmètre reste un mécanisme normal pour les autres rôles.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, {
+        userId: MANAGER_A,
+        entityIds: [ENT_SUCRE],
+      }),
+    );
+
+    await client.exec(`reset role;`);
+    const r = await client.query<{ n: number }>(
+      `select count(*)::int as n from member_entity_scopes where user_id = '${MANAGER_A}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.n).toBe(1);
+
+    // Nettoyage.
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      definirScopesMembre(tx, ctx, { userId: MANAGER_A, entityIds: [] }),
     );
   });
 });

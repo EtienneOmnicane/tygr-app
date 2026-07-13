@@ -26,6 +26,7 @@ import { z } from "zod";
 
 import { exigerSessionAdministration } from "@/server/auth/session";
 import {
+  AdminNonScopableError,
   CompteIntrouvableError,
   MembreNonScopableError,
   octroyerScopeFin,
@@ -92,6 +93,16 @@ function versCible(data: {
  * d'un autre tenant (404 « introuvable » neutre).
  */
 function mapErreur(e: unknown): EtatAction | null {
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (garde héritée : octroyerScopeFin
+  // délègue à definirScopesFinsMembre). Le message dit la RÈGLE, pas « interdit » : ce n'est
+  // pas un droit qui manque à l'acteur, c'est le rôle de la CIBLE qui exclut le périmètre.
+  if (e instanceof AdminNonScopableError) {
+    return {
+      erreur:
+        "Administrators always see the whole group — they cannot be limited to specific entities.",
+      succes: null,
+    };
+  }
   if (e instanceof ScopeFinNonAutoriseError) {
     return { erreur: MESSAGE_REFUS, succes: null };
   }

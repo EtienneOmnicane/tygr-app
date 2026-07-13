@@ -239,6 +239,7 @@ export {
   EntiteNonVideError,
   AssignationHorsPerimetreError,
   PerimetreReduitError,
+  AdminNonScopableError,
   MembreNonScopableError,
 } from "@/server/repositories/entites";
 export type {

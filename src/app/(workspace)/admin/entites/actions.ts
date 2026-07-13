@@ -38,6 +38,7 @@ import {
   EntiteIntrouvableError,
   EntiteNomDupliqueError,
   EntiteNonAutoriseError,
+  AdminNonScopableError,
   EntiteNonVideError,
   MembreNonScopableError,
   PerimetreReduitError,
@@ -164,6 +165,11 @@ function mapErreur(e: unknown): EtatAction | null {
   // oracle d'existence (une entité d'un autre tenant renvoie 404, pas ce message).
   // S4 — WITH CHECK de la policy entity_scope. Sans ce mapping, un ADMIN qui porte un
   // périmètre en base récoltait un 500 brut en dé-assignant un compte (chemin légitime).
+  // §12 — un ADMIN n'est jamais restreint à un périmètre. Le message dit la RÈGLE, pas
+  // « interdit » : l'admin doit comprendre que ce n'est pas un droit qui lui manque.
+  if (e instanceof AdminNonScopableError) {
+    return { erreur: "Administrators always see the whole group — they cannot be limited to specific entities.", succes: null };
+  }
   // R1 — une garde qui exige un dénombrement complet refuse de tourner sous périmètre
   // réduit. Le message dit POURQUOI, et comment en sortir (l'admin ne peut pas se
   // déscoper lui-même : c'est un autre admin qui doit lever la restriction).

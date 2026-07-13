@@ -46,13 +46,20 @@ export function FormulaireProvisioning({
   // repasse en Globale (confort de saisie).
   const [mode, setMode] = useState<"GLOBALE" | "ENTITE">("GLOBALE");
   const [selection, setSelection] = useState<string[]>([]);
+  // §12 — un ADMIN n'est jamais restreint à un périmètre (le serveur refuse :
+  // `AdminNonScopableError`). Le rôle passe donc en état contrôlé, pour ne PAS proposer un
+  // geste voué au rejet : on explique la règle à la place du sélecteur.
+  const [role, setRole] = useState<"ADMIN" | "MANAGER" | "VIEWER">("VIEWER");
 
   const sansEntite = entites.length === 0;
-  const estGlobale = mode === "GLOBALE" || sansEntite;
+  const estAdmin = role === "ADMIN";
+  // Un ADMIN est TOUJOURS global : ni le mode ni la sélection ne s'appliquent à lui.
+  const estGlobale = estAdmin || mode === "GLOBALE" || sansEntite;
   // Champs cachés réellement envoyés (convention serveur : Globale ⇒ []).
   const entityIdsAEnvoyer = estGlobale ? [] : selection;
   // Garde-fou produit : mode ENTITE sans aucune case → envoyer [] rouvrirait tout.
-  const entiteSansCase = mode === "ENTITE" && !sansEntite && selection.length === 0;
+  const entiteSansCase =
+    !estAdmin && mode === "ENTITE" && !sansEntite && selection.length === 0;
 
   function toggleEntite(id: string) {
     setSelection((prev) =>
@@ -93,7 +100,15 @@ export function FormulaireProvisioning({
       </label>
       <label className="flex flex-col gap-1.5">
         <span className="text-sm font-medium">Role</span>
-        <select name="role" defaultValue="VIEWER" disabled={enCours} className={champClass}>
+        <select
+          name="role"
+          value={role}
+          onChange={(e) =>
+            setRole(e.target.value as "ADMIN" | "MANAGER" | "VIEWER")
+          }
+          disabled={enCours}
+          className={champClass}
+        >
           <option value="VIEWER">Viewer (read-only)</option>
           <option value="MANAGER">Manager</option>
           <option value="ADMIN">Administrator</option>
@@ -101,6 +116,13 @@ export function FormulaireProvisioning({
       </label>
 
       {/* Périmètre entité (optionnel) ------------------------------------------- */}
+      {estAdmin ? (
+        <p className="border-t border-line pt-4 text-sm text-text-muted">
+          <span className="font-medium text-text">Access:</span> the whole group.
+          An administrator cannot be limited to specific entities — administering
+          means seeing everything.
+        </p>
+      ) : (
       <fieldset className="flex flex-col gap-2.5 border-t border-line pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <legend className="text-sm font-medium">Périmètre</legend>
@@ -197,6 +219,7 @@ export function FormulaireProvisioning({
           <input key={id} type="hidden" name="entityIds" value={id} />
         ))}
       </fieldset>
+      )}
 
       {etat.erreur !== null && (
         <p role="alert" className="text-xs text-danger">
