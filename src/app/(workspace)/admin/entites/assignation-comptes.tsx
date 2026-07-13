@@ -98,8 +98,16 @@ const LIBELLE_NON_ASSIGNE = "— Unassigned —";
  *
  * Exportée pour être testée et réutilisée sans dupliquer la cascade (même esprit que la
  * règle « source unique de formatage » appliquée aux montants et aux dates).
+ *
+ * Sa signature est STRUCTURELLE (les 3 champs dont elle a besoin), pas nominale : le sas de
+ * propositions (`CompteVue`) et le tableau (`CompteVueAssignation`) l'appellent tous les
+ * deux. C'est la décision Q2 — UNE seule source de libellé, jamais deux.
  */
-export function libelleCompte(compte: CompteVueAssignation): string {
+export function libelleCompte(compte: {
+  bankAccountId: string;
+  accountName: string;
+  institutionName: string | null;
+}): string {
   const nom = compte.accountName.trim();
   if (nom !== "") return nom;
 

@@ -452,6 +452,10 @@ export async function confirmerPropositionAction(
     throw e;
   }
 
+  // S3 — la confirmation ne posait AUCUN revalidatePath : le TABLEAU des comptes (devenu
+  // l'objet CENTRAL de l'écran depuis L1) gardait des props périmées après un rattachement.
+  revalidatePath("/admin/entites");
+
   const nbComptes = parsed.data.bankAccountIds.length;
   return {
     erreur: null,

@@ -272,6 +272,15 @@ export interface CompteDeProposition {
   bankAccountId: string;
   accountName: string;
   currency: string;
+  /**
+   * Institution de la connexion (nullable) — identifiant de REPLI (L4, décision Q2).
+   *
+   * Sans ce champ, le sas ne pourrait pas utiliser `libelleCompte()` — la source UNIQUE de
+   * libellé, partagée avec le tableau. Il retomberait sur `Account 1a2b3c4d` pour les 77
+   * comptes sans nom (sur 87), et l'institution disparaîtrait précisément sur ceux qu'on
+   * cherche à rendre identifiables. Même jointure que `listerComptesAvecEntite`.
+   */
+  institutionName: string | null;
   /** entity_id ACTUEL du compte (null = non assigné). Sert au bilan « déjà assigné ». */
   entityIdActuel: string | null;
 }
@@ -608,6 +617,10 @@ export async function listerPropositionsPartyEntite<TDb extends AnyPgDatabase>(
       bankAccountId: bankAccounts.id,
       accountName: bankAccounts.accountName,
       currency: bankAccounts.currency,
+      // L4 / Q2 : le libellé du sas passe par `libelleCompte()`, qui a besoin de
+      // l'institution pour replier les comptes sans nom. Même jointure que
+      // `listerComptesAvecEntite` — la lecture reste scopée workspace + RLS.
+      institutionName: bankConnections.institutionName,
       entityIdActuel: bankAccounts.entityId,
     })
     .from(accountPartyRole)
@@ -617,6 +630,10 @@ export async function listerPropositionsPartyEntite<TDb extends AnyPgDatabase>(
         eq(bankAccounts.id, accountPartyRole.bankAccountId),
         eq(bankAccounts.workspaceId, ctx.workspaceId),
       ),
+    )
+    .innerJoin(
+      bankConnections,
+      eq(bankConnections.id, bankAccounts.connectionId),
     )
     .where(eq(accountPartyRole.workspaceId, ctx.workspaceId))
     .orderBy(bankAccounts.accountName, bankAccounts.id);
@@ -631,6 +648,7 @@ export async function listerPropositionsPartyEntite<TDb extends AnyPgDatabase>(
       bankAccountId: c.bankAccountId,
       accountName: c.accountName,
       currency: c.currency,
+      institutionName: c.institutionName,
       entityIdActuel: c.entityIdActuel,
     });
     comptesParParty.set(c.partyId, liste);

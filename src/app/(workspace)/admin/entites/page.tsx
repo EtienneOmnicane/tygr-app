@@ -46,7 +46,7 @@ import {
   type MembreVue,
 } from "./assignation-entites";
 import {
-  PropositionsPartyEntite,
+  BanniereSuggestions,
   type EntiteCible,
   type PropositionVue,
 } from "./propositions";
@@ -91,14 +91,14 @@ export default async function PageEntites() {
       ctx,
     );
 
-    // L0, résidu PLAN §12 — GARDE FAIL-SAFE. L'amputation du viewFilter ne couvre que
-    // l'axe JWT. `entity_scope` et `account_scope` sont résolus EN BASE par withWorkspace
-    // (member_entity_scopes / user_scopes) : la session ne peut pas les neutraliser. Or
-    // rien n'interdit aujourd'hui de scoper un ADMIN — `definirScopesMembre` ne vérifie
-    // que la MEMBERSHIP, jamais le RÔLE — et cet écran expose lui-même l'action qui le
-    // permet. Un ADMIN scopé lirait donc des listes PARTIELLES.
-    // On ne durcit aucune règle serveur sans arbitrage (§12), mais on refuse de MENTIR :
-    // l'écran dit qu'il est restreint plutôt que d'afficher un « 0 non assigné » faux.
+    // GARDE FAIL-SAFE (§12). Depuis l'arbitrage du 2026-07-13, scoper un ADMIN est REFUSÉ
+    // (`AdminNonScopableError`) : la cause est fermée. Cette garde reste néanmoins — elle
+    // couvre les états HÉRITÉS (une ligne `member_entity_scopes` déjà en base, posée avant
+    // la règle, ou par une insertion directe). L'amputation du viewFilter (L0) ne peut rien
+    // pour eux : `entity_scope` / `account_scope` sont résolus EN BASE, pas dans la session.
+    // On refuse de MENTIR : l'écran DIT qu'il est partiel plutôt que d'afficher un « 0 non
+    // assigné » faux. Défense en profondeur : la garde applicative empêche de créer l'état,
+    // elle n'efface pas ceux qui existent déjà.
     const vueRestreinte =
       ctx.entityScope.mode !== "GLOBALE" || ctx.accountScope.mode !== "GLOBALE";
 
@@ -185,12 +185,11 @@ export default async function PageEntites() {
             </p>
           </div>
 
-          {/* Suggestions dérivées des données bancaires. Rien n'est écrit sans
-              confirmation explicite de l'admin (invariant ENTITY-PARTY1).
-              ⚠️ `propositions.tsx` n'est PAS touché par ce lot : la PR #183 est en vol
-              sur ce fichier. L4 le refond en bannière — et le traduit — APRÈS son merge.
-              Son contenu reste donc en français jusque-là (écart transitoire assumé). */}
-          <PropositionsPartyEntite
+          {/* L4 — les suggestions ne sont plus une SECTION jargonneuse en tête d'écran :
+              une bannière, ici, là où le geste a du sens. Elle disparaît quand il n'y a
+              rien à suggérer. Le détail vit dans un panneau qu'on ouvre pour vérifier.
+              🔒 INVARIANT : rien n'est écrit sans confirmation explicite (ENTITY-PARTY1). */}
+          <BanniereSuggestions
             propositions={donnees.propositions}
             entites={entitesCibles}
           />
