@@ -487,6 +487,31 @@ branche en vol · l'a11y du tri-état (`indeterminate` par `ref`, **déjà réso
 
 ---
 
+## 11-bis. Cross-review n° 3 — sur le CODE livré (L0→L3), 2026-07-13
+
+Contexte frais, mandaté sur le diff `origin/main...feature/refonte-entites-ia`. Elle a
+confirmé sains : la règle unique « non assigné » (aucune divergence possible), la sélection
+UI (aucun chemin de fuite), l'atomicité du batch, la complétude de l'amputation L0, et
+l'absence de régression. Elle a trouvé **deux bugs réels, prouvés sur Postgres** — tous deux
+sur la racine que §12 avait signalée mais que le lot n'avait traitée que côté AFFICHAGE :
+
+| Réf | Constat | Sort |
+|---|---|---|
+| **R1** | 🔴 La garde d'archivage **se contournait elle-même** : `archiverEntite` compte SOUS la RLS → sous périmètre réduit, il voyait 0 compte pour une entité qui en porte 12. | **Corrigé** — `PerimetreReduitError`. Principe : *une garde qui exige un dénombrement exhaustif refuse de s'exécuter sous périmètre réduit*. Cas 42. |
+| **R2** | 🔴 Garde à **sens unique** : on pouvait POSER un droit sur une entité **déjà archivée** (ni la FK ni `definirScopesMembre` ne regardaient `is_active`) → le droit orphelin que Q-ARCHIVAGE interdit. | **Corrigé** — contrôle `is_active` dans `definirScopesMembre`. Cas 43. |
+| **R3** | L'invariant « entité archivée ⇒ jamais une cible » n'était vrai que sur **1 des 3** chemins d'écriture. | **Corrigé** — `exigerEntiteCibleActive`, appliqué aux 3. Cas 44. |
+| **R4** | Le mapping SQLSTATE **42501** était correct mais **prouvé nulle part** (exit-criterion §10 non tenu). | **Corrigé** — cas 45. |
+| **R5** | L'accusé de réception du batch était du **code mort** (la barre se démonte avant que le succès soit peint) → après 50 comptes rangés, aucun retour. | **Corrigé** — le message du serveur vit au-dessus du tableau. |
+| **R6** | Règle ESLint **contournable par import relatif**. | **Corrigé** — `group` au lieu de `paths`. 3 contre-preuves. |
+| **R7** | TOCTOU sur `archiverEntite`. | **Corrigé** — verrou `FOR UPDATE` partagé avec `definirScopesMembre`. |
+| **R8** | `/admin/membres` amputé **sans** le garde-fou d'affichage (asymétrie contraire à Q-PERIMETRE). | **Corrigé**. |
+| **N1** | La cible **par défaut** de la barre d'action était la dé-assignation (geste destructif par défaut). | **Corrigé** — cible neutre, bouton inerte sans choix. |
+| **N3 / N4** | Routes `/demo` publiques montant de vraies Server Actions (préexistant) ; `admin/perimetres` sans appelant. | **Consignés** — `DEMO-ACTIONS1`, `ADMIN-PERIMETRES-MORT1`. |
+
+Les trois bloquants touchaient l'isolation → **corrigés, pas différés** (règle 9).
+
+---
+
 ## 12. ⚠️ Question résiduelle — rouverte à Etienne (non tranchée, non devinée)
 
 **Le principe acté est : « la surface admin ne s'exécute JAMAIS sous périmètre réduit ».**
@@ -505,9 +530,15 @@ le **rôle** de la cible. Et **`/admin/entites` expose elle-même l'action qui p
 un ADMIN** — `definirScopesAction` liste **tous** les membres, ADMIN compris. Un ADMIN peut
 donc **se scoper lui-même** depuis l'écran, et casser sa propre vue d'administration.
 
-**Ce que L0 fait** (sans arbitrage) : ampute le `viewFilter` **et** pose une garde
-d'affichage fail-safe — l'écran **dit** qu'il est restreint au lieu d'afficher des compteurs
-faux. Aucune règle serveur n'est durcie.
+**Ce que le chantier fait** (sans arbitrage) :
+1. **L0** ampute le `viewFilter` (l'axe JWT) et pose une garde d'**affichage** fail-safe —
+   l'écran **dit** qu'il est restreint plutôt que d'afficher des compteurs faux ;
+2. **les correctifs de cross-review** (§11-bis, R1) ferment le versant **écriture** : toute
+   garde dont la justesse exige un dénombrement exhaustif **refuse** de s'exécuter sous un
+   périmètre réduit (`PerimetreReduitError`). C'est le complément indispensable : un
+   avertissement de LECTURE ne protège pas une garde d'ÉCRITURE.
+
+Aucune règle d'écriture serveur n'est durcie **au-delà de ça**.
 
 **Ce que L0 ne fait PAS, et qui demande ton arbitrage** : durcir `definirScopesMembre` et
 `definirScopesFinsMembre` pour **interdire de scoper un ADMIN** (fail-closed structurel, ~10
