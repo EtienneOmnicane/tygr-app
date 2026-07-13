@@ -2168,6 +2168,70 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
 
 ## P2 — après le MVP
 
+### Widget natif — dettes ouvertes par `fix/widget-erreur-visible` (2026-07-13)
+
+- [ ] **WIDGET-ERR1 (P2) — reprise transparente sur `LINK_TOKEN_EXPIRED`.** Le registre S2
+  du plan promettait « régénérer le link-token, relancer le widget » sans clic. Le correctif
+  livre la rescue EXPLICITE (message + bouton réarmé, l'utilisateur reclique) : une relance
+  automatique boucle si le token expire immédiatement, et masquerait la cause. **Déclencheur** :
+  plainte utilisateur sur la friction du re-clic, OU stabilisation du TTL des LinkToken côté
+  Omni-FI. **Effort** : S.
+
+- [ ] **WIDGET-ERR4 (P2) — le watchdog du SDK peut être cassé EN SILENCE par une régression
+  de dépendances ; aucun gate ne l'attraperait.** Le risque n'est pas « des effets non testés »
+  en général : c'est que la correction de `omnifi-link-launcher.tsx` repose **entièrement sur la
+  STABILITÉ des dépendances**. `signalerSdkIndisponible` est un `useCallback([])` qui lit
+  `onErreurRef.current` **précisément pour ne pas fermer sur `onErreur`** (closure recréée à
+  chaque rendu du parent). Quiconque « corrigera » ça en remettant `onErreur` dans les deps
+  obtiendra : deps du watchdog changées à chaque rendu → `clearTimeout` + `setTimeout` en
+  boucle → **le watchdog ne tire JAMAIS** tant que le parent rerend plus vite que 15 s → retour
+  à l'attente infinie et muette. Même piège sur l'effet `open()` : `onErreur` dans ses deps le
+  ferait rejouer à chaque rendu → `destroy()` + `connect()` **en boucle sous l'utilisateur**.
+  **Ni ESLint (`exhaustive-deps` est SATISFAIT par la version fragile), ni `tsc`, ni les 459
+  tests ne verraient la régression** — seul le mapping pur est couvert. **Déclencheur** :
+  arrivée d'un renderer React de test au projet (jsdom + `@testing-library` — hors périmètre
+  d'un correctif : nouvelle dépendance, règle 9), OU 2ᵉ incident dans un effet du widget.
+  **Effort** : M (S une fois le renderer là). **Entre-temps** : les commentaires du fichier
+  nomment le piège — les lire avant de toucher aux deps.
+
+- [ ] **WIDGET-ERR5 (P2) — parler INSTANTANÉMENT au 2ᵉ montage après un échec de SDK.**
+  Le `<script>` mort restant dans le `<head>`, la condition est **définitive pour ce document** :
+  au montage suivant, on inflige quand même 15 s de panneau verrouillé avant de parler. Un
+  drapeau module-level poserait le message aussitôt. ⚠️ **Piège** : un drapeau NU
+  transformerait un faux positif du watchdog (bénin et auto-réparateur aujourd'hui — le SDK
+  finit par charger, le clic suivant marche) en **verrouillage permanent de la page**. Il faut
+  le garder par l'état réel : `if (sdkCondamne && !window.OmniFI) signalerSdkIndisponible()`.
+  Purement ergonomique ; le watchdog seul est correct. **Déclencheur** : plainte sur l'attente
+  de 15 s au 2ᵉ essai. **Effort** : S.
+
+- [ ] **WIDGET-ERR2 (P2) — télémétrie SERVEUR des codes d'échec du widget.** Aujourd'hui le
+  code part en `console.warn` navigateur (le launcher est client-only) : en production, on ne
+  saura pas quels codes tombent réellement chez les utilisateurs. Une remontée serveur exige
+  une Server Action dédiée (surface + rate-limit à penser) — non justifiée pour ce fix.
+  **Déclencheur** : premier échec widget non reproductible signalé par le support. **Effort** : S.
+
+- [ ] **WIDGET-ENV1 (P1) — `.env.prod` local pointe le CDN widget en 403.** `.env.prod:39`
+  porte `NEXT_PUBLIC_OMNIFI_ENV="production"` → le hook charge `cdn.omni-fi.co/v1/omni-fi-connect.js`,
+  qui répond **403** (seul `staging-cdn` est déployé, cf. [[prod-omnifi-pas-deployee]]). Le
+  fichier VERSIONNÉ `.env.prod.example:49` porte bien `"staging"`, et `scripts/dev-server.sh:84`
+  force `staging` — d'où l'invisibilité en local. Tout chemin de démarrage qui ne passe PAS par
+  ce script (Dockerfile, hébergeur, `next start --env-file=.env.prod`) charge le mauvais bundle.
+  `fix/widget-erreur-visible` rend désormais l'échec VISIBLE (message + bouton réarmé au lieu
+  d'une attente infinie muette) mais **ne répare pas la config** : le widget reste inutilisable
+  sous cet env. Fichier non versionné → à corriger à la main (`NEXT_PUBLIC_OMNIFI_ENV="staging"`).
+  **Déclencheur** : immédiat — avant toute démo sur un env non piloté par `dev-server.sh`.
+  **Effort** : XS.
+
+- [ ] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
+  `docs/UI_GUIDELINES.md` §3.4 : « une erreur a TOUJOURS un fond teinté, une icône et un
+  texte » — or les 3 canaux d'erreur du composant (`erreurDemarrage`, `erreurWidget`,
+  `erreurFinalisation`) rendent un `text-danger` NU. Écart **préexistant** et assumé dans le
+  JSDoc du composant (« feedback inline court ») ; `fix/widget-erreur-visible` s'y conforme
+  par cohérence plutôt que de rouvrir une décision UI dans un correctif de bug — mais l'écart
+  compte désormais 3 occurrences. À trancher en une fois : soit §3.4 s'applique (fond
+  `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
+  **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
+
 ### Epic 8 — Intelligence Métier (interview Accountant Omnicane/OL, 2026-06-11)
 - [ ] **FEAT-8.1 Moteur de catégorisation auto (Nature/Sous-nature + score de
   confiance)** — Effort M. Priorité `USER_RULE > SYSTEM_RULE > ML_FALLBACK` ; le
