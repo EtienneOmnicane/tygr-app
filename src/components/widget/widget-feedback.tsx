@@ -39,16 +39,25 @@ export interface ConnexionAReconnecter {
 
 export function WidgetFeedback({
   erreurDemarrage,
+  erreurWidget,
   erreurFinalisation,
   succes,
   redirection,
   reparation,
   onReconnecter,
   reparationEnCours,
+  widgetOuvert,
   aReconnecter,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
+  /**
+   * Erreur DU WIDGET NATIF (`onError` du CDN) — message déjà mappé S2 par
+   * `messageErreurWidget`. Canal DISTINCT des deux autres : origine différente (le
+   * widget, pas nos Server Actions) et rescue différente (réarmer et refaire le
+   * parcours). Les confondre rendrait le diagnostic impossible en support.
+   */
+  erreurWidget?: string | null;
   /** Erreur de finalisation/synchro — message déjà mappé S2. */
   erreurFinalisation?: string | null;
   /** Message de succès (déjà construit côté serveur). */
@@ -63,8 +72,20 @@ export function WidgetFeedback({
   reparation?: ConnexionAReparer[];
   /** Clic sur « Reconnecter » d'une connexion → le parent ouvre le widget REPAIR. */
   onReconnecter?: (connexion: ConnexionAReparer) => void;
-  /** `true` pendant l'ouverture d'une réparation : désactive les boutons (anti-double-clic). */
+  /**
+   * `true` entre le clic « Reconnecter » et l'obtention du token REPAIR : le bouton passe
+   * en « Ouverture… » (anti-double-clic). SENS UNIQUE — ne PAS y verser « un widget est
+   * ouvert » : le bouton afficherait « Ouverture… » alors que rien ne s'ouvre. C'est à ça
+   * que sert `widgetOuvert`.
+   */
   reparationEnCours?: boolean;
+  /**
+   * `true` dès qu'un widget est ouvert ou en cours d'ouverture (onboarding OU réparation).
+   * DÉSACTIVE « Reconnecter » sans en changer le libellé : on ne peut pas ouvrir deux
+   * widgets. Sans cette garde, « Reconnecter » démontait le widget ouvert sous les pieds
+   * de l'utilisateur — ou avalait en silence un LinkToken d'onboarding encore en vol.
+   */
+  widgetOuvert?: boolean;
   /**
    * Connexions dont l'accès est DÉSALIGNÉ (403) : à reconnecter par un NOUVEAU parcours
    * de connexion (pas de REPAIR — aucun jobId). On affiche une invite dédiée pointant
@@ -77,6 +98,14 @@ export function WidgetFeedback({
       {erreurDemarrage && (
         <p role="alert" className="text-sm text-danger">
           {erreurDemarrage}
+        </p>
+      )}
+      {/* Échec DU WIDGET (onError du CDN) : sans ceci, le widget se fermait sans un
+          mot. Le message est déjà mappé (jamais le texte amont, qui peut porter de
+          la PII) ; le code machine, lui, est parti au log côté launcher. */}
+      {erreurWidget && (
+        <p role="alert" className="text-sm text-danger">
+          {erreurWidget}
         </p>
       )}
       {erreurFinalisation && (
@@ -123,7 +152,7 @@ export function WidgetFeedback({
               <button
                 type="button"
                 onClick={() => onReconnecter?.(cx)}
-                disabled={!onReconnecter || reparationEnCours}
+                disabled={!onReconnecter || reparationEnCours || widgetOuvert}
                 className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
                   text-sm font-semibold text-primary transition-colors
                   hover:text-primary-600 hover:underline focus:outline-none
