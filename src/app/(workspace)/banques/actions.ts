@@ -32,6 +32,10 @@ import {
   selectionnerComptes,
   synchroniserConnexionsDepuisOmnifi,
 } from "@/server/widget/orchestration";
+import {
+  messageAucuneConnexion,
+  supplementsDesync,
+} from "@/server/widget/messages-sync";
 import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
 
 export interface EtatDemarrage {
@@ -42,6 +46,14 @@ export interface EtatDemarrage {
 export interface EtatFinalisation {
   erreur: string | null;
   succes: string | null;
+  /**
+   * INFORMATION actionnable — troisième registre, distinct des deux autres : rien n'a
+   * échoué (≠ `erreur`, jamais de rouge) et rien n'a réussi non plus (≠ `succes`, jamais
+   * de vert). Porte les désynchronisations base ↔ Omni-FI et le cas « aucune banque à
+   * synchroniser », qui étaient jusqu'ici renvoyés en SILENCE (`{erreur:null, succes:null}`
+   * → spinner puis rien). Absent quand il n'y a rien à signaler.
+   */
+  info?: string | null;
   /**
    * Succès TOTAL de la finalisation : `true` ssi zéro échec lors de la
    * découverte/synchronisation des comptes (toutes les connexions du payload ont
@@ -233,10 +245,37 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
 
   try {
     const r = await synchroniserConnexionsDepuisOmnifi(client, executer);
+
+    // DIAGNOSTIC (« spinner puis rien ») — récapitulatif du résultat, + le `viewFilter`
+    // de la SESSION, qui n'est pas visible depuis l'orchestration (il est consommé dans
+    // la transaction). C'est l'INTENTION du sélecteur de périmètre : s'il est actif, le
+    // sync écrit sous la clause `view_filter` de la policy `account_scope` (RESTRICTIVE,
+    // USING **et** WITH CHECK) → `bank_accounts` devient inaccessible en écriture hors du
+    // filtre, et `comptesRattaches` tombe à 0 SANS erreur. À corréler avec `sync_diag`.
+    console.info(
+      JSON.stringify({
+        evt: "sync_resultat",
+        workspaceId: session.activeWorkspaceId,
+        viewFilterActif: session.viewFilter?.length ?? 0,
+        connexions: r.connexions,
+        echecs: r.echecs,
+        comptesRattaches: r.comptesRattaches,
+        transactionsImportees: r.transactionsImportees,
+        aReconnecter: r.aReconnecter.length,
+        rateLimited: r.rateLimited.length,
+        aReparer: r.aReparer.length,
+      }),
+    );
+
     if (r.connexions === 0) {
-      // Aucune connexion trouvée : ni erreur ni faux succès (l'utilisateur a pu
-      // fermer sans connecter). Message neutre.
-      return { erreur: null, succes: null };
+      // Aucune connexion TRAITÉE. Ce n'est ni une erreur (rien n'a planté) ni un succès
+      // (rien n'a été synchronisé) — mais ce n'est SURTOUT PAS « rien à dire » : le
+      // renvoi muet `{erreur:null, succes:null}` laissait l'utilisateur devant un spinner
+      // sans réponse, alors que la cause est souvent ACTIONNABLE (une banque connectée
+      // chez Omni-FI mais jamais rattachée ici, ou des banques d'ici qui ne répondent
+      // plus). On le DIT, dans le registre « information » — jamais en rouge (rien n'a
+      // échoué), jamais en vert (rien n'a réussi).
+      return { erreur: null, succes: null, info: messageAucuneConnexion(r) };
     }
 
     // TOUT ÉCHOUÉ : toutes les connexions traitées ont échoué « dur » ET rien n'a été
@@ -244,7 +283,15 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     // si aucune connexion n'a réussi/cooldown/réparé. Les échecs par-connexion sont déjà
     // journalisés (orchestration), avec leur status/obieCode.
     if (r.echecs === r.connexions && r.comptesRattaches === 0) {
-      return { erreur: MESSAGE_SYNC_TOUT_ECHOUE, succes: null };
+      // Même ici, les désyncs doivent être dites : une banque morte resterait sinon invisible
+      // derrière le message d'échec, et l'utilisateur réessaierait indéfiniment une synchro
+      // qui ne peut pas aboutir tant qu'il n'a pas reconnecté.
+      const desyncEchec = supplementsDesync(r);
+      return {
+        erreur: MESSAGE_SYNC_TOUT_ECHOUE,
+        succes: null,
+        ...(desyncEchec ? { info: desyncEchec } : {}),
+      };
     }
 
     // Phrase de base + suppléments. Tous NON-énumérants : on COMPTE les cas, on ne nomme
@@ -284,9 +331,15 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     if (r.aReparer.length > 0) {
       base += ` ${r.aReparer.length} banque(s) demandent une nouvelle vérification de sécurité — reconnectez-les pour terminer.`;
     }
+    // Les désynchronisations se disent AUSSI quand la synchro a réussi par ailleurs : une
+    // banque qui ne répond plus resterait sinon invisible derrière un message vert, avec
+    // ses comptes affichés comme à jour. Canal `info` (≠ succès) : ce n'est pas une bonne
+    // nouvelle, et ce n'est pas une erreur — c'est une action à mener.
+    const desync = supplementsDesync(r);
     return {
       erreur: null,
       succes: base,
+      ...(desync ? { info: desync } : {}),
       ...(r.aReparer.length > 0 ? { reparation: r.aReparer } : {}),
       ...(r.rateLimited.length > 0 ? { rateLimited: r.rateLimited } : {}),
       ...(r.aReconnecter.length > 0

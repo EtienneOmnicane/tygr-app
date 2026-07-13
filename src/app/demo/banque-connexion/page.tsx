@@ -80,7 +80,21 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="5. Échec DU WIDGET NATIF (onError du CDN)"
+          titre="5. « Aucune banque à synchroniser » — le silence corrigé"
+          description="AVANT : le sync renvoyait { erreur: null, succes: null } quand aucune connexion n'était à traiter → spinner puis RIEN, sans que l'utilisateur sache pourquoi (incident 2026-07-13 : 2 banques en base introuvables chez Omni-FI, 1 banque chez Omni-FI jamais rattachée ici). Registre « information » : ni rouge (rien n'a échoué), ni vert (rien n'a réussi). Chaque signal porte son action."
+        >
+          <WidgetFeedback info="Aucune banque à synchroniser. 1 banque(s) connectée(s) chez votre fournisseur ne sont pas rattachées à cet espace — finalisez la connexion via « Connecter une banque ». 2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque »." />
+          <WidgetFeedback info="Aucune banque connectée à synchroniser — connectez-en une pour commencer." />
+          {/* Désync signalée MALGRÉ un succès : sans ça, une banque morte resterait
+              invisible derrière le message vert, comptes affichés comme à jour. */}
+          <WidgetFeedback
+            succes="Synchronisation effectuée — 1 banque(s) à jour, 10 compte(s) mis à jour."
+            info="2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque »."
+          />
+        </Bloc>
+
+        <Bloc
+          titre="6. Échec DU WIDGET NATIF (onError du CDN)"
           description="Le widget/la banque a refusé. Avant le correctif, onError était aliasé sur onClose : le widget se fermait SANS UN MOT. Le message vient de messageErreurWidget (registre S2) — jamais le texte amont du CDN (anglais, PII possible) ; le code machine, lui, part au log. Une ANNULATION (onExit), elle, reste silencieuse : rien ne s'affiche ici, c'est voulu."
         >
           <WidgetFeedback erreurWidget="La session de connexion a expiré. Recommencez la connexion." />
@@ -95,7 +109,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="6. Réparation — bouton « Reconnecter »"
+          titre="7. Réparation — bouton « Reconnecter »"
           description="Le re-sync a redemandé une vérification de sécurité (OTP) pour une ou plusieurs banques. Sous le message de synchro, un bouton « Reconnecter » par connexion rouvre le widget natif en mode REPAIR. Action secondaire (lien d'action), jamais en rouge."
         >
           <WidgetFeedback
@@ -106,7 +120,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="7. Réparation — ouverture en cours (bouton désactivé)"
+          titre="8. Réparation — ouverture en cours (bouton désactivé)"
           description="Entre le clic « Reconnecter » et l'obtention du token REPAIR : le bouton passe en « Ouverture… » et se désactive (anti-double-clic). Deux connexions à réparer."
         >
           <WidgetFeedback
@@ -121,7 +135,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="8. Réparation — widget déjà ouvert (désactivé, SANS « Ouverture… »)"
+          titre="9. Réparation — widget déjà ouvert (désactivé, SANS « Ouverture… »)"
           description="Un widget (onboarding ou réparation) est ouvert, ou un LinkToken est en vol : « Reconnecter » est désactivé — on ne peut pas ouvrir deux widgets, et le clic démonterait le widget ouvert sous les pieds de l'utilisateur. Le libellé reste « Reconnecter » : rien ne s'ouvre de ce côté-là, écrire « Ouverture… » mentirait (les deux sens sont portés par deux props distinctes)."
         >
           <WidgetFeedback
@@ -132,7 +146,7 @@ export default function BanqueConnexionDemoPage() {
         </Bloc>
 
         <Bloc
-          titre="9. Désalignement EndUser (403) — « Reconnecter cette banque »"
+          titre="10. Désalignement EndUser (403) — « Reconnecter cette banque »"
           description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n'est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l'utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
         >
           <WidgetFeedback

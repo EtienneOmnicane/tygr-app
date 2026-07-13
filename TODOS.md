@@ -2166,7 +2166,43 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   itération sur l'existant. **Déclencheur** : avant le premier déploiement production
   (P1). Raccrocher les findings tokens/sémantique à des sous-tickets datés.
 
+### Sync / widget (2026-07-13) — dettes de code
+
+- [ ] **SYNC-TYPE-STRUCTUREL1 (P1) — `EtatFinalisation` est consommé via des sous-types
+  STRUCTURELS qui ignorent les nouveaux champs EN SILENCE.** `dashboard/sync-button.tsx` déclare
+  son propre type `Retour` : il avait omis `info`, et **aucun gate ne l'a vu** (`tsc` est content,
+  le champ est juste jeté) → l'incident « spinner puis rien » restait entier sur l'écran d'accueil
+  alors qu'il était corrigé sur `/banques`. C'est une classe de bug, pas un oubli isolé : tout
+  champ ajouté à `EtatFinalisation` peut mourir en route. Piste : faire consommer directement
+  `EtatFinalisation` (ou `Pick<EtatFinalisation, …>`) au lieu d'un type redéclaré.
+  **Déclencheur** : prochain champ ajouté à `EtatFinalisation`. **Effort** : S.
+
+- [ ] **SYNC-ENV1 (P1) — `.env.prod` : l'étiquette d'environnement ment.** `OMNIFI_ENV="production"`
+  et `OMNIFI_AUTORISER_PRODUCTION=1` alors que `OMNIFI_BASE_URL="https://api-stage.omni-fi.co"`.
+  L'API répond 200 (les clés matchent l'hôte — l'env se décide par les CLÉS, pas l'hôte), donc
+  c'est inoffensif aujourd'hui ; mais un lecteur croit tourner en production. À aligner en même
+  temps que **WIDGET-ENV1** (`NEXT_PUBLIC_OMNIFI_ENV="production"` → charge un CDN qui répond 403).
+  **Déclencheur** : prochaine bascule d'environnement. **Effort** : XS.
+
+- [ ] **SYNC-DESYNC1 (P1) — reconnecter SBM et MCB (action OPÉRATIONNELLE, pas du code).**
+  Diagnostic runtime du 2026-07-13 : `bank_connections` porte 2 connexions (SBM `6a49e45c…`,
+  77 comptes ; MCB `307f186e…`, 10 comptes) que `GET /connections` **ne renvoie plus** ; Omni-FI
+  n'expose qu'une connexion Bank One (`05358b93…`), **absente de la base** (sa finalisation par
+  le widget avait échoué en silence — cf. PR #200). Le correctif
+  `fix/sync-spinner-sans-resultat` rend cet état VISIBLE et actionnable, mais ne le répare pas :
+  il faut reconnecter les banques via le widget. ⚠️ **Ne PAS supprimer les 87 comptes** — données
+  réelles (cf. [[diag-sync-403-enduser-prod]]). **Déclencheur** : immédiat. **Effort** : XS.
+
 ## P2 — après le MVP
+
+### Sync / widget (2026-07-13) — dettes différées
+
+- [ ] **SYNC-REVOCATION1 (P2) — une connexion révoquée LOCALEMENT sera encore synchronisée.**
+  `connexionsConnues` (le filtre de TRAITEMENT du sync) ignore le statut local — délibéré et
+  documenté. Les COMPTEURS, eux, sont protégés (`connuesActives`). Corollaire relevé en
+  cross-review : le jour où la révocation (`DELETE /connections/{id}`) arrivera, une connexion
+  révoquée chez nous mais encore active côté Omni-FI continuera d'être **synchronisée**.
+  **Déclencheur** : livraison de la révocation. **Effort** : XS.
 
 ### Widget natif — dettes ouvertes par `fix/widget-erreur-visible` (2026-07-13)
 
