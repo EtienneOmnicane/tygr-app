@@ -51,9 +51,9 @@ export interface MembreVue {
 
 // ── Helpers présentationnels ─────────────────────────────────────────────────
 const ROLE_LABEL: Record<RoleMembre, string> = {
-  ADMIN: "Administrateur",
-  MANAGER: "Gestionnaire",
-  VIEWER: "Lecteur",
+  ADMIN: "Administrator",
+  MANAGER: "Manager",
+  VIEWER: "Viewer",
 };
 
 // Tokens existants uniquement (cf. globals.css : pas de `info`).
@@ -106,7 +106,7 @@ export function AssignationEntites({
       {/* Barre d'outils : recherche */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative flex-1 sm:max-w-xs">
-          <span className="sr-only">Rechercher un membre</span>
+          <span className="sr-only">Search members</span>
           <svg
             aria-hidden
             viewBox="0 0 24 24"
@@ -124,14 +124,14 @@ export function AssignationEntites({
             type="search"
             value={recherche}
             onChange={(e) => setRecherche(e.target.value)}
-            placeholder="Rechercher un membre…"
+            placeholder="Search members…"
             className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
               text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
               focus:ring-2 focus:ring-primary/30"
           />
         </label>
         <p className="text-sm text-text-muted">
-          {membres.length} membre{membres.length > 1 ? "s" : ""}
+          {membres.length} member{membres.length > 1 ? "s" : ""}
         </p>
       </div>
 
@@ -143,7 +143,7 @@ export function AssignationEntites({
 
         {membresFiltres.length === 0 && (
           <li className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
-            Aucun membre ne correspond à « {recherche} ».
+            No member matches “{recherche}”.
           </li>
         )}
       </ul>
@@ -228,7 +228,7 @@ function CarteMembre({
         {/* Bascule Vision Globale / Vision Entité */}
         <div
           role="radiogroup"
-          aria-label={`Périmètre de ${membre.nomComplet}`}
+          aria-label={`Access for ${membre.nomComplet}`}
           className="flex rounded-control border border-line p-0.5 text-xs"
         >
           <button
@@ -245,7 +245,7 @@ function CarteMembre({
                 : "text-text-muted hover:text-text",
             )}
           >
-            Vision Globale
+            Whole group
           </button>
           <button
             type="button"
@@ -261,7 +261,7 @@ function CarteMembre({
                 : "text-text-muted hover:text-text",
             )}
           >
-            Vision Entité
+            Selected entities
           </button>
         </div>
       </div>
@@ -274,10 +274,10 @@ function CarteMembre({
         )}
       >
         {estGlobale
-          ? `Accès à l’ensemble du groupe (${entites.length} entité${entites.length > 1 ? "s" : ""})`
+          ? `Access to the whole group (${entites.length} ${entites.length > 1 ? "entities" : "entity"})`
           : entiteSansCase
-            ? "Sélectionnez au moins une entité, ou repassez en Vision Globale."
-            : `Vision restreinte à ${nbEntites} entité${nbEntites > 1 ? "s" : ""}`}
+            ? "Pick at least one entity, or switch back to whole-group access."
+            : `Access limited to ${nbEntites} ${nbEntites > 1 ? "entities" : "entity"}`}
       </p>
 
       {/* Formulaire : cases + champs cachés + bouton, le tout posté à l'action */}
@@ -293,7 +293,7 @@ function CarteMembre({
           disabled={estGlobale || enCours}
         >
           <legend className="sr-only">
-            Entités assignées à {membre.nomComplet}
+            Entities assigned to {membre.nomComplet}
           </legend>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {entites.map((entite) => {
@@ -328,7 +328,7 @@ function CarteMembre({
             })}
             {entites.length === 0 && (
               <p className="col-span-full text-xs text-text-muted">
-                Aucune entité n’a encore été créée pour ce groupe.
+                No entity has been created for this group yet.
               </p>
             )}
           </div>
@@ -348,7 +348,7 @@ function CarteMembre({
               </span>
             )}
             {etat.erreur === null && etat.succes === null && modifie && (
-              <span className="text-text-faint">Modification non enregistrée.</span>
+              <span className="text-text-faint">Unsaved changes.</span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -360,7 +360,7 @@ function CarteMembre({
                 transition-colors hover:text-text focus:outline-none focus-visible:ring-2
                 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-48"
             >
-              Réinitialiser
+              Reset
             </button>
             <button
               type="submit"
@@ -376,7 +376,7 @@ function CarteMembre({
                   className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
                 />
               )}
-              {enCours ? "Enregistrement…" : "Enregistrer"}
+              {enCours ? "Saving…" : "Save"}
             </button>
           </div>
         </div>

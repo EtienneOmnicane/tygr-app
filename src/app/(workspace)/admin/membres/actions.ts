@@ -40,15 +40,15 @@ const provisioningSchema = z
   })
   .strict();
 
-const MESSAGE_REFUS = "Action non autorisée.";
-const MESSAGE_INVALIDE = "Champs invalides.";
+const MESSAGE_REFUS = "You are not allowed to do this.";
+const MESSAGE_INVALIDE = "Invalid input.";
 
 /** Libellé du périmètre pour le message de succès (aucune donnée sensible). */
 function suffixePerimetre(scopesDefinis: boolean, nbEntites: number): string {
   if (scopesDefinis) {
-    return ` Périmètre : ${nbEntites} entité${nbEntites > 1 ? "s" : ""}.`;
+    return ` Access: ${nbEntites} ${nbEntites > 1 ? "entities" : "entity"}.`;
   }
-  return " Périmètre : Vision Globale.";
+  return " Access: the whole group.";
 }
 
 export async function provisionnerMembre(
@@ -108,7 +108,7 @@ export async function provisionnerMembre(
     // Déjà membre du workspace : rien n'a changé (anti-écrasement mot de passe + périmètre).
     return {
       erreur: null,
-      succes: `${email} est déjà membre — aucune modification (mot de passe et périmètre inchangés).`,
+      succes: `${email} is already a member — nothing changed (password and access left untouched).`,
     };
   }
 
@@ -121,12 +121,12 @@ export async function provisionnerMembre(
   if (resultat.utilisateurCree) {
     return {
       erreur: null,
-      succes: `${email} créé et rattaché comme ${parsed.data.role}.${perimetre}`,
+      succes: `${email} created and added as ${parsed.data.role}.${perimetre}`,
     };
   }
   // Utilisateur préexistant rattaché au workspace : mot de passe conservé.
   return {
     erreur: null,
-    succes: `Utilisateur existant rattaché comme ${parsed.data.role} — mot de passe inchangé.${perimetre}`,
+    succes: `Existing user added as ${parsed.data.role} — password left untouched.${perimetre}`,
   };
 }

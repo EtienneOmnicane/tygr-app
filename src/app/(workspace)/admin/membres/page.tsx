@@ -24,7 +24,7 @@ import {
 } from "./formulaire-provisioning";
 import { ListeMembres, type MembreLigne } from "./liste-membres";
 
-export const metadata = { title: "Membres — Dodo" };
+export const metadata = { title: "Members — Dodo" };
 
 export default async function PageMembres() {
   let session;
@@ -64,22 +64,24 @@ export default async function PageMembres() {
     donnees.entites.map((e) => [e.id, e.name]),
   );
 
+  // Pleine largeur — même gabarit que /admin/entites (UI_GUIDELINES §1.1 : « Admin — la
+  // table pleine largeur EST l'écran »). Les deux écrans admin restent cohérents.
   return (
-    <main className="flex flex-1 justify-center p-6">
-      <div className="flex w-full max-w-3xl flex-col gap-10">
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      <div className="flex flex-col gap-10">
         <section className="mx-auto w-full max-w-md">
-          <h1 className="mb-1 text-lg font-semibold">Membres du workspace</h1>
+          <h1 className="mb-1 text-lg font-semibold">Workspace members</h1>
           <p className="mb-6 text-sm text-text-muted">
-            Créez un utilisateur, rattachez-le à cet espace et définissez son périmètre.
+            Create a user, add them to this workspace and choose what they can see.
           </p>
           <FormulaireProvisioning entites={entitesActives} />
         </section>
 
         <section>
-          <h2 className="mb-1 text-lg font-semibold">Membres actuels</h2>
+          <h2 className="mb-1 text-lg font-semibold">Current members</h2>
           <p className="mb-4 text-sm text-text-muted">
-            {donnees.membres.length} membre{donnees.membres.length > 1 ? "s" : ""} dans
-            cet espace.
+            {donnees.membres.length} member{donnees.membres.length > 1 ? "s" : ""} in
+            this workspace.
           </p>
           <ListeMembres membres={donnees.membres} entitesParId={entitesParId} />
         </section>

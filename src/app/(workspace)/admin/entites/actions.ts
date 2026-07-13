@@ -48,8 +48,8 @@ export interface EtatAction {
   succes: string | null;
 }
 
-const MESSAGE_REFUS = "Action non autorisée.";
-const MESSAGE_INVALIDE = "Champs invalides.";
+const MESSAGE_REFUS = "You are not allowed to do this.";
+const MESSAGE_INVALIDE = "Invalid input.";
 
 /* ------------------------------------------------------------------ */
 /* Schémas Zod stricts (plan §4.1)                                     */
@@ -136,10 +136,10 @@ function mapErreur(e: unknown): EtatAction | null {
     e instanceof PartieIntrouvableError ||
     e instanceof MembreNonScopableError
   ) {
-    return { erreur: "Ressource introuvable.", succes: null };
+    return { erreur: "Not found.", succes: null };
   }
   if (e instanceof EntiteNomDupliqueError) {
-    return { erreur: "Une entité porte déjà ce nom.", succes: null };
+    return { erreur: "An entity already has this name.", succes: null };
   }
   return null;
 }
@@ -168,7 +168,7 @@ export async function creerEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: `Entité « ${parsed.data.name} » créée.` };
+  return { erreur: null, succes: `Entity “${parsed.data.name}” created.` };
 }
 
 export async function renommerEntiteAction(
@@ -194,7 +194,7 @@ export async function renommerEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: "Entité renommée." };
+  return { erreur: null, succes: "Entity renamed." };
 }
 
 export async function archiverEntiteAction(
@@ -216,7 +216,7 @@ export async function archiverEntiteAction(
     if (m) return m;
     throw e;
   }
-  return { erreur: null, succes: "Entité archivée." };
+  return { erreur: null, succes: "Entity archived." };
 }
 
 export async function assignerCompteAction(
@@ -256,8 +256,8 @@ export async function assignerCompteAction(
   return {
     erreur: null,
     succes: parsed.data.entityId
-      ? "Compte assigné à l'entité."
-      : "Compte repassé en non assigné.",
+      ? "Account attached to the entity."
+      : "Account set back to unassigned.",
   };
 }
 
@@ -289,8 +289,8 @@ export async function assignerPartieAction(
   return {
     erreur: null,
     succes: parsed.data.entityId
-      ? "Partie rattachée à l'entité."
-      : "Partie repassée en non rattachée.",
+      ? "Party attached to the entity."
+      : "Party set back to unattached.",
   };
 }
 
@@ -322,8 +322,8 @@ export async function definirScopesAction(
     erreur: null,
     succes:
       parsed.data.entityIds.length === 0
-        ? "Périmètre défini : Vision Globale (toutes entités)."
-        : `Périmètre défini : ${parsed.data.entityIds.length} entité(s).`,
+        ? "Access set: the whole group."
+        : `Access set: ${parsed.data.entityIds.length} entity(ies).`,
   };
 }
 
@@ -393,7 +393,7 @@ export async function confirmerPropositionAction(
   return {
     erreur: null,
     succes: nomEntite
-      ? `Entité « ${nomEntite} » créée et ${nbComptes} compte(s) rattaché(s).`
-      : `Proposition confirmée : ${nbComptes} compte(s) rattaché(s).`,
+      ? `Entity “${nomEntite}” created, ${nbComptes} account(s) attached.`
+      : `Confirmed: ${nbComptes} account(s) attached.`,
   };
 }

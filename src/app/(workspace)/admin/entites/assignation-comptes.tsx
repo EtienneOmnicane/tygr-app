@@ -33,6 +33,7 @@ import { EmptyState } from "@/components/ui/states";
 
 import { assignerCompteAction } from "./actions";
 import type { EntiteVue } from "./assignation-entites";
+import { estNonAssigne } from "./regles-comptes";
 
 /** Concatène des classes en ignorant les valeurs falsy. Pas de clsx (règle 9). */
 function cn(...classes: Array<string | false | null | undefined>): string {
@@ -57,7 +58,7 @@ const VALEUR_NON_ASSIGNE = "";
 /** Clé du groupe « non assigné », distincte d'un entityId (uuid). */
 const GROUPE_NON_ASSIGNE = "__non_assigne__";
 
-const LIBELLE_NON_ASSIGNE = "— Non assigné —";
+const LIBELLE_NON_ASSIGNE = "— Unassigned —";
 
 /**
  * Identifiant lisible d'un compte, par ordre de préférence :
@@ -80,7 +81,7 @@ export function libelleCompte(compte: CompteVueAssignation): string {
   const institution = compte.institutionName?.trim();
   if (institution) return `${institution} · ${suffixe}`;
 
-  return `Compte ${suffixe}`;
+  return `Account ${suffixe}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,6 +103,10 @@ interface GroupeComptes {
  * Un compte dont l'`entityId` ne correspond à aucune entité ACTIVE (entité archivée
  * après coup) retombe dans « non assigné » plutôt que de disparaître de l'écran —
  * sinon l'ADMIN ne pourrait plus jamais le rattacher ailleurs.
+ *
+ * La condition n'est PAS réécrite ici : elle vient de `estNonAssigne` (regles-comptes.ts),
+ * la source unique partagée avec le compteur du bandeau récap. Les deux surfaces ne
+ * peuvent donc pas diverger (constat C1 des cross-reviews).
  */
 function grouperParEntite(
   comptes: CompteVueAssignation[],
@@ -111,10 +116,11 @@ function grouperParEntite(
   const parCle = new Map<string, CompteVueAssignation[]>();
 
   for (const compte of comptes) {
-    const cle =
-      compte.entityId !== null && connues.has(compte.entityId)
-        ? compte.entityId
-        : GROUPE_NON_ASSIGNE;
+    // `entityId` est non-null dès que le compte n'est pas « non assigné » (invariant de
+    // `estNonAssigne`) — le `?? GROUPE_NON_ASSIGNE` n'est qu'un garde de typage.
+    const cle = estNonAssigne(compte, connues)
+      ? GROUPE_NON_ASSIGNE
+      : (compte.entityId ?? GROUPE_NON_ASSIGNE);
     const seau = parCle.get(cle);
     if (seau) seau.push(compte);
     else parCle.set(cle, [compte]);
@@ -173,10 +179,10 @@ export function AssignationComptes({
   if (comptes.length === 0) {
     return (
       <EmptyState
-        title="Aucun compte à assigner"
-        message="Connectez une banque : les comptes remontés apparaîtront ici, prêts à être rattachés à une entité."
+        title="No account to organise"
+        message="Connect a bank: the accounts it returns will show up here, ready to be attached to an entity."
         illustration="empty"
-        cta={{ label: "Connecter une banque", href: "/banques" }}
+        cta={{ label: "Connect a bank", href: "/banques" }}
       />
     );
   }
@@ -185,8 +191,8 @@ export function AssignationComptes({
   if (entites.length === 0) {
     return (
       <EmptyState
-        title="Aucune entité"
-        message="Créez une entité d’abord : sans elle, les comptes ne peuvent être rattachés à aucune business unit."
+        title="No entity yet"
+        message="Create an entity first: without one, accounts cannot be attached to any business unit."
         illustration="empty"
       />
     );
@@ -203,7 +209,7 @@ export function AssignationComptes({
 
       {comptesFiltres.length === 0 ? (
         <p className="rounded-card border border-dashed border-line bg-surface-card p-8 text-center text-sm text-text-muted">
-          Aucun compte ne correspond à « {recherche} ».
+          No account matches “{recherche}”.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-card border border-line bg-surface-card shadow-card">
@@ -222,19 +228,19 @@ export function AssignationComptes({
                   scope="col"
                   className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
                 >
-                  Compte
+                  Account
                 </th>
                 <th
                   scope="col"
                   className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
                 >
-                  Devise
+                  Currency
                 </th>
                 <th
                   scope="col"
                   className="px-3 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:px-4"
                 >
-                  Entité
+                  Entity
                 </th>
               </tr>
             </thead>
@@ -251,7 +257,7 @@ export function AssignationComptes({
                   >
                     {groupe.titre}
                     <span className="ml-2 font-normal text-text-muted">
-                      {groupe.comptes.length} compte
+                      {groupe.comptes.length} account
                       {groupe.comptes.length > 1 ? "s" : ""}
                     </span>
                   </th>
@@ -292,7 +298,7 @@ function BarreRecherche({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <label className="relative flex-1 sm:max-w-xs">
-        <span className="sr-only">Rechercher un compte</span>
+        <span className="sr-only">Search accounts</span>
         <svg
           aria-hidden
           viewBox="0 0 24 24"
@@ -310,7 +316,7 @@ function BarreRecherche({
           type="search"
           value={valeur}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="Rechercher un compte…"
+          placeholder="Search accounts…"
           className="h-10 w-full rounded-control border border-line bg-white pl-9 pr-3
             text-sm placeholder:text-text-faint focus:border-primary focus:outline-none
             focus:ring-2 focus:ring-primary/30"
@@ -318,8 +324,8 @@ function BarreRecherche({
       </label>
       <p className="text-sm text-text-muted" aria-live="polite">
         {filtreActif
-          ? `${nbFiltres} sur ${nbTotal} compte${nbTotal > 1 ? "s" : ""}`
-          : `${nbTotal} compte${nbTotal > 1 ? "s" : ""}`}
+          ? `${nbFiltres} of ${nbTotal} account${nbTotal > 1 ? "s" : ""}`
+          : `${nbTotal} account${nbTotal > 1 ? "s" : ""}`}
       </p>
     </div>
   );
@@ -381,7 +387,7 @@ function useLigneAssignation(bankAccountId: string, valeurServeur: string) {
         } catch {
           // Message GÉNÉRIQUE : jamais de libellé bancaire ni de cause brute dans l'UI
           // (règle 8 — pas de PII dans un message d'erreur ni dans la télémétrie).
-          resultat = { erreur: "Enregistrement impossible.", succes: null };
+          resultat = { erreur: "Could not save.", succes: null };
         }
 
         // Réponse périmée (un envoi plus récent l'a doublée) → on la jette.
@@ -445,7 +451,7 @@ function LigneCompte({
           {/* Pas de <label> visible (l'en-tête de colonne « Entité » le porte) : un
               nom accessible par ligne reste nécessaire pour le lecteur d'écran. */}
           <label htmlFor={idSelect} className="sr-only">
-            Entité de {libelle}
+            Entity for {libelle}
           </label>
           <Select
             id={idSelect}
@@ -479,7 +485,7 @@ function StatutLigne({ statut }: { statut: Statut }) {
             aria-hidden
             className="size-3 animate-spin rounded-full border-2 border-line border-t-text-muted"
           />
-          Enregistrement…
+          Saving…
         </span>
       )}
 
@@ -498,7 +504,7 @@ function StatutLigne({ statut }: { statut: Statut }) {
               strokeLinejoin="round"
             />
           </svg>
-          Enregistré
+          Saved
         </span>
       )}
 

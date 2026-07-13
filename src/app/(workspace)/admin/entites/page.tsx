@@ -37,6 +37,8 @@ import {
   AssignationComptes,
   type CompteVueAssignation,
 } from "./assignation-comptes";
+import { BandeauRecap } from "./bandeau-recap";
+import { compterNonAssignes } from "./regles-comptes";
 import {
   AssignationEntites,
   type EntiteVue,
@@ -48,7 +50,7 @@ import {
   type PropositionVue,
 } from "./propositions";
 
-export const metadata = { title: "Entités — Dodo" };
+export const metadata = { title: "Entities — Dodo" };
 
 export default async function PageEntites() {
   // L0 (§3.3) : session AMPUTÉE du viewFilter. Le sélecteur de périmètre du header est
@@ -118,50 +120,81 @@ export default async function PageEntites() {
     nom: e.nom,
   }));
 
+  // L1 — compteurs du bandeau. ZÉRO requête : tout se dérive des listes déjà lues dans le
+  // withWorkspace ci-dessus. Le « non assigné » vient de la règle PARTAGÉE avec le tableau
+  // (regles-comptes.ts) : bandeau et groupement ne peuvent pas se contredire (constat C1).
+  const idsEntitesActives = new Set(entitesActives.map((e) => e.id));
+  const nbNonAssignes = compterNonAssignes(donnees.comptes, idsEntitesActives);
+
   return (
-    <main className="flex flex-1 justify-center p-6">
-      <div className="flex w-full max-w-3xl flex-col gap-10">
+    // Pleine largeur (UI_GUIDELINES §1.1 : « Admin — la table pleine largeur EST l'écran »).
+    // Même gabarit que /transactions. L'ancien max-w-3xl écrasait un tableau de 87 lignes
+    // dans une colonne étroite.
+    <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      <div className="flex flex-col gap-8">
         {/* L0 §12 — l'écran DIT qu'il est partiel plutôt que d'afficher des chiffres faux.
             (L'axe viewFilter, lui, est déjà neutralisé par exigerSessionAdministration.) */}
         {donnees.vueRestreinte && <AvertissementVueRestreinte />}
 
-        <section>
-          <h1 className="mb-1 text-lg font-semibold">
-            Propositions d’entités (Parties Omni-FI)
-          </h1>
-          <p className="mb-6 text-sm text-text-muted">
-            Chaque proposition est dérivée d’une « Party » Omni-FI. Rien n’est
-            enregistré tant que vous n’avez pas confirmé : créez l’entité proposée
-            ou choisissez-en une existante, puis rattachez ses comptes.
+        <header>
+          <h1 className="text-xl font-semibold text-ink">Entities</h1>
+          <p className="mt-1 text-sm text-text-muted">
+            Group your bank accounts into entities, then choose who can see what.
           </p>
+        </header>
+
+        <BandeauRecap
+          nbEntites={entitesActives.length}
+          nbComptes={donnees.comptes.length}
+          nbNonAssignes={nbNonAssignes}
+          nbMembres={donnees.membres.length}
+        />
+
+        {/* ÉTAPE 1 — LE CŒUR. Passe AVANT l'accès des membres : on range les comptes,
+            PUIS on donne les clés. L'ordre inverse (l'ancien) faisait décider qui voit
+            quoi avant même que quoi que ce soit soit rangé. */}
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">
+              Step 1 — Organise accounts
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Attach each bank account to an entity. An account left unassigned
+              stays invisible to members with restricted access.
+            </p>
+          </div>
+
+          {/* Suggestions dérivées des données bancaires. Rien n'est écrit sans
+              confirmation explicite de l'admin (invariant ENTITY-PARTY1).
+              ⚠️ `propositions.tsx` n'est PAS touché par ce lot : la PR #183 est en vol
+              sur ce fichier. L4 le refond en bannière — et le traduit — APRÈS son merge.
+              Son contenu reste donc en français jusque-là (écart transitoire assumé). */}
           <PropositionsPartyEntite
             propositions={donnees.propositions}
             entites={entitesCibles}
           />
-        </section>
 
-        <section>
-          <h2 className="mb-1 text-lg font-semibold">Assignation des entités</h2>
-          <p className="mb-6 text-sm text-text-muted">
-            Définissez le périmètre de chaque membre : accès à l’ensemble du groupe
-            (Vision Globale) ou restreint à certaines entités (Vision Entité).
-          </p>
-          <AssignationEntites
-            entites={entitesActives}
-            membres={donnees.membres}
-          />
-        </section>
-
-        <section>
-          <h2 className="mb-1 text-lg font-semibold">Assignation des comptes</h2>
-          <p className="mb-6 text-sm text-text-muted">
-            Rattachez chaque compte bancaire à une entité, ou repassez-le en
-            « non assigné ». Un compte non assigné reste invisible aux membres en
-            Vision Entité.
-          </p>
           <AssignationComptes
             comptes={donnees.comptes}
             entites={entitesActives}
+          />
+        </section>
+
+        {/* ÉTAPE 2 — l'accès des membres, une fois les comptes rangés. */}
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">
+              Step 2 — Who sees what
+            </h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Choose each member’s access: the whole group, or only the entities
+              you pick.
+            </p>
+          </div>
+
+          <AssignationEntites
+            entites={entitesActives}
+            membres={donnees.membres}
           />
         </section>
       </div>
