@@ -11,6 +11,12 @@
  * - Authz : withWorkspace re-valide la membership ; la garde ADMIN est dans le repo
  *   (ctx.role). Une ressource d'un autre tenant → 404 (erreur nommée non-énumérante),
  *   jamais 403. Le message UI renvoyé est GÉNÉRIQUE (pas d'oracle d'existence).
+ * - Périmètre (L0, PLAN-refonte-entites.md §3.3) : TOUTES les actions passent par
+ *   `exigerSessionAdministration()`, JAMAIS `exigerSessionWorkspace()` — la session est
+ *   amputée du `viewFilter`. Sans ça, le WITH CHECK de la policy `account_scope`
+ *   (RESTRICTIVE FOR ALL, 0016/0017) refuserait l'UPDATE d'un compte hors du filtre
+ *   d'affichage choisi dans le header : l'ADMIN VOIT le compte et ne peut PAS le ranger.
+ *   Une règle ESLint interdit l'import de `exigerSessionWorkspace` sous `admin/`.
  * - Validation : Zod .strict() (bornes alignées DB) ; rejet bruyant « Champs invalides ».
  * - Erreurs : chaque erreur nommée du repo est mappée ; toute autre exception remonte
  *   (mappée 500 en amont), pas de catch-all silencieux.
@@ -20,7 +26,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionAdministration } from "@/server/auth/session";
 import {
   assignerCompteEntite,
   assignerPartieEntite,
@@ -146,7 +152,7 @@ export async function creerEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = creerEntiteSchema.safeParse({
     name: formData.get("name"),
     code: formData.get("code") || undefined,
@@ -169,7 +175,7 @@ export async function renommerEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = renommerEntiteSchema.safeParse({
     entityId: formData.get("entityId"),
     name: formData.get("name"),
@@ -195,7 +201,7 @@ export async function archiverEntiteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = archiverEntiteSchema.safeParse({
     entityId: formData.get("entityId"),
   });
@@ -217,7 +223,7 @@ export async function assignerCompteAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Une valeur vide/absente du select = « non assigné » (null).
   const rawEntity = formData.get("entityId");
   const parsed = assignerCompteSchema.safeParse({
@@ -259,7 +265,7 @@ export async function assignerPartieAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Une valeur vide/absente du select = « non rattachée » (null).
   const rawEntity = formData.get("entityId");
   const parsed = assignerPartieSchema.safeParse({
@@ -292,7 +298,7 @@ export async function definirScopesAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   // Multi-sélection : getAll renvoie toutes les entités cochées (0..N).
   const parsed = definirScopesSchema.safeParse({
     userId: formData.get("userId"),
@@ -341,7 +347,7 @@ export async function confirmerPropositionAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const rawEntity = formData.get("entityId");
   const rawName = formData.get("nouvelleEntiteName");
   const parsed = confirmerPropositionSchema.safeParse({

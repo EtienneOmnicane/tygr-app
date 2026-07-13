@@ -12,7 +12,7 @@ import argon2 from "argon2";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionAdministration } from "@/server/auth/session";
 import {
   creerMembreAvecScopes,
   EntiteIntrouvableError,
@@ -55,7 +55,7 @@ export async function provisionnerMembre(
   _etat: EtatProvisioning,
   formData: FormData,
 ): Promise<EtatProvisioning> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
 
   const parsed = provisioningSchema.safeParse({
     email: formData.get("email"),

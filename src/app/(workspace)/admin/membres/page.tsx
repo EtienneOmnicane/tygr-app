@@ -13,7 +13,7 @@ import { notFound, redirect } from "next/navigation";
 import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionAdministration,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { listerEntites, listerMembresWorkspace, withWorkspace } from "@/server/db";
@@ -29,7 +29,8 @@ export const metadata = { title: "Membres — Dodo" };
 export default async function PageMembres() {
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    // L0 (§3.3) : surface d'administration → session amputée du viewFilter.
+    session = await exigerSessionAdministration();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");

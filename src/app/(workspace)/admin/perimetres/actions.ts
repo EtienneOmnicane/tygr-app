@@ -24,7 +24,7 @@
  */
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionAdministration } from "@/server/auth/session";
 import {
   CompteIntrouvableError,
   MembreNonScopableError,
@@ -113,7 +113,7 @@ export async function octroyerScopeAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = cibleScopeSchema.safeParse({
     userId: formData.get("userId"),
     partyId: formData.get("partyId") || undefined,
@@ -137,7 +137,7 @@ export async function revoquerScopeAction(
   _etat: EtatAction,
   formData: FormData,
 ): Promise<EtatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionAdministration();
   const parsed = cibleScopeSchema.safeParse({
     userId: formData.get("userId"),
     partyId: formData.get("partyId") || undefined,

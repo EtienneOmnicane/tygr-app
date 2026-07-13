@@ -561,3 +561,74 @@ describe("listerComptesAvecEntite — lecture ADMIN-only, bornée au tenant (L7)
     expect(encore.map((c) => c.bankAccountId)).toEqual(ordre);
   });
 });
+
+describe("L0 — la surface d'ADMINISTRATION ne s'exécute JAMAIS sous périmètre réduit", () => {
+  // PLAN-refonte-entites.md §3.3. Le `PerimetreSwitcher` est monté dans le layout
+  // `(workspace)` : il est donc PRÉSENT sur /admin/entites elle-même, et son `viewFilter`
+  // vit dans le JWT — il PERSISTE de page en page. Or la policy `account_scope`
+  // (RESTRICTIVE FOR ALL, 0016/0017) porte sa clause `view_filter` en USING *et* en
+  // WITH CHECK.
+  //
+  // Ces 4 cas prouvent sur Postgres réel le DÉFAUT (le filtre ampute la LECTURE et bloque
+  // l'ÉCRITURE) puis la PARADE (la session amputée restaure les deux) — c'est-à-dire
+  // exactement ce que pose `exigerSessionAdministration()`.
+  //
+  // Pourquoi tester la composition et non la fonction : `exigerSessionAdministration()`
+  // dépend de `auth()` (runtime Next), inappelable ici. On teste donc la MÉCANIQUE
+  // équivalente — une session AVEC vs SANS `viewFilter`. Que les surfaces admin appellent
+  // bien la bonne fonction est garanti à la compilation par ESLint (`no-restricted-imports`
+  // sur `src/app/**/admin/**`), avec contre-preuve : réintroduire `exigerSessionWorkspace`
+  // sous `admin/` fait échouer le lint.
+
+  it("25. DÉFAUT — un viewFilter AMPUTE la lecture admin (le récap mentirait)", async () => {
+    // WS_A porte 2 comptes (ACC_A + ACC_A_SANS_NOM). Filtré sur un seul, l'ADMIN ne voit
+    // que celui-là : un compteur « comptes non assignés » dérivé de cette liste serait
+    // FAUX — et c'est le reste-à-faire de l'écran (défaut n° 3 du diagnostic).
+    const filtre = await withWorkspace(
+      { ...sAdminA, viewFilter: [ACC_A] },
+      (tx, ctx) => listerComptesAvecEntite(tx, ctx),
+    );
+    expect(filtre.map((c) => c.bankAccountId)).toEqual([ACC_A]);
+  });
+
+  it("26. PARADE — la session AMPUTÉE voit TOUS les comptes du tenant", async () => {
+    const complet = await withWorkspace(sAdminA, (tx, ctx) =>
+      listerComptesAvecEntite(tx, ctx),
+    );
+    expect(complet.map((c) => c.bankAccountId).sort()).toEqual(
+      [ACC_A, ACC_A_SANS_NOM].sort(),
+    );
+  });
+
+  it("27. DÉFAUT — un viewFilter BLOQUE l'écriture sur un compte hors filtre", async () => {
+    // Le piège de la DEMI-correction : amputer la lecture sans amputer l'écriture ferait
+    // voir 87 comptes à l'ADMIN, puis échouer le batch de L3 EN ENTIER (atomicité) sur
+    // « Ressource introuvable. » — pour des comptes qu'il a sous les yeux.
+    await expect(
+      withWorkspace({ ...sAdminA, viewFilter: [ACC_A] }, (tx, ctx) =>
+        assignerCompteEntite(tx, ctx, {
+          bankAccountId: ACC_A_SANS_NOM, // hors du filtre d'affichage
+          entityId: ENT_SUCRE,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CompteIntrouvableError);
+  });
+
+  it("28. PARADE — sans viewFilter, la même écriture ABOUTIT (vérifié en base)", async () => {
+    await withWorkspace(sAdminA, (tx, ctx) =>
+      assignerCompteEntite(tx, ctx, {
+        bankAccountId: ACC_A_SANS_NOM,
+        entityId: ENT_SUCRE,
+      }),
+    );
+
+    // Contrôle sous l'OWNER (bypass RLS) : on prouve l'état RÉEL en base, pas ce que la
+    // RLS veut bien nous montrer.
+    await client.exec(`reset role;`);
+    const r = await client.query<{ entity_id: string | null }>(
+      `select entity_id from bank_accounts where id = '${ACC_A_SANS_NOM}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    expect(r.rows[0]?.entity_id).toBe(ENT_SUCRE);
+  });
+});

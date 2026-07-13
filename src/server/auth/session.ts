@@ -99,3 +99,46 @@ export async function exigerSessionWorkspace(): Promise<WorkspaceSession> {
   }
   return parsed.data;
 }
+
+/**
+ * Session pour une surface d'ADMINISTRATION (`/admin/*`) — L0 de
+ * `PLAN-refonte-entites.md` (§3.3).
+ *
+ * Identique à `exigerSessionWorkspace()`, mais **amputée du `viewFilter`** : le filtre
+ * d'AFFICHAGE posé par le sélecteur de périmètre (L8b-1), qui vit dans le JWT et
+ * **persiste de page en page**.
+ *
+ * POURQUOI (mode de défaillance réel, pas théorique) : le `PerimetreSwitcher` est monté
+ * dans le layout `(workspace)` — il est donc **présent sur les écrans d'administration
+ * eux-mêmes**. La policy `account_scope` (migrations 0016/0017) est `AS RESTRICTIVE FOR
+ * ALL` et porte sa clause `view_filter` en **USING** *et* en **WITH CHECK**. Sans
+ * amputation, deux clics (« Périmètre → Entité A ») suffisent pour qu'un écran d'admin :
+ *   - en LECTURE, ne montre qu'une fraction des comptes **sans le dire** — un compteur
+ *     « 0 compte non assigné » rassurant et FAUX, alors que 77 le sont ;
+ *   - en ÉCRITURE, refuse un `UPDATE` sur un compte hors filtre (WITH CHECK) → l'ADMIN
+ *     **voit** le compte et **ne peut pas** le ranger (« Ressource introuvable. »).
+ * Administrer porte sur le TENANT ENTIER : un filtre d'affichage n'y a aucun sens.
+ *
+ * Même parade que `layout.tsx` (leçon du bug #143, où le sélecteur s'auto-amputait) :
+ * sans `viewFilter`, le GUC `app.current_view_filter` n'est pas posé → la clause est
+ * neutre. `tenant_isolation`, `entity_scope` et `account_scope` restent posés :
+ * **la sécurité est INCHANGÉE**, on ne retire qu'une intention d'affichage.
+ *
+ * ⚠️ Ne vérifie **PAS le rôle** : la garde ADMIN reste applicative, portée par les
+ * repositories (`exigerAdmin(ctx)`) sous le `ctx.role` re-résolu par `withWorkspace` à
+ * chaque requête. Cette fonction ne neutralise QUE le filtre d'affichage.
+ *
+ * ⚠️ Ne neutralise **PAS** `entity_scope` / `account_scope` : ceux-là sont résolus **en
+ * base** (`member_entity_scopes` / `user_scopes`), pas depuis la session — un ADMIN qui
+ * porterait un périmètre en base resterait borné. Ce résidu est **signalé, fail-safe côté
+ * UI** (bandeau « vue restreinte ») et **non tranché** : cf. `PLAN-refonte-entites.md` §12.
+ */
+export async function exigerSessionAdministration(): Promise<WorkspaceSession> {
+  const session = await exigerSessionWorkspace();
+  // Exactement les 2 champs du callback jwt — gabarit `layout.tsx:157`. Reconstruire
+  // l'objet (plutôt qu'un `delete`) garantit qu'aucun champ d'affichage futur ne fuite.
+  return {
+    userId: session.userId,
+    activeWorkspaceId: session.activeWorkspaceId,
+  };
+}

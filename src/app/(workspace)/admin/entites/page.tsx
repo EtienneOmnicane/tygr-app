@@ -18,10 +18,11 @@
  */
 import { notFound, redirect } from "next/navigation";
 
+import { AvertissementVueRestreinte } from "@/components/admin/avertissement-vue-restreinte";
 import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionAdministration,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import {
@@ -50,9 +51,12 @@ import {
 export const metadata = { title: "Entités — Dodo" };
 
 export default async function PageEntites() {
+  // L0 (§3.3) : session AMPUTÉE du viewFilter. Le sélecteur de périmètre du header est
+  // monté sur CETTE page ; sans amputation, la policy account_scope filtrerait les comptes
+  // et le récap mentirait (« 0 non assigné » alors que 77 le sont).
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    session = await exigerSessionAdministration();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
@@ -84,7 +88,18 @@ export default async function PageEntites() {
       ctx,
     );
 
-    return { entites, membres, propositions, comptes };
+    // L0, résidu PLAN §12 — GARDE FAIL-SAFE. L'amputation du viewFilter ne couvre que
+    // l'axe JWT. `entity_scope` et `account_scope` sont résolus EN BASE par withWorkspace
+    // (member_entity_scopes / user_scopes) : la session ne peut pas les neutraliser. Or
+    // rien n'interdit aujourd'hui de scoper un ADMIN — `definirScopesMembre` ne vérifie
+    // que la MEMBERSHIP, jamais le RÔLE — et cet écran expose lui-même l'action qui le
+    // permet. Un ADMIN scopé lirait donc des listes PARTIELLES.
+    // On ne durcit aucune règle serveur sans arbitrage (§12), mais on refuse de MENTIR :
+    // l'écran dit qu'il est restreint plutôt que d'afficher un « 0 non assigné » faux.
+    const vueRestreinte =
+      ctx.entityScope.mode !== "GLOBALE" || ctx.accountScope.mode !== "GLOBALE";
+
+    return { entites, membres, propositions, comptes, vueRestreinte };
   });
 
   if (donnees === null) {
@@ -106,6 +121,10 @@ export default async function PageEntites() {
   return (
     <main className="flex flex-1 justify-center p-6">
       <div className="flex w-full max-w-3xl flex-col gap-10">
+        {/* L0 §12 — l'écran DIT qu'il est partiel plutôt que d'afficher des chiffres faux.
+            (L'axe viewFilter, lui, est déjà neutralisé par exigerSessionAdministration.) */}
+        {donnees.vueRestreinte && <AvertissementVueRestreinte />}
+
         <section>
           <h1 className="mb-1 text-lg font-semibold">
             Propositions d’entités (Parties Omni-FI)
