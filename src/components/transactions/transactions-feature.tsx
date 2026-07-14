@@ -24,7 +24,7 @@ import {
   type ResultatAction,
   type SplitUI,
 } from "@/components/ui/category";
-import { AppErrorState, EmptyState } from "@/components/ui/states";
+import { AppErrorState, cn, EmptyState } from "@/components/ui/states";
 
 import { TransactionsTable } from "./transactions-table";
 import { TransactionsLoading } from "./states/transactions-loading";
@@ -106,7 +106,18 @@ export function TransactionsFeature({
     initial.curseurSuivant,
   );
   const [filtres, setFiltres] = useState<FiltresTransactions>({});
-  const [chargement, setChargement] = useState(false);
+  // Nature du chargement en cours (plutôt qu'un booléen nu) : on sépare le
+  // (re)chargement de la 1re page — qui REMPLACE la liste (filtres/recherche/
+  // après-sauvegarde) — de la pagination « Charger plus » (append). `chargement`
+  // (dérivé) garde son sens PARTOUT (toolbar/bouton/skeleton) ; seul un
+  // REMPLACEMENT (`rafraichissement`) estompe la liste déjà affichée pendant le
+  // refetch — la pagination, elle, ne l'estompe pas (les lignes en place ne
+  // changent pas, seul le bas s'allonge → estomper serait un artefact).
+  const [chargementEnCours, setChargementEnCours] = useState<
+    "page" | "plus" | null
+  >(null);
+  const chargement = chargementEnCours !== null;
+  const rafraichissement = chargementEnCours === "page";
   const [erreur, setErreur] = useState(false);
   /** Erreur de pagination (page suivante) — n'efface pas ce qui est affiché. */
   const [erreurPagination, setErreurPagination] = useState(false);
@@ -181,7 +192,7 @@ export function TransactionsFeature({
   /** (Re)charge la PREMIÈRE page pour un jeu de filtres donné (reset curseur). */
   const rechargerPremierePage = useCallback(
     async (f: FiltresTransactions) => {
-      setChargement(true);
+      setChargementEnCours("page");
       setErreur(false);
       setErreurPagination(false);
       const res = await actions.listerTransactions({ curseur: null, filtres: f });
@@ -191,7 +202,7 @@ export function TransactionsFeature({
       } else {
         setErreur(true);
       }
-      setChargement(false);
+      setChargementEnCours(null);
     },
     [actions],
   );
@@ -205,7 +216,7 @@ export function TransactionsFeature({
   /** Charge la page SUIVANTE et l'ajoute à la liste (append). */
   async function chargerPlus() {
     if (!curseur || chargement) return;
-    setChargement(true);
+    setChargementEnCours("plus");
     setErreurPagination(false);
     const res = await actions.listerTransactions({ curseur, filtres });
     if (res.ok) {
@@ -214,7 +225,7 @@ export function TransactionsFeature({
     } else {
       setErreurPagination(true);
     }
-    setChargement(false);
+    setChargementEnCours(null);
   }
 
   /**
@@ -313,7 +324,28 @@ export function TransactionsFeature({
         }
       />
 
-      {corps}
+      {/* Zone de résultats à hauteur PLANCHER (~8 lignes = gabarit du skeleton
+          TransactionsLoading) : skeleton / table / petite liste / empty partagent
+          ce plancher, donc la zone ne se « collapse » plus au fil de la recherche
+          → fin des sauts de layout (TX-RECHERCHE-LAYOUTSHIFT1). Pendant un RE-fetch
+          de la 1re page AVEC des résultats déjà affichés (recherche/filtre/après-
+          sauvegarde), on GARDE la liste montée et on l'estompe (« en cours » :
+          opacité réduite + aria-busy + non-cliquable) au lieu de la laisser figée
+          sans retour — même idiome que GraphiquesFeature. La pagination « Charger plus »
+          (append) N'estompe PAS : `rafraichissement` ne vaut que pour le refetch
+          page 1. `enChargementInitial` garde le skeleton réservé au cas SANS lignes
+          → jamais de clignotement vers le skeleton quand on avait déjà des lignes. */}
+      <div
+        aria-busy={rafraichissement && aDesResultats}
+        className={cn(
+          "min-h-[512px] transition-opacity",
+          rafraichissement &&
+            aDesResultats &&
+            "pointer-events-none opacity-60",
+        )}
+      >
+        {corps}
+      </div>
 
       {/* Pagination « Charger plus » — masquée si dernière page ou liste vide. */}
       {aDesResultats && curseur && (
