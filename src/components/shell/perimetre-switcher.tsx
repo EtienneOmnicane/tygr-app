@@ -260,7 +260,7 @@ export function PerimetreSwitcher({
   //
   // `usePathname` + `useChaineRequete`, et PAS `useSearchParams` : ce dernier force le
   // bail-out CSR du prerender de toute la route quand le composant n'est pas sous
-  // <Suspense> — c'est le cas ici (cf. app-topbar.tsx, où seul PeriodeSwitcher l'est).
+  // <Suspense> — c'est le cas ici (cf. barre-vue.tsx, où seul PeriodeSwitcher l'est).
   // La query compte : sans elle, revenir sur /transactions ferait sauter `?periode=3m`.
   const pathname = usePathname();
   const chaineRequete = useChaineRequete();
