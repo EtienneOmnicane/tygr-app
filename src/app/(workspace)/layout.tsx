@@ -230,11 +230,16 @@ export default async function WorkspaceLayout({
         onDeconnexion={deconnecter}
       />
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Barre de vue : montée GLOBALEMENT, mais chaque page ne rend que les
+            contrôles qui la concernent (matrice `shell/toolbar-config.ts`, lot A2) —
+            /selection n'en rend aucun. `workspaceNom` = repère de la bande minimale
+            (Règles / Membres / Entités), déjà résolu ci-dessus pour la sidebar. */}
         <AppTopbar
           role={contexte.role}
           comptes={contexte.comptes}
           entites={contexte.entites}
           viewFilterActif={viewFilterActif}
+          workspaceNom={contexte.workspaceNom}
         />
         <div key={clePerimetre} className="min-w-0 flex-1">
           {children}

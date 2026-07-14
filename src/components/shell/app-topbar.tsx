@@ -7,23 +7,23 @@
  * banque) descend ici, sur `surface-card`, au-dessus du contenu de chaque page.
  * Le WorkspaceSwitcher + les liens admin migrent, eux, dans `AppSidebar`.
  *
- * ANCRAGE AU SCROLL (demande Etienne) : la barre est `sticky top-0` avec un
- * `z-30` — elle reste collée en haut de la colonne de contenu quand le dashboard
- * défile (période/périmètre/CTA toujours atteignables). Fond `surface-card` opaque
- * (jamais translucide) pour que le contenu qui passe dessous ne transparaisse pas.
- *
- * Pas de `flex-wrap` (règle UI CLAUDE.md : condenser, jamais wrapper le header).
+ * DEPUIS LE LOT A2 (TOOLBAR-GLOBALE-CADRAGE1) : les contrôles ne sont plus montés
+ * inconditionnellement. Le layout monte cette barre GLOBALEMENT, mais chaque page
+ * n'affiche que les contrôles qui ONT un effet sur elle (matrice `toolbar-config.ts`).
+ * Comme la décision dépend du pathname (client-only), cette coquille SERVEUR se
+ * contente de résoudre ce qui est serveur et de le passer à `BarreVue` (client) :
+ *   - les données scopées RLS (comptes, entités, viewFilter, nom du workspace) ;
+ *   - le `BankCtaLink` déjà RENDU, passé en slot `cta` — il reste ainsi un server
+ *     component (un composant client ne peut pas en importer un, mais peut en
+ *     recevoir un rendu en prop).
  */
-import { Suspense } from "react";
-
 import type {
   CompteConnecte,
   EntiteVisible,
 } from "@/server/repositories/dashboard";
 import type { WorkspaceRole } from "@/server/db/schema";
 
-import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
-import { PeriodeSwitcher } from "@/components/shell/periode-switcher";
+import { BarreVue } from "@/components/shell/barre-vue";
 import { BankCtaLink } from "@/components/shell/bank-cta";
 
 export function AppTopbar({
@@ -31,6 +31,8 @@ export function AppTopbar({
   comptes,
   entites,
   viewFilterActif,
+  workspaceNom,
+  pathnameForce,
 }: {
   role: WorkspaceRole;
   /** Comptes visibles (scopés RLS) — alimentent le sélecteur de périmètre. */
@@ -39,38 +41,19 @@ export function AppTopbar({
   entites: EntiteVisible[];
   /** viewFilter courant (ids) ; null = « Groupe ». Pour l'état actif du sélecteur. */
   viewFilterActif: string[] | null;
+  /** Nom du workspace courant — repère de contexte de la bande minimale. */
+  workspaceNom: string;
+  /** Visual QA uniquement (`/demo/shell`) : force la route évaluée. Jamais en prod. */
+  pathnameForce?: string;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-line bg-surface-card px-6">
-      {/* Sélecteur de PÉRIODE (L8c) : presets Ce mois / 3m / 6m / 12m / Tout. Lit/écrit
-          `?periode` (filtre de lecture, hors RLS) côté client. Sous <Suspense> car
-          useSearchParams force le bail-out CSR au prerender (recommandation Next 16) —
-          fallback inerte aux mêmes dimensions pour éviter le saut de layout. */}
-      <Suspense
-        fallback={
-          <div
-            aria-hidden
-            className="h-7 w-[260px] rounded-full bg-surface-inset"
-          />
-        }
-      >
-        <PeriodeSwitcher />
-      </Suspense>
-      {/* Sélecteur de périmètre d'affichage (L8b-1) : Groupe / banque(s). La
-          `key` dérivée du périmètre actif force un remount propre quand le
-          serveur change le viewFilter (après Appliquer + redirect) — la
-          sélection locale repart alors sur la nouvelle vérité sans effet. */}
-      <PerimetreSwitcher
-        key={viewFilterActif?.join(",") ?? "groupe"}
-        comptes={comptes}
-        entites={entites}
-        viewFilterActif={viewFilterActif}
-      />
-      {/* CTA permanent vers /banques : seul accès à la connexion bancaire une
-          fois les états vides disparus (cf. bank-cta.tsx). Gating role à l'intérieur. */}
-      <div className="ml-auto flex items-center gap-3">
-        <BankCtaLink role={role} />
-      </div>
-    </header>
+    <BarreVue
+      comptes={comptes}
+      entites={entites}
+      viewFilterActif={viewFilterActif}
+      workspaceNom={workspaceNom}
+      cta={<BankCtaLink role={role} />}
+      pathnameForce={pathnameForce}
+    />
   );
 }

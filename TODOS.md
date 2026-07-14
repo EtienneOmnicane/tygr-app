@@ -163,21 +163,53 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   thème Tailwind, pour tuer la valeur arbitraire). **Déclencheur** : prochain composant
   flottant, ou la passe `PROD-UX-REVIEW1`.
 
-- [ ] **TOOLBAR-GLOBALE-CADRAGE1 (P2, CADRAGE PRODUIT d'abord — effort cadrage ~0,5 j,
-  implémentation à chiffrer après, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
+- [x] **TOOLBAR-GLOBALE-CADRAGE1 (P2, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
   GLOBALE cohérente : présente là où c'est pertinent, retirée là où c'est obsolète.**
-  Aujourd'hui `AppTopbar` est déjà montée GLOBALEMENT (`layout.tsx:206`) mais affiche période
-  + périmètre sur TOUTES les pages, y compris là où la période n'a aucun sens (Banques,
-  Règles, Membres, Entités). Cible produit (à valider) : toolbar pertinente sur Dashboard /
-  Transactions / Échéances / Graphiques ; retirée ou adaptée sur Banques / Règles / Membres /
-  Entités — « une seule toolbox qui suffit par page pertinente ». ⚠️ Dépendance : Échéances et
-  Graphiques n'existent pas encore (cf. NAV-ECHEANCES1, NAV-GRAPHIQUES1) → le cadrage tranche
-  par page présente aujourd'hui ET pose la règle pour les pages à venir. QUESTION OUVERTE
-  (à trancher au cadrage) : liste exacte « pertinent/obsolète » par page + quel sous-ensemble
-  de contrôles par page (période seule ? périmètre seul ? les deux ?). PRÉALABLE à
-  TOOLBAR-DATE-PRECISE1 et TX-TOOLBAR-DEDUP1 (le lot). **Déclencheur** : décision produit de
-  lancer le chantier « barre de vue globale ». Recoupe la passe PROD-UX-REVIEW1 et la famille
-  des chantiers produit à cadrer (cf. REGLES-OPERATIONNEL1).
+  ✅ **CADRÉ + LOT A2 (gating) LIVRÉ 2026-07-14** (branche `feat/toolbar-config`, plan
+  `PLAN-toolbar-config.md`). Matrice tranchée par Etienne, implémentée en fonction PURE
+  `src/components/shell/toolbar-config.ts` (`toolbarConfig(pathname)` → `{periode, perimetre,
+  cta, minimal}`), consommée par un composant CLIENT `barre-vue.tsx` (`usePathname`) —
+  `AppTopbar` reste SERVER et lui passe `BankCtaLink` en slot. **Livré** : période retirée de
+  Banques/Règles/Admin (elle n'y a aucun effet) ; CTA retiré de Graphiques/Échéances ; période
+  retirée d'Échéances (les presets sont rétrospectifs, l'écran regarde le futur) ; bande
+  MINIMALE (repère de tenant seul) sur `/admin/*` ; AUCUNE barre sur `/selection` ; défaut
+  fail-safe explicite pour toute page non cadrée. Reste du lot renvoyé à ses entrées :
+  **TOOLBAR-DATE-PRECISE1** (plage de dates, A1), **horizon futur d'Échéances** (chantier
+  séparé), **TX-TOOLBAR-DEDUP1**. ⚠️ **Deux cellules de la matrice N'ONT PAS été livrées**
+  (périmètre conservé sur Banques et Règles) → cf. TOOLBAR-PERIMETRE-AMPUTATION1 ci-dessous,
+  qui les débloque.
+
+- [ ] **TOOLBAR-PERIMETRE-AMPUTATION1 (P1, effort ~0,5 j, 2026-07-14) — amputer le
+  `viewFilter` des surfaces de GESTION `/banques` et `/regles`, puis y retirer le sélecteur
+  de périmètre (2 cellules restantes de la matrice A2).** Découvert par la cross-review de
+  `feat/toolbar-config` ; **arbitrage Etienne : ne PAS masquer le sélecteur tant que le
+  serveur n'est pas amputé** (sinon on supprime le seul moyen de voir/annuler un filtre qui
+  mord encore). **Le fond du problème** : le `viewFilter` n'est pas un filtre d'affichage
+  local, c'est un prédicat **RLS** (`app.current_view_filter`, policy `account_scope`
+  RESTRICTIVE en USING *et* WITH CHECK, migrations 0016/0017) porté par le **JWT** → il suit
+  l'utilisateur de page en page et mord sur toute page dont la session n'est pas amputée.
+  `/admin/*` l'est déjà (`exigerSessionAdministration()`, `server/auth/session.ts:136` — helper
+  qui NE vérifie PAS le rôle et dont la doc établit « la sécurité est INCHANGÉE, on ne retire
+  qu'une intention d'affichage » ; doctrine : « Administrer porte sur le TENANT ENTIER : un
+  filtre d'affichage n'y a aucun sens »). **Pas `/banques` ni `/regles`, qui tournent sur
+  `exigerSessionWorkspace()` (session COMPLÈTE)** :
+  - `/banques` — filtre actif ⇒ le sync **attache 0 compte SANS erreur** (`WITH CHECK` refuse
+    l'INSERT des comptes hors filtre). **Ce n'est pas théorique** : le repo le documente
+    lui-même comme diagnostic d'un bug terrain « spinner puis rien »
+    (`banques/actions.ts:281-286`). Les compteurs de `listerConnexionsBancaires` (leftJoin
+    `bank_accounts`) sont faux du même coup (« 1 compte » pour une connexion qui en a 5).
+  - `/regles` — filtre actif ⇒ `appliquerReglesAction` (`regles/actions.ts:200`) ne
+    recatégorise **que le périmètre filtré** : le FM croit avoir ré-analysé tout le groupe.
+  **Correctif** : `exigerSessionAdministration()` sur `banques/page.tsx:31`, les 6 actions de
+  `banques/actions.ts` (l.152, 212, 272, 444, 491, 590) et les actions d'écriture de
+  `regles/actions.ts` ; **puis** passer `banques`/`regles` à `perimetre: false` dans
+  `toolbar-config.ts` (⚠️ la garde CI `tests/unit/toolbar-config.test.ts` REFUSE ce passage
+  tant que le segment n'est pas déclaré amputé — c'est voulu). ⚠️ **Touche une surface
+  serveur** → cas d'isolation à ajouter (règle 3), effet de bord ASSUMÉ à valider : «
+  Ré-analyser » portera alors sur tout le tenant quel que soit le filtre d'affichage.
+  **Déclencheur** : immédiat/prochain chantier toolbar — c'est un bug de correction d'AFFICHAGE
+  et d'ÉCRITURE (sync silencieusement vide), pas une dette d'isolation (la RLS reste la garde,
+  aucune fuite cross-tenant : le filtre ne fait que RÉTRÉCIR).
 
 - [ ] **TOOLBAR-DATE-PRECISE1 (P2, effort ~0,5 j, 2026-07-13) — ajouter un sélecteur de DATE
   PRÉCISE (plage dd/mm/yyyy → dd/mm/yyyy) dans la barre de vue, en complément des presets de
