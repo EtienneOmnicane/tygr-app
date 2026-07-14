@@ -24,9 +24,25 @@ compose `PeriodeSwitcher` (presets Ce mois/3m/6m/12m/Tout via `?periode`, canal 
 hors RLS — `periode-switcher.tsx`, lib `src/lib/periode.ts`), `PerimetreSwitcher` (périmètre
 comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et `BankCtaLink`.
 
-- [ ] **PERIMETRE-REDIRECT-PAGE1 (P1, effort ~0,5 j, 2026-07-13) — BUG : changer le
+- [x] **PERIMETRE-REDIRECT-PAGE1 (P1, effort ~0,5 j, 2026-07-13) — BUG : changer le
   périmètre de comptes depuis `/transactions` (ou toute page ≠ dashboard) REDIRIGE vers le
-  dashboard.** Mode de défaillance : sur `/transactions`, ouvrir le sélecteur « Vue »,
+  dashboard.** ✅ **RÉSOLU 2026-07-14** (branche `fix/perimetre-redirect-page`, plan
+  `PLAN-perimetre-redirect-page.md`). Les 2 actions de PÉRIMÈTRE reviennent sur la page
+  courante : champ caché `origine` (`usePathname` + `useSyncExternalStore` sur
+  `window.location.search` — jamais `useSearchParams`, bail-out CSR), VALIDÉ serveur par
+  le nouveau `src/lib/redirect-interne.ts` (anti-open-redirect fail-closed : chemin
+  interne absolu uniquement, rejet `//host`, `/\host`, schémas, CRLF ; résolution
+  same-origin en défense en profondeur ; sortie `pathname+search`, jamais d'origine).
+  19 tests unitaires. `basculerWorkspace` garde `redirect("/")` (décision D1 : le switch
+  de workspace purge le viewFilter, et l'action sert aussi `/selection`).
+  ⚠️ **Garde indispensable découverte en recon** (arbitrage Etienne du 2026-07-14) :
+  rester sur la même route est un RE-RENDER, pas un remount → les features clientes qui
+  sèment le RSC dans un `useState` (`transactions-feature.tsx:104`,
+  `graphiques-feature.tsx:121`, `echeances-feature.tsx:93`) auraient affiché des données
+  PÉRIMÉES (topbar « Sucre » + table de tous les comptes). D'où la `key` de périmètre sur
+  le conteneur de page (`layout.tsx`), qui re-sème TOUTE page — présente et future — quand
+  le périmètre change. Contrepartie assumée → dette `TX-FILTRES-URL1` ci-dessous.
+  Mode de défaillance d'origine : sur `/transactions`, ouvrir le sélecteur « Vue »,
   ajouter/retirer un compte, « Appliquer » → on atterrit sur `/` au lieu de rester sur
   `/transactions` (perte de place + reset des filtres in-page recherche/statut/date). Cause
   EXACTE : les trois Server Actions de périmètre finissent par un `redirect("/")` EN DUR —
@@ -42,6 +58,32 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   accordéon/dérive de libellé ; ici = routage). **Déclencheur** : immédiat (reproduit ;
   gêne à chaque changement de périmètre hors dashboard). Pas une dette d'isolation (la RLS
   reste la garde ; c'est du routage).
+
+- [ ] **TX-FILTRES-URL1 (P2, effort ~0,5 j, 2026-07-14) — porter les filtres in-page de
+  `/transactions` (recherche / statut de ventilation / bornes de date) dans les
+  searchParams, pour qu'ils SURVIVENT à un changement de périmètre.** Contrepartie ASSUMÉE
+  de la garde livrée avec PERIMETRE-REDIRECT-PAGE1 (arbitrage Etienne, 2026-07-14) : la
+  `key` de périmètre du conteneur de page (`(workspace)/layout.tsx`) remonte le sous-arbre
+  quand le périmètre change — c'est ce qui interdit d'afficher des données PÉRIMÉES — mais
+  elle réinitialise du même coup l'état CLIENT des filtres (`transactions-feature.tsx:108`,
+  `useState<FiltresTransactions>({})`). Aujourd'hui : on reste bien sur `/transactions`
+  (bug principal réglé) et `?periode` est préservé, mais un changement de périmètre vide la
+  recherche/le statut/les dates. **Cible** : filtres dans l'URL (`?recherche`, `?statut`,
+  `?du`, `?au`) → ils sont alors portés par le chemin de retour (`validerCheminInterne`
+  préserve la query), survivent au remount, ET la page devient deep-linkable/partageable.
+  ⚠️ Recoupe TOOLBAR-DATE-PRECISE1 (qui veut déjà `?du`/`?au` GLOBAUX) : trancher d'abord
+  qui possède les bornes de date (barre de vue globale vs toolbar in-page), sinon deux
+  canaux concurrents. ⚠️ **Point de vigilance (nit cross-review 2026-07-14)** : le champ
+  `origine` du PerimetreSwitcher lit la query via `useSyncExternalStore` abonné au SEUL
+  `popstate` (`perimetre-switcher.tsx`, `souscrireHistorique`). Tant que seule la période
+  mute l'URL (et ferme le popover au clic), la valeur reste fraîche. Mais si ce chantier
+  fait muter la query par `router.replace`/`pushState` SANS fermer le popover (raccourci
+  clavier, debounce), `origine` pourrait poster une query périmée → au moment du fix,
+  patcher `souscrireHistorique` pour intercepter `history.pushState`/`replaceState` (ou
+  relire `window.location.search` au submit). Glitch UX bénin (le filtre vit dans le
+  cookie ; seul le param d'URL régresserait), pas une faille. **Déclencheur** : prochain
+  chantier `/transactions` (ou TOOLBAR-GLOBALE-CADRAGE1, qui tranche la propriété des
+  filtres). Pas une dette d'isolation (la RLS reste la garde ; c'est de l'état d'UI).
 
 - [ ] **TX-STATUT-SELECT-LAYOUT1 (P2, effort ~0,25 j, 2026-07-13) — BUG FRONT : ouvrir le
   filtre « Tous statuts » sur `/transactions` fait SAUTER le layout (barre de scroll
