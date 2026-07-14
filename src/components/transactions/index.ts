@@ -7,6 +7,7 @@ export { TransactionsFeature } from "./transactions-feature";
 export { TransactionsTable } from "./transactions-table";
 export { TransactionRow } from "./transaction-row";
 export { TransactionsToolbar } from "./transactions-toolbar";
+export { TransactionsSommeNette } from "./transactions-somme-nette";
 export { CategorisationStatusBadge } from "./categorisation-status-badge";
 export { FiabiliteBadge } from "./fiabilite-badge";
 export { SourceClassificationIcon } from "./source-classification-icon";
@@ -17,6 +18,7 @@ export type {
   CurseurTransactions,
   FiltresTransactions,
   PageTransactions,
+  SommeNetteDevise,
   StatutCategorisation,
   NiveauFiabilite,
   SourceClassification,
