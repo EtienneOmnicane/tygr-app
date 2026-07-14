@@ -5,6 +5,121 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Barre de vue globale & bugs /transactions — backlog navbar (2026-07-13)
+
+Retour terrain Etienne (passe navbar + `/transactions`, 2026-07-13) : deux bugs
+fonctionnels (A4 redirect de périmètre, B1 layout du sélecteur de statut), un lot produit
+« barre de vue globale » (A1-A3, à cadrer) et deux irritants UX/feature `/transactions`
+(B2 saut visuel de la recherche, B3 somme nette des résultats). Aucun de ces points ne
+touche l'isolation tenant, l'append-only ni les montants (sinon corrigé immédiatement, pas
+consigné) ; B3 est une FEATURE d'AFFICHAGE de montants — spécifiée ici, non implémentée —
+qui devra respecter la règle 8 (somme PAR devise, chaîne décimale, `tabular-nums`).
+Fichiers cités vérifiés en lecture seule. Cadre plus large : la passe profonde
+`PROD-UX-REVIEW1` (/design-review) est le déclencheur naturel de plusieurs de ces items.
+
+**Topologie (recon)** : la « barre de vue des comptes » = `AppTopbar`
+(`src/components/shell/app-topbar.tsx`), montée GLOBALEMENT par le layout
+(`src/app/(workspace)/layout.tsx:206`) → présente sur TOUTES les pages workspace. Elle
+compose `PeriodeSwitcher` (presets Ce mois/3m/6m/12m/Tout via `?periode`, canal de LECTURE
+hors RLS — `periode-switcher.tsx`, lib `src/lib/periode.ts`), `PerimetreSwitcher` (périmètre
+comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et `BankCtaLink`.
+
+- [ ] **PERIMETRE-REDIRECT-PAGE1 (P1, effort ~0,5 j, 2026-07-13) — BUG : changer le
+  périmètre de comptes depuis `/transactions` (ou toute page ≠ dashboard) REDIRIGE vers le
+  dashboard.** Mode de défaillance : sur `/transactions`, ouvrir le sélecteur « Vue »,
+  ajouter/retirer un compte, « Appliquer » → on atterrit sur `/` au lieu de rester sur
+  `/transactions` (perte de place + reset des filtres in-page recherche/statut/date). Cause
+  EXACTE : les trois Server Actions de périmètre finissent par un `redirect("/")` EN DUR —
+  `definirViewFilter` (`src/app/(workspace)/actions.ts:92`), `definirPerimetreEntite`
+  (`:137`) et l'action sœur (`:61`). Attendu : revenir sur la page COURANTE. ⚠️ Le redirect
+  n'est pas gratuit à supprimer : il pilote aujourd'hui le remount propre du
+  `PerimetreSwitcher` via une `key` dérivée du périmètre (`app-topbar.tsx:64`,
+  `perimetre-switcher.tsx:181`) → rester sur place doit quand même RE-résoudre le scope
+  (revalidation) et re-semer la sélection locale. Piste : passer le chemin d'origine à
+  l'action (`usePathname` → champ caché) puis `redirect(origine)` — chemin VALIDÉ (préfixe
+  interne, jamais un chemin client brut → open-redirect). Même composant que
+  UI-PERIMETRE-ACCORDEON1 / PERIMETRE-ENTITE-DERIVE1, à ne pas confondre (eux =
+  accordéon/dérive de libellé ; ici = routage). **Déclencheur** : immédiat (reproduit ;
+  gêne à chaque changement de périmètre hors dashboard). Pas une dette d'isolation (la RLS
+  reste la garde ; c'est du routage).
+
+- [ ] **TX-STATUT-SELECT-LAYOUT1 (P2, effort ~0,25 j, 2026-07-13) — BUG FRONT : ouvrir le
+  filtre « Tous statuts » sur `/transactions` fait SAUTER le layout (barre de scroll
+  parasite).** Reproduit au clic sur le sélecteur de statut de ventilation
+  (`transactions-toolbar.tsx:218-231`, options `:52-57`), un composant `Select` maison
+  (`src/components/ui/select/select.tsx`). À l'ouverture du menu, le contenu se décale et une
+  scrollbar parasite apparaît (probable débordement du popover / mesure de largeur qui
+  réserve puis retire l'espace de la scrollbar). **Déclencheur** : cette passe QA (affordance
+  du contrôle de statut). Corriger dans le composant `Select` (contenir l'overflow du menu,
+  éviter le reflow du conteneur). Pas d'isolation.
+
+- [ ] **TOOLBAR-GLOBALE-CADRAGE1 (P2, CADRAGE PRODUIT d'abord — effort cadrage ~0,5 j,
+  implémentation à chiffrer après, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
+  GLOBALE cohérente : présente là où c'est pertinent, retirée là où c'est obsolète.**
+  Aujourd'hui `AppTopbar` est déjà montée GLOBALEMENT (`layout.tsx:206`) mais affiche période
+  + périmètre sur TOUTES les pages, y compris là où la période n'a aucun sens (Banques,
+  Règles, Membres, Entités). Cible produit (à valider) : toolbar pertinente sur Dashboard /
+  Transactions / Échéances / Graphiques ; retirée ou adaptée sur Banques / Règles / Membres /
+  Entités — « une seule toolbox qui suffit par page pertinente ». ⚠️ Dépendance : Échéances et
+  Graphiques n'existent pas encore (cf. NAV-ECHEANCES1, NAV-GRAPHIQUES1) → le cadrage tranche
+  par page présente aujourd'hui ET pose la règle pour les pages à venir. QUESTION OUVERTE
+  (à trancher au cadrage) : liste exacte « pertinent/obsolète » par page + quel sous-ensemble
+  de contrôles par page (période seule ? périmètre seul ? les deux ?). PRÉALABLE à
+  TOOLBAR-DATE-PRECISE1 et TX-TOOLBAR-DEDUP1 (le lot). **Déclencheur** : décision produit de
+  lancer le chantier « barre de vue globale ». Recoupe la passe PROD-UX-REVIEW1 et la famille
+  des chantiers produit à cadrer (cf. REGLES-OPERATIONNEL1).
+
+- [ ] **TOOLBAR-DATE-PRECISE1 (P2, effort ~0,5 j, 2026-07-13) — ajouter un sélecteur de DATE
+  PRÉCISE (plage dd/mm/yyyy → dd/mm/yyyy) dans la barre de vue, en complément des presets de
+  période.** Aujourd'hui `PeriodeSwitcher` n'offre que les presets Ce mois/3m/6m/12m/Tout via
+  `?periode` (`periode-switcher.tsx`, lib `src/lib/periode.ts`). Ajouter une plage explicite :
+  nouveaux search params (ex. `?du`/`?au`), la lib `periode.ts` doit gérer « plage explicite
+  prime sur preset » (résolution + garde `du ≤ au`), rendu FR via `src/lib/format-date.ts`
+  (jamais de découpe de date maison — §Formatage). Emplacement : `AppTopbar` à côté du
+  `PeriodeSwitcher` (`app-topbar.tsx:44-58`). NB : `/transactions` porte DÉJÀ des bornes de
+  date in-page (`transactions-toolbar.tsx:233-265`) → cette plage globale les rendra
+  redondantes (cf. TX-TOOLBAR-DEDUP1). **Déclencheur** : chantier « barre de vue globale »
+  (lot avec TOOLBAR-GLOBALE-CADRAGE1) OU demande terrain d'une plage précise hors presets.
+
+- [ ] **TX-TOOLBAR-DEDUP1 (P2, effort ~0,25 j, 2026-07-13) — retirer de la toolbar
+  `/transactions` les contrôles qui DOUBLONNENT la barre de vue globale une fois celle-ci
+  posée.** Corollaire de TOOLBAR-DATE-PRECISE1 : dès que la plage de dates vit dans la toolbar
+  globale, les bornes de date in-page (`transactions-toolbar.tsx:233-265`) et toute notion de
+  période in-page deviennent une SECONDE source de filtre concurrente sur le même écran → à
+  supprimer. PRÉCÉDENT exact déjà appliqué : le sélecteur de compte a été retiré de cette
+  toolbar au profit du `PerimetreSwitcher` global (`transactions-toolbar.tsx:13-16`, « retrait
+  feedback 0709 : doublon moche du sélecteur navbar ») → même geste pour les dates. ⚠️ Ne PAS
+  retirer le filtre STATUT ni la recherche (propres à `/transactions`, absents de la toolbar
+  globale). **Déclencheur** : une fois TOOLBAR-DATE-PRECISE1 livrée (sinon on retire un filtre
+  sans remplaçant).
+
+- [ ] **TX-RECHERCHE-LAYOUTSHIFT1 (P2, effort ~0,25-0,5 j, 2026-07-13) — UX : la recherche par
+  libellé fait « sauter » l'écran à chaque rechargement de résultats.** ⚠️ NUANCE de recon
+  (à ne pas mal implémenter) : la recherche EST DÉJÀ débouncée ~300 ms
+  (`transactions-toolbar.tsx:48` `DEBOUNCE_RECHERCHE_MS`, effet `:118-131`) → ce n'est PAS
+  « une requête par touche » qu'il faut corriger (le debounce existe déjà), mais le LAYOUT
+  SHIFT au rechargement de la liste : elle se démonte/remonte et sa hauteur change, d'où le
+  saut visuel. Piste : réserver la hauteur (skeleton à même gabarit / `min-height`), garder la
+  liste montée pendant le refetch (état « en cours » superposé plutôt que unmount), ne pas
+  faire clignoter le conteneur. Parent : `src/components/transactions/transactions-feature.tsx`.
+  **Déclencheur** : `/design-review` (cf. PROD-UX-REVIEW1) OU plainte terrain sur le saut
+  visuel. Pas d'isolation.
+
+- [ ] **TX-RECHERCHE-SOMME-NETTE1 (P2, effort ~0,5-1 j — dépend d'un agrégat serveur,
+  2026-07-13) — FEATURE : afficher la SOMME NETTE des résultats filtrés (net = entrées −
+  sorties) pendant une recherche.** Sur `/transactions` (et potentiellement ailleurs dans
+  l'app). ⚠️ CONTRAINTE d'implémentation (MÊME piège que TX-FILTRE1 / TX-QA-FILTRE-CAT1) : la
+  pagination est en KEYSET → le client ne détient qu'UNE page ; sommer côté client ne
+  totaliserait que la page visible, PAS l'ensemble filtré. Il faut donc un AGRÉGAT SERVEUR
+  (nouvelle capacité de lecture : `SUM` scopé `withWorkspace`/RLS, groupé par devise,
+  appliquant les MÊMES filtres que la liste). Contraintes d'affichage (règle 8 + §Formatage
+  CLAUDE.md) : JAMAIS d'addition cross-devise → une ligne de total PAR devise ; calcul sur
+  chaîne décimale / centimes entiers, JAMAIS de float ; `tabular-nums` ; formatage via
+  `src/lib/format-montant.ts`. **Déclencheur** : demande produit d'un total net des résultats
+  filtrés (feature explicite, pas un bug). Pas une dette de montants (feature neuve conforme
+  règle 8), mais touche la lecture financière → test d'isolation du nouvel agrégat requis
+  (exit criteria règle 3).
+
 ### Fignolage layout §1.1 — pleine largeur (2026-07-08)
 
 Chantier layout livré (retour Etienne « les div ne remplissent pas assez la page,
