@@ -66,33 +66,68 @@ const curseurOpaque = z
   .regex(/^[A-Za-z0-9_-]+$/, "Curseur invalide");
 
 /**
- * Filtres de lecture. Tous optionnels (liste complète par défaut). `recherche`
- * porte sur le libellé nettoyé (jamais bank_label_raw — PII, règle 8). Le filtre
- * de statut s'appuie sur l'agrégat de ventilation (anti-N+1, cf. repository).
+ * Filtres MÉTIER — SOURCE UNIQUE, partagée par la LISTE paginée et par l'AGRÉGAT de
+ * somme nette (TX-RECHERCHE-SOMME-NETTE1). Tous optionnels (liste complète par
+ * défaut). `recherche` porte sur le libellé nettoyé (jamais bank_label_raw — PII,
+ * règle 8). Le filtre de statut s'appuie sur l'agrégat de ventilation (anti-N+1, cf.
+ * repository).
+ *
+ * ⚠️ Les deux schémas exportés ci-dessous DÉRIVENT de cet objet — on ne recopie
+ * JAMAIS la liste des champs. La somme nette doit porter EXACTEMENT les mêmes
+ * prédicats que la liste, sinon le total affiché ne correspond pas aux lignes
+ * affichées. Un filtre ajouté ici atterrit mécaniquement dans les deux (garantie
+ * STRUCTURELLE, pas une consigne de vigilance).
  */
-export const listerTransactionsSchema = z
-  .object({
-    /** Recherche plein-texte simple sur clean_label (ILIKE). */
-    recherche: z.string().trim().min(1).max(120).optional(),
-    /** Restreint à un compte bancaire (uuid). */
-    bankAccountId: z.string().uuid().optional(),
-    /** Filtre sur l'état de catégorisation. */
-    statut: z.enum(STATUTS_VENTILATION).optional(),
-    /** Bornes de date comptable (incluses). */
-    dateDebut: dateComptable.optional(),
-    dateFin: dateComptable.optional(),
+const filtresTransactions = z.object({
+  /** Recherche plein-texte simple sur clean_label (ILIKE). */
+  recherche: z.string().trim().min(1).max(120).optional(),
+  /** Restreint à un compte bancaire (uuid). */
+  bankAccountId: z.string().uuid().optional(),
+  /** Filtre sur l'état de catégorisation. */
+  statut: z.enum(STATUTS_VENTILATION).optional(),
+  /** Bornes de date comptable (incluses). */
+  dateDebut: dateComptable.optional(),
+  dateFin: dateComptable.optional(),
+});
+
+/** Cohérence de l'intervalle : début ≤ fin si les deux sont fournis (partagé). */
+function intervalleCoherent(f: {
+  dateDebut?: string;
+  dateFin?: string;
+}): boolean {
+  return !f.dateDebut || !f.dateFin || f.dateDebut <= f.dateFin;
+}
+
+/** Lecture PAGINÉE : les filtres + le curseur opaque et la taille de page. */
+export const listerTransactionsSchema = filtresTransactions
+  .extend({
     /** Curseur de page suivante (issu d'un appel précédent). */
     curseur: curseurOpaque.optional(),
     /** Taille de page demandée (clampée [1, 100]). */
     limite: z.coerce.number().int().min(1).max(LIMITE_MAX).default(LIMITE_DEFAUT),
   })
   .strict()
-  // Cohérence de l'intervalle : début ≤ fin si les deux sont fournis.
-  .refine(
-    (f) => !f.dateDebut || !f.dateFin || f.dateDebut <= f.dateFin,
-    { message: "dateDebut doit précéder dateFin", path: ["dateDebut"] },
-  );
+  .refine(intervalleCoherent, {
+    message: "dateDebut doit précéder dateFin",
+    path: ["dateDebut"],
+  });
 
 export type ListerTransactionsInput = z.infer<typeof listerTransactionsSchema>;
+
+/**
+ * AGRÉGAT « somme nette » : les MÊMES filtres que la liste, SANS curseur ni limite.
+ * Une somme porte sur l'INTÉGRALITÉ du jeu filtré, pas sur une page — c'est toute la
+ * raison d'être de cet agrégat serveur (piège TX-FILTRE1 : la pagination est en
+ * KEYSET, le client ne détient qu'une page, sommer côté client ne totaliserait que le
+ * visible). `.strict()` rejette donc explicitement un `curseur`/`limite` égaré.
+ */
+export const sommeNetteSchema = filtresTransactions
+  .strict()
+  .refine(intervalleCoherent, {
+    message: "dateDebut doit précéder dateFin",
+    path: ["dateDebut"],
+  });
+
+export type SommeNetteInput = z.infer<typeof sommeNetteSchema>;
 
 export { LIMITE_DEFAUT, LIMITE_MAX };

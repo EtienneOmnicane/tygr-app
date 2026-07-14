@@ -207,11 +207,13 @@ export type {
 // withWorkspace(tx) sans importer @/server/repositories/* directement.
 export {
   listerTransactions,
+  sommeNetteParDevise,
   CurseurInvalideError,
 } from "@/server/repositories/transactions";
 export type {
   TransactionLigne,
   PageTransactions,
+  SommeNetteDevise,
 } from "@/server/repositories/transactions";
 
 // Gestion des Entités (Option B, L3) : référentiel d'entités + sas d'assignation +

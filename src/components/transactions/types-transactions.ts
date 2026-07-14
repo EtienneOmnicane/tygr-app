@@ -167,6 +167,36 @@ export interface PageTransactions {
 }
 
 /**
+ * TOTAL des résultats FILTRÉS pour UNE devise (TX-RECHERCHE-SOMME-NETTE1). Miroir UI du
+ * contrat serveur (`SommeNetteDevise` du repository), réconcilié par l'adaptateur
+ * (`currency` → `devise`, comme le reste de ce contrat).
+ *
+ * ⚠️ Le total est calculé EN SQL, sur l'ENSEMBLE du jeu filtré. L'UI ne somme JAMAIS
+ * elle-même : la pagination est en KEYSET, le client ne détient qu'UNE page — additionner
+ * les lignes affichées ne totaliserait que le visible (piège TX-FILTRE1), et un montant
+ * ne se recalcule pas en JS (règle 8 : pas de float sur de l'argent).
+ *
+ * ⚠️ CONVENTION DE SIGNE, à ne pas ré-inventer au rendu :
+ *  - `entrees` / `sorties` = MAGNITUDES POSITIVES (des montants, pas des flux signés) —
+ *    le SENS est porté par le libellé et la couleur (`inflow` / `outflow`) ;
+ *  - `net` = `entrees − sorties`, SIGNÉ : c'est LUI qui porte la couleur sémantique selon
+ *    son signe (négatif = sortie nette).
+ * Même convention que la synthèse des échéances et que le cashflow du dashboard.
+ */
+export interface SommeNetteDevise {
+  /** Devise ISO (MUR/USD/EUR) — une ligne PAR devise, jamais d'addition cross-devise. */
+  devise: string;
+  /** Somme des entrées, chaîne décimale ≥ 0. */
+  entrees: string;
+  /** Somme des sorties, chaîne décimale ≥ 0 (magnitude, pas un négatif). */
+  sorties: string;
+  /** `entrees − sorties`, chaîne décimale SIGNÉE. */
+  net: string;
+  /** Nombre d'opérations agrégées dans cette devise. */
+  nbTransactions: number;
+}
+
+/**
  * Surface d'action injectée à la page (B3). Le Backend fournit l'implémentation
  * (Server Action `listerTransactionsAction`) ; la démo/tests fournissent un stub.
  * Scopée au workspace courant côté serveur (withWorkspace) — l'UI ne passe JAMAIS
@@ -196,4 +226,18 @@ export interface ActionsTransactions {
     transactionId: string;
     transactionDate: string;
   }): Promise<SplitUI[]>;
+  /**
+   * TOTAL NET des résultats filtrés, une ligne PAR DEVISE (TX-RECHERCHE-SOMME-NETTE1).
+   * Agrégat SERVEUR (`sommeNetteTransactionsAction`) portant EXACTEMENT les mêmes filtres
+   * que `listerTransactions` — mais sans curseur : il totalise TOUT le jeu filtré, pas la
+   * page affichée.
+   *
+   * OPTIONNELLE À DESSEIN : les surfaces qui n'ont pas d'agrégat serveur (stub de la démo
+   * `app/demo/transactions`, tests) ne la fournissent pas — le conteneur n'affiche alors
+   * simplement AUCUN total. Dégradation silencieuse assumée : pas de chiffre vaut mieux
+   * qu'un faux chiffre (un stub client ne pourrait sommer que la page visible).
+   */
+  sommeNette?(args: {
+    filtres?: FiltresTransactions;
+  }): Promise<ResultatAction<SommeNetteDevise[]>>;
 }

@@ -215,20 +215,74 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   **Déclencheur** : `/design-review` (cf. PROD-UX-REVIEW1) OU plainte terrain sur le saut
   visuel. Pas d'isolation.
 
-- [ ] **TX-RECHERCHE-SOMME-NETTE1 (P2, effort ~0,5-1 j — dépend d'un agrégat serveur,
+- [x] **TX-RECHERCHE-SOMME-NETTE1 (P2, effort ~0,5-1 j — dépend d'un agrégat serveur,
   2026-07-13) — FEATURE : afficher la SOMME NETTE des résultats filtrés (net = entrées −
-  sorties) pendant une recherche.** Sur `/transactions` (et potentiellement ailleurs dans
-  l'app). ⚠️ CONTRAINTE d'implémentation (MÊME piège que TX-FILTRE1 / TX-QA-FILTRE-CAT1) : la
-  pagination est en KEYSET → le client ne détient qu'UNE page ; sommer côté client ne
-  totaliserait que la page visible, PAS l'ensemble filtré. Il faut donc un AGRÉGAT SERVEUR
-  (nouvelle capacité de lecture : `SUM` scopé `withWorkspace`/RLS, groupé par devise,
-  appliquant les MÊMES filtres que la liste). Contraintes d'affichage (règle 8 + §Formatage
-  CLAUDE.md) : JAMAIS d'addition cross-devise → une ligne de total PAR devise ; calcul sur
-  chaîne décimale / centimes entiers, JAMAIS de float ; `tabular-nums` ; formatage via
-  `src/lib/format-montant.ts`. **Déclencheur** : demande produit d'un total net des résultats
-  filtrés (feature explicite, pas un bug). Pas une dette de montants (feature neuve conforme
-  règle 8), mais touche la lecture financière → test d'isolation du nouvel agrégat requis
-  (exit criteria règle 3).
+  sorties) pendant une recherche.** ✅ LIVRÉ 2026-07-14 (branche `feat/tx-somme-nette`,
+  plan `PLAN-tx-somme-nette.md`). Agrégat SERVEUR `sommeNetteParDevise` (SUM en SQL sous
+  `withWorkspace`/RLS, GROUP BY devise, MÊMES filtres que la liste — schémas dérivés d'un
+  même objet zod + prédicats SQL partagés, donc pas de divergence possible), Server Action
+  `sommeNetteTransactionsAction`, bandeau pur `TransactionsSommeNette` (une ligne par
+  devise, net coloré par son signe, `tabular-nums`, formatage via `src/lib/format-montant.ts`).
+  Le total n'est demandé que sous filtre, et jamais au « Charger plus ». Preuve :
+  `tests/isolation/transactions-somme-nette-isolation.test.ts` (24 cas — cross-tenant,
+  périmètre entité, GROUP BY devise, tombstone, filtres croisés avec la liste, contre-preuve
+  owner ; identité `net = entrées − sorties` vérifiée en centimes entiers BigInt, zéro float).
+  ⚠️ **PIÈGE ÉVITÉ, à ne pas ré-introduire** : `transactions_cache.amount` est stocké en
+  valeur ABSOLUE (`normaliserMontant` rejette tout signe ; `credit_debit` est la seule colonne
+  sous CHECK qui porte le sens). Un agrégat `net = sum(amount)` ADDITIONNE donc les sorties aux
+  entrées (total faux, toujours positif). On somme par `filter (where credit_debit = …)`, comme
+  `cashflowParDevise`/`syntheseMoisParDevise` — une seule convention dans l'app. Le semis du
+  test d'isolation reproduit la PRODUCTION (montants positifs) : le semer en négatif — comme le
+  fait `transactions-isolation.test.ts`, où le signe est invisible — rendrait l'agrégat FAUX au
+  VERT (vérifié par mutation : 13 cas tombent).
+
+- [ ] **AGREGATS-NUMERIC-PLAFOND1 (P2, effort ~0,25 j, 2026-07-14) — DETTE : `::numeric(15,2)`
+  sur une SOMME impose un plafond de précision (|x| < 10^13), pas seulement une échelle.**
+  Relevé en cross-review de TX-RECHERCHE-SOMME-NETTE1 (probe PGlite à l'appui) : deux
+  transactions au montant max accepté par `normaliserMontant` (13 chiffres) dans la même
+  devise ⇒ `coalesce(sum(...),0)::numeric(15,2)` lève `numeric field overflow`, là où le
+  `sum()` nu passe. Sites concernés : `cashflowParDevise` (`src/server/repositories/insights.ts`)
+  et `syntheseMois`/`syntheseMoisParDevise` (`dashboard.ts`). ⚠️ **Fail-LOUD** (erreur, pas un
+  chiffre faux) → ce n'est PAS une dette de montants au sens de la règle 9 (qui interdit la
+  dette produisant un montant FAUX). Correctif : `round(x, 2)::text` — même garantie
+  d'échelle (« 0.00 » sur un groupe vide), sans plafond ; c'est déjà ce qu'emploie
+  `sommeNetteParDevise`. **Déclencheur** : premier import de volume réel, ou apparition d'une
+  devise à faible valeur unitaire. Pas d'isolation (pas de changement de périmètre).
+
+- [ ] **TX-LISTE-ECHEC-SILENCIEUX1 (P2, effort ~0,25-0,5 j, 2026-07-14) — BUG PRÉ-EXISTANT :
+  un échec de rechargement de la liste est INVISIBLE quand des lignes sont déjà affichées.**
+  `transactions-feature.tsx` : `corps` ne monte l'`AppErrorState` que si `erreur && !aDesResultats`
+  → si `listerTransactionsAction` échoue pendant un re-fetch (changement de filtre), l'écran
+  garde les lignes du filtre PRÉCÉDENT, sans aucun message. L'utilisateur croit voir le
+  résultat de sa recherche. (Découvert en cross-review de TX-RECHERCHE-SOMME-NETTE1 ; le
+  bandeau de total, lui, est déjà protégé — il n'est posé QUE si la liste l'est aussi.)
+  Second volet : une Server Action qui **rejette** (session expirée → `exigerSessionWorkspace`
+  hors du `try`) laisse `chargementEnCours="page"` pour toujours (pas de `try/finally` autour
+  de `rechargerPremierePage`) → page figée, toolbar grisée. **Déclencheur** : plainte terrain
+  « la recherche affiche les mauvaises lignes / la page ne répond plus », ou passage
+  /design-review sur les états d'erreur. Pas d'isolation.
+
+- [ ] **TX-SOMME-NETTE-HAUTEUR1 (P2, effort ~0,25 j, 2026-07-14) — UX : la hauteur du bandeau
+  de total varie avec le NOMBRE DE DEVISES du jeu filtré.** Une devise = 1 ligne ; deux devises
+  = 2 lignes + la note « jamais d'addition entre devises » (~44 px de plus). Si une frappe fait
+  passer le jeu filtré de 2 devises à 1, le tableau saute d'autant — cousin de
+  TX-RECHERCHE-LAYOUTSHIFT1 (#206), mais AU-DESSUS de la zone à hauteur plancher, donc non
+  couvert par elle. Les cas franchement janky sont déjà tués (bandeau conservé pendant le
+  re-fetch, wrapper non monté sur un total vide). Piste : créneau à hauteur réservée dès qu'un
+  filtre est actif. **Déclencheur** : `/design-review` (mesure au navigateur — à faire avec
+  captures, pas à l'aveugle). Pas d'isolation.
+
+- [ ] **SCHEMA-FK-CONNECTION-COMPOSITE1 (P2, effort ~0,5 j — migration, 2026-07-14) — DURCISSEMENT :
+  `bank_accounts.connection_id → bank_connections(id)` n'est PAS une FK composite scopée
+  workspace.** CLAUDE.md impose le pattern `(x_id, workspace_id) → table(id, workspace_id)` pour
+  `entity_id` ; `connection_id` y échappe. Rien EN BASE n'interdit donc qu'un compte du tenant A
+  pointe une connexion du tenant B (la RLS `WITH CHECK` ne vérifie que le `workspace_id` de la
+  LIGNE, pas celui de la ligne référencée). Conséquence concrète si ça arrivait : la LISTE
+  `/transactions` (qui `innerJoin` bank_connections pour le nom d'institution) masquerait ces
+  lignes, alors que les AGRÉGATS (qui ne joignent que bank_accounts) les compteraient → total ≠
+  lignes affichées. Non atteignable par l'ingestion actuelle (relevé en cross-review, à titre de
+  durcissement). **Déclencheur** : prochaine migration touchant `bank_accounts`, ou premier
+  incident de cohérence liste/agrégat. Isolation : ajouter le cas au contract-test des FK.
 
 ### Fignolage layout §1.1 — pleine largeur (2026-07-08)
 

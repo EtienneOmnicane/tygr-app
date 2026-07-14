@@ -49,8 +49,14 @@ import {
   listerTransactionsAction,
   remplacerSplitsAction,
   renommerCategorieAction,
+  sommeNetteTransactionsAction,
 } from "./actions";
-import { versInputBackend, versPageUI } from "./adapter";
+import {
+  versFiltresSommeNette,
+  versInputBackend,
+  versPageUI,
+  versSommeNetteUI,
+} from "./adapter";
 
 export const metadata = { title: "Transactions — Dodo" };
 
@@ -119,6 +125,19 @@ export default async function PageTransactions() {
       // listerSplitsAction LÈVE en cas d'échec (jamais [] faussement vide) — le
       // conteneur catche et bloque l'ouverture de la modale (anti-écrasement).
       return listerSplitsAction(ref);
+    },
+    // TOTAL des résultats filtrés (TX-RECHERCHE-SOMME-NETTE1) : agrégat SERVEUR (SUM en
+    // SQL sous RLS) portant les MÊMES filtres que la liste, mais SANS curseur — il
+    // totalise TOUT le jeu filtré, pas la page affichée (piège TX-FILTRE1 : sommer côté
+    // client ne verrait que le visible). `versFiltresSommeNette` dérive la projection de
+    // filtres de `versInputBackend` (source unique) en retirant curseur/limite.
+    async sommeNette({ filtres }) {
+      "use server";
+      const res = await sommeNetteTransactionsAction(
+        versFiltresSommeNette(filtres),
+      );
+      if (!res.ok) return res;
+      return { ok: true, data: versSommeNetteUI(res.data) };
     },
   };
 

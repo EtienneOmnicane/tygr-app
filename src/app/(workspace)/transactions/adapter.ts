@@ -25,10 +25,12 @@
  */
 import type {
   PageTransactions as PageBackend,
+  SommeNetteDevise as SommeNetteDeviseBackend,
   TransactionLigne,
 } from "@/server/repositories/transactions";
 import type {
   ListerTransactionsInput,
+  SommeNetteInput,
   StatutVentilation,
 } from "@/lib/transactions-schema";
 
@@ -36,6 +38,7 @@ import type {
   FiltresTransactions,
   NiveauFiabilite,
   PageTransactions,
+  SommeNetteDevise,
   SourceClassification,
   StatutCategorisation,
   TransactionListItem,
@@ -79,6 +82,30 @@ export function versInputBackend(
   if (filtres?.dateDebut) input.dateDebut = filtres.dateDebut;
   if (filtres?.dateFin) input.dateFin = filtres.dateFin;
   if (curseur) input.curseur = curseur;
+  return input;
+}
+
+/**
+ * Filtres de l'AGRÉGAT de somme nette (TX-RECHERCHE-SOMME-NETTE1) : EXACTEMENT la même
+ * projection de filtres que la liste, mais SANS curseur ni limite.
+ *
+ * On DÉRIVE de `versInputBackend` au lieu de recopier les champs : le total affiché doit
+ * porter les mêmes lignes que la liste affichée, donc un futur filtre ajouté à la liste
+ * DOIT atterrir mécaniquement dans la somme. Le recopier ouvrirait une divergence
+ * silencieuse (un filtre appliqué à la liste mais pas au total = faux chiffre).
+ *
+ * Le retrait de `curseur`/`limite` est EXPLICITE : une somme porte sur TOUT le jeu
+ * filtré, jamais sur une page (piège TX-FILTRE1), et `sommeNetteSchema` est `.strict()`
+ * — un curseur égaré ferait échouer l'agrégat en INVALID_PARAMS. `versInputBackend(f,
+ * null)` n'en pose aucun aujourd'hui ; ces deux lignes FIGENT l'invariant au lieu de
+ * dépendre de sa relecture.
+ */
+export function versFiltresSommeNette(
+  filtres: FiltresTransactions | undefined,
+): Partial<SommeNetteInput> {
+  const input = versInputBackend(filtres, null);
+  delete input.curseur;
+  delete input.limite;
   return input;
 }
 
@@ -133,6 +160,26 @@ export function versLigneUI(
     niveauFiabilite: normaliserNiveauFiabilite(ligne.confidenceLevel),
     sourceClassification: normaliserSourceClassification(ligne.classificationSource),
   };
+}
+
+/**
+ * Convertit les TOTAUX Backend en totaux UI. Seule réconciliation : `currency` → `devise`
+ * (le contrat UI de cette page est en français — `devise`, `montantAbs`, `sens`).
+ *
+ * AUCUN recalcul, aucune addition : les montants sont des chaînes décimales DÉJÀ sommées
+ * en SQL (règle 8 — un `parseFloat` ici perdrait des centimes, et re-sommer côté client
+ * ne verrait de toute façon qu'une page).
+ */
+export function versSommeNetteUI(
+  totaux: SommeNetteDeviseBackend[],
+): SommeNetteDevise[] {
+  return totaux.map((t) => ({
+    devise: t.currency,
+    entrees: t.entrees,
+    sorties: t.sorties,
+    net: t.net,
+    nbTransactions: t.nbTransactions,
+  }));
 }
 
 /** Convertit une page Backend complète en page UI. */

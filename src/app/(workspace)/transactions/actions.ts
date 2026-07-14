@@ -38,6 +38,7 @@ import {
   CurseurInvalideError,
   type PageTransactions,
   type RefTransaction,
+  type SommeNetteDevise,
   type SplitLu,
   TransactionIntrouvableError,
   VentilationDepasseError,
@@ -49,6 +50,7 @@ import {
   listerTransactions,
   remplacerSplits,
   renommerCategorie,
+  sommeNetteParDevise,
   withWorkspace,
 } from "@/server/db";
 import {
@@ -60,7 +62,9 @@ import {
 } from "@/lib/categorisation-schema";
 import {
   type ListerTransactionsInput,
+  type SommeNetteInput,
   listerTransactionsSchema,
+  sommeNetteSchema,
 } from "@/lib/transactions-schema";
 
 /** Résultat normalisé (miroir de `ResultatAction` du contrat UI). */
@@ -196,6 +200,39 @@ export async function listerTransactionsAction(
     return { ok: true, data: page };
   } catch (erreur) {
     return echec(erreur, session.activeWorkspaceId, "lister-transactions");
+  }
+}
+
+/**
+ * SOMME NETTE des résultats filtrés (TX-RECHERCHE-SOMME-NETTE1), une ligne PAR DEVISE.
+ * Alimente le bandeau de total de /transactions quand un filtre est actif.
+ *
+ * AGRÉGAT SERVEUR obligatoire (piège TX-FILTRE1) : la pagination est en KEYSET, le
+ * client ne détient qu'UNE page — sommer côté client ne totaliserait que le visible.
+ * Le total est calculé en SQL sous `withWorkspace` (RLS), avec les MÊMES filtres que
+ * la liste (schémas dérivés d'un même objet Zod, prédicats SQL partagés).
+ *
+ * `filtres` porte les MÊMES champs que la liste SANS curseur ni limite (`.strict()`
+ * rejette l'un comme l'autre : une somme porte sur tout le jeu filtré, jamais sur une
+ * page). Le workspace n'est JAMAIS un paramètre client.
+ */
+export async function sommeNetteTransactionsAction(
+  filtres: Partial<SommeNetteInput> = {},
+): Promise<ResultatAction<SommeNetteDevise[]>> {
+  const session = await exigerSessionWorkspace();
+  const parsed = sommeNetteSchema.safeParse(filtres);
+  if (!parsed.success) {
+    return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
+  }
+  try {
+    const totaux = await withWorkspace(session, (tx, ctx) =>
+      sommeNetteParDevise(tx, ctx, parsed.data),
+    );
+    return { ok: true, data: totaux };
+  } catch (erreur) {
+    // `echec` journalise { evt, action, workspaceId, code } — jamais de libellé de
+    // recherche ni de montant (règle 8 : pas de PII/montant en télémétrie).
+    return echec(erreur, session.activeWorkspaceId, "somme-nette-transactions");
   }
 }
 
