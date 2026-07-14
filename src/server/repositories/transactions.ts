@@ -129,7 +129,7 @@ export interface PageTransactions {
  * aucune conversion FX (chantier DASH-FX1). Montants = chaînes décimales à 2
  * décimales (l'échelle est figée en SQL — cf. `sommeNetteParDevise`).
  *
- * ⚠️ CONVENTION DE SIGNE (identique à `cashflowParDevise`/`syntheseMoisParDevise` —
+ * ⚠️ CONVENTION DE SIGNE (identique à `cashflowParDevise`/`synthesePeriodeParDevise` —
  * une seule convention dans toute l'app) :
  *  - `entrees` et `sorties` sont des MAGNITUDES POSITIVES (des montants, pas des
  *    flux signés) ;
@@ -377,7 +377,7 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
  * signe accepté) persiste une valeur ABSOLUE, et `amount` n'a aucun CHECK de signe.
  * Un `sum(amount)` nu ADDITIONNERAIT donc les sorties aux entrées (total faux,
  * toujours positif). On somme par `filter (where credit_debit = …)`, comme
- * `cashflowParDevise` et `syntheseMoisParDevise` — une seule convention dans l'app :
+ * `cashflowParDevise` et `synthesePeriodeParDevise` — une seule convention dans l'app :
  * `entrees`/`sorties` = magnitudes positives, `net = entrees − sorties` = signé.
  *
  * `round(…, 2)::text` (et non `::text` nu) fige l'ÉCHELLE à 2 décimales même quand le
@@ -387,7 +387,7 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
  * base à l'écran.
  *
  * ⚠️ `round(…, 2)` et NON `::numeric(15,2)` (le cast qu'emploient `cashflowParDevise` /
- * `syntheseMoisParDevise`) : ce cast fige l'échelle MAIS impose aussi un PLAFOND de
+ * `synthesePeriodeParDevise`) : ce cast fige l'échelle MAIS impose aussi un PLAFOND de
  * précision (|x| < 10^13) — inoffensif sur une colonne, atteignable sur une SOMME. Un
  * cumul qui le dépasse lève `numeric field overflow` au lieu de renvoyer un total. Cet
  * agrégat y est plus exposé que ses deux modèles : eux sont bornés par une fenêtre de

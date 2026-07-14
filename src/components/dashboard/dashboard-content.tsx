@@ -28,7 +28,7 @@ import type {
   CompteConnecte,
   SoldeParDevise,
   SyntheseMensuelle,
-  SyntheseMoisDevise,
+  SynthesePeriodeDevise,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
 import type {
@@ -59,7 +59,7 @@ export interface DonneesDashboard {
   /** Flux net mensuel (entrées − sorties), UNE devise (base_currency), dérivé des transactions. */
   flux: PointCashflow[];
   /** Synthèse du mois courant VENTILÉE PAR DEVISE (jamais d'addition cross-devise). */
-  synthesesMois: SyntheseMoisDevise[];
+  synthesesMois: SynthesePeriodeDevise[];
   /** Concentration des contreparties (top postes, par défaut dépenses). */
   topVendors: ConcentrationVendors;
   /** Série entrées/sorties des N derniers mois (tendance), à plat par (mois, devise). */
@@ -72,14 +72,26 @@ export interface DonneesDashboard {
 export function DashboardContent({
   donnees,
   devise = "MUR",
-  mois,
+  libellePeriode,
+  syntheseTitre,
+  syntheseLibelle,
   role,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
   devise?: string;
-  /** Mois courant "YYYY-MM" (Maurice) — libellé des cartes de synthèse. */
-  mois: string;
+  /**
+   * Libellé de la FENÊTRE réellement appliquée, calculé par la page (SOURCE UNIQUE) :
+   * « 6 derniers mois » sous preset, « 3 mars → 17 avr. 2026 » sous plage précise
+   * (`?du`/`?au`). ⚠️ Ne PAS le recomposer ici depuis `grilleMensuelle.length` : sous une
+   * plage passée (janvier→mars consultée en juin), « 3 derniers mois » serait FAUX — c'est
+   * le mensonge d'affichage que le lot TOOLBAR-DATE-PRECISE1 combat.
+   */
+  libellePeriode: string;
+  /** Titre de la carte de synthèse : « Synthèse du mois » ou « Synthèse de la période ». */
+  syntheseTitre: string;
+  /** Ce que la carte de synthèse agrège vraiment : « Juin 2026 » ou l'intervalle réel. */
+  syntheseLibelle: string;
   /** Rôle résolu serveur — gate le bouton « Synchroniser » du side-panel (confort UI). */
   role: WorkspaceRole;
 }) {
@@ -116,9 +128,9 @@ export function DashboardContent({
   const fraicheur = synchro
     ? formaterFraicheurRelative(synchro.lastSyncedAt)
     : null;
-  // Sous-titre maquette : « N derniers mois · N comptes connectés ». Le nombre de
-  // mois = longueur de la grille d'axe (nbMois du preset) ; on ne recalcule rien.
-  const nbMoisFenetre = grilleMensuelle.length;
+  // Sous-titre maquette : « <période> · N comptes connectés ». Le libellé de période vient
+  // de la PAGE (source unique — il doit dire la fenêtre RÉELLEMENT appliquée, preset ou
+  // plage précise) ; on ne le recalcule surtout pas depuis la grille d'axe.
   const nbComptes = comptes.length;
 
   return (
@@ -134,8 +146,7 @@ export function DashboardContent({
               Trésorerie
             </h1>
             <p className="mt-1 text-sm text-text-muted">
-              {nbMoisFenetre} dernier{nbMoisFenetre > 1 ? "s" : ""} mois ·{" "}
-              {nbComptes} compte{nbComptes > 1 ? "s" : ""} connecté
+              {libellePeriode} · {nbComptes} compte{nbComptes > 1 ? "s" : ""} connecté
               {nbComptes > 1 ? "s" : ""}
             </p>
           </div>
@@ -173,6 +184,7 @@ export function DashboardContent({
               serieMensuelle={serieMensuelle}
               grilleMensuelle={grilleMensuelle}
               devise={devise}
+              libellePeriode={libellePeriode}
             />
           </div>
           {/* Colonne droite (1fr) : Synthèse du mois PUIS Comptes connectés, empilés,
@@ -181,7 +193,8 @@ export function DashboardContent({
             {/* Synthèse du mois (Entrées / Sorties / Variation), VENTILÉE PAR DEVISE. */}
             <CashFlowSummary
               synthesesMois={synthesesMois}
-              mois={mois}
+              titre={syntheseTitre}
+              libelle={syntheseLibelle}
               devise={devise}
             />
             {/* Comptes connectés — remontés dans la colonne droite (sortis de la
@@ -196,16 +209,15 @@ export function DashboardContent({
         {/* Top contreparties (concentration des postes, dérivé de la Voie A),
             fenêtrées sur la MÊME période que la courbe (FB0709-TOPVENDORS5) —
             le libellé reprend la formulation du sous-titre d'en-tête. */}
-        <TopVendorsCard
-          concentration={topVendors}
-          libellePeriode={`${nbMoisFenetre} dernier${nbMoisFenetre > 1 ? "s" : ""} mois`}
-        />
+        <TopVendorsCard concentration={topVendors} libellePeriode={libellePeriode} />
 
-        {/* Tendance : entrées/sorties des N derniers mois (barres + tableau). */}
+        {/* Tendance : entrées/sorties sur la fenêtre appliquée (barres + tableau). Sous
+            plage, les mois d'extrémité sont PARTIELS — d'où le libellé explicite. */}
         <MonthlyCashflow
           serie={serieMensuelle}
           grille={grilleMensuelle}
           devise={devise}
+          libellePeriode={libellePeriode}
         />
 
         {/* Table : vide par section si pas encore de transactions. */}

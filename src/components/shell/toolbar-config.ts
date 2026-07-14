@@ -31,16 +31,40 @@
  * par `tests/unit/toolbar-config.test.ts` (qui vérifie AUSSI l'invariant ci-dessus et
  * qu'aucune route de `src/app/(workspace)/` ne manque à la matrice).
  *
+ * ⚠️ INVARIANT ANTI-MENSONGE (lot A1, 2026-07-14) — `periode: true` ou `plageDates: true`
+ * n'est légitime QUE si la `page.tsx` du segment LIT réellement les params, c.-à-d.
+ * appelle `resoudrePeriode(searchParams)`. Sinon le contrôle est un NO-OP : l'utilisateur
+ * croit borner sa vue, la page ignore le réglage — le mensonge que ce lot combat.
+ *
+ * Ce n'est pas une consigne de vigilance : c'est une GARDE CI (toolbar-config.test.ts,
+ * « une page qui MONTE la période doit la LIRE ») qui relit le source des pages. Elle est
+ * née d'un défaut RÉEL : A2 avait mis `periode: true` sur `/graphiques` ET `/transactions`,
+ * or AUCUNE des deux ne lit `?periode` (les deux ont leur propre filtre IN-PAGE) → deux
+ * PeriodeSwitcher qui ne filtraient rien. Corrigé ici pour `/graphiques` ; `/transactions`
+ * est une exemption NOMMÉE de la garde jusqu'à A3 (TX-TOOLBAR-DEDUP1).
+ *
  * ⚠️ Ce module ne GATE que l'affichage de contrôles d'UI : il n'est JAMAIS une garde de
  * SÉCURITÉ (règle 2 — la RLS reste seule autorité de ce qu'une page a le DROIT de lire ;
  * masquer un contrôle ne restreint rien). Il engage en revanche la CORRECTION de
- * l'affichage et la RÉCUPÉRABILITÉ (cf. invariant) : c'est là qu'est le risque.
+ * l'affichage et la RÉCUPÉRABILITÉ (cf. invariants) : c'est là qu'est le risque.
  */
 
 /** Contrôles montés par la barre de vue pour une page donnée. */
 export type ConfigBarreVue = {
   /** Presets de période (`?periode`) — `PeriodeSwitcher`. Pur filtre de LECTURE (URL). */
   periode: boolean;
+  /**
+   * Plage de dates PRÉCISE (`?du`/`?au`) — `PlageDatesSwitcher` (lot A1,
+   * TOOLBAR-DATE-PRECISE1). Une plage valide PRIME sur le preset (`lib/periode.ts`).
+   *
+   * ⚠️ INVARIANT `plageDates: true` ⇒ `periode: true` : la plage prime SUR un preset ;
+   * sans le groupe de presets affiché, « primer » n'a pas de sens et l'utilisateur perd
+   * le retour arrière en un clic. Gardé en CI.
+   *
+   * ⚠️ Et surtout : ne l'activer que sur une page qui LIT réellement `?du`/`?au`
+   * (cf. l'invariant ANTI-MENSONGE ci-dessous). Aujourd'hui : le dashboard seul.
+   */
+  plageDates: boolean;
   /** Périmètre comptes/entités — `PerimetreSwitcher`. Cf. INVARIANT en tête de fichier. */
   perimetre: boolean;
   /** CTA permanent « Connecter une banque » — `BankCtaLink`. */
@@ -49,18 +73,23 @@ export type ConfigBarreVue = {
    * Bande MINIMALE : fine bande de contexte SANS aucun contrôle, portant le seul repère
    * de TENANT (nom du workspace). Elle existe pour que la colonne de contenu ne démarre
    * pas nue et qu'on sache toujours dans quel espace on agit.
-   * INVARIANT : `minimal === true` ⇒ les trois contrôles sont `false`.
+   * INVARIANT : `minimal === true` ⇒ TOUS les contrôles sont `false`.
    */
   minimal: boolean;
 };
 
-/** Barre complète — les contrôles listés sont montés (aucune bande de repère). */
+/**
+ * Barre complète — les contrôles listés sont montés (aucune bande de repère).
+ * `plageDates` est OPT-IN explicite (défaut `false`) : un contrôle de dates ne s'ajoute
+ * jamais par inadvertance à une page dont le serveur ne lit pas `?du`/`?au`.
+ */
 function barre(controles: {
   periode: boolean;
+  plageDates?: boolean;
   perimetre: boolean;
   cta: boolean;
 }): ConfigBarreVue {
-  return { ...controles, minimal: false };
+  return { plageDates: false, ...controles, minimal: false };
 }
 
 /**
@@ -70,6 +99,7 @@ function barre(controles: {
  */
 const MINIMALE: ConfigBarreVue = {
   periode: false,
+  plageDates: false,
   perimetre: false,
   cta: false,
   minimal: true,
@@ -78,6 +108,7 @@ const MINIMALE: ConfigBarreVue = {
 /** Aucune barre du tout : `AppTopbar` ne rend RIEN (pas de `<header>` vide). */
 const AUCUNE: ConfigBarreVue = {
   periode: false,
+  plageDates: false,
   perimetre: false,
   cta: false,
   minimal: false,
@@ -100,6 +131,10 @@ const AUCUNE: ConfigBarreVue = {
  */
 const DEFAUT: ConfigBarreVue = barre({
   periode: false,
+  // Corollaire direct de `periode: false` (une plage EST un filtre de période, en plus
+  // précis) ET de l'invariant `plageDates ⇒ periode` : une page non cadrée ne lit ni
+  // `?periode` ni `?du`/`?au`.
+  plageDates: false,
   perimetre: true,
   cta: false,
 });
@@ -118,11 +153,26 @@ const DEFAUT: ConfigBarreVue = barre({
 export const MATRICE_BARRE_VUE: Readonly<Record<string, ConfigBarreVue>> = {
   // Dashboard (route racine du groupe (workspace) — le route group `(dashboard)`
   // n'apparaît PAS dans le pathname).
-  "": barre({ periode: true, perimetre: true, cta: true }),
+  // SEULE page câblée sur `?periode` ET `?du`/`?au` (`(dashboard)/page.tsx` →
+  // `resoudrePeriode(searchParams)`) → seule page où la plage précise est montée (A1).
+  "": barre({ periode: true, plageDates: true, perimetre: true, cta: true }),
+  // Transactions : `periode: true` CONSERVÉ à l'identique — mais c'est un NO-OP connu
+  // (la page ne lit pas `?periode` ; ses dates vivent IN-PAGE, transactions-toolbar.tsx).
+  // Hors périmètre A1 (arbitrage Etienne 2026-07-14 : ne pas créer deux filtres de dates
+  // concurrents avant d'avoir retiré ceux de la page). PAS de `plageDates` pour la même
+  // raison. C'est A3/TX-TOOLBAR-DEDUP1 qui unifie — d'ici là, `transactions` est une
+  // EXEMPTION nommée de la garde CI anti-mensonge (toolbar-config.test.ts).
   transactions: barre({ periode: true, perimetre: true, cta: true }),
-  // Graphiques : période + périmètre, mais pas de CTA (l'écran n'est pas un point
-  // d'entrée de connexion bancaire — ses états vides portent déjà leur propre CTA).
-  graphiques: barre({ periode: true, perimetre: true, cta: false }),
+  // Graphiques : périmètre SEUL. La période a été RETIRÉE (≠ matrice A2, arbitrage
+  // Etienne 2026-07-14) : `graphiques/page.tsx` ne prend même pas `searchParams` — son
+  // PeriodeSwitcher ne filtrait donc RIEN, pendant que le vrai filtre (segmenté
+  // « Ce mois-ci / 30 j / 90 j / 12 mois ») vit IN-PAGE dans `graphiques-feature.tsx`.
+  // Retrait = zéro régression (un no-op ne filtre rien) et fin du mensonge. L'unification
+  // sur la barre est la dette GRAPHIQUES-PERIODE-DEDUP1 (P2) — elle devra trancher le
+  // conflit de vocabulaire (la barre n'a pas de fenêtre glissante 30 j/90 j ; Graphiques
+  // n'a pas de « Tout »). Pas de CTA non plus (l'écran n'est pas un point d'entrée
+  // bancaire — ses états vides portent déjà leur propre CTA).
+  graphiques: barre({ periode: false, perimetre: true, cta: false }),
   // Échéances : PAS de période — l'écran regarde le FUTUR, or les presets sont
   // rétrospectifs (Ce mois / 3m / 6m / 12m). Un horizon futur viendra en chantier séparé.
   echeances: barre({ periode: false, perimetre: true, cta: false }),

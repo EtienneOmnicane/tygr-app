@@ -104,14 +104,17 @@ export interface SyntheseMois {
 }
 
 /**
- * Synthèse entrées/sorties/variation d'un mois POUR UNE DEVISE. Multi-devises
- * (CLAUDE.md règle 8) : `syntheseMoisParDevise` renvoie UNE entrée PAR devise — on
+ * Synthèse entrées/sorties/variation d'une PÉRIODE POUR UNE DEVISE. Multi-devises
+ * (CLAUDE.md règle 8) : `synthesePeriodeParDevise` renvoie UNE entrée PAR devise — on
  * n'additionne JAMAIS des MUR et des USD (ce que faisait `syntheseMois`, qui sommait
  * `amount` toutes devises confondues et affichait le total dans la base_currency :
  * faux dès qu'un workspace a des comptes en plusieurs devises). Aucune conversion FX
  * (chantier DASH-FX1) : on expose les flux côte à côte, par devise.
+ *
+ * (Renommé de `SyntheseMoisDevise` en 2026-07-14 : la période n'est plus forcément un
+ * MOIS — une plage précise `?du`/`?au` la borne au JOUR. Cf. `synthesePeriodeParDevise`.)
  */
-export interface SyntheseMoisDevise {
+export interface SynthesePeriodeDevise {
   currency: string;
   entrees: string;
   sorties: string;
@@ -484,19 +487,28 @@ export async function syntheseMois(
 }
 
 /**
- * Synthèse entrées/sorties/variation d'un mois (YYYY-MM) VENTILÉE PAR DEVISE —
+ * Synthèse entrées/sorties/variation d'une PÉRIODE [from, to] VENTILÉE PAR DEVISE —
  * remplace `syntheseMois` pour le multi-devise (challenge mapping 2026-06-22). GROUP BY
- * devise : une ligne par devise présente sur le mois, JAMAIS d'addition cross-devise
+ * devise : une ligne par devise présente sur la période, JAMAIS d'addition cross-devise
  * (CLAUDE.md règle 8). Mêmes règles que `syntheseMois` (somme conditionnelle EN SQL sur
  * le sens, exclusion des tombstones, montants en chaînes) + héritage du scope entité
  * par jointure sur bank_accounts (ENTITY-READ-JOIN1). Ordonné par devise (affichage
- * stable). Mois sans transaction → tableau vide (l'UI affiche 0 dans la devise de base).
+ * stable). Période sans transaction → tableau vide (l'UI affiche 0 dans la devise de base).
+ *
+ * ⚠️ BORNES AU JOUR, INCLUSIVES (TOOLBAR-DATE-PRECISE1, 2026-07-14) — était
+ * `syntheseMoisParDevise(mois)`, qui bornait au MOIS ENTIER (`>= mois-01`,
+ * `< mois-01 + 1 mois`). Ça coïncidait tant que la seule fenêtre possible était un preset
+ * (dont le `from` tombe toujours un 1er du mois). Avec une PLAGE PRÉCISE (`?du`/`?au`),
+ * ça ne coïncide plus : une plage « 3 mars → 17 avril » aurait renvoyé AVRIL ENTIER, donc
+ * des montants HORS période — un mensonge d'affichage sur de la donnée financière. Les
+ * bornes viennent désormais de l'appelant (`resoudrePeriode`), qui possède le contrat
+ * d'URL. `from`/`to` sont des dates comptables MAURICE (E20 : `transaction_date` l'est
+ * déjà — aucune re-conversion de fuseau ici).
  */
-export async function syntheseMoisParDevise(
+export async function synthesePeriodeParDevise(
   tx: Tx,
-  mois: string, // "YYYY-MM"
-): Promise<SyntheseMoisDevise[]> {
-  const debut = `${mois}-01`;
+  opts: { from: string; to: string }, // "YYYY-MM-DD" INCLUSIFS (dates Maurice)
+): Promise<SynthesePeriodeDevise[]> {
   const lignes = await tx
     .select({
       currency: transactionsCache.currency,
@@ -514,8 +526,9 @@ export async function syntheseMoisParDevise(
     .where(
       and(
         eq(transactionsCache.isRemoved, false),
-        gte(transactionsCache.transactionDate, debut),
-        sql`${transactionsCache.transactionDate} < (${debut}::date + interval '1 month')`,
+        // Bornes JOUR inclusives des DEUX côtés (≠ ancien « < 1er du mois suivant »).
+        gte(transactionsCache.transactionDate, opts.from),
+        lte(transactionsCache.transactionDate, opts.to),
       ),
     )
     .groupBy(transactionsCache.currency)
@@ -527,9 +540,17 @@ export async function syntheseMoisParDevise(
  * SÉRIE temporelle mensuelle des entrées/sorties (Cash In/Out), groupée PAR MOIS
  * et PAR DEVISE — destinée à alimenter un graphique Front (barres mensuelles).
  *
- * Fenêtre : les `nbMois` derniers mois jusqu'à `moisFin` INCLUS. `moisFin` est
- * passé explicitement (déterministe + testable ; le mois « courant » dépend du
- * fuseau Maurice et se calcule côté appelant, JAMAIS d'un now() opaque ici).
+ * Fenêtre : [`from`, `to`] au JOUR, bornes INCLUSIVES, passées explicitement
+ * (déterministe + testable ; « aujourd'hui » dépend du fuseau Maurice et se calcule côté
+ * appelant — `resoudrePeriode` —, JAMAIS d'un now() opaque ici).
+ *
+ * ⚠️ BORNES AU JOUR (TOOLBAR-DATE-PRECISE1, 2026-07-14) — la fenêtre était auparavant
+ * `{moisFin, nbMois}`, donc calée sur des BORDS DE MOIS. Ça coïncidait avec le filtre tant
+ * que la seule fenêtre possible était un preset (`from` = un 1er du mois, `to` =
+ * aujourd'hui). Avec une PLAGE PRÉCISE (`?du`/`?au`), une fenêtre « 3 mars → 17 avril »
+ * aurait agrégé MARS ENTIER + AVRIL ENTIER : des montants hors période dans les barres.
+ * Le groupement reste MENSUEL — les mois d'EXTRÉMITÉ d'une plage sont donc légitimement
+ * PARTIELS (mars = 3→31), ce que l'UI annonce par le libellé de période.
  *
  * FUSEAU (CLAUDE.md, non négociable) : on groupe sur `transaction_date`, qui est
  * DÉJÀ la date comptable Maurice (dérivée à l'ingestion via
@@ -551,13 +572,8 @@ export async function syntheseMoisParDevise(
  */
 export async function syntheseParMois(
   tx: Tx,
-  opts: { moisFin: string; nbMois: number }, // moisFin "YYYY-MM", nbMois ≥ 1
+  opts: { from: string; to: string }, // "YYYY-MM-DD" INCLUSIFS (dates Maurice)
 ): Promise<SyntheseMensuelle[]> {
-  // Borne haute EXCLUSIVE = 1er jour du mois SUIVANT moisFin.
-  const finExclusive = `${opts.moisFin}-01`;
-  // Borne basse INCLUSIVE = 1er jour de (moisFin - (nbMois-1) mois). Calcul EN SQL
-  // à partir de la chaîne (déterministe) : interval sur la date de début de moisFin.
-  const reculMois = opts.nbMois - 1;
   const mois = sql<string>`to_char(date_trunc('month', ${transactionsCache.transactionDate}), 'YYYY-MM')`;
   const lignes = await tx
     .select({
@@ -577,10 +593,9 @@ export async function syntheseParMois(
     .where(
       and(
         eq(transactionsCache.isRemoved, false),
-        // ≥ 1er jour de (moisFin - reculMois mois).
-        sql`${transactionsCache.transactionDate} >= (${finExclusive}::date - (${reculMois} || ' month')::interval)`,
-        // < 1er jour du mois suivant moisFin (borne haute exclusive).
-        sql`${transactionsCache.transactionDate} < (${finExclusive}::date + interval '1 month')`,
+        // Bornes JOUR inclusives (≠ anciens bords de MOIS dérivés de moisFin/nbMois).
+        gte(transactionsCache.transactionDate, opts.from),
+        lte(transactionsCache.transactionDate, opts.to),
       ),
     )
     .groupBy(mois, transactionsCache.currency)

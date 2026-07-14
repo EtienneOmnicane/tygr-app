@@ -185,6 +185,24 @@ export function formaterMoisCourt(libelleMois: string): string {
 }
 
 /**
+ * Libellé FR d'un INTERVALLE de dates comptables « nues » : « 3 mars → 17 avr. 2026 ».
+ * Sert de libellé de période quand une PLAGE PRÉCISE (`?du`/`?au`) borne l'écran — là où
+ * un preset dirait « 6 derniers mois » (TOOLBAR-DATE-PRECISE1). SOURCE UNIQUE de ce
+ * libellé (dette C8 : aucune concaténation de dates maison dans un composant).
+ *
+ * L'année n'est portée QUE par la borne haute quand les deux bornes tombent la même année
+ * (« 3 mars → 17 avr. 2026 ») — sinon les deux la portent (« 12 déc. 2025 → 8 janv. 2026 »),
+ * car un intervalle à cheval sur deux années serait sinon ambigu. Réutilise les formateurs
+ * du module (aucun `new Date` supplémentaire, donc aucun risque de fuseau).
+ */
+export function formaterIntervalleComptable(du: string, au: string): string {
+  if (!estDateISO(du) || !estDateISO(au)) return `${du} → ${au}`; // défense : on n'invente pas
+  const memeAnnee = du.slice(0, 4) === au.slice(0, 4);
+  const debut = memeAnnee ? formaterDateComptable(du) : formaterDateComptableLongue(du);
+  return `${debut} → ${formaterDateComptableLongue(au)}`;
+}
+
+/**
  * Fraîcheur d'un solde COURANT à partir de sa dernière synchro `lastSyncedAt`
  * (UI_GUIDELINES §3.7 — pastille success/warning/danger). C'est la VRAIE réponse à
  * DR-F3 : on qualifie l'âge de la donnée instantanée, on n'affiche JAMAIS un EOD de

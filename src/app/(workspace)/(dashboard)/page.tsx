@@ -28,14 +28,18 @@ import {
   grilleMois,
   listerComptes,
   soldesCourantsParDevise,
-  syntheseMoisParDevise,
+  synthesePeriodeParDevise,
   syntheseParMois,
   transactionsRecentes,
   vendorsParConcentration,
   withWorkspace,
 } from "@/server/db";
 import { VENDORS_TOP_N_DEFAUT } from "@/lib/insights-schema";
-import { resoudrePeriode } from "@/lib/periode";
+import {
+  formaterIntervalleComptable,
+  formaterMoisAnnee,
+} from "@/lib/format-date";
+import { dernierJourMois, resoudrePeriode } from "@/lib/periode";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
@@ -67,13 +71,44 @@ export default async function PageDashboard({
     throw erreur;
   }
 
-  // Preset de période (L8c) : la valeur d'URL est NORMALISÉE ici (liste blanche,
-  // défaut 6m). `resoudrePeriode` retourne les bornes typées — from/to (jours Maurice
-  // INCLUSIFS), nbMois (≥1, fenêtre de tendance) et moisAncrage ("YYYY-MM" courant).
-  // Pour « tout », from = plancher 1re partition ("2024-01-01") → from ≤ to garanti et
-  // pruning des partitions préservé (filtre sur transaction_date, jamais booking_date_time).
-  const { periode } = await searchParams;
-  const { from: fromFlux, to, nbMois, moisAncrage: mois } = resoudrePeriode(periode);
+  // Période (L8c + plage précise A1) : on passe les searchParams ENTIERS — `?periode`
+  // (preset) ET `?du`/`?au` (plage explicite, qui PRIME sur le preset). `resoudrePeriode`
+  // possède tout le contrat d'URL et rend les bornes typées : from/to (jours Maurice
+  // INCLUSIFS), nbMois (≥1, fenêtre de tendance), moisAncrage ("YYYY-MM" — mois courant
+  // sur un preset, mois de FIN DE PLAGE sur une plage). Toute valeur invalide (preset
+  // inconnu, plage inversée/incomplète/hors bornes) est NORMALISÉE ici : l'URL brute ne
+  // touche jamais le SQL. Pour « tout », from = plancher 1re partition ("2024-01-01") →
+  // from ≤ to garanti et pruning des partitions préservé (filtre sur transaction_date,
+  // jamais booking_date_time).
+  const {
+    preset,
+    from: fromFlux,
+    to,
+    nbMois,
+    moisAncrage: mois,
+  } = resoudrePeriode(await searchParams);
+
+  // `preset === null` ⇔ une PLAGE EXPLICITE (?du/?au) prime (contrat de resoudrePeriode).
+  const sousPlage = preset === null;
+
+  // BORNES DE LA CARTE « SYNTHÈSE » — le point délicat du lot (constat BLOQUANT de la
+  // cross-review). Les agrégats prennent désormais des bornes au JOUR :
+  //   - sous PRESET : le MOIS D'ANCRAGE ENTIER (1er → dernier jour) = exactement l'ancien
+  //     `syntheseMoisParDevise(mois)` → ZÉRO régression, la carte reste « Synthèse du mois » ;
+  //   - sous PLAGE : la PLAGE elle-même → la carte devient « Synthèse de la période ».
+  // Sans ça, une plage « 3 mars → 17 avril » aurait affiché AVRIL ENTIER (donc des montants
+  // hors période) sous une barre annonçant « au 17/04 » : le mensonge que ce lot combat,
+  // déplacé de la barre vers la donnée.
+  const syntheseFrom = sousPlage ? fromFlux : `${mois}-01`;
+  const syntheseTo = sousPlage ? to : dernierJourMois(mois);
+
+  // LIBELLÉ de période — SOURCE UNIQUE (calculé ici, jamais recomposé dans un composant) :
+  // il légende l'en-tête, le Top contreparties et la tendance. Sous plage, « N derniers
+  // mois » serait FAUX (une plage janvier→mars affichée en juin n'est pas « 3 derniers
+  // mois ») → on affiche l'intervalle réel.
+  const libellePeriode = sousPlage
+    ? formaterIntervalleComptable(fromFlux, to)
+    : `${nbMois} dernier${nbMois > 1 ? "s" : ""} mois`;
 
   // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx. Le
   // `ctx.role` (re-résolu serveur) descend en prop pour gater le bouton « Synchroniser »
@@ -96,9 +131,9 @@ export default async function PageDashboard({
       // Courbe = FLUX net mensuel dérivé des transactions (cashflowParDevise) :
       // balance_history est vide en Staging → la courbe de solde restait muette.
       cashflowParDevise(tx, { granularite: "mois", from: fromFlux, to }),
-      // Synthèse du mois courant VENTILÉE PAR DEVISE (remplace syntheseMois mono,
-      // @deprecated : additionnait MUR + USD). Une ligne par devise.
-      syntheseMoisParDevise(tx, mois),
+      // Synthèse VENTILÉE PAR DEVISE (remplace syntheseMois mono, @deprecated :
+      // additionnait MUR + USD). Une ligne par devise. Bornes au JOUR (cf. ci-dessus).
+      synthesePeriodeParDevise(tx, { from: syntheseFrom, to: syntheseTo }),
       // Concentration des contreparties (par défaut dépenses) — donnée neuve Voie A.
       // Fenêtre = MÊME période que la courbe de flux (FB0709-TOPVENDORS5 : le
       // sélecteur 1/3/6 mois doit piloter la carte, pas tout l'historique).
@@ -108,10 +143,11 @@ export default async function PageDashboard({
         from: fromFlux,
         to,
       }),
-      // Tendance des `nbMois` derniers mois jusqu'au mois courant Maurice (piloté par
-      // le preset). Une seule requête GROUP BY (mois, devise) ; les mois vides sont
+      // Tendance : série GROUP BY (mois, devise) sur la MÊME fenêtre [from, to] que le
+      // reste de l'écran — bornée au JOUR. Sous plage, les mois d'EXTRÉMITÉ sont donc
+      // PARTIELS (mars = 3→31), ce que le libellé de période annonce. Les mois vides sont
       // comblés par grilleMois côté UI.
-      syntheseParMois(tx, { moisFin: mois, nbMois }),
+      syntheseParMois(tx, { from: fromFlux, to }),
       transactionsRecentes(tx),
       tx.execute(
         sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
@@ -141,6 +177,20 @@ export default async function PageDashboard({
   });
 
   return (
-    <DashboardContent donnees={donnees} devise={devise} mois={mois} role={role} />
+    <DashboardContent
+      donnees={donnees}
+      devise={devise}
+      libellePeriode={libellePeriode}
+      // La carte de synthèse DIT ce qu'elle agrège : le mois d'ancrage sous preset,
+      // l'intervalle réel sous plage. Jamais « Synthèse du mois » au-dessus d'un total
+      // qui ne couvre pas le mois.
+      syntheseTitre={sousPlage ? "Synthèse de la période" : "Synthèse du mois"}
+      syntheseLibelle={
+        sousPlage
+          ? formaterIntervalleComptable(syntheseFrom, syntheseTo)
+          : formaterMoisAnnee(mois)
+      }
+      role={role}
+    />
   );
 }

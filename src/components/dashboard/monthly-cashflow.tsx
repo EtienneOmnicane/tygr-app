@@ -36,6 +36,7 @@ export function MonthlyCashflow({
   serie,
   grille,
   devise = "MUR",
+  libellePeriode,
 }: {
   /** Série mensuelle à plat (mois × devise), agrégée en SQL (`syntheseParMois`). */
   serie: SyntheseMensuelle[];
@@ -43,6 +44,12 @@ export function MonthlyCashflow({
   grille: string[];
   /** Devise de base du workspace (affichage mono-devise, cf. note multidevise). */
   devise?: string;
+  /**
+   * Libellé de la fenêtre appliquée, fourni par la page (source unique). ⚠️ Ne PAS le
+   * dériver de `grille.length` (« N derniers mois ») : sous une PLAGE précise passée, la
+   * fenêtre n'est pas « les N derniers mois » — et les mois d'extrémité sont PARTIELS.
+   */
+  libellePeriode?: string;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
   // Vide = aucun mouvement sur toute la fenêtre dans la devise de base.
@@ -55,7 +62,9 @@ export function MonthlyCashflow({
     <StateCard>
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-text">Évolution mensuelle</h2>
-        <span className="text-xs text-text-muted">{mois.length} derniers mois</span>
+        <span className="text-xs text-text-muted">
+          {libellePeriode ?? `${mois.length} derniers mois`}
+        </span>
       </div>
 
       {aucunMouvement ? (

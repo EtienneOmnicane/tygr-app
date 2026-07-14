@@ -18,6 +18,7 @@
 import { z } from "zod";
 
 import { moisCourantMaurice } from "@/lib/format-date";
+import { dernierJourMois, premierJourMoisRecul } from "@/lib/periode";
 import {
   exigerSessionWorkspace,
   ServiceIndisponibleError,
@@ -44,9 +45,15 @@ const syntheseParMoisSchema = z
 
 /**
  * Série mensuelle Entrées/Sorties (Cash In/Out) des `nbMois` derniers mois (défaut
- * 12), par devise — pour un graphique Front. `moisFin` = mois COURANT Maurice
- * (calculé serveur, conversion explicite Indian/Mauritius) ; jamais un paramètre
+ * 12), par devise — pour un graphique Front. La fenêtre est dérivée SERVEUR depuis le
+ * mois COURANT Maurice (conversion explicite Indian/Mauritius) ; jamais un paramètre
  * client. Multi-devises : une ligne par (mois, devise), jamais d'addition cross-devise.
+ *
+ * ⚠️ `syntheseParMois` prend désormais des bornes au JOUR [from, to] (et non plus
+ * {moisFin, nbMois}) — cf. TOOLBAR-DATE-PRECISE1 : une plage précise doit pouvoir borner
+ * la série ailleurs qu'à un bord de mois. Ici on reconstitue EXACTEMENT l'ancienne
+ * fenêtre : du 1er jour du mois reculé de (nbMois − 1) au DERNIER jour du mois courant
+ * → série identique à celle d'avant, zéro régression pour cet appelant.
  */
 export async function syntheseParMoisAction(input?: {
   nbMois?: number;
@@ -58,8 +65,10 @@ export async function syntheseParMoisAction(input?: {
   }
   try {
     const moisFin = moisCourantMaurice();
+    const from = premierJourMoisRecul(moisFin, parsed.data.nbMois - 1);
+    const to = dernierJourMois(moisFin);
     const data = await withWorkspace(session, (tx) =>
-      syntheseParMois(tx, { moisFin, nbMois: parsed.data.nbMois }),
+      syntheseParMois(tx, { from, to }),
     );
     return { ok: true, data };
   } catch (erreur) {

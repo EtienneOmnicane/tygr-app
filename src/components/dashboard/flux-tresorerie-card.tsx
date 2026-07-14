@@ -23,6 +23,7 @@ export function FluxTresorerieCard({
   serieMensuelle,
   grilleMensuelle,
   devise,
+  libellePeriode,
 }: {
   /** Série entrées/sorties (mois × devise) — alimente les barres. */
   serieMensuelle: SyntheseMensuelle[];
@@ -30,6 +31,8 @@ export function FluxTresorerieCard({
   grilleMensuelle: string[];
   /** Devise de base du workspace. */
   devise: string;
+  /** Libellé de la fenêtre appliquée (source unique : la page) — relayé à `FluxBarres`. */
+  libellePeriode?: string;
 }) {
   return (
     <StateCard className="min-h-[380px]">
@@ -42,7 +45,12 @@ export function FluxTresorerieCard({
         <Legende />
       </div>
 
-      <FluxBarres serie={serieMensuelle} grille={grilleMensuelle} devise={devise} />
+      <FluxBarres
+        serie={serieMensuelle}
+        grille={grilleMensuelle}
+        devise={devise}
+        libellePeriode={libellePeriode}
+      />
     </StateCard>
   );
 }

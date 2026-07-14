@@ -32,6 +32,7 @@ import { usePathname } from "next/navigation";
 
 import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
 import { PeriodeSwitcher } from "@/components/shell/periode-switcher";
+import { PlageDatesSwitcher } from "@/components/shell/plage-dates-switcher";
 import { toolbarConfig } from "@/components/shell/toolbar-config";
 import type {
   CompteConnecte,
@@ -72,7 +73,13 @@ export function BarreVue({
 
   // Aucune barre (ex. /selection) : on ne rend PAS un <header> vide (il laisserait une
   // bande + bordure fantômes en haut de la colonne de contenu).
-  if (!config.minimal && !config.periode && !config.perimetre && !config.cta) {
+  if (
+    !config.minimal &&
+    !config.periode &&
+    !config.plageDates &&
+    !config.perimetre &&
+    !config.cta
+  ) {
     return null;
   }
 
@@ -118,6 +125,23 @@ export function BarreVue({
           }
         >
           <PeriodeSwitcher />
+        </Suspense>
+      )}
+
+      {/* PLAGE DE DATES PRÉCISE (A1) : `?du`/`?au`, en COMPLÉMENT des presets — elle PRIME
+          sur eux (resoudrePeriode). Montée uniquement sur une page qui LIT réellement ces
+          params (invariant anti-mensonge de `toolbar-config.ts` ; aujourd'hui : dashboard).
+          Même <Suspense> que ci-dessus (useSearchParams → bail-out CSR au prerender). */}
+      {config.plageDates && (
+        <Suspense
+          fallback={
+            <div
+              aria-hidden
+              className="h-7 w-[280px] rounded-full bg-surface-inset"
+            />
+          }
+        >
+          <PlageDatesSwitcher />
         </Suspense>
       )}
 

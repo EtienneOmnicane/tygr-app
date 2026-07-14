@@ -49,10 +49,17 @@ export function FluxBarres({
   serie,
   grille,
   devise,
+  libellePeriode,
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
   devise: string;
+  /**
+   * Libellé de la fenêtre appliquée (source unique : la page) — porté par l'`aria-label`
+   * du graphe. ⚠️ Sous une PLAGE précise, « N derniers mois » serait FAUX : c'est la seule
+   * chose qu'un lecteur d'écran entend de la fenêtre (TOOLBAR-DATE-PRECISE1).
+   */
+  libellePeriode?: string;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
   // Le max BRUT pilote la détection « aucun mouvement » (0 = fenêtre vide) ; le max
@@ -86,7 +93,12 @@ export function FluxBarres({
       {/* Le SVG remplit la hauteur disponible (flex-1) ET la largeur (w-full) :
           les barres ne sont plus « perdues » dans du vide (C1) et s'étalent sur
           toute la largeur de la carte (C2). */}
-      <BarresMensuelles mois={mois} max={max} devise={devise} />
+      <BarresMensuelles
+        mois={mois}
+        max={max}
+        devise={devise}
+        libellePeriode={libellePeriode}
+      />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
         <p className="mt-3 text-[11px] text-text-faint">
@@ -126,10 +138,13 @@ function BarresMensuelles({
   mois,
   max,
   devise,
+  libellePeriode,
 }: {
   mois: MoisAffiche[];
   max: number;
   devise: string;
+  /** Libellé de la fenêtre appliquée — seule description de la période pour un lecteur d'écran. */
+  libellePeriode?: string;
 }) {
   const { ref, largeur, hauteur } = useDimensionsSvg(
     LARGEUR_DEFAUT,
@@ -173,7 +188,7 @@ function BarresMensuelles({
         className="w-full"
         style={{ height: HAUTEUR_ANCRE }}
         role="img"
-        aria-label={`Entrées et sorties des ${mois.length} derniers mois, en ${devise}`}
+        aria-label={`Entrées et sorties — ${libellePeriode ?? `${mois.length} derniers mois`}, en ${devise}`}
       >
         {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre :
             `surface-inset`, jamais une couleur de donnée). Rendu AVANT l'axe et les

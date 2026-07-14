@@ -1,22 +1,29 @@
 /**
- * Matrice de la BARRE DE VUE par page (TOOLBAR-GLOBALE-CADRAGE1, lot A2 — validée par
- * Etienne le 2026-07-14, amendée le même jour sur /banques et /regles). Ces tests SONT
- * la matrice : ils la figent en CI.
+ * Matrice de la BARRE DE VUE par page (TOOLBAR-GLOBALE-CADRAGE1 lot A2, étendue par
+ * TOOLBAR-DATE-PRECISE1 lot A1 — validée par Etienne le 2026-07-14). Ces tests SONT la
+ * matrice : ils la figent en CI.
  *
  * Trois familles :
  *  1. la matrice page par page (ce qui est monté où) ;
  *  2. la résolution par segment racine (sous-routes, normalisation, défaut) ;
- *  3. les GARDES issues de la cross-review — les deux qui comptent vraiment :
+ *  3. les GARDES d'invariants — c'est ce qui compte vraiment :
  *     - INVARIANT `perimetre: false` : n'est légitime que sur une surface dont la session
  *       est AMPUTÉE du viewFilter (`/admin/*`) ou hors workspace (`/selection`). Ailleurs,
  *       le filtre RLS continue de mordre → le masquer le rendrait invisible ET
  *       inannulable. Cette garde échoue si quelqu'un met `perimetre: false` sur une
  *       nouvelle page sans avoir amputé la session côté serveur.
+ *     - INVARIANT ANTI-MENSONGE (lot A1) : une page qui MONTE la période / la plage doit
+ *       la LIRE (`resoudrePeriode(searchParams)`). Sans cette garde, A2 a livré DEUX
+ *       PeriodeSwitcher qui ne filtraient rien (/graphiques et /transactions ont leur
+ *       propre filtre IN-PAGE). Vérifiée en relisant le SOURCE des pages — mécanique, pas
+ *       une consigne de vigilance.
+ *     - INVARIANT `plageDates ⇒ periode` : la plage PRIME sur un preset ; sans le groupe
+ *       de presets affiché, « primer » n'a pas de sens et il n'y a plus de retour arrière.
  *     - COUVERTURE : toute route réelle de `src/app/(workspace)/` doit être une clé
  *       EXPLICITE de la matrice (une faute de frappe ferait tomber la page dans le
  *       défaut, en silence).
  */
-import { readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -27,9 +34,26 @@ import {
   toolbarConfig,
 } from "@/components/shell/toolbar-config";
 
-const COMPLETE = { periode: true, perimetre: true, cta: true, minimal: false };
-const MINIMALE = { periode: false, perimetre: false, cta: false, minimal: true };
-const AUCUNE = { periode: false, perimetre: false, cta: false, minimal: false };
+/** Barre complète SANS plage de dates (le cas de /transactions). */
+const COMPLETE = {
+  periode: true,
+  plageDates: false,
+  perimetre: true,
+  cta: true,
+  minimal: false,
+};
+/** Dashboard : la SEULE page câblée sur `?du`/`?au` (lot A1). */
+const COMPLETE_AVEC_PLAGE = { ...COMPLETE, plageDates: true };
+const MINIMALE = {
+  periode: false,
+  plageDates: false,
+  perimetre: false,
+  cta: false,
+  minimal: true,
+};
+const AUCUNE = { ...MINIMALE, minimal: false };
+
+const RACINE_WORKSPACE = join(process.cwd(), "src", "app", "(workspace)");
 
 /**
  * Les SEULS segments autorisés à masquer le sélecteur de périmètre (cf. invariant).
@@ -40,18 +64,62 @@ const AUCUNE = { periode: false, perimetre: false, cta: false, minimal: false };
  */
 const SEGMENTS_SANS_PERIMETRE_AUTORISES = ["admin", "selection"];
 
+/**
+ * EXEMPTIONS de la garde anti-mensonge — liste FERMÉE, nommée et datée.
+ *
+ * `transactions` (2026-07-14, dette A3 / TX-TOOLBAR-DEDUP1) : la matrice y monte
+ * `periode: true` alors que `transactions/page.tsx` ne lit PAS `?periode` (ses bornes de
+ * date vivent IN-PAGE, `transactions-toolbar.tsx`). C'est un NO-OP hérité d'A2, laissé
+ * INTACT ici sur arbitrage explicite (le corriger imposerait de retirer d'abord les dates
+ * in-page — sinon deux filtres concurrents), mais désormais TRACKÉ plutôt que silencieux.
+ *
+ * ⚠️ A3 doit SUPPRIMER cette ligne (et non l'allonger). Toute nouvelle entrée ici est
+ * l'aveu qu'on affiche un contrôle qui ne filtre rien : la revue doit la refuser.
+ */
+const SEGMENTS_PERIODE_NON_CABLEE = ["transactions"];
+
+/**
+ * Chemin de la `page.tsx` d'un segment de la matrice. Le segment "" est le dashboard, qui
+ * vit dans un ROUTE GROUP (`(dashboard)`) — invisible dans le pathname : on le retrouve en
+ * cherchant le groupe qui porte une `page.tsx` (aucun chemin en dur à maintenir).
+ */
+/**
+ * Retire commentaires de bloc et de ligne. La garde anti-mensonge cherche un APPEL, pas une
+ * mention : sans ce dépouillement, un fichier qui se contente de PARLER de `resoudrePeriode`
+ * dans sa doc passerait la garde tout en n'appelant rien (trou relevé en cross-review).
+ */
+function sansCommentaires(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
+function fichierPage(segment: string): string | null {
+  if (segment === "") {
+    const groupes = readdirSync(RACINE_WORKSPACE, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith("("))
+      .map((e) => join(RACINE_WORKSPACE, e.name, "page.tsx"));
+    return groupes.find((p) => existsSync(p)) ?? null;
+  }
+  const chemin = join(RACINE_WORKSPACE, segment, "page.tsx");
+  return existsSync(chemin) ? chemin : null;
+}
+
 describe("toolbarConfig — matrice validée par page", () => {
-  it("dashboard (/) : période + périmètre + CTA", () => {
-    expect(toolbarConfig("/")).toEqual(COMPLETE);
+  it("dashboard (/) : période + PLAGE DE DATES + périmètre + CTA (seule page câblée A1)", () => {
+    expect(toolbarConfig("/")).toEqual(COMPLETE_AVEC_PLAGE);
   });
 
-  it("/transactions : période + périmètre + CTA", () => {
+  it("/transactions : période (no-op connu, dette A3) + périmètre + CTA, SANS plage", () => {
+    // La plage y créerait un 2e filtre de dates concurrent des dates in-page → A3.
     expect(toolbarConfig("/transactions")).toEqual(COMPLETE);
   });
 
-  it("/graphiques : période + périmètre, PAS de CTA", () => {
+  it("/graphiques : périmètre SEUL — période RETIRÉE (la page ne lit pas ?periode)", () => {
+    // ≠ matrice A2 (arbitrage Etienne 2026-07-14) : `graphiques/page.tsx` ne prend même
+    // pas `searchParams` — son PeriodeSwitcher ne filtrait RIEN (le vrai filtre est le
+    // segmenté in-page). Retrait = zéro régression. Unification → GRAPHIQUES-PERIODE-DEDUP1.
     expect(toolbarConfig("/graphiques")).toEqual({
-      periode: true,
+      periode: false,
+      plageDates: false,
       perimetre: true,
       cta: false,
       minimal: false,
@@ -61,6 +129,7 @@ describe("toolbarConfig — matrice validée par page", () => {
   it("/echeances : périmètre seul (la période rétrospective n'a pas de sens sur un écran futur)", () => {
     expect(toolbarConfig("/echeances")).toEqual({
       periode: false,
+      plageDates: false,
       perimetre: true,
       cta: false,
       minimal: false,
@@ -70,6 +139,7 @@ describe("toolbarConfig — matrice validée par page", () => {
   it("/banques : CTA + périmètre CONSERVÉ (le viewFilter mord encore : sync à 0 compte)", () => {
     expect(toolbarConfig("/banques")).toEqual({
       periode: false,
+      plageDates: false,
       perimetre: true,
       cta: true,
       minimal: false,
@@ -79,6 +149,7 @@ describe("toolbarConfig — matrice validée par page", () => {
   it("/regles : périmètre CONSERVÉ (« Ré-analyser » ne traite que le périmètre filtré)", () => {
     expect(toolbarConfig("/regles")).toEqual({
       periode: false,
+      plageDates: false,
       perimetre: true,
       cta: false,
       minimal: false,
@@ -117,9 +188,12 @@ describe("toolbarConfig — résolution par segment racine", () => {
       toolbarConfig("/graphiques"),
     );
     expect(toolbarConfig("/regles#section")).toEqual(toolbarConfig("/regles"));
-    // Chemin vide / racine nue → dashboard (segment racine "").
-    expect(toolbarConfig("")).toEqual(COMPLETE);
-    expect(toolbarConfig("/?periode=12m")).toEqual(COMPLETE);
+    // Chemin vide / racine nue → dashboard (segment racine "") = la seule config à plage.
+    expect(toolbarConfig("")).toEqual(COMPLETE_AVEC_PLAGE);
+    expect(toolbarConfig("/?periode=12m")).toEqual(COMPLETE_AVEC_PLAGE);
+    expect(toolbarConfig("/?du=2026-03-03&au=2026-04-17")).toEqual(
+      COMPLETE_AVEC_PLAGE,
+    );
   });
 
   it("une page NON cadrée retombe sur le défaut EXPLICITE : périmètre seul", () => {
@@ -128,6 +202,7 @@ describe("toolbarConfig — résolution par segment racine", () => {
     // sortie. La période, elle, est un no-op tant que la page ne lit pas `?periode`.
     expect(toolbarConfig("/nouvelle-page")).toEqual({
       periode: false,
+      plageDates: false,
       perimetre: true,
       cta: false,
       minimal: false,
@@ -158,7 +233,67 @@ describe("toolbarConfig — gardes d'invariants (cross-review)", () => {
   it("INVARIANT : minimal ⇒ aucun contrôle monté", () => {
     for (const [, config] of entrees) {
       if (config.minimal) {
-        expect(config.periode || config.perimetre || config.cta).toBe(false);
+        expect(
+          config.periode || config.plageDates || config.perimetre || config.cta,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("INVARIANT ANTI-MENSONGE : une page qui MONTE la période/plage DOIT la LIRE", () => {
+    // LA garde du lot A1. Un contrôle de période affiché sur une page qui n'appelle pas
+    // `resoudrePeriode(searchParams)` est un NO-OP : l'utilisateur croit borner sa vue, la
+    // page ignore le réglage. C'est le défaut qu'A2 a livré sur /graphiques et
+    // /transactions — invisible parce qu'AUCUN test ne reliait la matrice au code serveur.
+    // On relit donc le SOURCE de la page : mécanique, pas déclaratif.
+    for (const [segment, config] of Object.entries(MATRICE_BARRE_VUE)) {
+      if (!config.periode && !config.plageDates) continue;
+      if (SEGMENTS_PERIODE_NON_CABLEE.includes(segment)) continue;
+
+      const chemin = fichierPage(segment);
+      expect(
+        chemin,
+        `« ${segment} » monte un contrôle de période mais n'a pas de page.tsx trouvable.`,
+      ).not.toBeNull();
+
+      // On dépouille les COMMENTAIRES d'abord : sans ça, une simple mention du mot
+      // « resoudrePeriode » dans un bloc de doc suffisait à faire passer la garde.
+      const source = sansCommentaires(readFileSync(chemin!, "utf8"));
+
+      expect(
+        source,
+        `« /${segment} » MONTE la période (ou la plage) mais sa page n'APPELLE pas ` +
+          `resoudrePeriode(...) : le contrôle ne filtrerait RIEN. Câble la page, ou passe ` +
+          `periode/plageDates à false dans la matrice.`,
+      ).toMatch(/\bresoudrePeriode\s*\(/);
+
+      expect(
+        source,
+        `« /${segment} » n'accepte pas de searchParams : elle ne peut pas lire ?periode.`,
+      ).toContain("searchParams");
+
+      // Pour une page à PLAGE : l'appel doit recevoir les searchParams ENTIERS, pas un objet
+      // littéral qui cueillerait `{ periode }` seul — ça typecheckerait (tous les champs de
+      // ParamsPeriode sont optionnels) tout en IGNORANT ?du/?au. Ce serait le mensonge exact
+      // que cette garde existe pour rendre impossible.
+      if (config.plageDates) {
+        expect(
+          source,
+          `« /${segment} » monte la PLAGE mais passe un objet littéral à resoudrePeriode : ` +
+            `?du/?au seraient ignorés. Passe les searchParams entiers.`,
+        ).not.toMatch(/resoudrePeriode\s*\(\s*\{/);
+      }
+    }
+  });
+
+  it("INVARIANT : plageDates ⇒ periode (une plage PRIME sur un preset — encore faut-il l'afficher)", () => {
+    for (const [segment, config] of entrees) {
+      if (config.plageDates) {
+        expect(
+          config.periode,
+          `« ${segment} » monte la plage de dates sans les presets : « primer sur le ` +
+            `preset » n'a alors aucun sens, et l'utilisateur perd le retour arrière en un clic.`,
+        ).toBe(true);
       }
     }
   });
@@ -168,7 +303,11 @@ describe("toolbarConfig — gardes d'invariants (cross-review)", () => {
     // /selection, ce serait une page silencieusement sans chrome partout ailleurs.
     for (const [segment, config] of entrees) {
       const rienDuTout =
-        !config.minimal && !config.periode && !config.perimetre && !config.cta;
+        !config.minimal &&
+        !config.periode &&
+        !config.plageDates &&
+        !config.perimetre &&
+        !config.cta;
       if (rienDuTout) expect(segment).toBe("selection");
     }
   });

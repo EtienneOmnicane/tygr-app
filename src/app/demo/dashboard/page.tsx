@@ -20,6 +20,7 @@ import {
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
 } from "@/lib/dashboard-demo-fixtures";
+import { formaterMoisAnnee } from "@/lib/format-date";
 import {
   DashboardContent,
   type DonneesDashboard,
@@ -161,10 +162,15 @@ export default function DashboardPreviewPage() {
       </div>
 
       {/* role ADMIN : la démo montre le bouton « Synchroniser » actif (état complet). */}
+      {/* Libellés de période : la démo monte le cas PRESET (la page réelle bascule sur
+          l'intervalle « 3 mars → 17 avr. 2026 » et « Synthèse de la période » dès qu'une
+          plage `?du`/`?au` prime — cf. TOOLBAR-DATE-PRECISE1). */}
       <DashboardContent
         donnees={donnees}
         devise="MUR"
-        mois={DEMO_MOIS}
+        libellePeriode="6 derniers mois"
+        syntheseTitre="Synthèse du mois"
+        syntheseLibelle={formaterMoisAnnee(DEMO_MOIS)}
         role="ADMIN"
       />
     </div>

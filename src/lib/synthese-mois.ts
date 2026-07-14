@@ -1,6 +1,6 @@
 /**
  * Repli d'affichage pour la synthèse mensuelle VENTILÉE PAR DEVISE
- * (`syntheseMoisParDevise`). Source UNIQUE consommée par `CashFlowSummary`
+ * (`synthesePeriodeParDevise`). Source UNIQUE consommée par `CashFlowSummary`
  * (pas de duplication de la règle de repli — règle 6/9).
  *
  * Le service renvoie une ligne par devise présente sur le mois, et un TABLEAU VIDE
@@ -11,12 +11,12 @@
  *
  * Tri stable par code devise (affichage déterministe, comme les soldes par devise).
  */
-import type { SyntheseMoisDevise } from "@/server/repositories/dashboard";
+import type { SynthesePeriodeDevise } from "@/server/repositories/dashboard";
 
 export function replierSynthesesMois(
-  synthesesMois: SyntheseMoisDevise[],
+  synthesesMois: SynthesePeriodeDevise[],
   deviseBase: string,
-): SyntheseMoisDevise[] {
+): SynthesePeriodeDevise[] {
   if (synthesesMois.length === 0) {
     return [{ currency: deviseBase, entrees: "0", sorties: "0", variation: "0" }];
   }
