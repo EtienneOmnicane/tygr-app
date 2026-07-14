@@ -85,15 +85,83 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   chantier `/transactions` (ou TOOLBAR-GLOBALE-CADRAGE1, qui tranche la propriété des
   filtres). Pas une dette d'isolation (la RLS reste la garde ; c'est de l'état d'UI).
 
-- [ ] **TX-STATUT-SELECT-LAYOUT1 (P2, effort ~0,25 j, 2026-07-13) — BUG FRONT : ouvrir le
+- [x] **TX-STATUT-SELECT-LAYOUT1 (P2, effort ~0,25 j, 2026-07-13) — BUG FRONT : ouvrir le
   filtre « Tous statuts » sur `/transactions` fait SAUTER le layout (barre de scroll
-  parasite).** Reproduit au clic sur le sélecteur de statut de ventilation
-  (`transactions-toolbar.tsx:218-231`, options `:52-57`), un composant `Select` maison
-  (`src/components/ui/select/select.tsx`). À l'ouverture du menu, le contenu se décale et une
-  scrollbar parasite apparaît (probable débordement du popover / mesure de largeur qui
-  réserve puis retire l'espace de la scrollbar). **Déclencheur** : cette passe QA (affordance
-  du contrôle de statut). Corriger dans le composant `Select` (contenir l'overflow du menu,
-  éviter le reflow du conteneur). Pas d'isolation.
+  parasite).** ✅ **RÉSOLU 2026-07-14** (branche `fix/select-layout-shift`). **Cause réelle**
+  (mesurée, ce n'était pas la scrollbar-gutter supposée) : le popover était `absolute`, donc
+  enfant du groupe de filtres `overflow-x-auto` (`transactions-toolbar.tsx:156`) — or CSS
+  force `overflow-y` à `auto` dès que `overflow-x` ne vaut plus `visible`. Le menu (288px)
+  débordait de la rangée (40px) → **la toolbar devenait scrollable de 142px** (mesuré au
+  navigateur) et le `scrollIntoView` de l'option active la faisait défiler → scrollbar
+  parasite + saut. **Fix** : le menu est PORTALÉ dans `document.body` et positionné en
+  `fixed` sur le rect du trigger (`src/components/ui/select/position-menu.ts`, géométrie
+  PURE + 14 tests unitaires ; `select.tsx` mesure et applique). Un `fixed` échappe à TOUT
+  ancêtre clippant ET, hors flux, ne peut créer aucune scrollbar de document.
+  **Bugs LATENTS de la même famille tués au passage** — dans les 7 FICHIERS appelants du
+  `Select` (14 occurrences), tous re-QA'és : (a) tableau d'assignation
+  (`assignation-comptes.tsx:339` `overflow-x-auto`) — les menus des dernières lignes sortaient
+  SOUS le viewport (mesuré à 1033px pour une fenêtre de 900 → options inatteignables) ;
+  (b) liste des suggestions en modale (`propositions.tsx:233` `max-h-[60vh] overflow-y-auto`)
+  — même clipping. ⚠️ La famille n'est PAS close pour autant : les popovers maison HORS
+  `Select` restent à traiter (cf. SIDEBAR-SWITCHER-CLIP1). Le `z-[60]` du menu est exigé par
+  la NOUVELLE architecture (le menu et l'overlay de la Modal sont désormais deux portals
+  FRÈRES sous `body` : à z-index égal, seul l'ordre du DOM les départagerait) — avant le
+  portal, le menu était un DESCENDANT du contexte d'empilement de l'overlay et passait donc
+  toujours devant : il n'y avait là aucun défaut de z-index, seulement le clipping.
+  Ajouts : FLIP au-dessus quand l'espace manque en bas, hauteur ET ancre bornées au viewport,
+  reposition au scroll/resize (coalescée par rAF), fermeture du menu dès que le trigger n'est
+  plus visible (`IntersectionObserver` — sinon le `fixed`, qui échappe au clip, laisserait le
+  menu ORPHELIN sur une ancre invisible). Les deux derniers points viennent de la revue
+  contradictoire (constats F1/F2, bloquants) — la géométrie sortait de l'écran dès qu'on
+  scrollait menu ouvert ; 3 tests ajoutés, qui échouaient avant le bornage.
+  Effet de bord assumé : le typeahead lit l'horodatage de l'ÉVÉNEMENT au lieu de `Date.now()`
+  (le React Compiler refuse l'appel impur — `react-hooks/purity` — une fois le composant
+  devenu analysable). Pas d'isolation, aucun changement d'API ni de token.
+  Plan + registre de revue : `PLAN-select-layout-shift.md`.
+
+- [ ] **SELECT-MODALE-A11Y1 (P1, effort ~0,5 j, 2026-07-14) — RÉGRESSION A11Y assumée du
+  portal : dans une modale, le menu du `Select` sort du sous-arbre `aria-modal`.** Constat de
+  la revue contradictoire de `fix/select-layout-shift` (confiance 7/10, non reproductible ici
+  faute de lecteur d'écran). `modal.tsx:136` pose `aria-modal="true"` : les AT ignorent alors
+  tout ce qui vit HORS du `role="dialog"`. Or le menu est désormais portalé sous `document.body`
+  → **frère** de l'overlay, pas descendant du dialogue. Un utilisateur NVDA/JAWS/VoiceOver qui
+  ouvre le seul `Select` vivant en modale (`propositions.tsx:422`, sas ADMIN des suggestions)
+  et navigue ↑/↓ pourrait n'entendre AUCUNE option (`aria-activedescendant` pointe un `id`
+  situé dans la zone masquée). Avant le portal, le menu était dans le panneau → annoncé.
+  **Deux correctifs candidats, chacun avec son coût** : (a) portaler dans le panneau du
+  dialogue (`closest('[role="dialog"]')`) — garde le sous-arbre a11y ET échappe au clip de la
+  liste, MAIS les options rejoignent alors la requête du focus-trap de la Modal
+  (`modal.tsx:94`, sélecteur qui n'exclut pas `tabindex="-1"`) → il faut AUSSI durcir la
+  Modal (risque sur TOUTES les modales) ; (b) prop `container?: HTMLElement` sur `Select` +
+  la Modal expose son panneau → API élargie, 3 fichiers. Écarté au MVP : incertitude sur le
+  comportement réel des AT + périmètre (le lot devait rester CONTENU au `Select`, sans
+  changement d'API). C'est le pattern que portent Radix/MUI/Headless UI (portal `body`), avec
+  la même réserve connue. **Déclencheur** : prochaine passe a11y, ou tout chantier touchant
+  `modal.tsx` / le sas ADMIN. Trancher AVANT la prod (P1) — à valider au lecteur d'écran réel.
+
+- [ ] **SIDEBAR-SWITCHER-CLIP1 (P2, effort ~0,25 j, 2026-07-14) — MÊME famille que
+  TX-STATUT-SELECT-LAYOUT1, hors `Select` : le popover du `WorkspaceSwitcher` est clippé par
+  la sidebar.** `workspace-switcher.tsx:60-63` rend son menu en `absolute … mt-2` (il s'ouvre
+  vers le BAS) ; son trigger vit dans le bloc `mt-auto` (collé en BAS) de
+  `app-sidebar.tsx:47-49` — un `<aside class="sticky top-0 flex h-screen … overflow-y-auto">`.
+  Popover `absolute` ouvrant vers le bas depuis le bas d'un conteneur `overflow-y-auto` =
+  exactement la configuration corrigée pour le `Select` : la sidebar devient scrollable à
+  l'ouverture (scrollbar parasite) et le menu est rogné. **Non traité ici** : ce n'est pas un
+  `Select`, le lot devait rester contenu (règle 7, pas d'expansion de périmètre). Correctif :
+  soit réutiliser le `Select` (il porte maintenant le portal), soit remonter la même mécanique
+  (portal + `fixed` + `position-menu.ts`, déjà écrit et testé). **Déclencheur** : prochain
+  chantier navbar/shell (typiquement TOOLBAR-GLOBALE-CADRAGE1). Pas d'isolation.
+
+- [ ] **UI-ZINDEX-ECHELLE1 (P2, effort ~0,1 j, 2026-07-14) — `docs/UI_GUIDELINES.md` ne
+  documente AUCUNE échelle de z-index, alors qu'il en existe une de fait.** Relevé par la
+  revue de `fix/select-layout-shift`, qui a dû introduire le premier cran > 50 (`z-[60]` du
+  menu portalé, qui doit battre l'overlay Modal `z-50`). Échelle réelle constatée : `z-10`
+  (workspace-switcher, en-têtes sticky), `z-20` (perimetre-switcher, CategoryPicker),
+  `z-30` (topbar), `z-50` (overlay Modal), `z-[60]` (menu du Select). Sans registre écrit, le
+  prochain composant flottant tirera un z-index au jugé et passera un jour DERRIÈRE une modale.
+  Correctif : 4 lignes dans UI_GUIDELINES §4.4 (+ éventuellement un token `z-popover` dans le
+  thème Tailwind, pour tuer la valeur arbitraire). **Déclencheur** : prochain composant
+  flottant, ou la passe `PROD-UX-REVIEW1`.
 
 - [ ] **TOOLBAR-GLOBALE-CADRAGE1 (P2, CADRAGE PRODUIT d'abord — effort cadrage ~0,5 j,
   implémentation à chiffrer après, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
