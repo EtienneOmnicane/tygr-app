@@ -21,6 +21,15 @@
  * serveur (`normaliserPreset`) → l'état actif affiché correspond exactement à ce que la
  * page calcule (un `?periode` trafiqué retombe sur « 6m » des deux côtés).
  *
+ * ⚠️ PLAGE EXPLICITE (lot A1) — `?du`/`?au` PRIMENT sur le preset côté serveur
+ * (`resoudrePeriode`). Conséquence NON NÉGOCIABLE ici : tant qu'une plage valide est
+ * active, ce groupe n'allume AUCUN segment (`actif = null`). Laisser « 6 mois » allumé
+ * pendant qu'une plage de mars filtre la page serait le mensonge d'affichage que tout ce
+ * chantier combat — à l'échelle du contrôle. On lit la plage par le MÊME `lirePlage` que
+ * le serveur (source unique) : les deux ne peuvent pas diverger.
+ * Cliquer un preset EFFACE la plage (porte de sortie ; l'autre est le « × » du
+ * `PlageDatesSwitcher`).
+ *
  * Tokens UI_GUIDELINES uniquement : segment actif en `primary`, JAMAIS vert/rouge
  * (réservés aux montants inflow/outflow). Groupe segmenté sur `surface-inset` (calque
  * visuel du déclencheur PerimetreSwitcher). Responsive : le groupe condense (libellés
@@ -31,7 +40,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   PRESETS_PERIODE,
   PRESET_DEFAUT,
+  lirePlage,
   normaliserPreset,
+  paramsPeriodeDepuisURL,
   type PresetPeriode,
 } from "@/lib/periode";
 
@@ -53,13 +64,27 @@ export function PeriodeSwitcher() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Vérité serveur = l'URL, normalisée par la MÊME garde que la page (défaut 6m).
-  const actif = normaliserPreset(searchParams.get("periode") ?? undefined);
+  // Une plage explicite VALIDE prime → AUCUN preset ne s'applique : `actif = null`, donc
+  // aucun segment allumé (le `PlageDatesSwitcher` porte l'état actif). Sinon : vérité =
+  // l'URL, normalisée par la MÊME garde que la page (défaut 6m).
+  // `paramsPeriodeDepuisURL` (et pas des `.get()` à la main) : un param DUPLIQUÉ doit être
+  // vu comme un tableau — donc REJETÉ — exactement comme côté serveur. Sinon `?du=X&du=Y`
+  // allumerait le contrôle sur une plage que la page, elle, ignore (divergence UI/serveur).
+  const params = paramsPeriodeDepuisURL(searchParams);
+  const plage = lirePlage(params);
+  const actif: PresetPeriode | null = plage
+    ? null
+    : normaliserPreset(params.periode);
 
   function choisir(preset: PresetPeriode) {
     if (preset === actif) return; // no-op (évite une navigation inutile)
     // Repart des searchParams existants pour ne pas perdre d'autres filtres éventuels.
     const params = new URLSearchParams(searchParams.toString());
+    // Choisir un preset SORT de la plage explicite (sinon la plage continuerait de primer
+    // et le clic n'aurait aucun effet visible : un bouton mort). `actif` valant null sous
+    // plage, on ne peut pas court-circuiter au-dessus — le clic passe toujours ici.
+    params.delete("du");
+    params.delete("au");
     if (preset === PRESET_DEFAUT) {
       params.delete("periode"); // défaut → URL propre (pas de ?periode=6m)
     } else {

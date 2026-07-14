@@ -7,10 +7,10 @@
  * hauteur de la carte Flux.
  *
  * Présentationnel PUR : reçoit `synthesesMois` (sortie du service
- * `syntheseMoisParDevise`, déjà agrégée EN SQL) + le mois courant, NE recalcule
+ * `synthesePeriodeParDevise`, déjà agrégée EN SQL) + le mois courant, NE recalcule
  * rien. Montants formatés via `formatMontant` (chaînes décimales, zéro float — règle 8).
  *
- * ⚠️ Multi-devises (CLAUDE.md règle 8) : `syntheseMoisParDevise` renvoie UNE entrée
+ * ⚠️ Multi-devises (CLAUDE.md règle 8) : `synthesePeriodeParDevise` renvoie UNE entrée
  * PAR devise (GROUP BY currency). On affiche donc un groupe Entrées/Sorties/Variation
  * PAR devise, empilé — JAMAIS d'addition cross-devise, aucune conversion FX (chantier
  * DASH-FX1). Mois sans transaction → tableau vide → on affiche 0 dans la devise de
@@ -23,23 +23,29 @@
  */
 import Link from "next/link";
 
-import type { SyntheseMoisDevise } from "@/server/repositories/dashboard";
+import type { SynthesePeriodeDevise } from "@/server/repositories/dashboard";
 
 import { replierSynthesesMois } from "@/lib/synthese-mois";
-import { formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant, estNegatif, estZero } from "@/lib/format-montant";
 import { StateCard } from "@/components/dashboard/states/primitives";
 
 export function CashFlowSummary({
   synthesesMois,
-  mois,
+  titre = "Synthèse du mois",
+  libelle,
   devise = "MUR",
 }: {
-  /** Entrées/sorties/variation du mois PAR DEVISE (chaînes décimales, déjà agrégées). */
-  synthesesMois: SyntheseMoisDevise[];
-  /** Mois courant "YYYY-MM" (libellé de la carte). */
-  mois: string;
-  /** Devise de base du workspace (repli quand aucune transaction le mois). */
+  /** Entrées/sorties/variation de la période PAR DEVISE (chaînes décimales, déjà agrégées). */
+  synthesesMois: SynthesePeriodeDevise[];
+  /**
+   * Titre de la carte. « Synthèse du mois » sous un preset ; « Synthèse de la période »
+   * quand une PLAGE PRÉCISE (`?du`/`?au`) borne l'écran — la carte agrège alors la plage,
+   * pas un mois (TOOLBAR-DATE-PRECISE1). Le titre DOIT suivre ce qu'on agrège.
+   */
+  titre?: string;
+  /** Ce que la carte agrège vraiment : « Juin 2026 » ou « 3 mars → 17 avr. 2026 ». */
+  libelle: string;
+  /** Devise de base du workspace (repli quand aucune transaction sur la période). */
   devise?: string;
 }) {
   // Repli : aucune donnée le mois → 0 dans la devise de base (jamais une carte vide).
@@ -51,8 +57,8 @@ export function CashFlowSummary({
   return (
     <StateCard className="flex flex-col">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-base font-semibold text-text">Synthèse du mois</h2>
-        <span className="text-xs text-text-muted">{formaterMoisAnnee(mois)}</span>
+        <h2 className="text-base font-semibold text-text">{titre}</h2>
+        <span className="text-xs text-text-muted">{libelle}</span>
       </div>
 
       <div className="mt-4 flex flex-1 flex-col gap-6">
@@ -62,7 +68,9 @@ export function CashFlowSummary({
 
         {aucuneEntree && (
           <p className="mt-auto rounded-control bg-surface-page px-3.5 py-3 text-[13px] leading-relaxed text-text-muted">
-            Aucune entrée enregistrée ce mois-ci.{" "}
+            {/* « sur cette période » et non « ce mois-ci » : sous une plage précise, la
+                carte n'agrège pas un mois (TOOLBAR-DATE-PRECISE1). */}
+            Aucune entrée enregistrée sur cette période.{" "}
             <Link
               href="/echeances"
               className="font-semibold text-primary underline-offset-2 hover:underline
@@ -83,7 +91,7 @@ function BlocDevise({
   synthese,
   afficherDevise,
 }: {
-  synthese: SyntheseMoisDevise;
+  synthese: SynthesePeriodeDevise;
   afficherDevise: boolean;
 }) {
   const devise = synthese.currency;

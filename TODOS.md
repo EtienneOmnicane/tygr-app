@@ -211,29 +211,67 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   et d'ÉCRITURE (sync silencieusement vide), pas une dette d'isolation (la RLS reste la garde,
   aucune fuite cross-tenant : le filtre ne fait que RÉTRÉCIR).
 
-- [ ] **TOOLBAR-DATE-PRECISE1 (P2, effort ~0,5 j, 2026-07-13) — ajouter un sélecteur de DATE
-  PRÉCISE (plage dd/mm/yyyy → dd/mm/yyyy) dans la barre de vue, en complément des presets de
-  période.** Aujourd'hui `PeriodeSwitcher` n'offre que les presets Ce mois/3m/6m/12m/Tout via
-  `?periode` (`periode-switcher.tsx`, lib `src/lib/periode.ts`). Ajouter une plage explicite :
-  nouveaux search params (ex. `?du`/`?au`), la lib `periode.ts` doit gérer « plage explicite
-  prime sur preset » (résolution + garde `du ≤ au`), rendu FR via `src/lib/format-date.ts`
-  (jamais de découpe de date maison — §Formatage). Emplacement : `AppTopbar` à côté du
-  `PeriodeSwitcher` (`app-topbar.tsx:44-58`). NB : `/transactions` porte DÉJÀ des bornes de
-  date in-page (`transactions-toolbar.tsx:233-265`) → cette plage globale les rendra
-  redondantes (cf. TX-TOOLBAR-DEDUP1). **Déclencheur** : chantier « barre de vue globale »
-  (lot avec TOOLBAR-GLOBALE-CADRAGE1) OU demande terrain d'une plage précise hors presets.
+- [x] **TOOLBAR-DATE-PRECISE1 (P2, effort ~0,5 j, 2026-07-13) — ajouter un sélecteur de DATE
+  PRÉCISE (plage `?du`/`?au`) dans la barre de vue, en complément des presets de période.**
+  ✅ **LIVRÉ 2026-07-14 (lot A1)** — branche `feat/toolbar-date-precise`, plan
+  `PLAN-toolbar-date-precise.md`. `src/lib/periode.ts` gère « **plage explicite prime sur
+  preset** » (`lirePlage` = source UNIQUE de validation, partagée serveur/UI : dates
+  calendaires réelles via `estDateISO`, garde `du ≤ au`, amplitude bornée à `MAX_MOIS_PLAGE`
+  = 120 mois — anti-abus d'un `?du` forgé ; toute plage inexploitable → repli silencieux sur
+  le preset). `BornesPeriode.preset` devient `PresetPeriode | null` (null sous plage = garde
+  anti-mensonge au niveau du TYPE). UI : `plage-dates-switcher.tsx` (client) + le
+  `PeriodeSwitcher` n'allume AUCUN segment sous plage (et un clic sur un preset efface la
+  plage). **Câblage serveur RÉEL** : `(dashboard)/page.tsx` → `resoudrePeriode(searchParams)`.
+  ⚠️ **Périmètre RÉDUIT au Dashboard** (arbitrage Etienne, cf. GRAPHIQUES-PERIODE-DEDUP1
+  ci-dessous et TX-TOOLBAR-DEDUP1) : c'est la SEULE page qui lit ces params. La garde CI
+  « une page qui MONTE la période DOIT la LIRE » (`tests/unit/toolbar-config.test.ts`) rend
+  désormais impossible d'afficher un contrôle de période qui ne filtre rien.
+  ⚠️ **BLOQUANT trouvé en cross-review et corrigé (arbitrage Etienne 2026-07-14)** : deux des
+  quatre lectures du Dashboard n'étaient PAS bornées au jour — `syntheseMoisParDevise(mois)`
+  et `syntheseParMois({moisFin, nbMois})` agrégeaient au **MOIS ENTIER**. Invisible avec les
+  presets (leur `from` tombe toujours un 1er du mois → l'agrégat coïncidait), mais une plage
+  « 3 mars → 17 avril » aurait affiché **avril entier** sous une barre annonçant « au 17/04 » :
+  le mensonge d'affichage déplacé de la barre vers la DONNÉE FINANCIÈRE. Les deux repos
+  prennent désormais `{from, to}` (renommage `synthesePeriodeParDevise` / type
+  `SynthesePeriodeDevise` — ils n'agrègent plus « un mois ») ; le GROUP BY reste mensuel, donc
+  sous plage les **mois d'extrémité sont PARTIELS**, ce que le nouveau `libellePeriode`
+  (source unique, calculé par la page) annonce partout — en-tête, Top contreparties, tendance,
+  `aria-label` du graphe — et la carte devient « Synthèse de la période ». Zéro régression sous
+  preset (le mois d'ancrage ENTIER est repassé explicitement). Preuves en suite d'isolation.
+
+- [ ] **GRAPHIQUES-PERIODE-DEDUP1 (P2, effort ~0,5 j, 2026-07-14) — unifier la période de
+  `/graphiques` sur la barre de vue (retirer le sélecteur de période IN-PAGE).** Jumelle de
+  TX-TOOLBAR-DEDUP1, **découverte au cadrage du lot A1** : `graphiques/page.tsx` ne prend même
+  pas `searchParams` — le `PeriodeSwitcher` que la matrice A2 y montait ne filtrait donc RIEN,
+  pendant que le vrai filtre (segmenté « Ce mois-ci / 30 j / 90 j / 12 mois ») vit in-page
+  (`graphiques-feature.tsx:173`, Server Action `analyserCategoriesAction` + `periode-analyse.ts`).
+  **Mitigation immédiate (A1)** : `periode: false` sur `/graphiques` → le no-op est retiré (zéro
+  régression : le filtre in-page reste maître). **Reste à faire** : faire porter les bornes par
+  l'URL (la barre devient source unique), ce qui suppose de **trancher le conflit de
+  vocabulaire des presets** — la barre n'a pas de fenêtre glissante 30 j/90 j, Graphiques n'a
+  pas de « Tout » — puis d'adapter la Server Action (aujourd'hui son contrat est « le client
+  n'envoie qu'un preset fermé, jamais des dates »). ⚠️ Arbitrage PRODUIT requis avant code.
+  **Déclencheur** : le chantier qui tranche la propriété des filtres (avec TX-TOOLBAR-DEDUP1),
+  ou une demande terrain de plage précise sur les graphiques.
 
 - [ ] **TX-TOOLBAR-DEDUP1 (P2, effort ~0,25 j, 2026-07-13) — retirer de la toolbar
   `/transactions` les contrôles qui DOUBLONNENT la barre de vue globale une fois celle-ci
-  posée.** Corollaire de TOOLBAR-DATE-PRECISE1 : dès que la plage de dates vit dans la toolbar
-  globale, les bornes de date in-page (`transactions-toolbar.tsx:233-265`) et toute notion de
-  période in-page deviennent une SECONDE source de filtre concurrente sur le même écran → à
-  supprimer. PRÉCÉDENT exact déjà appliqué : le sélecteur de compte a été retiré de cette
-  toolbar au profit du `PerimetreSwitcher` global (`transactions-toolbar.tsx:13-16`, « retrait
-  feedback 0709 : doublon moche du sélecteur navbar ») → même geste pour les dates. ⚠️ Ne PAS
-  retirer le filtre STATUT ni la recherche (propres à `/transactions`, absents de la toolbar
-  globale). **Déclencheur** : une fois TOOLBAR-DATE-PRECISE1 livrée (sinon on retire un filtre
-  sans remplaçant).
+  posée.** Corollaire de TOOLBAR-DATE-PRECISE1 (livrée) : dès que la plage de dates vit dans la
+  toolbar globale, les bornes de date in-page (`transactions-toolbar.tsx:233-265`) et toute
+  notion de période in-page deviennent une SECONDE source de filtre concurrente sur le même
+  écran → à supprimer. PRÉCÉDENT exact déjà appliqué : le sélecteur de compte a été retiré de
+  cette toolbar au profit du `PerimetreSwitcher` global (`transactions-toolbar.tsx:13-16`,
+  « retrait feedback 0709 : doublon moche du sélecteur navbar ») → même geste pour les dates.
+  ⚠️ Ne PAS retirer le filtre STATUT ni la recherche (propres à `/transactions`, absents de la
+  toolbar globale). ⚠️ **DETTE PRÉCISÉE PAR A1 (2026-07-14)** : `/transactions` garde
+  `periode: true` dans la matrice alors que sa page **ne lit PAS `?periode`** → ce
+  PeriodeSwitcher est un **NO-OP** aujourd'hui (mensonge d'affichage, laissé INTACT sur
+  arbitrage pour ne pas créer deux filtres de dates concurrents avant d'avoir retiré ceux de la
+  page). Il est tracké : `transactions` est l'UNIQUE **exemption nommée** de la garde CI
+  anti-mensonge (`SEGMENTS_PERIODE_NON_CABLEE`, `tests/unit/toolbar-config.test.ts`). **Ce lot
+  DOIT supprimer cette exemption** (et non l'allonger) : retirer les dates in-page, câbler la
+  page sur `resoudrePeriode(searchParams)`, puis passer `plageDates: true` dans la matrice.
+  **Déclencheur** : maintenant que TOOLBAR-DATE-PRECISE1 est livrée (le remplaçant existe).
 
 - [ ] **TX-RECHERCHE-LAYOUTSHIFT1 (P2, effort ~0,25-0,5 j, 2026-07-13) — UX : la recherche par
   libellé fait « sauter » l'écran à chaque rechargement de résultats.** ⚠️ NUANCE de recon

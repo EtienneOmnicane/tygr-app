@@ -94,7 +94,7 @@ afterAll(async () => {
 describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => {
   it("groupe par mois ET par devise sur la fenêtre (3 mois finissant en juin)", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     // Mois attendus : 2026-04 (MUR), 2026-05 (MUR), 2026-06 (MUR + USD) = 4 lignes.
     // Ordre : chronologique puis devise.
@@ -108,7 +108,7 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
   it("calcule entrées/sorties/variation par mois (MUR)", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     const mai = serie.find((l) => l.mois === "2026-05" && l.currency === "MUR")!;
     expect(mai.entrees).toBe("2000.00");
@@ -125,7 +125,7 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
   it("FUSEAU Maurice : la transaction 31/05 22:00 UTC compte en JUIN, pas en mai", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     const mai = serie.find((l) => l.mois === "2026-05" && l.currency === "MUR")!;
     // Si le fuseau était ignoré, le 40 tomberait en mai (entrées 2040). Il est en juin.
@@ -134,7 +134,7 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
   it("multi-devises : USD séparé du MUR, jamais additionné", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     const usd = serie.find((l) => l.mois === "2026-06" && l.currency === "USD")!;
     expect(usd.entrees).toBe("700.00");
@@ -143,18 +143,58 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
   it("fenêtre nbMois : demander 2 mois (mai+juin) EXCLUT avril", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 2 }),
+      syntheseParMois(tx, { from: "2026-05-01", to: "2026-06-30" }),
     );
     expect(serie.some((l) => l.mois === "2026-04")).toBe(false);
     expect(serie.some((l) => l.mois === "2026-05")).toBe(true);
     expect(serie.some((l) => l.mois === "2026-06")).toBe(true);
   });
 
+  it("PLAGE PRÉCISE : les bornes coupent À L'INTÉRIEUR des mois d'extrémité (mois PARTIELS)", async () => {
+    // LE cas que corrige TOOLBAR-DATE-PRECISE1 (constat BLOQUANT de cross-review) : avant,
+    // la fenêtre était calée sur des BORDS DE MOIS ({moisFin, nbMois}) — une plage
+    // « 15 mai → 6 juin » aurait donc agrégé MAI ENTIER + JUIN ENTIER, soit des montants
+    // HORS période sous une barre annonçant « au 06/06 ». On prouve ici que les deux bornes
+    // mordent au JOUR, des DEUX côtés.
+    const serie = await withWorkspace(sessionA, (tx) =>
+      syntheseParMois(tx, { from: "2026-05-15", to: "2026-06-06" }),
+    );
+
+    const mai = serie.find((l) => l.mois === "2026-05" && l.currency === "MUR")!;
+    // Le crédit 2000 du 12/05 est AVANT `from` → exclu. Seul le débit 500 du 20/05 reste.
+    expect(mai.entrees).toBe("0");
+    expect(mai.sorties).toBe("500.00");
+
+    const juin = serie.find((l) => l.mois === "2026-06" && l.currency === "MUR")!;
+    // Entrées : 40 (01/06, transaction tardive UTC) + 1000 (05/06) = 1040.
+    // Le débit 300 du 08/06 est APRÈS `to` → EXCLU (c'est lui qui trahissait le bug).
+    expect(juin.entrees).toBe("1040.00");
+    expect(juin.sorties).toBe("0");
+
+    // Multi-devise préservé : l'USD du 06/06 est DANS la plage (borne haute INCLUSIVE).
+    const usd = serie.find((l) => l.mois === "2026-06" && l.currency === "USD")!;
+    expect(usd.entrees).toBe("700.00");
+  });
+
+  it("PLAGE d'UN SEUL JOUR : bornes inclusives des deux côtés", async () => {
+    const serie = await withWorkspace(sessionA, (tx) =>
+      syntheseParMois(tx, { from: "2026-06-05", to: "2026-06-05" }),
+    );
+    // Uniquement le crédit 1000 du 05/06 (ni le 40 du 01/06, ni le débit 300 du 08/06).
+    expect(serie).toHaveLength(1);
+    expect(serie[0]).toMatchObject({
+      mois: "2026-06",
+      currency: "MUR",
+      entrees: "1000.00",
+      sorties: "0",
+    });
+  });
+
   it("mois sans transaction : absent de la série (pas de ligne fabriquée)", async () => {
     // Juillet n'a aucune transaction → demander une fenêtre incluant juillet ne
     // crée pas de ligne juillet (le Front comble l'axe s'il le souhaite).
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-07", nbMois: 2 }),
+      syntheseParMois(tx, { from: "2026-06-01", to: "2026-07-31" }),
     );
     expect(serie.some((l) => l.mois === "2026-07")).toBe(false);
     expect(serie.some((l) => l.mois === "2026-06")).toBe(true);
@@ -162,7 +202,7 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
   it("ISOLATION : la série de A ne contient jamais le débit 7777 de B", async () => {
     const serie = await withWorkspace(sessionA, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     const juin = serie.find((l) => l.mois === "2026-06" && l.currency === "MUR")!;
     // 7777 n'entre jamais dans les sorties de A (RLS tenant_isolation).
@@ -170,7 +210,7 @@ describe("syntheseParMois — série temporelle mensuelle (Cash In/Out)", () => 
 
     // Et B voit SES flux, pas ceux de A.
     const serieB = await withWorkspace(sessionB, (tx) =>
-      syntheseParMois(tx, { moisFin: "2026-06", nbMois: 3 }),
+      syntheseParMois(tx, { from: "2026-04-01", to: "2026-06-30" }),
     );
     expect(serieB).toHaveLength(1);
     expect(serieB[0]).toMatchObject({ mois: "2026-06", currency: "MUR", sorties: "7777.00" });
