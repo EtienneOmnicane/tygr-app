@@ -22,8 +22,9 @@
  * Tokens sémantiques uniquement : onglet/option actifs en `primary`, JAMAIS vert/rouge
  * de donnée (réservés aux montants inflow/outflow).
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useActionState } from "react";
+import { usePathname } from "next/navigation";
 
 import {
   definirViewFilter,
@@ -45,6 +46,41 @@ function cn(...classes: Array<string | false | null | undefined>): string {
 }
 
 const ETAT_INITIAL: EtatPerimetre = { erreur: null };
+
+/**
+ * Souscription au retour/avance navigateur. Référence STABLE (module-level) : passée
+ * à `useSyncExternalStore`, une closure recréée à chaque rendu re-souscrirait en boucle.
+ */
+function souscrireHistorique(surChangement: () => void): () => void {
+  window.addEventListener("popstate", surChangement);
+  return () => window.removeEventListener("popstate", surChangement);
+}
+
+/**
+ * Query string COURANTE (`?periode=3m`), lue depuis `window.location` — composant du
+ * chemin de RETOUR posté aux actions de périmètre (A4).
+ *
+ * `useSyncExternalStore` et PAS un `useState` + `useEffect` : lire une source externe
+ * mutable est exactement son rôle, et un `setState` dans un effet est interdit
+ * (`react-hooks/set-state-in-effect` — cascades de rendus).
+ *   - SSR + hydratation : `getServerSnapshot` rend `""` des deux côtés → aucun
+ *     mismatch ; React relit ensuite la vraie valeur après hydratation.
+ *   - Client : le snapshot est relu à CHAQUE rendu — donc à l'ouverture du popover,
+ *     le seul instant qui compte (le <form>, donc le champ caché, n'existe QUE popover
+ *     ouvert). C'est ce qui rattrape `?periode`, écrit par PeriodeSwitcher via
+ *     `router.replace` SANS changer le pathname (periode-switcher.tsx:69) — un effet
+ *     dépendant de [pathname] aurait laissé la query périmée.
+ *   - `popstate` (retour navigateur) notifie React explicitement.
+ * Le snapshot est une CHAÎNE (primitive) : comparaison par valeur, donc pas de boucle
+ * « getSnapshot should be cached » (qui ne frappe que les objets recréés).
+ */
+function useChaineRequete(): string {
+  return useSyncExternalStore(
+    souscrireHistorique,
+    () => window.location.search,
+    () => "",
+  );
+}
 
 type Onglet = "compte" | "entite";
 
@@ -217,6 +253,19 @@ export function PerimetreSwitcher({
     if (ouvert) requestAnimationFrame(() => inputRechercheRef.current?.focus());
   }, [ouvert]);
 
+  // ─── Chemin de RETOUR posté aux deux actions (A4 / PERIMETRE-REDIRECT-PAGE1) ───
+  // « Appliquer » revient sur la page COURANTE au lieu de téléporter au dashboard
+  // (`redirect("/")` en dur). Ce champ est du CONFORT, pas une garde : le serveur le
+  // RE-VALIDE (validerCheminInterne — anti-open-redirect) et retombe sur "/" sinon.
+  //
+  // `usePathname` + `useChaineRequete`, et PAS `useSearchParams` : ce dernier force le
+  // bail-out CSR du prerender de toute la route quand le composant n'est pas sous
+  // <Suspense> — c'est le cas ici (cf. app-topbar.tsx, où seul PeriodeSwitcher l'est).
+  // La query compte : sans elle, revenir sur /transactions ferait sauter `?periode=3m`.
+  const pathname = usePathname();
+  const chaineRequete = useChaineRequete();
+  const origine = `${pathname}${chaineRequete}`;
+
   // Libellé du déclencheur (FERMÉ) : dérivé de la vérité serveur `viewFilterActif`.
   //   « Tous les comptes » (0)  →  « Sucre » si le filtre = exactement une entité (C5)
   //   →  le nom du compte (1 compte, hors entité)  →  « N comptes » (repli / péremption).
@@ -385,6 +434,10 @@ export function PerimetreSwitcher({
           {ongletEffectif === "compte" ? (
             /* ───────── Onglet « Par compte » (L8b-1) — INCHANGÉ ───────── */
             <form action={actionCompte} role="tabpanel" aria-label="Filtrer par compte">
+              {/* Page de RETOUR (A4) : l'action y revient au lieu du dashboard.
+                  Falsifiable → RE-VALIDÉE serveur (validerCheminInterne). */}
+              <input type="hidden" name="origine" value={origine} />
+
               {/* Option « Tous les comptes » épinglée = état PAR DÉFAUT / reset
                   (décocher tout). Encadré accent permanent (retour), ✓ quand actif. */}
               <button
@@ -549,6 +602,11 @@ export function PerimetreSwitcher({
               role="tabpanel"
               aria-label="Filtrer par entité"
             >
+              {/* Page de RETOUR (A4) — posté quelle que soit l'action choisie
+                  ci-dessus (definirViewFilter sur « Groupe », definirPerimetreEntite
+                  sinon) : les DEUX la consomment. RE-VALIDÉE serveur. */}
+              <input type="hidden" name="origine" value={origine} />
+
               {/* « Groupe » épinglée = état par défaut / reset. Comme l'onglet « Par
                   compte », on sélectionne ici (setState) puis on valide via Appliquer
                   (qui poste definirViewFilter avec [] tant qu'aucune entité n'est
