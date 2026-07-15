@@ -1,10 +1,15 @@
 /**
  * Carte « Synthèse du mois » — vision Entrées / Sorties / Variation nette du mois
- * courant. Refonte Dodo (maquette Dodo.dc.html §Synthèse du mois) : posée dans la
- * COLONNE DROITE (1fr) du dashboard, à côté de la carte Flux (2fr). Le format passe
- * de deux blocs teintés côte à côte à des LIGNES EMPILÉES (Entrées / Sorties /
- * Variation nette), plus lisibles dans une colonne étroite et symétriques avec la
- * hauteur de la carte Flux.
+ * courant. Refonte Dodo (maquette Dodo.dc.html §Synthèse du mois).
+ *
+ * DISPOSITION (prop `disposition`, le conteneur décide — composant présentationnel pur) :
+ *   - "empile" (défaut) : lignes empilées Entrées / Sorties / Variation, une pile par
+ *     devise — format historique, adapté à une colonne étroite.
+ *   - "bandeau" : posée PLEINE LARGEUR sous le graphe de flux (retrait de la carte
+ *     « Comptes connectés », DASH-RETIRER-COMPTES-CONNECTES1). Mono-devise → 3 colonnes
+ *     KPI Entrées | Sorties | Variation (symétrique, comble l'espace sous le graphe) ;
+ *     multi-devise → repli sur les piles par devise disposées en grille bornée (évite
+ *     l'étalement d'une pile unique sur toute la largeur).
  *
  * Présentationnel PUR : reçoit `synthesesMois` (sortie du service
  * `synthesePeriodeParDevise`, déjà agrégée EN SQL) + le mois courant, NE recalcule
@@ -12,14 +17,14 @@
  *
  * ⚠️ Multi-devises (CLAUDE.md règle 8) : `synthesePeriodeParDevise` renvoie UNE entrée
  * PAR devise (GROUP BY currency). On affiche donc un groupe Entrées/Sorties/Variation
- * PAR devise, empilé — JAMAIS d'addition cross-devise, aucune conversion FX (chantier
- * DASH-FX1). Mois sans transaction → tableau vide → on affiche 0 dans la devise de
- * base (repli `replierSynthesesMois`).
+ * PAR devise — JAMAIS d'addition cross-devise, aucune conversion FX (chantier DASH-FX1).
+ * Mois sans transaction → tableau vide → 0 dans la devise de base (repli
+ * `replierSynthesesMois`).
  *
  * Couleurs (§3.1) : vert/rouge réservés à la DONNÉE — entrées `inflow-700` / sorties
- * `outflow-700`, variation colorée par son signe. `tabular-nums` (§0) pour
- * l'alignement des chiffres. La note « aucune entrée » n'apparaît que si le flux
- * d'entrées est nul (aide contextuelle vers les échéances), en tokens neutres.
+ * `outflow-700`, variation colorée par son signe. `tabular-nums` (§0) pour l'alignement
+ * des chiffres. La note « aucune entrée » n'apparaît que si le flux d'entrées est nul
+ * (aide contextuelle vers les échéances), en tokens neutres.
  */
 import Link from "next/link";
 
@@ -34,6 +39,7 @@ export function CashFlowSummary({
   titre = "Synthèse du mois",
   libelle,
   devise = "MUR",
+  disposition = "empile",
 }: {
   /** Entrées/sorties/variation de la période PAR DEVISE (chaînes décimales, déjà agrégées). */
   synthesesMois: SynthesePeriodeDevise[];
@@ -47,12 +53,19 @@ export function CashFlowSummary({
   libelle: string;
   /** Devise de base du workspace (repli quand aucune transaction sur la période). */
   devise?: string;
+  /**
+   * Mise en page — le CONTENEUR décide (composant pur) : "empile" (colonne étroite,
+   * défaut historique) ou "bandeau" (pleine largeur sous le graphe, mono-devise en
+   * 3 colonnes KPI).
+   */
+  disposition?: "empile" | "bandeau";
 }) {
   // Repli : aucune donnée le mois → 0 dans la devise de base (jamais une carte vide).
   const lignes = replierSynthesesMois(synthesesMois, devise);
   const multi = lignes.length > 1;
   // Aide contextuelle : aucune ENTRÉE sur la 1re devise → on oriente vers les échéances.
   const aucuneEntree = estZero(lignes[0]!.entrees);
+  const bandeau = disposition === "bandeau";
 
   return (
     <StateCard className="flex flex-col">
@@ -61,28 +74,113 @@ export function CashFlowSummary({
         <span className="text-xs text-text-muted">{libelle}</span>
       </div>
 
-      <div className="mt-4 flex flex-1 flex-col gap-6">
-        {lignes.map((s) => (
-          <BlocDevise key={s.currency} synthese={s} afficherDevise={multi} />
-        ))}
+      {bandeau ? (
+        <div className="mt-5">
+          {multi ? (
+            /* Multi-devise : piles par devise en grille bornée — évite l'étalement
+               d'une pile unique sur toute la largeur (jamais d'addition cross-devise). */
+            <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
+              {lignes.map((s) => (
+                <BlocDevise key={s.currency} synthese={s} afficherDevise />
+              ))}
+            </div>
+          ) : (
+            /* Mono-devise : bandeau 3 colonnes KPI (symétrique) ; empile sous `sm`. */
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+              <ColonneKpi
+                label="Entrées"
+                valeur={formatMontant(lignes[0]!.entrees, lignes[0]!.currency, {
+                  signeExplicite: true,
+                })}
+                couleur="text-inflow-700"
+              />
+              <ColonneKpi
+                label="Sorties"
+                valeur={formatMontant(lignes[0]!.sorties, lignes[0]!.currency)}
+                couleur="text-outflow-700"
+              />
+              <ColonneKpi
+                label="Variation nette"
+                valeur={formatMontant(lignes[0]!.variation, lignes[0]!.currency, {
+                  signeExplicite: true,
+                })}
+                couleur={couleurVariation(lignes[0]!.variation)}
+              />
+            </div>
+          )}
 
-        {aucuneEntree && (
-          <p className="mt-auto rounded-control bg-surface-page px-3.5 py-3 text-[13px] leading-relaxed text-text-muted">
-            {/* « sur cette période » et non « ce mois-ci » : sous une plage précise, la
-                carte n'agrège pas un mois (TOOLBAR-DATE-PRECISE1). */}
-            Aucune entrée enregistrée sur cette période.{" "}
-            <Link
-              href="/echeances"
-              className="font-semibold text-primary underline-offset-2 hover:underline
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-                focus-visible:ring-offset-2 rounded-[2px]"
-            >
-              Voir les échéances à venir
-            </Link>
-          </p>
-        )}
-      </div>
+          {aucuneEntree && <NoteAucuneEntree className="mt-6" />}
+        </div>
+      ) : (
+        /* Disposition empilée (défaut historique — colonne étroite, inchangée). */
+        <div className="mt-4 flex flex-1 flex-col gap-6">
+          {lignes.map((s) => (
+            <BlocDevise key={s.currency} synthese={s} afficherDevise={multi} />
+          ))}
+
+          {aucuneEntree && <NoteAucuneEntree className="mt-auto" />}
+        </div>
+      )}
     </StateCard>
+  );
+}
+
+/**
+ * Couleur d'un montant de VARIATION selon son signe (§3.1) : excédent → inflow,
+ * déficit → outflow, nul → texte neutre. Source UNIQUE de la règle, partagée par
+ * `BlocDevise` (empilé) ET le bandeau mono-devise — pas de duplication (règle 6).
+ */
+function couleurVariation(variation: string): string {
+  if (estZero(variation)) return "text-text";
+  return estNegatif(variation) ? "text-outflow-700" : "text-inflow-700";
+}
+
+/**
+ * Colonne KPI du bandeau (mono-devise) : label de section au-dessus, montant coloré
+ * dessous — échelle KPI (§2.1 : label 11px uppercase, montant 18px/600 tabular).
+ */
+function ColonneKpi({
+  label,
+  valeur,
+  couleur,
+}: {
+  label: string;
+  valeur: string;
+  couleur: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+        {label}
+      </span>
+      {/* Montant jamais tronqué (chiffre clé, règle 8) : `whitespace-nowrap tabular-nums`. */}
+      <span
+        className={`whitespace-nowrap text-lg font-semibold tabular-nums ${couleur}`}
+      >
+        {valeur}
+      </span>
+    </div>
+  );
+}
+
+/** Aide contextuelle « aucune entrée » → lien vers les échéances (tokens neutres). */
+function NoteAucuneEntree({ className = "" }: { className?: string }) {
+  return (
+    <p
+      className={`rounded-control bg-surface-page px-3.5 py-3 text-[13px] leading-relaxed text-text-muted ${className}`}
+    >
+      {/* « sur cette période » et non « ce mois-ci » : sous une plage précise, la carte
+          n'agrège pas un mois (TOOLBAR-DATE-PRECISE1). */}
+      Aucune entrée enregistrée sur cette période.{" "}
+      <Link
+        href="/echeances"
+        className="font-semibold text-primary underline-offset-2 hover:underline
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+          focus-visible:ring-offset-2 rounded-[2px]"
+      >
+        Voir les échéances à venir
+      </Link>
+    </p>
   );
 }
 
@@ -95,14 +193,6 @@ function BlocDevise({
   afficherDevise: boolean;
 }) {
   const devise = synthese.currency;
-  // La variation peut être positive (excédent), négative (déficit) ou nulle.
-  const variationNegative = estNegatif(synthese.variation);
-  const variationNulle = estZero(synthese.variation);
-  const couleurVariation = variationNulle
-    ? "text-text"
-    : variationNegative
-      ? "text-outflow-700"
-      : "text-inflow-700";
 
   return (
     <div>
@@ -130,7 +220,7 @@ function BlocDevise({
         valeur={formatMontant(synthese.variation, devise, {
           signeExplicite: true,
         })}
-        couleur={couleurVariation}
+        couleur={couleurVariation(synthese.variation)}
         accent
         derniere
       />

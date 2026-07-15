@@ -11,8 +11,10 @@
  *      à droite, fraîcheur du solde + bouton « Synchroniser ».
  *   2. Rangée KPI « Soldes par devise » horizontale (SoldesDevisesRow), carte de
  *      la devise de base mise en avant (ink).
- *   3. Grille 2fr/1fr : Flux de trésorerie (ancre) + Synthèse du mois côte à côte.
- *   4. Comptes connectés en PLEINE LARGEUR.
+ *   3. Flux de trésorerie — ANCRE PLEINE LARGEUR (UI_GUIDELINES §6.1/§6.7 : une seule
+ *      ancre par écran ; sans KPI contextuel à droite, on passe pleine largeur).
+ *   4. Synthèse du mois en BANDEAU horizontal sous le graphe (Entrées | Sorties |
+ *      Variation en mono-devise ; repli empilé par devise en multi-devise).
  *   5. Features conservées hors maquette (Top contreparties, Évolution mensuelle,
  *      Transactions récentes), empilées pleine largeur dessous.
  *
@@ -45,7 +47,6 @@ import { StateCard } from "@/components/dashboard/states/primitives";
 import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { SyncButton } from "@/components/dashboard/sync-button";
-import { ConnectedAccountsCard } from "@/components/dashboard/connected-accounts-card";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
@@ -170,42 +171,30 @@ export function DashboardContent({
           devise={devise}
         />
 
-        {/* 3. GRILLE 2fr / 1fr : Flux de trésorerie (ancre, colonne gauche) + pile
-            droite « Synthèse du mois » PUIS « Comptes connectés » (demande Etienne :
-            remonter les comptes dans l'espace résiduel à droite du graphe — la
-            Synthèse est plus courte que le graphe, la colonne droite restait creuse).
-            lg:grid-cols-3 → col-span-2 (2/3) + col-span-1 (1/3) = 2fr/1fr ; empilé
-            sous lg. */}
-        <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-3">
-          {/* Ancre : FLUX mensuel en barres (entrées/sorties). Consomme les séries
-              déjà chargées par la page (zéro fetch). */}
-          <div className="lg:col-span-2">
-            <FluxTresorerieCard
-              serieMensuelle={serieMensuelle}
-              grilleMensuelle={grilleMensuelle}
-              devise={devise}
-              libellePeriode={libellePeriode}
-            />
-          </div>
-          {/* Colonne droite (1fr) : Synthèse du mois PUIS Comptes connectés, empilés,
-              pour occuper la hauteur du graphe plutôt que de laisser un vide. */}
-          <div className="flex flex-col gap-3.5 lg:col-span-1">
-            {/* Synthèse du mois (Entrées / Sorties / Variation), VENTILÉE PAR DEVISE. */}
-            <CashFlowSummary
-              synthesesMois={synthesesMois}
-              titre={syntheseTitre}
-              libelle={syntheseLibelle}
-              devise={devise}
-            />
-            {/* Comptes connectés — remontés dans la colonne droite (sortis de la
-                pleine largeur) pour combler l'espace à droite du graphe. La carte
-                reste robuste en colonne étroite : libellés `truncate`, montants
-                `shrink-0 whitespace-nowrap tabular-nums` (jamais tronqués). */}
-            <ConnectedAccountsCard comptes={comptes} />
-          </div>
-        </div>
+        {/* 3. FLUX DE TRÉSORERIE — ancre PLEINE LARGEUR (UI_GUIDELINES §6.1/§6.7 : une
+            seule ancre par écran ; pas de KPI contextuel à droite → pleine largeur).
+            `FluxBarres` mesure son SVG (ResizeObserver) → s'élargit seul. Zéro fetch. */}
+        <FluxTresorerieCard
+          serieMensuelle={serieMensuelle}
+          grilleMensuelle={grilleMensuelle}
+          devise={devise}
+          libellePeriode={libellePeriode}
+        />
 
-        {/* 4. FEATURES CONSERVÉES hors maquette, empilées pleine largeur. */}
+        {/* 4. SYNTHÈSE DU MOIS — bandeau horizontal sous le graphe (remplace l'ancienne
+            pile droite Synthèse + Comptes connectés, cette dernière retirée du dashboard).
+            `disposition="bandeau"` : mono-devise → 3 colonnes Entrées | Sorties | Variation
+            (comble l'espace, pas de creux) ; multi-devise → repli empilé PAR DEVISE
+            (jamais d'addition cross-devise, règle 8). */}
+        <CashFlowSummary
+          synthesesMois={synthesesMois}
+          titre={syntheseTitre}
+          libelle={syntheseLibelle}
+          devise={devise}
+          disposition="bandeau"
+        />
+
+        {/* 5. FEATURES CONSERVÉES hors maquette, empilées pleine largeur. */}
         {/* Top contreparties (concentration des postes, dérivé de la Voie A),
             fenêtrées sur la MÊME période que la courbe (FB0709-TOPVENDORS5) —
             le libellé reprend la formulation du sous-titre d'en-tête. */}
