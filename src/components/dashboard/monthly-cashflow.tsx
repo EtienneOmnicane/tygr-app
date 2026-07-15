@@ -105,15 +105,27 @@ export function MonthlyCashflow({
   );
 }
 
+// Zéro = absence de donnée, pas une donnée verte/rouge : rendu `text-faint`
+// (§4.1 — le vert/rouge sémantique est réservé aux mouvements réels ; un mois
+// vide coloré est du bruit).
+function estNul(montant: string): boolean {
+  return montant === "0" || montant === "0.00";
+}
+
 /** Une ligne du tableau : mois + entrées (vert) + sorties (rouge) + variation. */
 function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
   const variationNegative = mois.variation.trim().startsWith("-");
-  const variationNulle = mois.variation === "0" || mois.variation === "0.00";
-  const couleurVariation = variationNulle
-    ? "text-text"
+  const couleurVariation = estNul(mois.variation)
+    ? "text-text-faint"
     : variationNegative
       ? "text-outflow-700"
       : "text-inflow-700";
+  const couleurEntrees = estNul(mois.entrees)
+    ? "text-text-faint"
+    : "text-inflow-700";
+  const couleurSorties = estNul(mois.sorties)
+    ? "text-text-faint"
+    : "text-outflow-700";
 
   return (
     <tr className="border-b border-line/60 last:border-0">
@@ -128,10 +140,14 @@ function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
           </span>
         )}
       </td>
-      <td className="py-2 px-3 text-right whitespace-nowrap tabular-nums text-inflow-700">
+      <td
+        className={`py-2 px-3 text-right whitespace-nowrap tabular-nums ${couleurEntrees}`}
+      >
         {formatMontant(mois.entrees, devise, { signeExplicite: true })}
       </td>
-      <td className="py-2 px-3 text-right whitespace-nowrap tabular-nums text-outflow-700">
+      <td
+        className={`py-2 px-3 text-right whitespace-nowrap tabular-nums ${couleurSorties}`}
+      >
         {formatMontant(mois.sorties, devise)}
       </td>
       <td
