@@ -47,6 +47,29 @@
   --color-text-faint: #8a8f9f;
   --color-text-onink: #ffffff;
 
+  /* Palette des BADGES de catégorie (CategoryBadge) — paires {fond pastel,
+   * texte 700 AA}, attribution par HASH d'identité (stable), décision
+   * plan-ceo-review 2026-06-17 §A4 + Visual QA (sarcelle/cyan retirés).
+   * DISTINCTE de la palette chart-cat-* du donut (attribution par RANG de
+   * montant) : deux référentiels assumés — convergence éventuelle = décision
+   * produit (TODOS DESIGN-CAT-COULEURS1), pas un détail d'implémentation. */
+  --color-cat-badge-1: #3730a3; /* indigo */
+  --color-cat-badge-1-bg: #eef2ff;
+  --color-cat-badge-2: #6d28d9; /* violet */
+  --color-cat-badge-2-bg: #f5f3ff;
+  --color-cat-badge-3: #b54708; /* ambre */
+  --color-cat-badge-3-bg: #fffaeb;
+  --color-cat-badge-4: #1e3a8a; /* bleu-acier (ex-cyan) */
+  --color-cat-badge-4-bg: #eff4ff;
+  --color-cat-badge-5: #7c4a21; /* brun-terre (ex-sarcelle) */
+  --color-cat-badge-5-bg: #faf6f2;
+  --color-cat-badge-6: #9d174d; /* rose */
+  --color-cat-badge-6-bg: #fdf2fa;
+  --color-cat-badge-7: #334155; /* ardoise */
+  --color-cat-badge-7-bg: #f8fafc;
+  --color-cat-badge-8: #86198f; /* fuchsia */
+  --color-cat-badge-8-bg: #faf5ff;
+
   --radius-card: 12px;
   --radius-control: 8px;
   --radius-modal: 16px;
