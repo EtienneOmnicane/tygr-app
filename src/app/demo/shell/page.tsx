@@ -16,6 +16,7 @@
  *    ADMIN / MANAGER → CTA actif (bouton ink) ; VIEWER → CTA désactivé (inerte + tooltip).
  */
 import { AppTopbar } from "@/components/shell/app-topbar";
+import { SidebarNav } from "@/components/shell/sidebar-nav";
 import type {
   CompteConnecte,
   EntiteVisible,
@@ -173,6 +174,24 @@ export default function DemoShellTopbar() {
           />
         </section>
       ))}
+
+      {/* 3. Persistance de la période dans la nav (TX/DASH-PERIODE-PERSIST1). La nav calcule
+          l'href de chaque lien depuis la matrice `toolbarConfig` (indépendante du pathname de
+          démo) : elle se comporte donc ICI comme en prod. On PILOTE la démo par la query de
+          l'URL : `/demo/shell?periode=3m` (ou `?du=…&au=…`) → seuls Dashboard & Transactions
+          portent la période dans leur `href` ; les autres liens restent nus. Le bouton
+          « Réinitialiser la période » (bloc 1, topbars de période) apparaît aussi hors défaut,
+          car il lit la MÊME query. */}
+      <h1 className="px-6 py-4 text-sm font-semibold text-ink">
+        3. Persistance de la période dans la nav (sidebar)
+      </h1>
+      <Etiquette
+        titre="Sidebar"
+        attendu="ajouter ?periode=3m (ou ?du=…&au=…) à l'URL de CETTE démo → seuls Dashboard & Transactions propagent la période dans leur href ; échéances / graphiques / banques / règles restent nus. Sans query : tous nus."
+      />
+      <div className="w-[232px] border-r border-line bg-surface-card p-4">
+        <SidebarNav />
+      </div>
     </div>
   );
 }

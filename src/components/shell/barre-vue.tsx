@@ -33,6 +33,7 @@ import { usePathname } from "next/navigation";
 import { PerimetreSwitcher } from "@/components/shell/perimetre-switcher";
 import { PeriodeSwitcher } from "@/components/shell/periode-switcher";
 import { PlageDatesSwitcher } from "@/components/shell/plage-dates-switcher";
+import { ReinitialiserPeriode } from "@/components/shell/reinitialiser-periode";
 import { toolbarConfig } from "@/components/shell/toolbar-config";
 import type {
   CompteConnecte,
@@ -142,6 +143,18 @@ export function BarreVue({
           }
         >
           <PlageDatesSwitcher />
+        </Suspense>
+      )}
+
+      {/* RÉINITIALISER LA PÉRIODE (TX/DASH-PERIODE-PERSIST1) : ramène le groupe période
+          ENTIER au défaut « 6 mois » (efface ?periode/?du/?au). Distinct du « × » du
+          PlageDatesSwitcher (qui n'efface que la plage). Gaté `config.periode` (monté dès que
+          le groupe période l'est) ; le composant se rend lui-même `null` tant qu'on est au
+          défaut (pas de bouton leurre). Sous <Suspense> car useSearchParams — fallback `null`,
+          c'est un contrôle secondaire (aucune dimension réservée à préserver). */}
+      {config.periode && (
+        <Suspense fallback={null}>
+          <ReinitialiserPeriode />
         </Suspense>
       )}
 
