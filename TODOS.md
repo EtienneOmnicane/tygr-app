@@ -5,6 +5,25 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Dashboard : carte « Comptes connectés » orpheline (2026-07-15)
+
+- [ ] **DASH-COMPTES-CONNECTES-ORPHELIN1 (P2, effort ~0,25 j, 2026-07-15) — DETTE :
+  `connected-accounts-card.tsx` n'est plus monté par le Dashboard.** Le ticket
+  DASH-RETIRER-COMPTES-CONNECTES1 (branche `fix/dashboard-retirer-comptes-connectes`,
+  `PLAN-dashboard-retirer-comptes-connectes.md`) a DÉBRANCHÉ la carte « Comptes connectés »
+  du dashboard (jugée redondante avec la nav latérale par Etienne) et rééquilibré le layout
+  (graphe `FluxTresorerieCard` pleine largeur + « Synthèse du mois » en bandeau horizontal).
+  Le composant `src/components/dashboard/connected-accounts-card.tsx` et sa démo
+  `src/app/demo/comptes-provenance/page.tsx` n'ont **PAS** été supprimés (règle 12/9 : dead
+  code préexistant → on signale, on ne supprime pas sans demande). Ils ne sont donc plus
+  référencés que par cette démo → **ORPHELINS**. La prop/fetch `comptes` reste utilisée par
+  le dashboard (compteur `SoldesDevisesRow`, pastille `synchroLaPlusRecente`, « N comptes »
+  du sous-titre) — seul le rendu de la carte a disparu. **À trancher** (recycler vs
+  supprimer) : soit la carte est recyclée sur une autre page (ex. future page « Comptes » /
+  détail de connexion), soit elle est supprimée avec sa démo. Pas une dette d'isolation/
+  append-only/montants (pur présentationnel). **Déclencheur** : prochaine décision produit
+  sur une page « Comptes » dédiée, OU revue de dead code de fin d'Epic 3 — l'un tranche.
+
 ### Barre de vue globale & bugs /transactions — backlog navbar (2026-07-13)
 
 Retour terrain Etienne (passe navbar + `/transactions`, 2026-07-13) : deux bugs
