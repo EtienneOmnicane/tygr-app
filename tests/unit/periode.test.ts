@@ -14,11 +14,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CLES_PERIODE,
   MAX_MOIS_PLAGE,
   PLANCHER_HISTORIQUE,
   PRESET_DEFAUT,
   aujourdhuiMaurice,
   dernierJourMois,
+  estHorsDefautPeriode,
   lirePlage,
   nbMoisEntre,
   normaliserPreset,
@@ -299,5 +301,46 @@ describe("resoudrePeriode — la PLAGE EXPLICITE prime sur le preset (règle du 
     expect(resoudrePeriode(plage, MAINTENANT)).toEqual(
       resoudrePeriode(plage, minuitMaurice),
     );
+  });
+});
+
+describe("CLES_PERIODE — clés de période centralisées (source unique nav ↔ serveur)", () => {
+  it("vaut exactement [periode, du, au]", () => {
+    expect(CLES_PERIODE).toEqual(["periode", "du", "au"]);
+  });
+
+  it("paramsPeriodeDepuisURL lit EXACTEMENT ces clés (aucune de plus, aucune de moins)", () => {
+    // La constante et la lecture serveur ne peuvent pas diverger : le jour où l'on ajoute une
+    // clé de période, elle doit apparaître dans les DEUX (garde au TYPE côté source). On fige
+    // ici le fait que la nav (qui propage `CLES_PERIODE`) et le serveur lisent le même jeu.
+    const params = paramsPeriodeDepuisURL(
+      new URLSearchParams("periode=3m&du=2026-03-03&au=2026-04-17&q=bruit"),
+    );
+    expect(Object.keys(params).sort()).toEqual([...CLES_PERIODE].sort());
+  });
+});
+
+describe("estHorsDefautPeriode — (c) pilote l'affichage du reset (mêmes gardes que le serveur)", () => {
+  it("AU DÉFAUT (→ pas de bouton) : rien, 6m explicite, valeur forgée, plage incomplète/inversée/dupliquée", () => {
+    expect(estHorsDefautPeriode({})).toBe(false);
+    expect(estHorsDefautPeriode({ periode: "6m" })).toBe(false);
+    expect(estHorsDefautPeriode({ periode: "bidon" })).toBe(false); // normalise en 6m
+    expect(estHorsDefautPeriode({ periode: "6M" })).toBe(false); // strict casse → 6m
+    expect(estHorsDefautPeriode({ du: "2026-03-03" })).toBe(false); // plage incomplète
+    expect(estHorsDefautPeriode({ du: "2026-04-17", au: "2026-03-03" })).toBe(false); // inversée
+    expect(
+      estHorsDefautPeriode({ du: ["2026-03-03"], au: "2026-04-17" }), // du dupliqué → rejeté
+    ).toBe(false);
+  });
+
+  it("HORS DÉFAUT (→ bouton visible) : un preset ≠ 6m, ou une plage valide (même sous ?periode=6m)", () => {
+    for (const p of ["ce-mois", "3m", "12m", "tout"] as const) {
+      expect(estHorsDefautPeriode({ periode: p })).toBe(true);
+    }
+    expect(estHorsDefautPeriode({ du: "2026-03-03", au: "2026-04-17" })).toBe(true);
+    // Une plage valide PRIME (comme resoudrePeriode) : hors défaut même si le preset est « 6m ».
+    expect(
+      estHorsDefautPeriode({ periode: "6m", du: "2026-03-03", au: "2026-04-17" }),
+    ).toBe(true);
   });
 });

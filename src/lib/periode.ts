@@ -108,6 +108,21 @@ export interface ParamsPeriode {
   au?: string | string[] | undefined;
 }
 
+/**
+ * Les 3 clés d'URL qui portent la période. SOURCE UNIQUE : lue par le serveur
+ * (`paramsPeriodeDepuisURL`), PROPAGÉE par la nav (`nav-periode.ts` — la période doit
+ * survivre au clic de sidebar) et PURGÉE par le reset. Toute lecture/écriture de période
+ * itère CETTE liste → aucune divergence possible (si la nav propageait « period » au lieu de
+ * « periode », ou oubliait « au », un lien perdrait silencieusement une borne).
+ *
+ * Garde au TYPE, pas seulement à la vigilance : `paramsPeriodeDepuisURL` construit son objet
+ * en assignant `params[cle]` pour `cle ∈ CLES_PERIODE` — ça ne compile que si
+ * `ClePeriode ⊆ keyof ParamsPeriode`. Ajouter une clé ici sans l'ajouter à `ParamsPeriode`
+ * casse le build.
+ */
+export const CLES_PERIODE = ["periode", "du", "au"] as const;
+export type ClePeriode = (typeof CLES_PERIODE)[number];
+
 /** Date du jour à Maurice « YYYY-MM-DD ». `maintenant` injectable (tests déterministes). */
 export function aujourdhuiMaurice(maintenant: Date = new Date()): string {
   return FMT_JOUR_MAURICE.format(maintenant);
@@ -203,7 +218,12 @@ export function paramsPeriodeDepuisURL(sp: URLSearchParams): ParamsPeriode {
     if (valeurs.length === 0) return undefined;
     return valeurs.length === 1 ? valeurs[0] : valeurs; // dupliqué → tableau → rejeté
   };
-  return { periode: lire("periode"), du: lire("du"), au: lire("au") };
+  // Itère `CLES_PERIODE` (et NON des littéraux « periode »/« du »/« au ») : la nav et le
+  // reset itèrent la MÊME liste → impossible de diverger. Le typage de la boucle est la garde
+  // (cf. CLES_PERIODE) : `params[cle] =` n'accepte `cle` que s'il est bien une clé de ParamsPeriode.
+  const params: ParamsPeriode = {};
+  for (const cle of CLES_PERIODE) params[cle] = lire(cle);
+  return params;
 }
 
 /**
@@ -237,6 +257,22 @@ export function lirePlage(params: ParamsPeriode): PlageExplicite | null {
   if (du < PLANCHER_HISTORIQUE) return null;
   if (nbMoisEntre(du, au.slice(0, 7)) > MAX_MOIS_PLAGE) return null;
   return { du, au };
+}
+
+/**
+ * La période est-elle RÉGLÉE au-delà du défaut « 6 mois » ? Vrai si une PLAGE explicite
+ * valide filtre (`?du`/`?au`) OU si un preset ≠ `PRESET_DEFAUT` est actif.
+ *
+ * Réutilise EXACTEMENT les gardes que le serveur applique (`lirePlage` + `normaliserPreset`)
+ * — aucune détection maison : un `?periode`/`?du` forgé, dupliqué ou incomplet retombe au
+ * défaut ICI comme côté page, donc le bouton reset n'apparaît pas pour une valeur qui, de
+ * toute façon, filtre déjà comme « 6 mois ». C'est ce qui pilote l'affichage du reset.
+ */
+export function estHorsDefautPeriode(params: ParamsPeriode): boolean {
+  return (
+    lirePlage(params) !== null ||
+    normaliserPreset(params.periode) !== PRESET_DEFAUT
+  );
 }
 
 /**
