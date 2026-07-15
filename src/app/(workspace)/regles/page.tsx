@@ -13,15 +13,19 @@
  * `peutModifier` (défense en profondeur — la vraie garde reste serveur). Un VIEWER
  * voit la liste en lecture seule.
  *
- * Authz (règle 3) : exigerSessionWorkspace + withWorkspace ; non auth → /login,
- * aucun workspace → /selection.
+ * Authz (règle 3) : exigerSessionSansPerimetre + withWorkspace ; non auth → /login,
+ * aucun workspace → /selection. Session AMPUTÉE du viewFilter (surface de GESTION
+ * tenant-wide, TOOLBAR-PERIMETRE-AMPUTATION1) : ici un NO-OP de correction (la page ne
+ * lit que règles/catégories/rôle, workspace-global) mais requis pour que l'invariant
+ * « la page tourne amputée » (toolbar-config.ts) tienne. La ré-analyse elle-même est
+ * amputée dans `appliquerReglesAction` (actions.ts) — c'est là qu'était le bug.
  */
 import { redirect } from "next/navigation";
 
 import { peutModifier } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionSansPerimetre,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { withWorkspace } from "@/server/db";
@@ -52,7 +56,7 @@ export default async function PageRegles({
 }) {
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    session = await exigerSessionSansPerimetre();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");

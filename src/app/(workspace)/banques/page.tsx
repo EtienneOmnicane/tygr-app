@@ -16,7 +16,7 @@ import { peutModifier } from "@/lib/permissions";
 import { listerConnexionsBancaires, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionSansPerimetre,
   NonAuthentifieError,
 } from "@/server/auth/session";
 
@@ -28,7 +28,7 @@ export const metadata = { title: "Connecter une banque — Dodo" };
 export default async function PageBanques() {
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    session = await exigerSessionSansPerimetre();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
