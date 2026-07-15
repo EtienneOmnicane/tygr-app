@@ -79,9 +79,10 @@ export function PlageDatesSwitcher() {
   const [cleUrlPrecedente, setCleUrlPrecedente] = useState(cleUrl);
   if (cleUrl !== cleUrlPrecedente) {
     setCleUrlPrecedente(cleUrl);
-    if (cleUrl !== dernierEcrit) {
-      setDu(plage?.du ?? "");
-      setAu(plage?.au ?? "");
+    const resync = resyncDepuisUrl(cleUrl, dernierEcrit, plage);
+    if (resync) {
+      setDu(resync.du);
+      setAu(resync.au);
     }
   }
 
@@ -97,15 +98,7 @@ export function PlageDatesSwitcher() {
     // Mémorise CE QU'ON ÉCRIT pour ne pas prendre notre propre écriture pour un changement
     // externe (et donc écraser le brouillon en cours de saisie).
     setDernierEcrit(nouvelle ? `${nouvelle.du}|${nouvelle.au}` : "|");
-    const params = new URLSearchParams(searchParams.toString());
-    if (nouvelle) {
-      params.set("du", nouvelle.du);
-      params.set("au", nouvelle.au);
-    } else {
-      params.delete("du");
-      params.delete("au");
-    }
-    const query = params.toString();
+    const query = parametresPlage(searchParams.toString(), nouvelle).toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
@@ -128,6 +121,20 @@ export function PlageDatesSwitcher() {
       return;
     }
     if (plage) ecrire(null);
+  }
+
+  /**
+   * Geste « × » : effacement VOLONTAIRE de la plage. Contrairement à l'édition en cours
+   * (protégée par `dernierEcrit`), ce geste DOIT forcer le vidage des DEUX champs. Sinon
+   * l'URL se nettoie (preset rallumé) mais les `<input>` gardent l'ancienne plage : la
+   * resynchro plus haut prend ce nettoyage pour notre propre écriture (`cleUrl === dernierEcrit
+   * === "|"` via `resyncDepuisUrl`) et n'y touche pas. On vide donc le brouillon ICI, en plus
+   * d'effacer l'URL. Le garde-fou reste intact — il ne protège que l'ÉDITION, pas ce geste.
+   */
+  function effacerTout() {
+    setDu("");
+    setAu("");
+    ecrire(null);
   }
 
   // Bornes natives du navigateur : elles EMPÊCHENT de composer une plage inversée dans le
@@ -207,11 +214,14 @@ export function PlageDatesSwitcher() {
       {active && (
         <button
           type="button"
-          onClick={() => ecrire(null)}
+          onClick={effacerTout}
           aria-label="Effacer la plage de dates et revenir aux périodes prédéfinies"
           title="Effacer la plage"
           className={cn(
-            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs",
+            // Cible ≥24px (`h-6 w-6`) : le « × » doit se viser sans précision au pixel (le
+            // `h-5 w-5` précédent était trop petit). Glyphe `text-sm leading-none` (plus
+            // lisible que `text-xs`), centré dans la pastille. `shrink-0` : jamais compressé.
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm leading-none",
             "text-text-muted transition-colors hover:bg-surface-inset hover:text-ink",
             "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
           )}
@@ -221,4 +231,43 @@ export function PlageDatesSwitcher() {
       )}
     </div>
   );
+}
+
+/**
+ * Décide, à un changement de la clé d'URL, si les champs doivent se RÉALIGNER sur l'URL.
+ * Extrait PUR — testable sans renderer React (pattern du projet, cf. `machine-mfa.ts`) :
+ *   - `cleUrl === dernierEcrit` → c'est NOTRE propre écriture : on ne réaligne pas, sinon on
+ *     écraserait le brouillon que l'utilisateur compose (perte de la borne en cours) → `null`.
+ *   - sinon (preset cliqué, retour navigateur, lien collé) → réaligner sur l'URL.
+ * ⚠️ Corollaire : après un effacement volontaire (« × »), `cleUrl === "|" === dernierEcrit`
+ * → retourne `null`. C'est pourquoi le handler « × » (`effacerTout`) vide les champs LUI-MÊME :
+ * la resynchro ne le fera pas (c'est le bug PLAGE-DATES-RESET-UX1).
+ */
+export function resyncDepuisUrl(
+  cleUrl: string,
+  dernierEcrit: string | null,
+  plage: PlageExplicite | null,
+): { du: string; au: string } | null {
+  if (cleUrl === dernierEcrit) return null;
+  return { du: plage?.du ?? "", au: plage?.au ?? "" };
+}
+
+/**
+ * Construit les `searchParams` PROCHAINS en posant (`nouvelle`) ou retirant (`null`) `du`/`au`,
+ * tous les AUTRES params préservés (hygiène — ce contrôle ne possède que `?du`/`?au`). Extrait
+ * de `ecrire` pour être testable : après un reset, l'URL ne doit plus porter `du`/`au`.
+ */
+export function parametresPlage(
+  baseQuery: string,
+  nouvelle: PlageExplicite | null,
+): URLSearchParams {
+  const params = new URLSearchParams(baseQuery);
+  if (nouvelle) {
+    params.set("du", nouvelle.du);
+    params.set("au", nouvelle.au);
+  } else {
+    params.delete("du");
+    params.delete("au");
+  }
+  return params;
 }
