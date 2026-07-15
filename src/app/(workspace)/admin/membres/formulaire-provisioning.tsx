@@ -139,7 +139,7 @@ export function FormulaireProvisioning({
                 disabled={enCours}
                 onClick={() => setMode("GLOBALE")}
                 className={cn(
-                  "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+                  "rounded-control px-2.5 py-1 font-medium transition-colors",
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                   estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
                 )}
@@ -153,7 +153,7 @@ export function FormulaireProvisioning({
                 disabled={enCours}
                 onClick={() => setMode("ENTITE")}
                 className={cn(
-                  "rounded-[6px] px-2.5 py-1 font-medium transition-colors",
+                  "rounded-control px-2.5 py-1 font-medium transition-colors",
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                   !estGlobale ? "bg-primary text-white" : "text-text-muted hover:text-text",
                 )}

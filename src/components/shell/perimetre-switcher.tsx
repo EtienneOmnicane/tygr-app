@@ -397,7 +397,7 @@ export function PerimetreSwitcher({
                       setRecherche(""); // recherche propre à chaque onglet (modes séparés)
                     }}
                     className={cn(
-                      "flex-1 rounded-[6px] px-3 py-1.5 text-sm font-medium transition-colors",
+                      "flex-1 rounded-control px-3 py-1.5 text-sm font-medium transition-colors",
                       "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                       actif
                         ? "bg-surface-card text-primary shadow-sm"
