@@ -62,12 +62,31 @@ const STATUT_BACKEND: Record<StatutCategorisation, StatutVentilation> = {
 };
 
 /**
- * Convertit les filtres UI + curseur en entrée du schéma Backend. Le `sens` UI
- * n'est PAS transmis (non supporté serveur). `curseur` null/absent = première page.
+ * Bornes de la FENÊTRE de dates GLOBALE (barre de vue), déjà résolues et validées par
+ * `resoudrePeriode` (`src/lib/periode.ts` — source unique : fuseau Maurice, plage
+ * `?du`/`?au` primant sur preset, garde `from ≤ to`). Dates comptables Maurice
+ * `YYYY-MM-DD`, INCLUSIVES.
+ */
+export interface PeriodeBornes {
+  from: string;
+  to: string;
+}
+
+/**
+ * Convertit les filtres UI + curseur + la fenêtre de dates GLOBALE en entrée du schéma
+ * Backend. Le `sens` UI n'est PAS transmis (non supporté serveur). `curseur` null/absent
+ * = première page.
+ *
+ * ⚠️ La fenêtre de dates n'est PLUS un filtre in-page (TX-TOOLBAR-DEDUP1) : elle arrive
+ * de la barre globale via `periode` (injectée par le RSC `page.tsx`), jamais de `filtres`.
+ * On la traduit en `dateDebut`/`dateFin` (WHERE gte/lte serveur sur `transaction_date`,
+ * qui EST déjà la date Maurice — E20, aucune conversion ici). `periode` absente (surface
+ * sans période : stub de démo/tests) ⇒ aucune borne (comportement « tout »).
  */
 export function versInputBackend(
   filtres: FiltresTransactions | undefined,
   curseur: string | null | undefined,
+  periode?: PeriodeBornes,
 ): Partial<ListerTransactionsInput> {
   const input: Partial<ListerTransactionsInput> = {};
   // Recherche : passe-plat direct sur cleanLabel (ILIKE serveur, méta-caractères
@@ -77,10 +96,13 @@ export function versInputBackend(
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
-  // Bornes de date : passe-plat direct (même format YYYY-MM-DD des deux côtés) →
-  // WHERE gte/lte serveur. Zod re-valide forme + validité calendaire + intervalle.
-  if (filtres?.dateDebut) input.dateDebut = filtres.dateDebut;
-  if (filtres?.dateFin) input.dateFin = filtres.dateFin;
+  // Fenêtre GLOBALE → bornes de date (même format YYYY-MM-DD des deux côtés). Zod
+  // re-valide forme + validité calendaire + intervalle ; `resoudrePeriode` garantit
+  // déjà `from ≤ to`, donc jamais de rejet ici.
+  if (periode) {
+    input.dateDebut = periode.from;
+    input.dateFin = periode.to;
+  }
   if (curseur) input.curseur = curseur;
   return input;
 }
@@ -97,13 +119,18 @@ export function versInputBackend(
  * Le retrait de `curseur`/`limite` est EXPLICITE : une somme porte sur TOUT le jeu
  * filtré, jamais sur une page (piège TX-FILTRE1), et `sommeNetteSchema` est `.strict()`
  * — un curseur égaré ferait échouer l'agrégat en INVALID_PARAMS. `versInputBackend(f,
- * null)` n'en pose aucun aujourd'hui ; ces deux lignes FIGENT l'invariant au lieu de
- * dépendre de sa relecture.
+ * null, periode)` n'en pose aucun aujourd'hui ; ces deux lignes FIGENT l'invariant au
+ * lieu de dépendre de sa relecture.
+ *
+ * La fenêtre GLOBALE (`periode`) descend par le MÊME `versInputBackend` : la somme est
+ * donc bornée à la période EXACTEMENT comme la liste (un total qui ne totaliserait pas
+ * la même fenêtre que les lignes affichées serait un faux chiffre).
  */
 export function versFiltresSommeNette(
   filtres: FiltresTransactions | undefined,
+  periode?: PeriodeBornes,
 ): Partial<SommeNetteInput> {
-  const input = versInputBackend(filtres, null);
+  const input = versInputBackend(filtres, null, periode);
   delete input.curseur;
   delete input.limite;
   return input;

@@ -156,13 +156,13 @@ export const MATRICE_BARRE_VUE: Readonly<Record<string, ConfigBarreVue>> = {
   // SEULE page câblée sur `?periode` ET `?du`/`?au` (`(dashboard)/page.tsx` →
   // `resoudrePeriode(searchParams)`) → seule page où la plage précise est montée (A1).
   "": barre({ periode: true, plageDates: true, perimetre: true, cta: true }),
-  // Transactions : `periode: true` CONSERVÉ à l'identique — mais c'est un NO-OP connu
-  // (la page ne lit pas `?periode` ; ses dates vivent IN-PAGE, transactions-toolbar.tsx).
-  // Hors périmètre A1 (arbitrage Etienne 2026-07-14 : ne pas créer deux filtres de dates
-  // concurrents avant d'avoir retiré ceux de la page). PAS de `plageDates` pour la même
-  // raison. C'est A3/TX-TOOLBAR-DEDUP1 qui unifie — d'ici là, `transactions` est une
-  // EXEMPTION nommée de la garde CI anti-mensonge (toolbar-config.test.ts).
-  transactions: barre({ periode: true, perimetre: true, cta: true }),
+  // Transactions : barre COMPLÈTE avec PLAGE — config identique au Dashboard depuis A3
+  // (TX-TOOLBAR-DEDUP1, 2026-07-15). Les dates in-page ont été RETIRÉES et la page LIT
+  // désormais la fenêtre globale (`resoudrePeriode(await searchParams)` dans
+  // transactions/page.tsx, injectée côté serveur) → la barre de vue est la SOURCE UNIQUE
+  // de la fenêtre de dates. Fin du NO-OP hérité d'A2 : `transactions` n'est PLUS une
+  // exemption de la garde CI anti-mensonge (toolbar-config.test.ts).
+  transactions: barre({ periode: true, plageDates: true, perimetre: true, cta: true }),
   // Graphiques : périmètre SEUL. La période a été RETIRÉE (≠ matrice A2, arbitrage
   // Etienne 2026-07-14) : `graphiques/page.tsx` ne prend même pas `searchParams` — son
   // PeriodeSwitcher ne filtrait donc RIEN, pendant que le vrai filtre (segmenté

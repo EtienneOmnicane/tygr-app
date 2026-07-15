@@ -133,14 +133,18 @@ export interface TransactionListItem {
 export type CurseurTransactions = string;
 
 /**
- * Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ».
+ * Filtres IN-PAGE de la liste (B1). Tous nullables = « pas de filtre ».
  * NB : pas de filtre `sens` (Entrées/Sorties) — non supporté par le schéma de
  * lecture Backend v1 ; le filtrer côté client casserait la pagination (TX-FILTRE1).
- * Les BORNES DE DATE (`dateDebut`/`dateFin`), elles, SONT supportées serveur (WHERE
- * `gte/lte` sur `transaction_date`) : exposées ici, elles partent au WHERE via
- * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
- * Idem pour la RECHERCHE (`recherche`) : ILIKE serveur, jamais de filtrage client.
- * NB : plus de filtre `bankAccountId` — le périmètre de comptes est piloté
+ * La RECHERCHE (`recherche`) part au serveur (ILIKE), jamais de filtrage client.
+ *
+ * ⚠️ La FENÊTRE DE DATES n'est PLUS un filtre in-page (TX-TOOLBAR-DEDUP1) : elle est
+ * portée par la barre de vue GLOBALE (`?periode`/`?du`/`?au`), résolue par
+ * `resoudrePeriode` (source unique, fuseau Maurice) et injectée côté SERVEUR dans
+ * `versInputBackend` (→ `dateDebut`/`dateFin` du schéma Backend, WHERE `gte/lte` sur
+ * `transaction_date`). Elle ne transite donc jamais par cet objet client. Le SCHÉMA
+ * Backend garde `dateDebut`/`dateFin` — c'est ce que la période alimente.
+ * NB : plus de filtre `bankAccountId` non plus — le périmètre de comptes est piloté
  * globalement par le `PerimetreSwitcher` de la navbar (doublon retiré, PR #190).
  */
 export interface FiltresTransactions {
@@ -154,10 +158,6 @@ export interface FiltresTransactions {
   recherche?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
-  /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */
-  dateDebut?: string;
-  /** Borne INCLUSE de fin (date comptable Maurice, `YYYY-MM-DD`). */
-  dateFin?: string;
 }
 
 /** Une page de résultats (B1). `curseurSuivant` null = dernière page. */

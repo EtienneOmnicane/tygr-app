@@ -344,12 +344,14 @@ export function TransactionsFeature({
           />
         );
       }
-      // 3) Autres filtres (statut/dates) sans résultat, ou sync en cours.
+      // 3) Filtre statut sans résultat, période (barre globale) sans opération, ou sync
+      //    en cours. La fenêtre de dates vient désormais de la barre de vue (TX-TOOLBAR-
+      //    DEDUP1) : une plage étroite sans transaction retombe légitimement ici.
       return (
         <EmptyState
           illustration="table"
           title="Aucune transaction pour ces critères"
-          message="Aucune opération ne correspond aux filtres sélectionnés, ou la première synchronisation est encore en cours."
+          message="Aucune opération ne correspond à la période et aux filtres sélectionnés, ou la première synchronisation est encore en cours."
         />
       );
     }
