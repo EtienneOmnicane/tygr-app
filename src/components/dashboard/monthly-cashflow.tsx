@@ -133,7 +133,7 @@ function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
         {formaterMoisAnnee(mois.libelleMois)}
         {mois.autresDevises && (
           <span
-            className="ml-1.5 align-middle text-[10px] text-text-faint"
+            className="ml-1.5 align-middle text-[11px] text-text-faint"
             title="Mouvements aussi dans d’autres devises (non additionnés)"
           >
             + autres devises
