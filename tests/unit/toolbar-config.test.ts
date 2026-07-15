@@ -34,16 +34,14 @@ import {
   toolbarConfig,
 } from "@/components/shell/toolbar-config";
 
-/** Barre complète SANS plage de dates (le cas de /transactions). */
+/** Barre complète AVEC plage de dates — Dashboard ET /transactions (depuis A3). */
 const COMPLETE = {
   periode: true,
-  plageDates: false,
+  plageDates: true,
   perimetre: true,
   cta: true,
   minimal: false,
 };
-/** Dashboard : la SEULE page câblée sur `?du`/`?au` (lot A1). */
-const COMPLETE_AVEC_PLAGE = { ...COMPLETE, plageDates: true };
 const MINIMALE = {
   periode: false,
   plageDates: false,
@@ -67,16 +65,17 @@ const SEGMENTS_SANS_PERIMETRE_AUTORISES = ["admin", "selection"];
 /**
  * EXEMPTIONS de la garde anti-mensonge — liste FERMÉE, nommée et datée.
  *
- * `transactions` (2026-07-14, dette A3 / TX-TOOLBAR-DEDUP1) : la matrice y monte
- * `periode: true` alors que `transactions/page.tsx` ne lit PAS `?periode` (ses bornes de
- * date vivent IN-PAGE, `transactions-toolbar.tsx`). C'est un NO-OP hérité d'A2, laissé
- * INTACT ici sur arbitrage explicite (le corriger imposerait de retirer d'abord les dates
- * in-page — sinon deux filtres concurrents), mais désormais TRACKÉ plutôt que silencieux.
+ * VIDE depuis A3 (TX-TOOLBAR-DEDUP1, 2026-07-15). `transactions` en était l'unique
+ * entrée : la matrice y montait `periode: true` alors que la page ne lisait PAS `?periode`
+ * (ses bornes de date vivaient IN-PAGE). A3 a retiré les dates in-page et câblé la page sur
+ * `resoudrePeriode(await searchParams)` → l'exemption est LEVÉE, la garde s'applique
+ * pleinement à `transactions`.
  *
- * ⚠️ A3 doit SUPPRIMER cette ligne (et non l'allonger). Toute nouvelle entrée ici est
- * l'aveu qu'on affiche un contrôle qui ne filtre rien : la revue doit la refuser.
+ * ⚠️ NE JAMAIS rallonger cette liste. Toute entrée est l'aveu qu'on affiche un contrôle
+ * qui ne filtre rien (mensonge d'affichage) : la revue doit la refuser — on câble la page
+ * (`resoudrePeriode`), ou on retire le contrôle de la matrice.
  */
-const SEGMENTS_PERIODE_NON_CABLEE = ["transactions"];
+const SEGMENTS_PERIODE_NON_CABLEE: string[] = [];
 
 /**
  * Chemin de la `page.tsx` d'un segment de la matrice. Le segment "" est le dashboard, qui
@@ -104,12 +103,13 @@ function fichierPage(segment: string): string | null {
 }
 
 describe("toolbarConfig — matrice validée par page", () => {
-  it("dashboard (/) : période + PLAGE DE DATES + périmètre + CTA (seule page câblée A1)", () => {
-    expect(toolbarConfig("/")).toEqual(COMPLETE_AVEC_PLAGE);
+  it("dashboard (/) : période + PLAGE DE DATES + périmètre + CTA", () => {
+    expect(toolbarConfig("/")).toEqual(COMPLETE);
   });
 
-  it("/transactions : période (no-op connu, dette A3) + périmètre + CTA, SANS plage", () => {
-    // La plage y créerait un 2e filtre de dates concurrent des dates in-page → A3.
+  it("/transactions : période + PLAGE + périmètre + CTA (barre globale = source unique, A3)", () => {
+    // A3 (TX-TOOLBAR-DEDUP1) : dates in-page retirées, la page LIT la fenêtre globale
+    // (resoudrePeriode) → même config complète que le Dashboard.
     expect(toolbarConfig("/transactions")).toEqual(COMPLETE);
   });
 
@@ -188,12 +188,10 @@ describe("toolbarConfig — résolution par segment racine", () => {
       toolbarConfig("/graphiques"),
     );
     expect(toolbarConfig("/regles#section")).toEqual(toolbarConfig("/regles"));
-    // Chemin vide / racine nue → dashboard (segment racine "") = la seule config à plage.
-    expect(toolbarConfig("")).toEqual(COMPLETE_AVEC_PLAGE);
-    expect(toolbarConfig("/?periode=12m")).toEqual(COMPLETE_AVEC_PLAGE);
-    expect(toolbarConfig("/?du=2026-03-03&au=2026-04-17")).toEqual(
-      COMPLETE_AVEC_PLAGE,
-    );
+    // Chemin vide / racine nue → dashboard (segment racine "").
+    expect(toolbarConfig("")).toEqual(COMPLETE);
+    expect(toolbarConfig("/?periode=12m")).toEqual(COMPLETE);
+    expect(toolbarConfig("/?du=2026-03-03&au=2026-04-17")).toEqual(COMPLETE);
   });
 
   it("une page NON cadrée retombe sur le défaut EXPLICITE : périmètre seul", () => {
