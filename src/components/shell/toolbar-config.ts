@@ -21,11 +21,12 @@
  *   si la page vit hors contexte workspace (/selection).
  *
  * Sinon le filtre reste actif, INVISIBLE et INANNULABLE sur place : le sélecteur est le
- * seul moyen de le voir et de le lever. Aujourd'hui seul `/admin/*` est amputé — d'où
- * le périmètre CONSERVÉ sur /banques et /regles (arbitrage Etienne 2026-07-14, cf.
- * TOOLBAR-PERIMETRE-AMPUTATION1 dans TODOS.md ; sur /banques, un filtre actif fait
- * silencieusement attacher 0 compte au sync — bug terrain « spinner puis rien »,
- * documenté dans `banques/actions.ts`).
+ * seul moyen de le voir et de le lever. Surfaces amputées à ce jour : `/admin/*`
+ * (`exigerSessionAdministration`) ET `/banques` + `/regles` (`exigerSessionSansPerimetre`,
+ * TOOLBAR-PERIMETRE-AMPUTATION1, livré) — leurs pages ET leurs Server Actions
+ * reconstruisent la session sans viewFilter (session.ts), d'où le périmètre RETIRÉ. Sur
+ * `/banques` un filtre résiduel faisait attacher 0 compte au sync (bug « spinner puis
+ * rien ») ; sur `/regles` « Ré-analyser » ne portait que sur le périmètre filtré.
  *
  * PURE (aucun React, aucun import UI) → c'est LA matrice, et elle est protégée en CI
  * par `tests/unit/toolbar-config.test.ts` (qui vérifie AUSSI l'invariant ci-dessus et
@@ -178,17 +179,24 @@ export const MATRICE_BARRE_VUE: Readonly<Record<string, ConfigBarreVue>> = {
   echeances: barre({ periode: false, perimetre: true, cta: false }),
   // Banques : pas de période (on gère des CONNEXIONS, pas une vue datée). Le CTA reste :
   // c'est la page de destination de l'action.
-  // PÉRIMÈTRE CONSERVÉ (≠ matrice initiale — arbitrage Etienne 2026-07-14) : la page et
-  // ses Server Actions tournent sur `exigerSessionWorkspace` (session COMPLÈTE) → le
-  // viewFilter mord ENCORE ici (sync qui attache 0 compte sans erreur, compteurs de
-  // connexions faux). Le retirer supprimerait le seul moyen de voir/annuler le filtre.
-  // À retirer SEULEMENT avec l'amputation serveur (TOOLBAR-PERIMETRE-AMPUTATION1, P1).
-  banques: barre({ periode: false, perimetre: true, cta: true }),
-  // Règles : ni période ni CTA (surface de configuration).
-  // PÉRIMÈTRE CONSERVÉ, même raison que /banques : `appliquerReglesAction` tourne sur une
-  // session complète → « Ré-analyser » ne recatégorise que le périmètre filtré. Masquer
-  // le sélecteur ferait croire à une ré-analyse totale. Idem : lié à l'amputation P1.
-  regles: barre({ periode: false, perimetre: true, cta: false }),
+  // PÉRIMÈTRE RETIRÉ (TOOLBAR-PERIMETRE-AMPUTATION1, livré) : la page (`banques/page.tsx`)
+  // ET toutes ses Server Actions (`banques/actions.ts` ×6, `widget-runtime.ts`) tournent
+  // sur `exigerSessionSansPerimetre` (session amputée du viewFilter) → aucun filtre ne
+  // mord ici. C'est une surface de GESTION tenant-wide : une connexion attache les comptes
+  // de N entités, un filtre résiduel faisait attacher 0 compte au sync (« spinner puis
+  // rien »). Rien à voir ni à annuler → pas de sélecteur.
+  banques: barre({ periode: false, perimetre: false, cta: true }),
+  // Règles : ni période ni CTA (surface de configuration), et périmètre RETIRÉ
+  // (TOOLBAR-PERIMETRE-AMPUTATION1, livré) → PLUS AUCUN contrôle. La page ET ses Server
+  // Actions d'ÉCRITURE (créer/modifier/archiver/réordonner/ré-analyser) tournent amputées.
+  // La seule réellement distordue par un filtre était « Ré-analyser » (`appliquerReglesAction`,
+  // INNER JOIN bank_accounts → recatégorisation partielle) ; désormais elle porte sur tout
+  // le tenant. (La lecture `listerReglesAction` reste en session complète : règles
+  // workspace-global, immunes au viewFilter — rien à amputer.)
+  // Sans aucun contrôle à monter, `/regles` rejoint `/admin/*` en bande MINIMALE (repère de
+  // tenant seul) : on reste DANS un workspace, la colonne ne doit pas démarrer nue (une
+  // barre « tout à false » non-minimale ne rendrait RIEN — réservé à /selection).
+  regles: MINIMALE,
   // Admin (membres + entités) : SEULE surface légitimement MINIMALE aujourd'hui — ses
   // pages ET actions passent par `exigerSessionAdministration()` (session amputée du
   // viewFilter, session.ts) → aucun filtre ne mord, il n'y a donc rien à voir ni à

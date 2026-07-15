@@ -57,10 +57,20 @@ const RACINE_WORKSPACE = join(process.cwd(), "src", "app", "(workspace)");
  * Les SEULS segments autorisés à masquer le sélecteur de périmètre (cf. invariant).
  *  - `admin`  : pages ET actions passent par `exigerSessionAdministration()` → session
  *               amputée du viewFilter (server/auth/session.ts) → aucun filtre ne mord.
+ *  - `banques` : page + actions (`banques/actions.ts`, `widget-runtime.ts`) passent par
+ *               `exigerSessionSansPerimetre()` (TOOLBAR-PERIMETRE-AMPUTATION1) → aucun
+ *               filtre ne mord ; le sync attache TOUS les comptes de la connexion.
+ *  - `regles` : page + actions d'écriture (dont « Ré-analyser ») passent par
+ *               `exigerSessionSansPerimetre()` → la ré-analyse porte sur tout le tenant.
  *  - `selection` : hors contexte workspace (aucun espace actif) → rien à filtrer.
  * ⚠️ N'AJOUTER un segment ici QU'APRÈS avoir amputé la session de la page côté serveur.
  */
-const SEGMENTS_SANS_PERIMETRE_AUTORISES = ["admin", "selection"];
+const SEGMENTS_SANS_PERIMETRE_AUTORISES = [
+  "admin",
+  "banques",
+  "regles",
+  "selection",
+];
 
 /**
  * EXEMPTIONS de la garde anti-mensonge — liste FERMÉE, nommée et datée.
@@ -136,24 +146,25 @@ describe("toolbarConfig — matrice validée par page", () => {
     });
   });
 
-  it("/banques : CTA + périmètre CONSERVÉ (le viewFilter mord encore : sync à 0 compte)", () => {
+  it("/banques : CTA seul — périmètre RETIRÉ (session amputée : le sync attache tous les comptes)", () => {
+    // TOOLBAR-PERIMETRE-AMPUTATION1 : page + actions sur `exigerSessionSansPerimetre`
+    // → aucun filtre ne mord, fin du bug « sync à 0 compte ». Le CTA reste (page d'accueil
+    // de la connexion bancaire).
     expect(toolbarConfig("/banques")).toEqual({
       periode: false,
       plageDates: false,
-      perimetre: true,
+      perimetre: false,
       cta: true,
       minimal: false,
     });
   });
 
-  it("/regles : périmètre CONSERVÉ (« Ré-analyser » ne traite que le périmètre filtré)", () => {
-    expect(toolbarConfig("/regles")).toEqual({
-      periode: false,
-      plageDates: false,
-      perimetre: true,
-      cta: false,
-      minimal: false,
-    });
+  it("/regles : bande MINIMALE — périmètre RETIRÉ, plus aucun contrôle (session amputée)", () => {
+    // TOOLBAR-PERIMETRE-AMPUTATION1 : les écritures (dont appliquerReglesAction) sur
+    // `exigerSessionSansPerimetre` → la ré-analyse porte sur tout le tenant. Sans période,
+    // CTA ni périmètre, il ne reste AUCUN contrôle → `/regles` rejoint `/admin/*` en bande
+    // minimale (repère de tenant seul ; une barre « tout à false » ne rendrait rien).
+    expect(toolbarConfig("/regles")).toEqual(MINIMALE);
   });
 
   it("/admin/membres : bande minimale (session amputée du viewFilter)", () => {
