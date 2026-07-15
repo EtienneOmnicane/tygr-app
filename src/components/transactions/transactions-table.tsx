@@ -26,13 +26,16 @@ export function TransactionsTable({
           contenu et le montant sort de l'écran). */}
       <table className="w-full table-fixed border-collapse text-left">
         {/* Largeurs de colonnes (imposées par table-fixed). La colonne Catégorie
-            est ramenée à 0 en mobile (`w-0`) car ses cellules sont masquées
-            (`hidden sm:table-cell`) — en table-fixed, une <col> à largeur fixe
-            réserverait l'espace même cellules masquées et ferait déborder la table. */}
+            est ramenée à 0 SOUS lg (`w-0`) car ses cellules sont masquées
+            (`hidden lg:table-cell`) — en table-fixed, une <col> à largeur fixe
+            réserverait l'espace même cellules masquées et ferait déborder la table.
+            Seuil lg (1024) et non sm (640) : entre 640 et 1024, la sidebar (232px)
+            + 200px de catégorie affamaient le LIBELLÉ (réduit à 1-2 lettres) —
+            l'info clé cède avant la colonne quasi constante (FINDING-002b). */}
         <colgroup>
           <col className="w-[68px] sm:w-[92px]" />
           <col />
-          <col className="w-0 sm:w-[200px]" />
+          <col className="w-0 lg:w-[200px]" />
           <col className="w-[128px] sm:w-[150px]" />
         </colgroup>
 
@@ -52,7 +55,7 @@ export function TransactionsTable({
             </th>
             <th
               scope="col"
-              className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted sm:table-cell"
+              className="hidden px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-text-muted lg:table-cell"
             >
               Catégorie
             </th>
