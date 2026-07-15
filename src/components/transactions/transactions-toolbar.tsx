@@ -14,7 +14,9 @@
  *   de la navbar (topbar) → scope serveur via `withWorkspace`/RLS. La toolbar ne
  *   duplique DONC PLUS de sélecteur de compte (retrait feedback 0709 : doublon moche
  *   du sélecteur navbar).
- * - Recherche par libellé (débouncée), statut de ventilation, bornes de date.
+ * - Recherche par libellé (débouncée) et statut de ventilation. La FENÊTRE DE DATES
+ *   ne vit plus ici : elle est portée par la barre de vue GLOBALE (`?periode`/`?du`/
+ *   `?au`, `resoudrePeriode`), source unique, injectée côté serveur (TX-TOOLBAR-DEDUP1).
  * - Action secondaire à DROITE : « Gérer les catégories » (ADMIN seul). Elle vit ICI
  *   plutôt qu'en bouton orphelin au-dessus du tableau → une seule barre d'actions
  *   cohérente. La toolbar ne connaît PAS la garde de rôle : elle rend simplement le
@@ -229,40 +231,6 @@ export function TransactionsToolbar({
             options={OPTIONS_STATUT.map((o) => ({ value: o.valeur, label: o.label }))}
           />
         </div>
-
-        {/* Bornes de date comptable (from/to) — INCLUSES. Opt-in : vides = aucune
-            fenêtre (montre tout). Le range part au SERVEUR (WHERE gte/lte via
-            versInputBackend) — JAMAIS de filtrage date côté client (TX-FILTRE1).
-            `<input type="date">` émet nativement `YYYY-MM-DD` = format attendu par
-            `transaction_date`, sans conversion. Bornage croisé min/max = garde-fou
-            visuel ; la vraie garde `dateDebut ≤ dateFin` reste côté serveur (Zod). */}
-        <label className="inline-flex shrink-0 items-center gap-2 text-sm text-text-muted">
-          <span className="sr-only">Date de début</span>
-          <input
-            type="date"
-            value={filtres.dateDebut ?? ""}
-            max={filtres.dateFin || undefined}
-            disabled={disabled}
-            onChange={(e) =>
-              onChange({ ...filtres, dateDebut: e.target.value || undefined })
-            }
-            className={champSelect}
-          />
-        </label>
-
-        <label className="inline-flex shrink-0 items-center gap-2 text-sm text-text-muted">
-          <span className="sr-only">Date de fin</span>
-          <input
-            type="date"
-            value={filtres.dateFin ?? ""}
-            min={filtres.dateDebut || undefined}
-            disabled={disabled}
-            onChange={(e) =>
-              onChange({ ...filtres, dateFin: e.target.value || undefined })
-            }
-            className={champSelect}
-          />
-        </label>
       </div>
 
       {/* Groupe ACTIONS (droite) — ADMIN seul (le parent ne passe la closure qu'à
