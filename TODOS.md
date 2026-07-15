@@ -198,9 +198,23 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   (périmètre conservé sur Banques et Règles) → cf. TOOLBAR-PERIMETRE-AMPUTATION1 ci-dessous,
   qui les débloque.
 
-- [ ] **TOOLBAR-PERIMETRE-AMPUTATION1 (P1, effort ~0,5 j, 2026-07-14) — amputer le
+- [x] **TOOLBAR-PERIMETRE-AMPUTATION1 (P1, effort ~0,5 j, 2026-07-14) — amputer le
   `viewFilter` des surfaces de GESTION `/banques` et `/regles`, puis y retirer le sélecteur
-  de périmètre (2 cellules restantes de la matrice A2).** Découvert par la cross-review de
+  de périmètre (2 cellules restantes de la matrice A2).**
+  ✅ **LIVRÉ 2026-07-15** (branche `fix/toolbar-perimetre-amputation`, plan
+  `PLAN-toolbar-perimetre-amputation.md`). Helper renommé `exigerSessionSansPerimetre()`
+  (arbitrage Etienne : nom honnête + alias `exigerSessionAdministration` rétro-compat).
+  Amputé : `banques/page.tsx`, `banques/actions.ts` (×6), `banques/widget-runtime.ts` (×3,
+  NO-OP — découverte), `regles/page.tsx` (découverte), et les **5 écritures** de
+  `regles/actions.ts` (dont `appliquerReglesAction`, la SEULE réellement distordue —
+  INNER JOIN `bank_accounts`). La **lecture** `listerReglesAction` reste en session complète
+  (règles workspace-global, immunes au viewFilter). Matrice : `banques` → `perimetre:false`
+  (CTA seul) ; `regles` → **`MINIMALE`** (plus aucun contrôle → bande de tenant, comme
+  `/admin`). Preuve : `tests/isolation/perimetre-amputation-gestion-isolation.test.ts`
+  (repro + fix des 2 surfaces + non-régression tenant). Effet de bord ASSUMÉ : « Ré-analyser »
+  porte désormais sur tout le tenant quel que soit le filtre d'affichage. Reste : Visual QA +
+  merge (Etienne).
+  Découvert par la cross-review de
   `feat/toolbar-config` ; **arbitrage Etienne : ne PAS masquer le sélecteur tant que le
   serveur n'est pas amputé** (sinon on supprime le seul moyen de voir/annuler un filtre qui
   mord encore). **Le fond du problème** : le `viewFilter` n'est pas un filtre d'affichage

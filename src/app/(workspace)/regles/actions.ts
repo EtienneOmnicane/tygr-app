@@ -10,17 +10,25 @@
  * mappe les erreurs nommées en { ok:false, code, message } non-énumérant.
  *
  * Exit-criteria (CLAUDE.md règle 3) :
- * - Authz : exigerSessionWorkspace + withWorkspace (membership re-validée à chaque
- *   requête). Le CRUD est OUVERT aux membres (cohérent avec le CRUD de catégories,
- *   décision PO 2026-06-17) — la RLS WITH CHECK workspace suffit. `appliquerRegles`
- *   ÉCRIT des splits en masse → réservé MANAGER/ADMIN (garde peutModifier dans la
- *   transaction, calquée sur l'ingestion/synchro).
+ * - Authz : withWorkspace (membership re-validée à chaque requête). Le CRUD est OUVERT
+ *   aux membres (cohérent avec le CRUD de catégories, décision PO 2026-06-17) — la RLS
+ *   WITH CHECK workspace suffit. `appliquerRegles` ÉCRIT des splits en masse → réservé
+ *   MANAGER/ADMIN (garde peutModifier dans la transaction, calquée sur l'ingestion/synchro).
+ * - Périmètre (TOOLBAR-PERIMETRE-AMPUTATION1) : `/regles` est une surface de GESTION
+ *   tenant-wide → les ÉCRITURES (créer/modifier/archiver/réordonner/ré-analyser) tournent
+ *   sur `exigerSessionSansPerimetre` (session amputée du viewFilter). Seule
+ *   `appliquerRegles` est RÉELLEMENT distordue par un filtre résiduel (INNER JOIN
+ *   bank_accounts → ré-analyse partielle) ; les 4 autres écritures ne touchent que
+ *   `categorization_rules` (workspace-global) → amputation NO-OP, adoptée par uniformité.
+ *   La LECTURE `listerReglesAction` reste sur `exigerSessionWorkspace` : elle ne lit que
+ *   des règles workspace-global, immunes au viewFilter — rien à amputer (carve-out brief).
  * - Validation Zod stricte (motif, énum, uuid, bornes).
  * - workspace_id JAMAIS un paramètre client (vient de ctx).
  * - Logs corrélés (workspace_id + code), SANS PII (jamais le motif ni un libellé).
  */
 import { peutModifier } from "@/lib/permissions";
 import {
+  exigerSessionSansPerimetre,
   exigerSessionWorkspace,
   ServiceIndisponibleError,
 } from "@/server/auth/session";
@@ -126,7 +134,7 @@ export async function creerRegleAction(input: {
   categoryId: string;
   priority?: number;
 }): Promise<ResultatAction<{ ruleId: string }>> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionSansPerimetre();
   const parsed = creerRegleSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
@@ -152,7 +160,7 @@ export async function modifierRegleAction(input: {
   priority?: number;
   isActive?: boolean;
 }): Promise<ResultatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionSansPerimetre();
   const parsed = modifierRegleSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
@@ -172,7 +180,7 @@ export async function modifierRegleAction(input: {
 export async function archiverRegleAction(
   ruleId: string,
 ): Promise<ResultatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionSansPerimetre();
   const parsed = archiverRegleSchema.safeParse({ ruleId });
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
@@ -197,7 +205,13 @@ export async function archiverRegleAction(
 export async function appliquerReglesAction(opts?: {
   bankAccountId?: string;
 }): Promise<ResultatAction<ResultatApplication>> {
-  const session = await exigerSessionWorkspace();
+  // ⭐ Session AMPUTÉE du viewFilter (TOOLBAR-PERIMETRE-AMPUTATION1). C'est LE chemin
+  // réellement distordu par le filtre : `appliquerRegles` fait un INNER JOIN sur
+  // bank_accounts (repo) → sous un viewFilter actif, la sélection des candidats est
+  // rétrécie aux comptes filtrés et « Ré-analyser » ne recatégorise qu'une fraction du
+  // groupe (le FM croit avoir tout ré-analysé). Amputé, il porte sur tout le tenant —
+  // c'est l'intention. La RLS reste la garde (droits durs entity/account conservés).
+  const session = await exigerSessionSansPerimetre();
   const parsed = appliquerReglesSchema.safeParse(opts ?? {});
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
@@ -223,7 +237,7 @@ export async function appliquerReglesAction(opts?: {
 export async function reordonnerReglesAction(input: {
   ordre: string[];
 }): Promise<ResultatAction> {
-  const session = await exigerSessionWorkspace();
+  const session = await exigerSessionSansPerimetre();
   const parsed = reordonnerReglesSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: MSG_PARAMS };
