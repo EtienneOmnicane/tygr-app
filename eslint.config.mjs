@@ -38,6 +38,11 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Build QA isolé HORS `.next/` (convention TYGR_DIST_DIR=.next-qa des
+    // sessions /qa, cf. commentaire next.config.ts) : sans cette ligne, le
+    // hook stop-loss linte les chunks Turbopack générés et échoue sur du
+    // code qui n'est pas le nôtre — même piège que les worktrees ci-dessous.
+    ".next-qa/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

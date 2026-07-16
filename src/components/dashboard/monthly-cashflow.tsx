@@ -73,7 +73,10 @@ export function MonthlyCashflow({
         </p>
       ) : (
         <div className="mt-5 overflow-x-auto">
-          <table className="w-full text-sm">
+          {/* min-w : sous ~620px de conteneur (sidebar ouverte <1024), les colonnes
+              gardent leur largeur et le conteneur scrolle — jamais un montant
+              écrasé/coupé en plein chiffre (règle 8 : un montant ne tronque pas). */}
+          <table className="w-full min-w-[620px] text-sm">
             <thead>
               <tr className="border-b border-line text-left text-xs text-text-muted">
                 <th className="py-2 pr-3 font-medium">Mois</th>
@@ -102,36 +105,54 @@ export function MonthlyCashflow({
   );
 }
 
+// Zéro = absence de donnée, pas une donnée verte/rouge : rendu `text-faint`
+// (§4.1 — le vert/rouge sémantique est réservé aux mouvements réels ; un mois
+// vide coloré est du bruit).
+function estNul(montant: string): boolean {
+  return montant === "0" || montant === "0.00";
+}
+
 /** Une ligne du tableau : mois + entrées (vert) + sorties (rouge) + variation. */
 function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
   const variationNegative = mois.variation.trim().startsWith("-");
-  const variationNulle = mois.variation === "0" || mois.variation === "0.00";
-  const couleurVariation = variationNulle
-    ? "text-text"
+  const couleurVariation = estNul(mois.variation)
+    ? "text-text-faint"
     : variationNegative
       ? "text-outflow-700"
       : "text-inflow-700";
+  const couleurEntrees = estNul(mois.entrees)
+    ? "text-text-faint"
+    : "text-inflow-700";
+  const couleurSorties = estNul(mois.sorties)
+    ? "text-text-faint"
+    : "text-outflow-700";
 
   return (
     <tr className="border-b border-line/60 last:border-0">
-      <td className="py-2 pr-3 text-text">
+      <td className="py-2 pr-3 whitespace-nowrap text-text">
         {formaterMoisAnnee(mois.libelleMois)}
         {mois.autresDevises && (
           <span
-            className="ml-1.5 align-middle text-[10px] text-text-faint"
+            className="ml-1.5 align-middle text-[11px] text-text-faint"
             title="Mouvements aussi dans d’autres devises (non additionnés)"
           >
             + autres devises
           </span>
         )}
       </td>
-      <td className="py-2 px-3 text-right tabular-nums text-inflow-700">
+      <td
+        className={`py-2 px-3 text-right whitespace-nowrap tabular-nums ${couleurEntrees}`}
+      >
         {formatMontant(mois.entrees, devise, { signeExplicite: true })}
       </td>
-      <td className="py-2 px-3 text-right tabular-nums text-outflow-700">
+      <td
+        className={`py-2 px-3 text-right whitespace-nowrap tabular-nums ${couleurSorties}`}
+      >
         {formatMontant(mois.sorties, devise)}
       </td>
-      <td className={`py-2 pl-3 text-right font-medium tabular-nums ${couleurVariation}`}>
+      <td
+        className={`py-2 pl-3 text-right font-medium whitespace-nowrap tabular-nums ${couleurVariation}`}
+      >
         {formatMontant(mois.variation, devise, { signeExplicite: true })}
       </td>
     </tr>

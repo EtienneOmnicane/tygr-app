@@ -168,12 +168,20 @@ export function formaterMoisAnnee(libelleMois: string): string {
   return `${MOIS_PLEINS[idx]} ${m[1]}`;
 }
 
+// Abréviations FR NON AMBIGUËS (pas de troncature algorithmique : « Juin » et
+// « Juillet » coupés à 3 lettres donnent tous deux « Jui » — deux mois consécutifs
+// devenaient indistinguables sur l'axe du graphe de flux).
+const MOIS_COURTS = [
+  "Janv", "Févr", "Mars", "Avr", "Mai", "Juin",
+  "Juil", "Août", "Sept", "Oct", "Nov", "Déc",
+] as const;
+
 /**
- * Formate un libellé de mois `YYYY-MM` en COURT « Juin 26 » (mois 3 premières
- * lettres + année sur 2 chiffres) — pour les axes de graphe denses où le mois plein
- * ne tient pas. L'année (2 chiffres) lève l'ambiguïté entre deux mois homonymes
- * d'années différentes (deux « Jan » sur l'axe). Dérive de la MÊME table `MOIS_PLEINS`
- * (source unique de formatage, dette C8) — aucun parser ni `new Date` (pas de fuseau).
+ * Formate un libellé de mois `YYYY-MM` en COURT « Juin 26 » (abréviation FR
+ * non ambiguë + année sur 2 chiffres) — pour les axes de graphe denses où le mois
+ * plein ne tient pas. L'année (2 chiffres) lève l'ambiguïté entre deux mois homonymes
+ * d'années différentes (deux « Janv » sur l'axe) ; la table `MOIS_COURTS` lève celle
+ * entre mois d'une même année (Juin/Juil). Aucun parser ni `new Date` (pas de fuseau).
  * Entrée hors forme `YYYY-MM` → restituée telle quelle (défense).
  */
 export function formaterMoisCourt(libelleMois: string): string {
@@ -181,7 +189,7 @@ export function formaterMoisCourt(libelleMois: string): string {
   if (!m) return libelleMois;
   const idx = Number(m[2]) - 1;
   if (idx < 0 || idx >= 12) return libelleMois;
-  return `${MOIS_PLEINS[idx].slice(0, 3)} ${m[1].slice(2)}`;
+  return `${MOIS_COURTS[idx]} ${m[1].slice(2)}`;
 }
 
 /**

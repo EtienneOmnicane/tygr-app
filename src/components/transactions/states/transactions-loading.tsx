@@ -19,18 +19,18 @@ export function TransactionsLoading({ lignes = 8 }: { lignes?: number }) {
         <colgroup>
           <col className="w-[68px] sm:w-[92px]" />
           <col />
-          <col className="w-0 sm:w-[200px]" />
+          <col className="w-0 lg:w-[200px]" />
           <col className="w-[128px] sm:w-[150px]" />
         </colgroup>
 
-        {/* En-tête réel (statique) pour ancrer la forme. Catégorie masquée en mobile. */}
+        {/* En-tête réel (statique) pour ancrer la forme. Catégorie masquée sous lg. */}
         <thead>
           <tr className="border-b border-line-strong">
             {(
               [
                 { c: "Date", cls: "sm:px-4 px-3" },
                 { c: "Libellé", cls: "sm:px-4 px-3" },
-                { c: "Catégorie", cls: "hidden sm:table-cell px-4" },
+                { c: "Catégorie", cls: "hidden lg:table-cell px-4" },
                 { c: "Montant", cls: "text-right sm:px-4 px-3" },
               ] as const
             ).map(({ c, cls }) => (

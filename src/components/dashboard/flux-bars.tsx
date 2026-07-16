@@ -249,7 +249,7 @@ function BarresMensuelles({
                   y={hauteur - 6}
                   textAnchor="middle"
                   fill="var(--color-text-muted)"
-                  className="text-[10px]"
+                  className="text-[11px]"
                 >
                   {formaterMoisCourt(m.libelleMois)}
                 </text>

@@ -74,7 +74,7 @@ export function WorkspaceSwitcher({
                 disabled={estActif || enCours}
                 role="option"
                 aria-selected={estActif}
-                className="flex w-full items-center justify-between gap-2 rounded-[6px]
+                className="flex w-full items-center justify-between gap-2 rounded-control
                   px-3 py-2 text-left text-sm text-text transition-colors
                   hover:bg-primary-50 disabled:cursor-default disabled:hover:bg-transparent
                   focus:outline-none focus:bg-primary-50"

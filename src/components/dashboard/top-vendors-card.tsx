@@ -115,6 +115,20 @@ export function TopVendorsCard({
   );
 }
 
+/**
+ * Libellé d'AFFICHAGE d'une contrepartie : pipes techniques traînants élagués
+ * (« Fx Deal Settlement| ») et sentinelle amont « UNCLASSIFIED » traduite —
+ * la donnée bancaire brute ne fuit pas telle quelle dans une UI française.
+ * Présentation pure : la valeur d'origine reste intacte (et dans le `title`).
+ */
+function libelleContrepartie(brut: string): string {
+  const nettoye = brut.replace(/\s*\|+\s*$/u, "").trim();
+  if (!nettoye || /^unclassified$/iu.test(nettoye)) {
+    return "Sans contrepartie identifiée";
+  }
+  return nettoye;
+}
+
 /** Une contrepartie : libellé (tronquable) + montant (jamais tronqué) + barre de part. */
 function LigneContrepartie({
   ligne,
@@ -130,7 +144,7 @@ function LigneContrepartie({
     <li>
       <div className="flex items-baseline justify-between gap-3">
         <span className="min-w-0 truncate text-[13px] text-text" title={ligne.contrepartie}>
-          {ligne.contrepartie}
+          {libelleContrepartie(ligne.contrepartie)}
         </span>
         <span className="whitespace-nowrap text-[13px] font-semibold tabular-nums text-text">
           {formatMontant(ligne.montant, ligne.currency)}
