@@ -65,7 +65,10 @@ l'isolation/append-only/montants-exacts (sinon corrigé, pas consigné).
   « Instrument Sans + Geist » (code = Red Hat Display unifiée, conforme §0) ;
   DESIGN.md racine résume d'ANCIENNES valeurs (`ink #0F1E3D` vs `#0C1633`) ;
   segmented actif rendu `primary` (spec §2.3 : pill `ink`) — à acter ; H1 de page
-  26px sans rôle dans l'échelle §2.1 — à acter. PR docs (auto-mergeable).
+  26px sans rôle dans l'échelle §2.1 — à acter ; **CLAUDE.md « Interface en
+  français » à réconcilier avec Q-LANG** (destination EN actée 2026-07-13 — le
+  design-review 2026-07-15 a failli traduire le pilote admin EN en FR sur la foi
+  de cette phrase). PR docs (auto-mergeable).
   **Déclencheur** : avant la PROCHAINE /design-consultation ou tout nouveau plan UI.
 - [ ] **DESIGN-RESTANT-SERVEUR1 (P2, effort ~0,25 j, 2026-07-15) —
   `restantDecimal()` recalcule un montant dans l'UI** (`echeances-list.tsx:62-74`,
