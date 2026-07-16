@@ -89,8 +89,9 @@ export function versInputBackend(
   periode?: PeriodeBornes,
 ): Partial<ListerTransactionsInput> {
   const input: Partial<ListerTransactionsInput> = {};
-  // Recherche : passe-plat direct sur cleanLabel (ILIKE serveur, méta-caractères
-  // LIKE échappés côté repository). La toolbar ne remonte jamais une chaîne vide
+  // Recherche : passe-plat direct du terme (ILIKE serveur sur le libellé affiché —
+  // marchand nettoyé sinon brut, cf. `conditionsFiltres` ; méta-caractères LIKE
+  // échappés côté repository). La toolbar ne remonte jamais une chaîne vide
   // (→ undefined), donc pas de garde ici ; Zod re-valide trim/min1/max120.
   if (filtres?.recherche) input.recherche = filtres.recherche;
   if (filtres?.statutCategorisation) {

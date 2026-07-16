@@ -24,7 +24,7 @@
  * Dates : via `format-date` (aucun nom de mois en dur). Le restant d'un « partiel »
  * est affiché en sous-libellé (montant plein − part réglée), toujours formaté.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { BoutonProtege } from "@/components/ui/action-protegee";
 import { CategoryBadge } from "@/components/ui/category";
@@ -164,6 +164,83 @@ function StatutControl({
   );
 }
 
+/** Fenêtre pendant laquelle le 2e clic est ignoré (rebond du clic d'armement). */
+const ANTI_REBOND_MS = 350;
+/** Sans confirmation dans ce délai, le bouton revient à l'état initial. */
+const DESARMEMENT_MS = 5000;
+
+/**
+ * Suppression en DEUX TEMPS : le 1er clic ARME (« Confirmer ? », style danger),
+ * le 2e supprime. Une échéance est saisie à la main — la détruire d'un seul clic
+ * (DELETE physique, sans undo) transformait un mauvais clic en perte sèche.
+ * Le bouton se désarme seul (5 s), au blur, ou à Échap ; le 2e clic est ignoré
+ * pendant 350 ms pour qu'un double-clic nerveux ne confirme pas par accident.
+ * Le gating VIEWER (`BoutonProtege`) est conservé tel quel.
+ */
+function BoutonSupprimerDeuxTemps({
+  autorise,
+  enCours,
+  libelle,
+  onSupprimer,
+}: {
+  autorise: boolean;
+  /** Suppression déjà partie au serveur (désactive le bouton). */
+  enCours: boolean;
+  /** Libellé de l'échéance, pour un aria-label non ambigu. */
+  libelle: string;
+  onSupprimer?: () => void;
+}) {
+  const [armeDepuis, setArmeDepuis] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (armeDepuis === null) return;
+    const t = setTimeout(() => setArmeDepuis(null), DESARMEMENT_MS);
+    return () => clearTimeout(t);
+  }, [armeDepuis]);
+
+  const arme = armeDepuis !== null;
+  const gererClic = onSupprimer
+    ? () => {
+        if (enCours) return;
+        if (armeDepuis === null) {
+          setArmeDepuis(Date.now());
+          return;
+        }
+        if (Date.now() - armeDepuis < ANTI_REBOND_MS) return;
+        setArmeDepuis(null);
+        onSupprimer();
+      }
+    : undefined;
+
+  return (
+    <BoutonProtege
+      autorise={autorise}
+      raison={RAISON_ECHEANCES}
+      onClick={gererClic}
+      disabled={enCours}
+      aria-label={
+        arme
+          ? `Confirmer la suppression de « ${libelle} »`
+          : `Supprimer « ${libelle} »`
+      }
+      onBlur={() => setArmeDepuis(null)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setArmeDepuis(null);
+      }}
+      className={cn(
+        "rounded-control px-2.5 py-1.5 text-[13px] font-medium transition-colors",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        "disabled:opacity-[0.48]",
+        arme
+          ? "bg-danger-bg font-semibold text-danger hover:bg-danger-bg"
+          : "text-text-muted hover:bg-danger-bg hover:text-danger",
+      )}
+    >
+      {enCours ? "Suppression…" : arme ? "Confirmer ?" : "Supprimer"}
+    </BoutonProtege>
+  );
+}
+
 export function EcheancesList({
   echeances,
   nomParCategorie,
@@ -285,18 +362,12 @@ export function EcheancesList({
                 >
                   Modifier
                 </BoutonProtege>
-                <BoutonProtege
+                <BoutonSupprimerDeuxTemps
                   autorise={peutGerer}
-                  raison={RAISON_ECHEANCES}
-                  onClick={onSupprimer ? () => onSupprimer(e.id) : undefined}
-                  disabled={enSuppression}
-                  className="rounded-control px-2.5 py-1.5 text-[13px] font-medium text-text-muted
-                    transition-colors hover:bg-danger-bg hover:text-danger
-                    focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
-                    disabled:opacity-[0.48]"
-                >
-                  {enSuppression ? "Suppression…" : "Supprimer"}
-                </BoutonProtege>
+                  enCours={enSuppression}
+                  libelle={e.libelle}
+                  onSupprimer={onSupprimer ? () => onSupprimer(e.id) : undefined}
+                />
               </div>
             </div>
           </li>
