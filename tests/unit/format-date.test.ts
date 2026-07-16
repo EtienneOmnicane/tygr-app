@@ -12,6 +12,7 @@ import {
   formaterDateCourteNumerique,
   formaterFraicheurRelative,
   formaterMoisAnnee,
+  formaterMoisCourt,
   moisCourantMaurice,
 } from "@/lib/format-date";
 
@@ -90,6 +91,26 @@ describe("formaterMoisAnnee", () => {
     expect(formaterMoisAnnee("2026-00")).toBe("2026-00"); // mois 00
     expect(formaterMoisAnnee("2026-06-11")).toBe("2026-06-11"); // pas un YYYY-MM
     expect(formaterMoisAnnee("juin")).toBe("juin");
+  });
+});
+
+describe("formaterMoisCourt — abréviations non ambiguës (FINDING-001)", () => {
+  it("distingue Juin et Juillet (la troncature à 3 lettres donnait « Jui » ×2)", () => {
+    expect(formaterMoisCourt("2026-06")).toBe("Juin 26");
+    expect(formaterMoisCourt("2026-07")).toBe("Juil 26");
+    expect(formaterMoisCourt("2026-06")).not.toBe(formaterMoisCourt("2026-07"));
+  });
+
+  it("les 12 abréviations d'une même année sont toutes distinctes", () => {
+    const libelles = Array.from({ length: 12 }, (_, i) =>
+      formaterMoisCourt(`2026-${String(i + 1).padStart(2, "0")}`),
+    );
+    expect(new Set(libelles).size).toBe(12);
+  });
+
+  it("rend l'entrée telle quelle si forme ou mois invalides (défense)", () => {
+    expect(formaterMoisCourt("2026-13")).toBe("2026-13");
+    expect(formaterMoisCourt("juin")).toBe("juin");
   });
 });
 

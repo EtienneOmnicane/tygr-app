@@ -33,16 +33,20 @@ function cn(...classes: Array<string | false | null | undefined>): string {
  * (confusion avec inflow, aggravée à côté du bouton `success`). Remplacés par
  * bleu-acier et brun-terre, franchement non-ambigus. Teintes finales : indigo,
  * violet, ambre, bleu-acier, brun, rose, ardoise, fuchsia.
+ *
+ * Les VALEURS vivent dans les tokens `globals.css` (`--color-cat-badge-*`,
+ * règle « aucune couleur en dur dans un composant ») ; ce module ne référence
+ * que les classes utilitaires générées.
  */
 const PALETTE_CATEGORIE = [
-  { bg: "bg-[#EEF2FF]", text: "text-[#3730A3]" }, // indigo
-  { bg: "bg-[#F5F3FF]", text: "text-[#6D28D9]" }, // violet
-  { bg: "bg-[#FFFAEB]", text: "text-[#B54708]" }, // ambre
-  { bg: "bg-[#EFF4FF]", text: "text-[#1E3A8A]" }, // bleu-acier (ex-cyan)
-  { bg: "bg-[#FAF6F2]", text: "text-[#7C4A21]" }, // brun-terre (ex-sarcelle)
-  { bg: "bg-[#FDF2FA]", text: "text-[#9D174D]" }, // rose
-  { bg: "bg-[#F8FAFC]", text: "text-[#334155]" }, // ardoise
-  { bg: "bg-[#FAF5FF]", text: "text-[#86198F]" }, // fuchsia
+  { bg: "bg-cat-badge-1-bg", text: "text-cat-badge-1" }, // indigo
+  { bg: "bg-cat-badge-2-bg", text: "text-cat-badge-2" }, // violet
+  { bg: "bg-cat-badge-3-bg", text: "text-cat-badge-3" }, // ambre
+  { bg: "bg-cat-badge-4-bg", text: "text-cat-badge-4" }, // bleu-acier (ex-cyan)
+  { bg: "bg-cat-badge-5-bg", text: "text-cat-badge-5" }, // brun-terre (ex-sarcelle)
+  { bg: "bg-cat-badge-6-bg", text: "text-cat-badge-6" }, // rose
+  { bg: "bg-cat-badge-7-bg", text: "text-cat-badge-7" }, // ardoise
+  { bg: "bg-cat-badge-8-bg", text: "text-cat-badge-8" }, // fuchsia
 ] as const;
 
 /** Nombre de teintes — exporté pour les tests de déterminisme. */

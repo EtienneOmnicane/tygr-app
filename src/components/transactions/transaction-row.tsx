@@ -100,7 +100,7 @@ export function TransactionRow({
           (sous-texte) est DISTINCTE du statut de ventilation manuelle (colonne dédiée
           à droite). ANTI-DOUBLON : si le libellé principal EST déjà la catégorie
           (niveau 2 de la cascade), on n'affiche PAS la catégorie en sous-texte (sinon
-          deux fois la même). En mobile (colonne Catégorie masquée), le badge de statut
+          deux fois la même). Sous lg (colonne Catégorie masquée), le badge de statut
           se replie ICI. */}
       <td className="px-3 py-[14px] sm:px-4">
         <LibelleTransaction
@@ -130,7 +130,7 @@ export function TransactionRow({
             « À vérifier » côte à côte. `flex-wrap` LOCAL autorisé ici (ce n'est pas le
             header — la règle anti-flex-wrap vise le header) : sur un petit écran, deux
             badges passent à la ligne proprement plutôt que de déborder (anti-chevauchement R2). */}
-        <span className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
+        <span className="mt-1 flex flex-wrap items-center gap-2 lg:hidden">
           <CategorisationStatusBadge
             statut={transaction.statutCategorisation}
             categorie={transaction.categorie}
@@ -145,7 +145,7 @@ export function TransactionRow({
           Le badge « À vérifier » (concept B, fiabilité amont) se PILE dessous : les deux
           coexistent (ils ne se remplacent pas). `items-start` garde les badges calés à
           gauche, `gap-1` les sépare sans alourdir la densité de ligne. */}
-      <td className="hidden px-4 py-[14px] align-top sm:table-cell">
+      <td className="hidden px-4 py-[14px] align-top lg:table-cell">
         <span className="flex flex-col items-start gap-1">
           <CategorisationStatusBadge
             statut={transaction.statutCategorisation}

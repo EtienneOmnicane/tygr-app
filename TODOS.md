@@ -5,6 +5,77 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Différés /design-review du 2026-07-15 (rapport : `~/.gstack/projects/tygr-app/designs/design-audit-20260715/`)
+
+Baseline Design Score B− (AI Slop A) ; 10 findings fixés en
+`fix/design-review-20260715`, les suivants DIFFÉRÉS. Aucun ne touche
+l'isolation/append-only/montants-exacts (sinon corrigé, pas consigné).
+
+- [ ] **DESIGN-MOBILE1 (P2, effort ~2-3 j, 2026-07-15) — mobile <768 non conçu.**
+  La sidebar (232px, sans variante responsive) ne collapse pas ; à 375px le
+  contenu s'écrase (graphe illisible, chiffres masqués). Spec §1.1 « <768 =
+  lecture seule, KPIs en rangée scrollable, bottom-nav 4 entrées » NON
+  implémentée. Captures : `screenshots/dashboard-mobile.png`,
+  `transactions-mobile.png`. **Déclencheur** : décision produit « mobile
+  lecture seule » ou premier usage mobile réel rapporté.
+- [ ] **DESIGN-BREAKPOINTS1 (P2, effort ~0,5 j, 2026-07-15) — seuils sm/lg vs
+  norme 768/1280.** Le code bascule à 640/1024 (64× `sm:`, 10× `lg:`), la norme
+  §1.1 dit 768/1280. Soit ACTER les seuils réels dans UI_GUIDELINES, soit
+  migrer (`md:`/`xl:`). Lié : DESIGN-MOBILE1. **Déclencheur** : mise à jour
+  UI_GUIDELINES (DESIGN-DOCS-PERIMEES1) — trancher AVANT tout sweep.
+- [ ] **DESIGN-FOCUS-SWEEP1 (P2, effort ~0,5 j, 2026-07-15) — focus non
+  uniforme.** 44× `focus:ring` (s'allume au clic souris) vs 252×
+  `focus-visible:ring`, mélangés jusque dans `category-picker.tsx` ; 3 rendus
+  d'anneau (offset-2 / sans offset / `ring-primary/30`). Cible §2.3 : ring 2px
+  primary offset 2px, `focus-visible` partout. Mécanique mais 15+ fichiers.
+  **Déclencheur** : prochain chantier a11y OU prochaine /design-review.
+- [ ] **DESIGN-HAUTEURS-CONTROLES1 (P2, effort ~0,25 j, 2026-07-15) — h-9 (19×)
+  vs h-10 (46×, spec §2.3) vs toolbar h-12 (`barre-vue.tsx:99`).** Unifier à
+  h-10 écran par écran (risque de layout calibré). **Déclencheur** : prochaine
+  passe admin/forms.
+- [ ] **DESIGN-CAT-COULEURS1 (P2, effort ~0,5 j, 2026-07-15) — deux référentiels
+  de couleur catégorie ASSUMÉS mais divergents.** Badge = identité (hash,
+  stable, tokens `--color-cat-badge-*`) ; donut = RANG de montant (tokens
+  `--color-chart-cat-*`). Une même catégorie change de couleur selon la
+  surface. Converger = décision produit (le donut par identité perdrait la
+  lecture de classement ; le badge par rang perdrait la stabilité).
+  **Déclencheur** : décision design/PO explicite — ne pas « fixer » en douce.
+- [ ] **DESIGN-DEVISE-CONVENTION1 (P2, effort ~0,25 j, 2026-07-15) — CONFLIT de
+  règles documentées sur les devises sans symbole.** CLAUDE.md §8 (figé
+  2026-06-22) : repli code ISO en SUFFIXE (« 28 061,11 GBP » — synthèse,
+  graphiques) ; `indicateurDevise` (UI-SOLDE-MULTIDEVISE-POLISH1) : indicateur
+  TOUJOURS en préfixe pour aligner les virgules de la pile multi-devise
+  (« GBP 349,20 » — cartes de solde). Même devise, deux écritures sur le même
+  écran. Trancher (l'alignement décimal plaide pour le préfixe généralisé),
+  harmoniser, corriger la règle perdante. **Déclencheur** : arbitrage Etienne.
+- [ ] **DESIGN-ITALIQUE-BRUT1 (P2, effort ~0,25 j, 2026-07-15) — l'italique
+  « libellé brut non enrichi » est un signal NON documenté.** Transactions et
+  légendes graphiques rendent les libellés bruts en italique, les enrichis en
+  romain — sémantique réelle, invisible pour l'utilisateur (deux « Merchant
+  Settlement|… » stylés différemment sans explication). Documenter (légende/
+  tooltip) OU uniformiser. **Déclencheur** : décision produit.
+- [ ] **DESIGN-ENTETE-VARIANTES1 (P2, effort ~0,25 j, 2026-07-15) — 3 variantes
+  de zone d'en-tête depuis #214.** Toolbar complète (dashboard/transactions/
+  échéances) / CTA seul (banques) / bandeau « ESPACE » (règles + admin). Unifier
+  ou acter la matrice page→en-tête. **Déclencheur** : consolidation toolbar
+  (PLAN-toolbar-config).
+- [ ] **DESIGN-DOCS-PERIMEES1 (P2, effort ~0,5 j, 2026-07-15) — docs design
+  périmées vs code.** UI_GUIDELINES §1.1/§1.2 décrivent le header ink + side-panel
+  KPI 300px (remplacés par AppSidebar verticale, refonte Dodo) ; §2.1 dit encore
+  « Instrument Sans + Geist » (code = Red Hat Display unifiée, conforme §0) ;
+  DESIGN.md racine résume d'ANCIENNES valeurs (`ink #0F1E3D` vs `#0C1633`) ;
+  segmented actif rendu `primary` (spec §2.3 : pill `ink`) — à acter ; H1 de page
+  26px sans rôle dans l'échelle §2.1 — à acter ; **CLAUDE.md « Interface en
+  français » à réconcilier avec Q-LANG** (destination EN actée 2026-07-13 — le
+  design-review 2026-07-15 a failli traduire le pilote admin EN en FR sur la foi
+  de cette phrase). PR docs (auto-mergeable).
+  **Déclencheur** : avant la PROCHAINE /design-consultation ou tout nouveau plan UI.
+- [ ] **DESIGN-RESTANT-SERVEUR1 (P2, effort ~0,25 j, 2026-07-15) —
+  `restantDecimal()` recalcule un montant dans l'UI** (`echeances-list.tsx:62-74`,
+  centimes BigInt — pas de float). Contraire au principe « l'UI affiche, ne
+  recalcule rien » (en-tête format-montant.ts) : déplacer le « restant dû » dans
+  la requête/service. **Déclencheur** : prochain chantier échéances.
+
 ### Dashboard : carte « Comptes connectés » orpheline (2026-07-15)
 
 - [ ] **DASH-COMPTES-CONNECTES-ORPHELIN1 (P2, effort ~0,25 j, 2026-07-15) — DETTE :
