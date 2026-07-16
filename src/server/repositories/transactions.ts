@@ -70,7 +70,8 @@ export interface TransactionLigne {
    * REPLI d'affichage quand `cleanLabel` (marchand enrichi) est vide — décision
    * produit assumée 2026-06-23 : on préfère montrer le narratif brut (« DBIT / POS
    * / … ») plutôt qu'un « Opération bancaire » générique. Narratif de relevé, pas
-   * de PII nominative ; la recherche (ILIKE) reste sur cleanLabel uniquement.
+   * de PII nominative ; la recherche (ILIKE) porte sur la même cascade que
+   * l'affichage — marchand nettoyé SINON brut (cf. `conditionsFiltres`).
    */
   bankLabelRaw: string | null;
   primaryCategory: string | null;
@@ -508,10 +509,25 @@ function conditionsFiltres(params: {
     conditions.push(eq(transactionsCache.bankAccountId, bankAccountId));
   }
   if (recherche) {
-    // ILIKE sur le libellé NETTOYÉ uniquement (bank_label_raw = PII, règle 8).
     // Échappe les méta-caractères LIKE pour traiter la saisie comme littérale.
     const motif = `%${recherche.replace(/[\\%_]/g, "\\$&")}%`;
-    conditions.push(ilike(transactionsCache.cleanLabel, motif));
+    // ILIKE sur le libellé CHERCHABLE : le marchand nettoyé s'il est non vide
+    // (même `trim` que `resoudreLibelle`), SINON le brut bancaire — c'est-à-dire
+    // ce que la colonne Libellé AFFICHE. Avant ce correctif, seul `clean_label`
+    // était interrogé : ~1 tx sur 3 (clean_label NULL) restait INTROUVABLE alors
+    // que son libellé brut était à l'écran ET que le moteur de règles, lui, le
+    // matche (incohérence chercher/afficher/règles). Le niveau intermédiaire de
+    // la cascade (« catégorie FR ») est un mapping applicatif TS, non transposable
+    // ici — compromis assumé : la recherche couvre marchand + brut.
+    // Règle 8 : elle interdit le brut dans les LOGS/télémétrie, pas dans un WHERE
+    // (le motif reste un paramètre lié ; rien n'est journalisé) — le brut est
+    // d'ailleurs AFFICHÉ en repli depuis la décision produit du 2026-06-23.
+    conditions.push(
+      ilike(
+        sql`coalesce(nullif(trim(${transactionsCache.cleanLabel}), ''), ${transactionsCache.bankLabelRaw})`,
+        motif,
+      ),
+    );
   }
   if (dateDebut) {
     conditions.push(gte(transactionsCache.transactionDate, dateDebut));
