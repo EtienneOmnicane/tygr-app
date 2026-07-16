@@ -5,6 +5,34 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### QA runtime du 2026-07-15 — constats différés (rapport `.gstack/qa-reports/`)
+
+Passe /qa complète sur main@747c4f3 (build local, vraie donnée, compte jetable).
+Deux bugs corrigés dans la PR associée (recherche aveugle aux `clean_label` NULL ;
+suppression d'échéance sans confirmation). Un seul constat différé — il ne touche
+ni l'isolation, ni l'append-only, ni l'exactitude des montants :
+
+- [ ] **QA-REGLES-PICKER-INDENT1 (P2, effort ~0,1 j, 2026-07-15) — le préfixe
+  d'indentation hiérarchique fuit dans le label fermé du picker** : sur `/regles`,
+  choisir la sous-catégorie « Fournitures » affiche « — Fournitures » (tiret
+  d'indentation du dropdown) dans le bouton fermé du formulaire « Nouvelle règle ».
+  Le label fermé doit rendre le NOM seul ; l'indentation n'a de sens que dans la
+  liste déroulée. **Déclencheur** : prochain lot UI sur `/regles` ou sur le Select
+  maison (`components/ui/select`).
+
+Deux constats levés PENDANT la passe ont été requalifiés à la lecture des décisions
+existantes, et ne sont PAS consignés (trace d'audit, règle 6) : l'anglais de
+`/admin/*` est le pilote **Q-LANG** voulu (décision 2026-07-13 — ne pas « corriger »
+la langue de ces écrans) ; l'incohérence préfixe/suffixe GBP/ZAR (cartes vs synthèse)
+est déjà consignée par le design review du 2026-07-15 (`DESIGN-DEVISE-CONVENTION1`,
+arbitrage Etienne attendu).
+
+Statut des dettes déjà consignées re-vérifiées au passage : `QA-UX-VENTIL-RESTE1`
+toujours reproductible à l'identique (2e ligne orpheline, Valider grisé — l'invariant
+bloque, pas de corruption) ; `QA-LISTES-MANQUANTES1` et `QA-NAV-PLACEHOLDERS1` sont
+RÉSOLUS en pratique (/banques liste la connexion, /admin/membres liste les membres,
+/graphiques et /echeances sont de vraies pages) — à cocher par leur auteur si confirmé.
+
 ### Dashboard : carte « Comptes connectés » orpheline (2026-07-15)
 
 - [ ] **DASH-COMPTES-CONNECTES-ORPHELIN1 (P2, effort ~0,25 j, 2026-07-15) — DETTE :
