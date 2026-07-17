@@ -147,6 +147,9 @@ export function FluxBarres({
 const LARGEUR_DEFAUT = 640;
 const HAUTEUR_DEFAUT = 380;
 const BANDE_LABELS = 22; // px réservés sous l'axe pour les libellés de mois
+// Bande ÉLARGIE quand la colonne pivot porte son sous-label « Réalisé à date » (§3.5) :
+// il lui faut une SECONDE ligne sous le libellé de mois, sinon les deux se superposent.
+const BANDE_LABELS_PIVOT = 38;
 const FRACTION_BARRE = 0.5; // largeur d'une barre = 50 % de sa colonne (reste = gap)
 const LARGEUR_BARRE_MAX = 40; // px — plafond : sur peu de mois (colonnes larges) une
 // barre à 50 % deviendrait un gros bloc (« graphe cassé »). On la borne pour qu'elle
@@ -186,10 +189,18 @@ function BarresMensuelles({
   const [survol, setSurvol] = useState<number | null>(null);
   const colonneActive = survol != null ? colonnes[survol] : null;
 
+  // FRONTIÈRE réalisé / prévisionnel. Le PIVOT est la colonne qui porte les DEUX (le mois
+  // courant, D2) ; tout ce qui suit le premier mois sans réalisé est purement projeté.
+  // Calculé AVANT la géométrie : la présence du pivot élargit la bande de labels.
+  const idxPivot = colonnes.findIndex((c) => c.realise !== null && c.prevision !== null);
+  const premierFutur = colonnes.findIndex((c) => c.realise === null);
+  const ilExistePrevision = colonnes.some((c) => c.prevision !== null);
+
   // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
   // centre de cette zone (entrées au-dessus, sorties en dessous). `hauteurDemi`
   // borné ≥ 0 par sécurité (cartes très basses).
-  const hauteurDemi = Math.max((hauteur - BANDE_LABELS) / 2, 0);
+  const bandeLabels = idxPivot >= 0 ? BANDE_LABELS_PIVOT : BANDE_LABELS;
+  const hauteurDemi = Math.max((hauteur - bandeLabels) / 2, 0);
   const yAxe = hauteurDemi;
 
   // Une colonne par mois ; la barre occupe `FRACTION_BARRE` de sa colonne, centrée
@@ -204,21 +215,21 @@ function BarresMensuelles({
   // C3 — densité des labels : au-delà de MAX_LABELS mois, on n'affiche qu'un label
   // sur `pasLabel`, régulièrement espacé, en garantissant TOUJOURS le premier (i=0)
   // et le dernier (lisibilité des bornes de la fenêtre).
-  // ⚠️ La zone prévisionnelle ALLONGE l'axe → le pas des labels du réalisé peut changer
-  // (défaut n°3 du plan §5.2). Les bornes restent garanties ; vérifié au Visual QA.
+  //
+  // ⚠️ La zone prévisionnelle ALLONGE l'axe → le pas des labels grossit (défaut n°3 du
+  // plan §5.2) : sur 6 mois + 3 projetés, il passe de 1 à 2 et le PIVOT perd son libellé.
+  // Or c'est la colonne la plus lourde de sens — « Réalisé à date » y pointerait un mois
+  // anonyme. Le pivot est donc garanti au même titre que les bornes (constat de Visual QA).
   const pasLabel = Math.max(1, Math.ceil(colonnes.length / MAX_LABELS));
   const dernier = colonnes.length - 1;
 
   // Hauteur de la zone traçable (hors bande de labels) — sert au bandeau de survol
   // qui met en évidence la colonne active sur toute la hauteur des barres.
-  const hauteurZone = Math.max(hauteur - BANDE_LABELS, 0);
+  const hauteurZone = Math.max(hauteur - bandeLabels, 0);
 
-  // FRONTIÈRE réalisé / prévisionnel. Le pivot est la DERNIÈRE colonne qui porte du
-  // réalisé ; tout ce qui suit est purement projeté. `-1` = aucune prévision rendue.
-  const idxPivot = colonnes.findIndex((c) => c.realise !== null && c.prevision !== null);
-  const premierFutur = colonnes.findIndex((c) => c.realise === null);
-  const ilExistePrevision = colonnes.some((c) => c.prevision !== null);
   const xFrontiere = premierFutur >= 0 ? premierFutur * pas : null;
+  // Ligne des libellés de mois : remontée d'un cran quand le pivot porte son sous-label.
+  const yLabelMois = hauteur - (idxPivot >= 0 ? 20 : 6);
 
   const hauteurDe = (montant: string | undefined) =>
     max > 0 && montant !== undefined
@@ -254,16 +265,22 @@ function BarresMensuelles({
             fill="var(--color-surface-forecast)"
           />
         )}
-        {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre :
-            `surface-inset`, jamais une couleur de donnée). Rendu AVANT l'axe et les
-            barres → il reste en arrière-plan. */}
+        {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre, jamais une
+            couleur de donnée). Rendu AVANT l'axe et les barres → il reste en arrière-plan.
+            ⚠️ `line-strong` et NON `surface-inset` (#f0ecdf) : ce dernier est à 2 unités RGB
+            de `surface-forecast` (#efebdd) — indistinguable. Depuis que la zone
+            prévisionnelle existe, il produisait DEUX faux signaux (constat de Visual QA) :
+            survoler un mois PASSÉ le peignait comme du prévisionnel, et dans la zone
+            prévisionnelle le survol devenait invisible. `line-strong` se détache des deux
+            fonds (blanc et forecast) sans emprunter de couleur sémantique. */}
         {survol != null && (
           <rect
             x={survol * pas}
             y={0}
             width={pas}
             height={hauteurZone}
-            fill="var(--color-surface-inset)"
+            fill="var(--color-line-strong)"
+            fillOpacity={0.5}
           />
         )}
         {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
@@ -298,7 +315,7 @@ function BarresMensuelles({
           const hSortieR = hauteurDe(c.realise?.sorties);
           const hEntreeP = hauteurDe(c.prevision?.entrees);
           const hSortieP = hauteurDe(c.prevision?.sorties);
-          const labelVisible = i % pasLabel === 0 || i === dernier;
+          const labelVisible = i % pasLabel === 0 || i === dernier || i === idxPivot;
           return (
             <g key={c.libelleMois}>
               {/* Entrée RÉALISÉE (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
@@ -347,7 +364,7 @@ function BarresMensuelles({
               {labelVisible && (
                 <text
                   x={cx + largeurBarre / 2}
-                  y={hauteur - 6}
+                  y={yLabelMois}
                   textAnchor="middle"
                   fill={
                     c.realise === null
@@ -357,6 +374,22 @@ function BarresMensuelles({
                   className="text-[11px]"
                 >
                   {formaterMoisCourt(c.libelleMois)}
+                </text>
+              )}
+              {/* Sous-label de la colonne PIVOT (§3.5) — le second signal, TEXTUEL, du
+                  basculement : ce mois n'est réalisé que jusqu'à aujourd'hui, le reste de
+                  sa barre est projeté. Rendu DANS le SVG, en unités de viewBox : le SVG
+                  est étiré (`w-full`), donc un positionnement en px CSS se décalerait de
+                  tout le facteur d'échelle (constat de Visual QA). */}
+              {i === idxPivot && (
+                <text
+                  x={cx + largeurBarre / 2}
+                  y={hauteur - 6}
+                  textAnchor="middle"
+                  fill="var(--color-primary)"
+                  className="text-[11px] italic"
+                >
+                  Réalisé à date
                 </text>
               )}
             </g>
@@ -378,18 +411,6 @@ function BarresMensuelles({
           />
         ))}
       </svg>
-
-      {/* Sous-label de la colonne PIVOT (§3.5 : « Réalisé à date ») — le second signal,
-          textuel, du basculement : il dit que ce mois n'est réalisé que jusqu'à aujourd'hui
-          et que le reste de sa barre est projeté. Rendu hors SVG pour rester lisible. */}
-      {idxPivot >= 0 && (
-        <p
-          className="pointer-events-none absolute bottom-0 text-center text-[11px] italic text-primary"
-          style={{ left: idxPivot * pas, width: pas }}
-        >
-          Réalisé à date
-        </p>
-      )}
 
       {/* Tooltip (§4.2) : carte blanche, mois + entrées/sorties/net tabular. Centré
           en haut (même patron que l'ancienne courbe), inerte au pointeur. */}
