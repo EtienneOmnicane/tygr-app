@@ -48,6 +48,10 @@ import {
   ajouterJours,
   expanserOccurrences,
 } from "@/lib/echeances-recurrence";
+import type {
+  EcheanceProjetable,
+  OccurrenceProjetee,
+} from "@/lib/echeances-recurrence";
 import {
   ZERO_CENTIMES,
   depuisCentimes,
@@ -302,6 +306,54 @@ export async function listerEcheances<TDb extends AnyPgDatabase>(
 }
 
 /**
+ * Échéances CANDIDATES à la projection, dont la tête ne dépasse pas `finMax` — la lecture
+ * que partagent la synthèse d'horizon (C0) et la projection du dashboard (C1).
+ *
+ * ⚠️ La clause `or(statut non terminal, recurrence non nulle)` PORTE la décision D1
+ * (« gabarit + tête ») : une récurrente TERMINALE reste candidate, parce que sa tête est
+ * éteinte mais ses occurrences futures restent dues. Un `statut NOT IN (...)` seul — le
+ * comportement d'avant C0 — ré-introduirait l'optimisme silencieux (pointer « payée »
+ * l'occurrence de juin d'un loyer effacerait juillet et toute la suite). Cette clause est
+ * donc lue par UNE seule fonction : dupliquée, elle divergerait au premier correctif.
+ *
+ * Borne : une occurrence est TOUJOURS ≥ sa tête → une échéance dont la tête dépasse
+ * `finMax` n'a aucune occurrence utile. Aucune borne BASSE ici : c'est l'appelant qui
+ * décide du sort de l'arriéré, via les bornes qu'il passe au moteur.
+ *
+ * Isolation : RLS tenant + `entity_scope` (RESTRICTIVE, portée par `echeances.entity_id`)
+ * via le `tx` de `withWorkspace`, plus le filtre `workspace_id` explicite en défense en
+ * profondeur. Paramètres liés uniquement.
+ */
+async function listerProjetables<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  finMax: string,
+): Promise<EcheanceProjetable[]> {
+  return tx
+    .select({
+      id: echeances.id,
+      direction: echeances.direction,
+      montant: echeances.montant,
+      montantRegle: echeances.montantRegle,
+      devise: echeances.devise,
+      dateEcheance: echeances.dateEcheance,
+      statut: echeances.statut,
+      recurrence: echeances.recurrence,
+    })
+    .from(echeances)
+    .where(
+      and(
+        eq(echeances.workspaceId, ctx.workspaceId),
+        lte(echeances.dateEcheance, finMax),
+        or(
+          notInArray(echeances.statut, [...STATUTS_TERMINAUX]),
+          isNotNull(echeances.recurrence),
+        ),
+      ),
+    );
+}
+
+/**
  * Synthèse par HORIZON (30/60/90 j) et par DEVISE des montants RESTANT dus, **occurrences
  * récurrentes COMPRISES** (C0 — `PLAN-conception-previsionnel-C.md`).
  *
@@ -354,31 +406,9 @@ export async function synthetiserHorizon<TDb extends AnyPgDatabase>(
   // donc une échéance dont la tête dépasse l'horizon max n'a aucune occurrence utile.
   const finMax = bornes[bornes.length - 1].fin;
 
-  const candidates = await tx
-    .select({
-      id: echeances.id,
-      direction: echeances.direction,
-      montant: echeances.montant,
-      montantRegle: echeances.montantRegle,
-      devise: echeances.devise,
-      dateEcheance: echeances.dateEcheance,
-      statut: echeances.statut,
-      recurrence: echeances.recurrence,
-    })
-    .from(echeances)
-    .where(
-      and(
-        eq(echeances.workspaceId, ctx.workspaceId),
-        lte(echeances.dateEcheance, finMax),
-        // ⚠️ Une récurrente TERMINALE reste candidate : sa tête est éteinte, mais ses
-        // occurrences futures sont dues (D1). Filtrer `statut NOT IN (...)` seul —
-        // l'ancien comportement — ré-introduirait exactement l'optimisme silencieux.
-        or(
-          notInArray(echeances.statut, [...STATUTS_TERMINAUX]),
-          isNotNull(echeances.recurrence),
-        ),
-      ),
-    );
+  // Lecture partagée avec la projection du dashboard (`listerProjetables`) : la clause
+  // qui garde les récurrentes terminales candidates porte D1 et n'existe qu'à un endroit.
+  const candidates = await listerProjetables(tx, ctx, finMax);
 
   return bornes.map(({ jours, fin }) => {
     // Agrégation par devise, en centimes entiers. `Map` → une devise n'apparaît que si
@@ -422,6 +452,51 @@ export async function synthetiserHorizon<TDb extends AnyPgDatabase>(
 
     return { jours, lignes };
   });
+}
+
+/**
+ * OCCURRENCES d'échéances dues dans `[debut, fin]` (dates « nues » Maurice, INCLUSIVES) —
+ * la source du PRÉVISIONNEL du dashboard (C1). Rapatrie les candidates puis délègue toute
+ * la règle de récurrence au moteur pur `expanserOccurrences` (rien n'est réimplémenté ici).
+ *
+ * ## Pourquoi une borne BASSE, contrairement à la synthèse d'horizon
+ *
+ * `synthetiserHorizon` n'en pose PAS : « une dette exigible hier reste due », et son écran
+ * assume de compter l'arriéré. Le dashboard, lui, prolonge une fenêtre vers le FUTUR —
+ * `debut` y vaut AUJOURD'HUI (décision D2 : le mois courant montre le réalisé à date + les
+ * échéances RESTANTES du mois). Conséquence ASSUMÉE : une tête en retard n'est pas projetée
+ * sur les barres. La verser dans un mois PASSÉ la mélangerait au réalisé d'une colonne
+ * rendue à 100 % d'opacité — un montant jamais encaissé/décaissé qui se lirait comme
+ * mouvementé. L'arriéré reste porté par l'onglet Échéances, qui le compte (horizons 30/60/90).
+ *
+ * Ces montants ne sont JAMAIS additionnés à du réalisé : deux séries, deux sources, deux
+ * rendus (§3.5). L'agrégation par mois/devise appartient à `projeterEcheancesSurGrille`
+ * (module pur) — ici on ne fait que lire et expanser.
+ *
+ * `opts.aujourdhui` injectable pour des tests déterministes ; défaut = date courante à
+ * Maurice (E20 — le fuseau est posé ICI, une fois, jamais dans le moteur pur).
+ */
+export async function occurrencesSurFenetre<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  opts: { debut: string; fin: string; aujourdhui?: string },
+): Promise<OccurrenceProjetee[]> {
+  const aujourdhui = opts.aujourdhui ?? dateCouranteMaurice();
+  const candidates = await listerProjetables(tx, ctx, opts.fin);
+
+  const occurrences: OccurrenceProjetee[] = [];
+  for (const candidate of candidates) {
+    // `deriveesDepuis: aujourdhui` — même garde que la synthèse : une dérivée PASSÉE n'a
+    // aucun statut, rien ne dit si elle a été réglée (elle serait un arriéré fantôme).
+    occurrences.push(
+      ...expanserOccurrences(candidate, {
+        debut: opts.debut,
+        fin: opts.fin,
+        deriveesDepuis: aujourdhui,
+      }),
+    );
+  }
+  return occurrences;
 }
 
 /* ------------------------------------------------------------------ */
