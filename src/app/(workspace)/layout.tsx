@@ -34,6 +34,7 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import {
@@ -173,6 +174,9 @@ export default async function WorkspaceLayout({
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
+    }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
     }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");

@@ -22,6 +22,7 @@ import { peutModifier } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { withWorkspace } from "@/server/db";
@@ -94,6 +95,7 @@ export default async function PageEcheances() {
     session = await exigerSessionWorkspace();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
+    if (erreur instanceof MotDePasseAChangerError) redirect("/account/password");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
     throw erreur;
   }

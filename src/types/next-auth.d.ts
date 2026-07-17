@@ -18,7 +18,19 @@ declare module "next-auth" {
     userId?: string;
     activeWorkspaceId?: string | null;
     viewFilter?: string[] | null;
+    /**
+     * `pwdAt` (AUTH-MDP-TEMPO1 D4) = epoch ms du dernier POSAGE de mot de passe
+     * au moment de l'émission du token (users.password_changed_at ; null =
+     * jamais posé depuis la migration 0022). Comparé par ÉGALITÉ STRICTE à la
+     * base à chaque requête gardée : un posage ultérieur invalide la session.
+     */
+    pwdAt?: number | null;
     user: DefaultSession["user"];
+  }
+
+  /** authorize() retourne le claim (config.ts) — recopié par le callback jwt. */
+  interface User {
+    pwdAt?: number | null;
   }
 }
 
@@ -29,5 +41,6 @@ declare module "@auth/core/jwt" {
     userId?: string;
     activeWorkspaceId?: string | null;
     viewFilter?: string[] | null;
+    pwdAt?: number | null;
   }
 }

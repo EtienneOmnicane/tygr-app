@@ -25,7 +25,7 @@ import {
   workspaces,
 } from "@/server/db/schema";
 import type { WorkspaceRole } from "@/server/db/schema";
-import { evaluerEchec, evaluerSucces } from "@/server/auth/lockout";
+import { estVerrouille, evaluerEchec, evaluerSucces } from "@/server/auth/lockout";
 import { debutFenetre } from "@/server/auth/rate-limit-ip";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
@@ -38,6 +38,57 @@ export interface UtilisateurIdentite {
   isActive: boolean;
   failedLoginCount: number;
   lockedUntil: Date | null;
+  mustChangePassword: boolean;
+  passwordChangedAt: Date | null;
+}
+
+/** État du compte relu à CHAQUE requête gardée (E6 étendu — AUTH-MDP-TEMPO1 D3/D4). */
+export interface EtatCompte {
+  isActive: boolean;
+  mustChangePassword: boolean;
+  passwordChangedAt: Date | null;
+}
+
+/**
+ * Erreurs nommées du changement de mot de passe (registre S2 du plan
+ * AUTH-MDP-TEMPO1 §6). Messages sans PII ; les codes machine servent au
+ * mapping de l'action et aux logs structurés.
+ */
+
+/** Compte inexistant ou désactivé — indistinguable d'un non-connecté (fail-closed). */
+export class CompteIndisponibleError extends Error {
+  readonly code = "ACCOUNT_UNAVAILABLE";
+  constructor() {
+    super("Compte indisponible");
+    this.name = "CompteIndisponibleError";
+  }
+}
+
+/** Verrou lockout E18 actif — rien n'est écrit (pas d'extension de verrou). */
+export class CompteVerrouilleError extends Error {
+  readonly code = "ACCOUNT_LOCKED";
+  constructor() {
+    super("Compte temporairement verrouillé");
+    this.name = "CompteVerrouilleError";
+  }
+}
+
+/** password_hash NULL (SSO futur) — jamais de verify sur NULL. */
+export class CompteSansMotDePasseError extends Error {
+  readonly code = "NO_PASSWORD_SET";
+  constructor() {
+    super("Ce compte n'utilise pas de mot de passe");
+    this.name = "CompteSansMotDePasseError";
+  }
+}
+
+/** Mot de passe actuel refusé — a compté comme un échec de connexion (D6). */
+export class MotDePasseActuelIncorrectError extends Error {
+  readonly code = "CURRENT_PASSWORD_INCORRECT";
+  constructor() {
+    super("Mot de passe actuel incorrect");
+    this.name = "MotDePasseActuelIncorrectError";
+  }
 }
 
 export interface MembershipResume {
@@ -63,6 +114,8 @@ export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
           isActive: users.isActive,
           failedLoginCount: users.failedLoginCount,
           lockedUntil: users.lockedUntil,
+          mustChangePassword: users.mustChangePassword,
+          passwordChangedAt: users.passwordChangedAt,
         })
         .from(users)
         .where(sql`lower(${users.email}) = lower(${email})`)
@@ -70,14 +123,108 @@ export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
       return lignes[0] ?? null;
     },
 
-    /** Re-validation E6 — appelée à chaque requête par le bridge session. */
-    async estActif(userId: string): Promise<boolean> {
+    /**
+     * Re-validation E6 étendue (AUTH-MDP-TEMPO1 D3/D4) — appelée à chaque
+     * requête par le bridge session, MÊME requête unique qu'estActif avant
+     * elle : le flag de forçage et le dernier posage de mot de passe (claim
+     * `pwdAt`) sortent du même SELECT, zéro coût ajouté.
+     * `null` = utilisateur inexistant → traité comme inactif (fail-closed).
+     */
+    async etatCompte(userId: string): Promise<EtatCompte | null> {
       const lignes = await db
-        .select({ isActive: users.isActive })
+        .select({
+          isActive: users.isActive,
+          mustChangePassword: users.mustChangePassword,
+          passwordChangedAt: users.passwordChangedAt,
+        })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
-      return lignes[0]?.isActive === true;
+      return lignes[0] ?? null;
+    },
+
+    /**
+     * Changement de mot de passe par le membre (AUTH-MDP-TEMPO1 §5.4).
+     *
+     * TOUTE la décision (verrou ? → verify → écriture) est re-prise dans UNE
+     * transaction sous `FOR UPDATE` : deux soumissions concurrentes ne peuvent
+     * ni bypasser le verrou ni perdre un incrément — la surface naît sans la
+     * course read-decide-write du login (dette CSO, lot séparé).
+     *
+     * Le verify argon2 (~100 ms) tourne SOUS le verrou de ligne : assumé — la
+     * contention est bornée à CE compte (self-DoS au pire) et c'est le seul
+     * moyen d'exclure une course entre verify et écriture.
+     *
+     * Un échec du mot de passe actuel COMPTE comme un échec de connexion
+     * (D6 — même secret, même machine lockout E18, mêmes colonnes).
+     */
+    async changerMotDePasse(
+      userId: string,
+      options: {
+        /** argon2.verify appliqué au hash lu sous verrou ; ne doit jamais lever. */
+        verifierAncien: (hash: string) => Promise<boolean>;
+        nouveauHash: string;
+        maintenant: Date;
+      },
+    ): Promise<void> {
+      const { verifierAncien, nouveauHash, maintenant } = options;
+      await db.transaction(async (tx) => {
+        const lignes = await tx
+          .select({
+            id: users.id,
+            passwordHash: users.passwordHash,
+            failedLoginCount: users.failedLoginCount,
+            lockedUntil: users.lockedUntil,
+            isActive: users.isActive,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .for("update");
+
+        // Fail-closed : inexistant ou désactivé ≡ non connecté (non-énumérant).
+        if (lignes.length === 0 || !lignes[0].isActive) {
+          throw new CompteIndisponibleError();
+        }
+        const compte = lignes[0];
+
+        // Verrou actif : refus SANS écriture (politique lockout.ts — pas
+        // d'extension de verrou sans information nouvelle).
+        if (estVerrouille(compte.lockedUntil, maintenant)) {
+          throw new CompteVerrouilleError();
+        }
+
+        // SSO futur : jamais de verify sur un hash NULL.
+        if (compte.passwordHash === null) {
+          throw new CompteSansMotDePasseError();
+        }
+
+        const ancienValide = await verifierAncien(compte.passwordHash);
+        if (!ancienValide) {
+          // Échec = échec de connexion (D6) : transition lockout DANS la tx.
+          const etat = evaluerEchec(compte.failedLoginCount, maintenant);
+          await tx
+            .update(users)
+            .set({
+              failedLoginCount: etat.failedLoginCount,
+              lockedUntil: etat.lockedUntil,
+            })
+            .where(eq(users.id, userId));
+          throw new MotDePasseActuelIncorrectError();
+        }
+
+        // Succès : nouveau posage (invalide les autres sessions via pwdAt, D4),
+        // flag levé, lockout remis à zéro (comme un login réussi).
+        await tx
+          .update(users)
+          .set({
+            passwordHash: nouveauHash,
+            mustChangePassword: false,
+            passwordChangedAt: maintenant,
+            failedLoginCount: 0,
+            lockedUntil: null,
+          })
+          .where(eq(users.id, userId));
+      });
     },
 
     /**

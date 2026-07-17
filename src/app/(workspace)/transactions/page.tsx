@@ -30,6 +30,7 @@ import { listerComptes, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { peutAdministrer } from "@/lib/permissions";
@@ -81,6 +82,9 @@ export default async function PageTransactions({
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
+    }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
     }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");

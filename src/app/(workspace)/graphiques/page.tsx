@@ -18,6 +18,7 @@ import { redirect } from "next/navigation";
 
 import {
   AucunWorkspaceActifError,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { analyseCategoriesParamsSchema } from "@/lib/insights-schema";
@@ -44,6 +45,7 @@ export default async function PageGraphiques() {
     vue = await chargerAnalyseCategories();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
+    if (erreur instanceof MotDePasseAChangerError) redirect("/account/password");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
     throw erreur;
   }

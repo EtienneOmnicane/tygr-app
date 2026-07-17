@@ -15,6 +15,7 @@ import { peutAdministrer } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
   exigerSessionAdministration,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { listerEntites, listerMembresWorkspace, withWorkspace } from "@/server/db";
@@ -34,6 +35,7 @@ export default async function PageMembres() {
     session = await exigerSessionAdministration();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
+    if (erreur instanceof MotDePasseAChangerError) redirect("/account/password");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
     throw erreur;
   }
