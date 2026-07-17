@@ -386,7 +386,14 @@ export async function synthetiserHorizon<TDb extends AnyPgDatabase>(
     const parDevise = new Map<string, { enc: bigint; dec: bigint }>();
 
     for (const candidate of candidates) {
-      for (const occ of expanserOccurrences(candidate, { fin })) {
+      // `deriveesDepuis: aujourdhui` — la TÊTE garde son retard (statut explicite), mais
+      // une occurrence DÉRIVÉE passée n'a aucun statut : rien ne dit si elle a été réglée.
+      // Sans cette borne, un gabarit mensuel vieux d'un an compterait 13 loyers dans
+      // l'horizon 30 j, +1 chaque mois (décision Etienne 2026-07-17, cross-review).
+      for (const occ of expanserOccurrences(candidate, {
+        fin,
+        deriveesDepuis: aujourdhui,
+      })) {
         const centimes = enCentimes(occ.montant);
         // Invariant : le moteur n'émet que des montants positifs bien formés. Une
         // violation est un défaut de code, pas une donnée à avaler en silence.

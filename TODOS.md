@@ -26,17 +26,16 @@ Etienne du 2026-07-17, cf. `PLAN-conception-previsionnel-C.md`).
   2. **Une série ne se clôt pas par un statut** — le seul geste de clôture est la
      SUPPRESSION de la ligne (le modèle n'a pas de `recurrence_fin`). À dire
      explicitement dans l'UI tant que cette dette vit.
-  3. **Arriéré fantôme** : la synthèse n'a **pas de borne basse** (sémantique voulue —
-     « une dette exigible hier reste due »). Un gabarit ancien jamais pointé fait donc
-     compter TOUTES ses occurrences passées : un loyer mensuel saisi il y a 2 ans et
-     jamais mis à jour pèse 24 × son montant dans l'horizon 30 j. Borné aujourd'hui par
-     le seul garde-fou `MAX_OCCURRENCES` (240). Sans occurrence matérialisée, on ne peut
-     pas distinguer « occurrence passée payée » de « occurrence passée impayée » : le
-     choix est binaire entre optimisme (ignorer le passé) et pessimisme (tout compter) —
-     C0 retient le **pessimisme**, biais prudent pour un outil de trésorerie.
+  3. **Une occurrence dérivée passée est INVISIBLE de la synthèse** (`deriveesDepuis`,
+     décision Etienne 2026-07-17) : n'ayant aucun statut, rien ne dit si elle a été
+     réglée — on ne la compte donc pas. Un arriéré réel sur une récurrente est ainsi
+     **sous-évalué** au-delà de sa tête. C'est le choix DÉLIBÉRÉ face à l'alternative
+     (tout compter → sur-estimation croissante et non bornée sur un montant affiché,
+     interdite par la règle 9). Seules des occurrences matérialisées permettront de
+     compter un arriéré **prouvé** plutôt que supposé.
   **Déclencheur** : le premier utilisateur qui pointe le paiement d'une occurrence
-  récurrente, ou le premier signalement d'arriéré fantôme. **Ne PAS** rouvrir en même
-  temps que le lot UI (C1) : celui-ci consomme le moteur, pas le modèle.
+  récurrente, ou le premier besoin d'un arriéré exact sur une série. **Ne PAS** rouvrir
+  en même temps que le lot UI (C1) : celui-ci consomme le moteur, pas le modèle.
 
 Bug de schéma corrigé au passage (migration `0023`, **pas une dette** — il est fixé) :
 `recurrence` était `varchar(12)` alors que `'trimestrielle'` fait **13** caractères. La
