@@ -391,6 +391,12 @@ flux interrompu (bandeau warning + retry auto).
   révocation de consentement — règle D2 du plan).
 - **Onboarding chip** (guide de démarrage) : carte `ink` bas-gauche, 13px blanc,
   progress bar `accent` 4px, réductible. Réservé au premier parcours.
+- **Échelle z-index** (registre de fait, UI-ZINDEX-ECHELLE1) : `z-10` éléments
+  sticky locaux (en-têtes de table, workspace-switcher) · `z-20` popovers de
+  contenu (perimetre-switcher, CategoryPicker) · `z-30` topbar globale ·
+  `z-50` overlay de Modal · `z-[60]` menus portalés qui doivent battre une
+  modale (Select). Tout nouveau composant flottant se place sur CE barème —
+  jamais de valeur au jugé (un popover sous `z-50` passera derrière une modale).
 
 ---
 
