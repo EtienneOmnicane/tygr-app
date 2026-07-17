@@ -94,7 +94,7 @@ export class UnsafeDatabaseRoleError extends Error {
   }
 }
 
-type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
+export type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
 /** Le type de transaction Drizzle, dérivé du type de base injecté. */
 export type WorkspaceTx<TDb extends AnyPgDatabase> = Parameters<
@@ -171,6 +171,32 @@ export type ExecuterWorkspace = <T>(
   fn: (tx: WorkspaceTx<AnyPgDatabase>, ctx: WorkspaceContext) => Promise<T>,
 ) => Promise<T>;
 
+/**
+ * Garde-fou R1/C6 PARTAGÉ (withWorkspace + primitive système, W1) : refuser de
+ * servir si la connexion tourne sous le propriétaire des tables (RLS
+ * contournable). Comparé au propriétaire réel de workspace_members — pas à une
+ * liste de noms en dur, pour rester correct quel que soit le nom d'owner
+ * (tygr_owner en local, autre sur Neon). `tableowner = current_user` ⇒ rôle
+ * propriétaire ⇒ fail-closed.
+ */
+export async function exigerRoleNonProprietaire<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+): Promise<void> {
+  const roleCheck = await tx.execute(
+    sql`select current_user as who,
+               current_user = tableowner as is_owner
+        from pg_tables where tablename = 'workspace_members'`,
+  );
+  const ligneRole = (
+    roleCheck as unknown as {
+      rows: { who: string; is_owner: boolean }[];
+    }
+  ).rows[0];
+  if (ligneRole?.is_owner === true) {
+    throw new UnsafeDatabaseRoleError(ligneRole.who ?? "owner");
+  }
+}
+
 export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
   return async function withWorkspace<T>(
     session: WorkspaceSession,
@@ -183,24 +209,7 @@ export function createWithWorkspace<TDb extends AnyPgDatabase>(db: TDb) {
     const { userId, activeWorkspaceId } = parsed.data;
 
     return db.transaction(async (tx) => {
-      // Garde-fou R1/C6 : refuser de servir si la connexion tourne sous le
-      // propriétaire des tables (RLS contournable). Comparé au propriétaire
-      // réel de workspace_members — pas à une liste de noms en dur, pour rester
-      // correct quel que soit le nom d'owner (tygr_owner en local, autre sur
-      // Neon). `tableowner = current_user` ⇒ rôle propriétaire ⇒ fail-closed.
-      const roleCheck = await tx.execute(
-        sql`select current_user as who,
-                   current_user = tableowner as is_owner
-            from pg_tables where tablename = 'workspace_members'`,
-      );
-      const ligneRole = (
-        roleCheck as unknown as {
-          rows: { who: string; is_owner: boolean }[];
-        }
-      ).rows[0];
-      if (ligneRole?.is_owner === true) {
-        throw new UnsafeDatabaseRoleError(ligneRole.who ?? "owner");
-      }
+      await exigerRoleNonProprietaire<TDb>(tx);
 
       await tx.execute(
         sql`select set_config('app.current_workspace_id', ${activeWorkspaceId}, true)`,

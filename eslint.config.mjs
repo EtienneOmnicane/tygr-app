@@ -31,6 +31,34 @@ const FRONTIERE_DONNEES = {
     "Accès runtime au schéma/repositories interdit hors src/server/** (CLAUDE.md règle 2). Lis les données via withWorkspace(session, fn). (Les `import type` sont autorisés.)",
 };
 
+/**
+ * Frontière de la PRIMITIVE SYSTÈME (lot W1, PLAN-ingestion-webhook-omnifi.md
+ * §6.1) — même mécanique de constante RÉPÉTÉE que FRONTIERE_DONNEES.
+ *
+ * `executerPourWorkspaceSysteme` CONTOURNE la re-validation de membership (il
+ * n'y a pas d'utilisateur) : elle n'est légitime que pour les chemins sans
+ * session — les fonctions Inngest (W1) et, plus tard, la route webhook (W4).
+ * Importée d'une Server Action ou d'un composant, elle deviendrait un bypass
+ * de membership : la règle rend l'oubli IMPOSSIBLE. `group` avec préfixe glob
+ * double-étoile : attrape aussi les imports relatifs (leçon R6). Pas
+ * d'allowTypeImports : aucun type de ce module n'a vocation à circuler (les
+ * types partagés vivent dans tenancy).
+ */
+const FRONTIERE_SYSTEME = {
+  // Trois globs, du plus précis au plus large — chaque élargissement ferme une
+  // voie de contournement PROUVÉE au lint : `../db/systeme` (relatif depuis
+  // src/server/*) ne contient pas « server/ » ; `./systeme` (voisin direct
+  // dans src/server/db/) ne contient pas « db/ ». Le dernier motif interdit du
+  // même coup le ré-export par db/index.ts (la primitive ne doit JAMAIS
+  // rejoindre le point d'entrée commun). Seul module homonyme du repo ; un
+  // futur faux positif porterait ce message et se résoudrait en renommant.
+  group: ["**/server/db/systeme", "**/db/systeme", "**/systeme"],
+  message:
+    "Primitive système (executerPourWorkspaceSysteme) réservée aux fonctions Inngest " +
+    "(src/server/inngest/**) — PLAN-ingestion-webhook-omnifi.md §6.1. Toute surface " +
+    "utilisateur passe par withWorkspace(session, fn).",
+};
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -76,7 +104,23 @@ const eslintConfig = defineConfig([
     files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/server/**"],
     rules: {
-      "no-restricted-imports": ["error", { patterns: [FRONTIERE_DONNEES] }],
+      "no-restricted-imports": [
+        "error",
+        { patterns: [FRONTIERE_DONNEES, FRONTIERE_SYSTEME] },
+      ],
+    },
+  },
+
+  // Frontière de la primitive système DANS la couche serveur (W1) : hors
+  // src/server/inngest/**, aucun module serveur (repository, orchestration,
+  // auth…) ne consomme executerPourWorkspaceSysteme. Bloc SÉPARÉ du précédent :
+  // celui-ci ignore src/server/** en entier (les repositories DOIVENT importer
+  // le schéma), ici on ne restreint QUE la primitive.
+  {
+    files: ["src/server/**/*.{ts,tsx}"],
+    ignores: ["src/server/inngest/**", "src/server/db/systeme.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [FRONTIERE_SYSTEME] }],
     },
   },
 
@@ -102,6 +146,7 @@ const eslintConfig = defineConfig([
         {
           patterns: [
             FRONTIERE_DONNEES,
+            FRONTIERE_SYSTEME,
             {
               // `paths` ne matche QUE le spécifieur exact : un import RELATIF
               // (`../../../../server/auth/session`) passait à travers. `group` matche le
