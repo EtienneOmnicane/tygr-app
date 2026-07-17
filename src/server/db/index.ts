@@ -155,6 +155,7 @@ export {
   synthesePeriodeParDevise,
   syntheseParMois,
   grilleMois,
+  grilleMoisSuivants,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 export type {
@@ -318,6 +319,9 @@ export type {
 export {
   listerEcheances,
   synthetiserHorizon,
+  // Prévisionnel du dashboard (C1) : occurrences dues sur une fenêtre, récurrences
+  // comprises. Lue dans le Promise.all de la page, sous le MÊME tx que le réalisé.
+  occurrencesSurFenetre,
   creerEcheance,
   modifierEcheance,
   changerStatutEcheance,

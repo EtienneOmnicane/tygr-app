@@ -16,6 +16,8 @@ import { useMemo, useState } from "react";
 import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
+  DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  DEMO_DASHBOARD_PREVISION_SANS_REALISE,
   DEMO_DASHBOARD_UN_MOIS,
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
@@ -26,11 +28,22 @@ import {
   type DonneesDashboard,
 } from "@/components/dashboard/dashboard-content";
 
-type EtatDemo = "succes" | "multi-devise" | "un-mois" | "partiel" | "vide";
+type EtatDemo =
+  | "succes"
+  | "prevision-sans-realise"
+  | "prevision-autre-devise"
+  | "sans-prevision"
+  | "multi-devise"
+  | "un-mois"
+  | "partiel"
+  | "vide";
 type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
-  { id: "succes", label: "Succès" },
+  { id: "succes", label: "Succès (avec prévision)" },
+  { id: "prevision-sans-realise", label: "Prévision SEULE (sans réalisé)" },
+  { id: "prevision-autre-devise", label: "Prévision autre devise" },
+  { id: "sans-prevision", label: "Sans prévision (fenêtre passée)" },
   { id: "multi-devise", label: "Multi-devise (5)" },
   { id: "un-mois", label: "1 mois peuplé (fix courbe)" },
   { id: "partiel", label: "Partiel (post-onboarding)" },
@@ -50,6 +63,25 @@ const DEMO_SOLDES_CINQ_DEVISES: DonneesDashboard["soldesParDevise"] = [
   { currency: "USD", total: "179200.00" },
   { currency: "ZAR", total: "1204360.50" },
 ];
+
+/**
+ * Fixture montée par onglet. Table plutôt que cascade de ternaires : à 8 états, la
+ * cascade devenait illisible et un état oublié y passait inaperçu (le Record force
+ * l'exhaustivité au typecheck).
+ */
+const FIXTURE_PAR_ETAT: Record<EtatDemo, DonneesDashboard> = {
+  succes: DEMO_DASHBOARD,
+  // Défaut n°1 du plan §5.2 : la prévision doit s'afficher SEULE, jamais « Aucun mouvement ».
+  "prevision-sans-realise": DEMO_DASHBOARD_PREVISION_SANS_REALISE,
+  // §5.3 : colonnes futures à ZÉRO + note — jamais un montant étranger, jamais de FX.
+  "prevision-autre-devise": DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  // D4 : fenêtre passée → AUCUNE zone prévisionnelle (l'axe reste celui d'aujourd'hui).
+  "sans-prevision": { ...DEMO_DASHBOARD, prevision: null },
+  "multi-devise": { ...DEMO_DASHBOARD, soldesParDevise: DEMO_SOLDES_CINQ_DEVISES },
+  "un-mois": DEMO_DASHBOARD_UN_MOIS,
+  partiel: DEMO_DASHBOARD_PARTIEL,
+  vide: DEMO_DASHBOARD_VIDE,
+};
 
 const ONGLETS_FRAICHEUR: Array<{ id: FraicheurDemo; label: string; heures: number }> = [
   { id: "frais", label: "Frais (<6h)", heures: 2 },
@@ -76,16 +108,7 @@ export default function DashboardPreviewPage() {
   const donnees = useMemo<DonneesDashboard>(() => {
     const heures =
       ONGLETS_FRAICHEUR.find((o) => o.id === fraicheur)?.heures ?? 2;
-    const base =
-      etat === "succes"
-        ? DEMO_DASHBOARD
-        : etat === "multi-devise"
-          ? { ...DEMO_DASHBOARD, soldesParDevise: DEMO_SOLDES_CINQ_DEVISES }
-          : etat === "un-mois"
-            ? DEMO_DASHBOARD_UN_MOIS
-            : etat === "partiel"
-              ? DEMO_DASHBOARD_PARTIEL
-              : DEMO_DASHBOARD_VIDE;
+    const base = FIXTURE_PAR_ETAT[etat];
     // L'état « vide » n'a pas de compte → la fraîcheur n'a pas d'effet (pas de pastille).
     return etat === "vide" ? base : avecFraicheur(base, heures);
   }, [etat, fraicheur]);

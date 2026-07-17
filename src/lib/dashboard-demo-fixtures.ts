@@ -110,6 +110,46 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
     { mois: "2026-06", currency: "MUR", entrees: "5200000.00", sorties: "4474000.00", variation: "726000.00" },
   ],
   grilleMensuelle: ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"],
+  /**
+   * Zone PRÉVISIONNELLE (C1) : le mois d'ancrage (2026-06) porte ses échéances RESTANTES,
+   * empilées sur son réalisé (D2), puis 3 mois projetés (D3). Un loyer mensuel de 850 000
+   * court sur les trois — c'est l'occurrence RÉCURRENTE qui doit peser CHAQUE mois (le
+   * constat d'origine : elle n'était comptée qu'une fois).
+   */
+  prevision: {
+    moisCourant: {
+      libelleMois: "2026-06",
+      entrees: "1200000.00",
+      sorties: "850000.00",
+      variation: "350000.00",
+      autresDevises: false,
+    },
+    moisFuturs: [
+      {
+        libelleMois: "2026-07",
+        entrees: "2400000.00",
+        sorties: "850000.00",
+        variation: "1550000.00",
+        autresDevises: false,
+      },
+      {
+        libelleMois: "2026-08",
+        entrees: "0.00",
+        sorties: "850000.00",
+        variation: "-850000.00",
+        autresDevises: false,
+      },
+      {
+        // Mois qui porte AUSSI une échéance en USD : signalée par le drapeau, JAMAIS
+        // additionnée aux MUR (règle 8 / DASH-FX1) — la note multi-devises doit sortir.
+        libelleMois: "2026-09",
+        entrees: "0.00",
+        sorties: "3150000.00",
+        variation: "-3150000.00",
+        autresDevises: true,
+      },
+    ],
+  },
   transactionsRecentes: [
     {
       omnifiTxnId: "demo-tx-0008",
@@ -191,6 +231,9 @@ export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
   topVendors: { direction: "outflow", lignes: [] },
   serieMensuelle: [],
   grilleMensuelle: [],
+  // Aucune échéance saisie → AUCUNE zone prévisionnelle (pas de colonnes fantômes à
+  // zéro : une prévision vide n'est pas une prévision nulle, §5.3).
+  prevision: null,
   transactionsRecentes: [],
 };
 
@@ -203,6 +246,7 @@ export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
   topVendors: { direction: "outflow", lignes: [] },
   serieMensuelle: [],
   grilleMensuelle: [],
+  prevision: null,
   transactionsRecentes: [],
 };
 
@@ -226,5 +270,99 @@ export const DEMO_DASHBOARD_UN_MOIS: DonneesDashboard = {
     { mois: "2026-01", currency: "MUR", entrees: "3800000.00", sorties: "3450000.00", variation: "350000.00" },
   ],
   grilleMensuelle: ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"],
+  prevision: null,
   transactionsRecentes: DEMO_DASHBOARD.transactionsRecentes,
+};
+
+/**
+ * État PRÉVISIONNEL « SANS RÉALISÉ » — le cas critique du plan (§5.2, défaut n°1) :
+ * workspace neuf, comptes connectés, AUCUNE transaction synchronisée, mais des échéances
+ * DÉJÀ saisies. Attendu : les barres de prévision s'affichent SEULES — surtout pas
+ * « Aucun mouvement sur la période », qui ferait disparaître une donnée pourtant saisie.
+ *
+ * C'est exactement le parcours de démo : on saisit une échéance, la trésorerie
+ * prévisionnelle doit bouger même sans historique bancaire.
+ */
+export const DEMO_DASHBOARD_PREVISION_SANS_REALISE: DonneesDashboard = {
+  comptes: DEMO_DASHBOARD.comptes,
+  soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
+  flux: [],
+  synthesesMois: [],
+  topVendors: { direction: "outflow", lignes: [] },
+  serieMensuelle: [],
+  grilleMensuelle: ["2026-04", "2026-05", "2026-06"],
+  prevision: {
+    moisCourant: {
+      libelleMois: "2026-06",
+      entrees: "0.00",
+      sorties: "850000.00",
+      variation: "-850000.00",
+      autresDevises: false,
+    },
+    moisFuturs: [
+      {
+        libelleMois: "2026-07",
+        entrees: "1500000.00",
+        sorties: "850000.00",
+        variation: "650000.00",
+        autresDevises: false,
+      },
+      {
+        libelleMois: "2026-08",
+        entrees: "0.00",
+        sorties: "850000.00",
+        variation: "-850000.00",
+        autresDevises: false,
+      },
+      {
+        libelleMois: "2026-09",
+        entrees: "0.00",
+        sorties: "850000.00",
+        variation: "-850000.00",
+        autresDevises: false,
+      },
+    ],
+  },
+  transactionsRecentes: [],
+};
+
+/**
+ * État PRÉVISIONNEL « AUTRE DEVISE SEULE » (§5.3) : les mois futurs ne portent QUE des
+ * échéances en devise ≠ base. Attendu : colonnes à ZÉRO + note multi-devises — jamais le
+ * montant étranger affiché à la place, jamais une conversion inventée (DASH-FX1).
+ */
+export const DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE: DonneesDashboard = {
+  ...DEMO_DASHBOARD,
+  prevision: {
+    moisCourant: {
+      libelleMois: "2026-06",
+      entrees: "0.00",
+      sorties: "0.00",
+      variation: "0.00",
+      autresDevises: true,
+    },
+    moisFuturs: [
+      {
+        libelleMois: "2026-07",
+        entrees: "0.00",
+        sorties: "0.00",
+        variation: "0.00",
+        autresDevises: true,
+      },
+      {
+        libelleMois: "2026-08",
+        entrees: "0.00",
+        sorties: "0.00",
+        variation: "0.00",
+        autresDevises: true,
+      },
+      {
+        libelleMois: "2026-09",
+        entrees: "0.00",
+        sorties: "0.00",
+        variation: "0.00",
+        autresDevises: true,
+      },
+    ],
+  },
 };

@@ -18,10 +18,12 @@ import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { FluxBarres } from "@/components/dashboard/flux-bars";
+import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 
 export function FluxTresorerieCard({
   serieMensuelle,
   grilleMensuelle,
+  prevision,
   devise,
   libellePeriode,
 }: {
@@ -29,6 +31,11 @@ export function FluxTresorerieCard({
   serieMensuelle: SyntheseMensuelle[];
   /** Axe continu des mois attendus (comble les mois sans transaction). */
   grilleMensuelle: string[];
+  /**
+   * Zone prévisionnelle (échéances projetées) ou `null` — la page décide (D4). La carte ne
+   * la calcule pas : elle arrive dans le MÊME payload serveur que le réalisé.
+   */
+  prevision?: PrevisionFlux | null;
   /** Devise de base du workspace. */
   devise: string;
   /** Libellé de la fenêtre appliquée (source unique : la page) — relayé à `FluxBarres`. */
@@ -39,15 +46,20 @@ export function FluxTresorerieCard({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-text">Flux de trésorerie</h2>
-          <p className="mt-0.5 text-xs text-text-muted">Entrées − sorties par mois</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            {prevision
+              ? "Entrées − sorties par mois · prévision issue des échéances"
+              : "Entrées − sorties par mois"}
+          </p>
         </div>
 
-        <Legende />
+        <Legende avecPrevision={Boolean(prevision)} />
       </div>
 
       <FluxBarres
         serie={serieMensuelle}
         grille={grilleMensuelle}
+        prevision={prevision}
         devise={devise}
         libellePeriode={libellePeriode}
       />
@@ -58,8 +70,12 @@ export function FluxTresorerieCard({
 /**
  * Légende des barres : Entrées (inflow) / Sorties (outflow). Ici le vert/rouge DÉCRIT la
  * donnée affichée (légitime, §3.1).
+ *
+ * La pastille « Prévision » n'apparaît que si une zone prévisionnelle est rendue — et elle
+ * est NEUTRE (`surface-forecast` + bordure), jamais verte/rouge : le prévisionnel n'emprunte
+ * pas les couleurs sémantiques du réalisé, sous peine de les confondre (§3.5).
  */
-function Legende() {
+function Legende({ avecPrevision }: { avecPrevision: boolean }) {
   return (
     <span className="flex items-center gap-3 text-xs text-text-muted">
       <span className="flex items-center gap-1.5">
@@ -70,6 +86,15 @@ function Legende() {
         <span aria-hidden className="h-2 w-2 rounded-full bg-outflow" />
         Sorties
       </span>
+      {avecPrevision && (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2 w-2 rounded-full border border-line bg-surface-forecast"
+          />
+          Prévision
+        </span>
+      )}
     </span>
   );
 }

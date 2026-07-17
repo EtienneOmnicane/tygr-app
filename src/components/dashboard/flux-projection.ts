@@ -140,6 +140,21 @@ export function projeterEcheancesSurGrille(
 }
 
 /**
+ * La zone prévisionnelle telle que la page la résout et la passe à l'UI (payload SERVEUR,
+ * même chemin que le réalisé — aucun fetch client, donc aucun nouvel état de chargement).
+ *
+ * `null` côté page (pas un objet vide) quand la fenêtre n'atteint pas le mois courant
+ * (D4) : l'absence de prévision se dit par l'absence de la structure, pas par des mois
+ * remplis de zéros — une prévision vide n'est pas une prévision nulle (§5.3).
+ */
+export interface PrevisionFlux {
+  /** Part prévisionnelle du mois d'ancrage : ses échéances RESTANTES (D2, colonne pivot). */
+  moisCourant: MoisAffiche;
+  /** Les `nbMoisPrevision` mois qui suivent l'ancrage, alimentés par les échéances seules. */
+  moisFuturs: MoisAffiche[];
+}
+
+/**
  * Une colonne de l'axe : ce que la barre du mois porte, réalisé et prévision SÉPARÉS.
  * Jamais fusionnés en un chiffre — deux sources (`transactions_cache` vs `echeances`)
  * ne s'additionnent pas dans une même valeur (§3.5, frontière non ambiguë).

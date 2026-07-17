@@ -26,20 +26,31 @@ import { redirect } from "next/navigation";
 import {
   cashflowParDevise,
   grilleMois,
+  grilleMoisSuivants,
   listerComptes,
   soldesCourantsParDevise,
   synthesePeriodeParDevise,
+  occurrencesSurFenetre,
   syntheseParMois,
   transactionsRecentes,
   vendorsParConcentration,
   withWorkspace,
 } from "@/server/db";
+import { projeterEcheancesSurGrille } from "@/components/dashboard/flux-projection";
 import { VENDORS_TOP_N_DEFAUT } from "@/lib/insights-schema";
 import {
+  dateCouranteMaurice,
   formaterIntervalleComptable,
   formaterMoisAnnee,
 } from "@/lib/format-date";
 import { dernierJourMois, resoudrePeriode } from "@/lib/periode";
+
+/**
+ * Profondeur de la zone PRÉVISIONNELLE, en mois (décision D3, 2026-07-17) : FIXE à 3,
+ * aligné sur les horizons 30/60/90 j de l'onglet Échéances — le dashboard et la synthèse
+ * parlent ainsi de la même profondeur d'engagement. Pas de contrôle de toolbar au MVP.
+ */
+const NB_MOIS_PREVISION = 3;
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
@@ -114,6 +125,26 @@ export default async function PageDashboard({
     ? formaterIntervalleComptable(fromFlux, to)
     : `${nbMois} dernier${nbMois > 1 ? "s" : ""} mois`;
 
+  // ZONE PRÉVISIONNELLE (C1) — le fuseau Maurice est posé ICI, une seule fois (E20) :
+  // tout l'aval (moteur de récurrence, grilles) est de l'arithmétique sur dates « nues ».
+  const aujourdhui = dateCouranteMaurice();
+  const moisCourant = aujourdhui.slice(0, 7);
+
+  // D4 : la prévision n'apparaît QUE si la fenêtre atteint le mois courant. Sous une plage
+  // PASSÉE (« janvier→mars » consultée en juillet), prolonger vers l'avant serait absurde —
+  // l'utilisateur regarde le passé — et le libellé de période mentirait (même piège que
+  // « N derniers mois » sous plage précise, TOOLBAR-DATE-PRECISE1). `moisAncrage` vaut le
+  // mois courant sous preset, le mois de FIN DE PLAGE sous plage : le comparer suffit.
+  const previsionActive = mois === moisCourant;
+  const grillePrevision = previsionActive
+    ? grilleMoisSuivants(NB_MOIS_PREVISION, mois)
+    : [];
+  // Fenêtre d'expansion : d'AUJOURD'HUI (D2 — le mois courant montre son réalisé à date
+  // PUIS ses échéances restantes) au dernier jour du dernier mois projeté.
+  const finPrevision = previsionActive
+    ? dernierJourMois(grillePrevision[grillePrevision.length - 1])
+    : null;
+
   // UN SEUL withWorkspace : les lectures + la devise de base partagent le tx. Le
   // `ctx.role` (re-résolu serveur) descend en prop pour gater le bouton « Synchroniser »
   // côté UI (confort — la garde réelle est dans l'orchestration, cf. SyncButton).
@@ -126,6 +157,7 @@ export default async function PageDashboard({
       vendors,
       serie,
       transactions,
+      occurrences,
       ligneWs,
     ] = await Promise.all([
       listerComptes(tx),
@@ -153,6 +185,18 @@ export default async function PageDashboard({
       // comblés par grilleMois côté UI.
       syntheseParMois(tx, { from: fromFlux, to }),
       transactionsRecentes(tx),
+      // PRÉVISIONNEL (C1) — occurrences d'échéances, récurrences comprises (moteur pur).
+      // ⚠️ Lecture DANS le Promise.all existant, sous le MÊME `tx` : ouvrir un second
+      // `withWorkspace` pour la projection rejouerait le défaut d'auto-amputation déjà
+      // rencontré (L8b-1 : un chemin parallèle qui lit SANS le périmètre du reste de
+      // l'écran). Même transaction ⇒ mêmes GUC ⇒ mêmes deux étages RLS.
+      finPrevision !== null
+        ? occurrencesSurFenetre(tx, ctx, {
+            debut: aujourdhui,
+            fin: finPrevision,
+            aujourdhui,
+          })
+        : [],
       tx.execute(
         sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
       ),
@@ -160,6 +204,18 @@ export default async function PageDashboard({
 
     const rows = ligneWs as unknown as Array<{ base_currency: string }>;
     const deviseBase = rows[0]?.base_currency ?? "MUR";
+
+    // Agrégation PURE (hors SQL, comme le filtre de flux ci-dessous) : les occurrences
+    // deviennent des cellules mensuelles réduites à la devise de base — jamais additionnées
+    // au réalisé, jamais converties (DASH-FX1). La grille est [mois pivot, ...mois futurs] :
+    // le mois courant reçoit ses échéances RESTANTES, empilées sur son réalisé (D2).
+    const previsionParMois = previsionActive
+      ? projeterEcheancesSurGrille(
+          occurrences,
+          [mois, ...grillePrevision],
+          deviseBase,
+        )
+      : [];
     return {
       devise: deviseBase,
       role: ctx.role,
@@ -175,6 +231,15 @@ export default async function PageDashboard({
         serieMensuelle: serie,
         // Axe continu des `nbMois` mois (calcul pur, partagé avec l'UI).
         grilleMensuelle: grilleMois(nbMois, mois),
+        // Prévision (C1) — `null` quand la fenêtre n'atteint pas le mois courant (D4) :
+        // l'UI ne rend alors AUCUNE zone prévisionnelle (pas de colonnes fantômes à zéro —
+        // une prévision vide n'est pas une prévision nulle).
+        prevision: previsionActive
+          ? {
+              moisCourant: previsionParMois[0],
+              moisFuturs: previsionParMois.slice(1),
+            }
+          : null,
         transactionsRecentes: transactions,
       },
     };
