@@ -1,0 +1,1 @@
+ALTER TABLE "echeances" ALTER COLUMN "recurrence" SET DATA TYPE varchar(20);

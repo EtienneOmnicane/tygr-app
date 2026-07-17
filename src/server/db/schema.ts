@@ -1179,7 +1179,17 @@ export const echeances = pgTable(
      * categorization_rules) : une catégorie d'un autre tenant est impossible.
      */
     categorieId: uuid("categorie_id"),
-    recurrence: varchar("recurrence", { length: 12 }).$type<EcheanceRecurrence>(),
+    /**
+     * Périodicité du GABARIT (C0). NULL = ponctuelle.
+     *
+     * ⚠️ Était `varchar(12)` — or `'trimestrielle'` fait **13** caractères : la valeur
+     * était PHYSIQUEMENT impossible à stocker (Postgres 22001), alors que le formulaire
+     * la proposait, que zod l'acceptait et que le CHECK ci-dessous l'autorisait (sa
+     * branche était morte). Toute création d'échéance trimestrielle finissait en 500.
+     * Élargi à 20 : couvre les périodicités du CHECK et laisse une marge (semestrielle,
+     * hebdomadaire…) sans nouvelle migration.
+     */
+    recurrence: varchar("recurrence", { length: 20 }).$type<EcheanceRecurrence>(),
     /** Montant déjà réglé (support du statut `partiel`). NULL = aucun règlement partiel. */
     montantRegle: numeric("montant_regle", { precision: 15, scale: 2 }),
     createdBy: uuid("created_by")
