@@ -5,6 +5,46 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
+
+Lot C0 livré : le champ `recurrence` était **stocké mais jamais lu** — la synthèse
+30/60/90 j comptait chaque échéance UNE fois, à sa date stockée, et **sous-estimait
+donc tout engagement récurrent** (une mensuelle de 10 000 affichait 10 000 à plat au
+lieu de 10 000 / 20 000 / 30 000). Corrigé par un moteur pur d'expansion
+(`src/lib/echeances-recurrence.ts`), sémantique **D1 « gabarit + tête »** (décision
+Etienne du 2026-07-17, cf. `PLAN-conception-previsionnel-C.md`).
+
+- [ ] **ECH-OCCURRENCES1 (P1, effort ~2–3 j, 2026-07-17) — matérialiser les occurrences
+  d'échéance récurrente** (table `echeance_occurrences` : une ligne par échéance × date,
+  `statut`/`montant_regle` **par occurrence**, FK composite scopée workspace + RLS 2
+  étages + liste blanche DELETE). **Pourquoi** : le modèle actuel porte `statut` et
+  `montant_regle` sur **la ligne** (le gabarit), donc une occurrence ne peut pas être
+  pointée individuellement. Trois conséquences, toutes de la même cause :
+  1. **Aucun geste pour pointer un paiement** sans toucher la série. D1 « gabarit +
+     tête » contourne le trou (une tête terminale n'éteint plus les dérivées), il ne le
+     comble pas.
+  2. **Une série ne se clôt pas par un statut** — le seul geste de clôture est la
+     SUPPRESSION de la ligne (le modèle n'a pas de `recurrence_fin`). À dire
+     explicitement dans l'UI tant que cette dette vit.
+  3. **Arriéré fantôme** : la synthèse n'a **pas de borne basse** (sémantique voulue —
+     « une dette exigible hier reste due »). Un gabarit ancien jamais pointé fait donc
+     compter TOUTES ses occurrences passées : un loyer mensuel saisi il y a 2 ans et
+     jamais mis à jour pèse 24 × son montant dans l'horizon 30 j. Borné aujourd'hui par
+     le seul garde-fou `MAX_OCCURRENCES` (240). Sans occurrence matérialisée, on ne peut
+     pas distinguer « occurrence passée payée » de « occurrence passée impayée » : le
+     choix est binaire entre optimisme (ignorer le passé) et pessimisme (tout compter) —
+     C0 retient le **pessimisme**, biais prudent pour un outil de trésorerie.
+  **Déclencheur** : le premier utilisateur qui pointe le paiement d'une occurrence
+  récurrente, ou le premier signalement d'arriéré fantôme. **Ne PAS** rouvrir en même
+  temps que le lot UI (C1) : celui-ci consomme le moteur, pas le modèle.
+
+Bug de schéma corrigé au passage (migration `0023`, **pas une dette** — il est fixé) :
+`recurrence` était `varchar(12)` alors que `'trimestrielle'` fait **13** caractères. La
+valeur était donc impossible à stocker (Postgres `22001`) **alors que le formulaire la
+proposait** et que zod l'acceptait ; le `22001` n'étant mappé nulle part, toute création
+d'échéance trimestrielle finissait en **500 brute**. La branche `'trimestrielle'` du
+CHECK était morte depuis `0019`. Élargi à `varchar(20)`, prouvé par le test 25.
+
 ### QA runtime du 2026-07-15 — constats différés (rapport `.gstack/qa-reports/`)
 
 Passe /qa complète sur main@747c4f3 (build local, vraie donnée, compte jetable).
