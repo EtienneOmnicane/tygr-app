@@ -39,6 +39,7 @@ import {
   creerEcheance,
   listerEcheances,
   modifierEcheance,
+  occurrencesSurFenetre,
   supprimerEcheance,
   synthetiserHorizon,
   EcheanceHorsPerimetreError,
@@ -84,6 +85,10 @@ const ECH_A_MOD = "a7000000-0000-4000-8000-000000000001";
 const ECH_A_STAT = "a7000000-0000-4000-8000-000000000002";
 const ECH_A_STAT2 = "a7000000-0000-4000-8000-000000000003";
 const ECH_A_DEL = "a7000000-0000-4000-8000-000000000004";
+// C1 — projection du dashboard : deux échéances WS_A dans des entités DIFFÉRENTES, pour
+// prouver que la zone prévisionnelle est AMPUTÉE au périmètre du lecteur (étage 2).
+const ECH_A_SUCRE_PROJ = "a7000000-0000-4000-8000-000000000005";
+const ECH_A_ENERGIE_PROJ = "a7000000-0000-4000-8000-000000000006";
 const ECH_B = "b7000000-0000-4000-8000-000000000001";
 
 // Échéances WS_C (synthèse déterministe, entity_id NULL).
@@ -190,7 +195,11 @@ beforeAll(async () => {
       ('${ECH_A_MOD}','${WS_A}','${ENT_SUCRE}','encaissement','À modifier','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'),
       ('${ECH_A_STAT}','${WS_A}','${ENT_SUCRE}','encaissement','Cycle de vie','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
       ('${ECH_A_STAT2}','${WS_A}','${ENT_SUCRE}','encaissement','Borne réglé','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
-      ('${ECH_A_DEL}','${WS_A}','${ENT_SUCRE}','encaissement','À supprimer','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now());
+      ('${ECH_A_DEL}','${WS_A}','${ENT_SUCRE}','encaissement','À supprimer','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
+      -- Paire de projection (C1) : montants REPÈRES distincts, une par entité. MGR_SUCRE
+      -- (scopé Sucrière) ne doit JAMAIS voir la seconde dans sa zone prévisionnelle.
+      ('${ECH_A_SUCRE_PROJ}','${WS_A}','${ENT_SUCRE}','decaissement','Projection Sucrière','111.00','MUR','2026-07-20','en_cours','${ADMIN_A}',now(),now()),
+      ('${ECH_A_ENERGIE_PROJ}','${WS_A}','${ENT_ENERGIE}','decaissement','Projection Énergie','222.00','MUR','2026-07-21','en_cours','${ADMIN_A}',now(),now());
     -- Témoin cross-tenant.
     insert into echeances
       (id, workspace_id, entity_id, direction, libelle, montant, devise, date_echeance, statut, created_by) values
@@ -676,5 +685,93 @@ describe("C0 — synthèse × RÉCURRENCE (gabarit + tête, D1)", () => {
     );
     // WS_C n'a aucune récurrente : ses totaux restent ceux du test 17.
     expect(c[2].lignes.find((l) => l.devise === "MUR")!.decaissement).toBe("600.00");
+  });
+});
+
+/**
+ * C1 — la source du PRÉVISIONNEL du dashboard. `occurrencesSurFenetre` tourne sous les
+ * MÊMES deux étages RLS que le reste de l'écran (elle est lue dans le `Promise.all` de la
+ * page, sous son `tx`) : ces cas le prouvent sous RLS réelle, rôle `tygr_app`.
+ *
+ * La projection est ensuite agrégée par `projeterEcheancesSurGrille` (module PUR, couvert
+ * par `tests/unit/flux-previsionnel.test.ts`) : ici on prouve la LECTURE et ses bornes.
+ */
+describe("C1 — occurrences sur fenêtre (source du prévisionnel dashboard)", () => {
+  // Fenêtre type du dashboard : d'AUJOURD'HUI au dernier jour du 3ᵉ mois projeté (D3).
+  const FENETRE = { debut: AUJ, fin: "2026-09-30", aujourdhui: AUJ };
+
+  it("25. WS_D : expanse les occurrences de la fenêtre, récurrences comprises", async () => {
+    const occ = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const cle = (o: (typeof occ)[number]) => `${o.dateEcheance}:${o.devise}:${o.montant}`;
+    expect(occ.map(cle).sort()).toEqual(
+      [
+        // R1 mensuelle dec MUR 10000 @07-11 : tête + 2 dérivées dans la fenêtre.
+        "2026-07-11:MUR:10000.00",
+        "2026-08-11:MUR:10000.00",
+        "2026-09-11:MUR:10000.00",
+        // R3 mensuelle dec USD 100 @07-11 PAYEE : tête ÉTEINTE, série VIVANTE (D1) —
+        // c'est la fin de l'optimisme silencieux, ici sur le chemin du dashboard.
+        "2026-08-11:USD:100.00",
+        "2026-09-11:USD:100.00",
+        // R5 mensuelle dec MUR 7 @08-07 : tête + 1 dérivée (10-07 déborde la fin).
+        "2026-08-07:MUR:7.00",
+        "2026-09-07:MUR:7.00",
+      ].sort(),
+    );
+    // R4 (ponctuelle payée) n'apparaît nulle part : un terminal non récurrent reste éteint.
+    expect(occ.some((o) => o.montant === "9999.00")).toBe(false);
+  });
+
+  it("26. la BORNE BASSE écarte une tête EN RETARD (≠ synthèse d'horizon, qui la compte)", async () => {
+    // R2 (trimestrielle enc MUR 5000 @07-05) est OVERDUE à AUJ = 07-08.
+    const occ = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    expect(occ.some((o) => o.montant === "5000.00")).toBe(false);
+
+    // …alors que la synthèse d'horizon, elle, la compte (« une dette exigible hier reste
+    // due »). Les deux écrans divergent VOLONTAIREMENT : verser un arriéré dans un mois
+    // PASSÉ des barres le mélangerait au réalisé d'une colonne rendue à 100 % d'opacité.
+    const synth = await withWorkspace(sessAdminD, (tx, ctx) =>
+      synthetiserHorizon(tx, ctx, { aujourdhui: AUJ }),
+    );
+    expect(synth[0].lignes.find((l) => l.devise === "MUR")!.encaissement).toBe("5000.00");
+  });
+
+  it("27. isolation TENANT : la fenêtre de WS_D ne voit RIEN de WS_C (et inversement)", async () => {
+    const d = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    // 7777/8888/9999 sont les montants repères de WS_C : aucun ne doit fuir.
+    expect(d.some((o) => ["7777.00", "8888.00", "9999.00"].includes(o.montant))).toBe(false);
+
+    const c = await withWorkspace(sessAdminC, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    // WS_C ne porte AUCUNE récurrente : ses gabarits de WS_D sont invisibles.
+    expect(c.some((o) => o.montant === "10000.00")).toBe(false);
+    // C7 (payee) et C8 (annulee) restent éteints ; C9 (12-01) déborde la fenêtre.
+    expect(c.map((o) => o.dateEcheance).sort()).toEqual(["2026-07-20", "2026-07-25", "2026-08-01", "2026-08-20", "2026-09-20"]);
+  });
+
+  it("28. isolation ENTITÉ : un membre SCOPÉ ne projette QUE son périmètre", async () => {
+    // ADMIN_A est en Vision Globale : il voit les DEUX entités.
+    const vueGlobale = await withWorkspace(sessAdminA, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const montantsGlobale = vueGlobale.map((o) => o.montant);
+    expect(montantsGlobale).toContain("111.00"); // Sucrière
+    expect(montantsGlobale).toContain("222.00"); // Énergie
+
+    // MGR_SUCRE est scopé Sucrière : l'échéance d'Énergie doit DISPARAÎTRE de sa
+    // projection — sinon la zone prévisionnelle fuirait entre BU du même groupe.
+    const vueScopee = await withWorkspace(sessMgr, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const montantsScopee = vueScopee.map((o) => o.montant);
+    expect(montantsScopee).toContain("111.00");
+    expect(montantsScopee).not.toContain("222.00");
   });
 });
