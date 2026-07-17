@@ -63,10 +63,17 @@ import { enCentimes, depuisCentimes, ZERO_CENTIMES } from "@/lib/montant-centime
 export const STATUTS_TERMINAUX: readonly EcheanceStatut[] = ["payee", "annulee"];
 
 /**
- * Plafond dur d'occurrences par échéance. Garde-fou (le modèle n'a PAS de
- * `recurrence_fin` : une récurrente est théoriquement infinie) contre une borne
- * aberrante — PAS une règle métier. 240 = 20 ans de mensualités : très au-delà de
- * tout horizon réel (90 j) comme de toute grille de dashboard.
+ * Plafond dur d'occurrences DÉRIVÉES par échéance. Garde-fou anti-boucle-infinie (le
+ * modèle n'a PAS de `recurrence_fin`) — PAS une règle métier.
+ *
+ * ⚠️ Il ne borne que la SORTIE, jamais le parcours : l'itération démarre au premier rang
+ * utile (`premierRangDerive`), pas au rang 0. Sans cela, un gabarit ancien épuisait le
+ * plafond AVANT d'atteindre la fenêtre — il rendait 240 occurrences périmées, perdait
+ * l'occurrence réellement due, et RESTAURAIT des horizons plats (le bug même que ce
+ * module corrige). Constat de cross-review, 2026-07-17.
+ *
+ * 240 dérivées = 20 ans de mensualités : inatteignable pour la synthèse (fenêtre ≤ 90 j)
+ * comme pour une grille de dashboard.
  */
 const MAX_OCCURRENCES = 240;
 
@@ -110,12 +117,26 @@ export interface OccurrenceProjetee {
 /** Bornes d'expansion, dates « nues » Maurice INCLUSIVES. */
 export interface BornesExpansion {
   /**
-   * Borne basse OPTIONNELLE. Absente = pas de borne basse : on part de la tête.
-   * La synthèse d'horizon n'en pose PAS (« une dette exigible hier reste due »).
+   * Borne basse OPTIONNELLE applicable à TOUTES les occurrences, tête comprise (usage :
+   * la grille de mois du dashboard). La synthèse d'horizon n'en pose PAS — « une dette
+   * exigible hier reste due ».
    */
   debut?: string;
   /** Borne haute OBLIGATOIRE (ex. aujourd'hui + 90 j). Sans elle, la série est infinie. */
   fin: string;
+  /**
+   * Date à partir de laquelle une occurrence **DÉRIVÉE** (rang ≥ 1) est projetée —
+   * typiquement AUJOURD'HUI à Maurice. **La TÊTE n'est PAS concernée** : son retard reste
+   * compté, parce qu'elle porte un `statut` EXPLICITE (l'utilisateur a dit si elle est
+   * payée). Une dérivée passée, elle, n'a aucun statut : rien ne dit si elle a été réglée.
+   *
+   * ⚠️ OBLIGATOIRE, à dessein (fail-closed) : sans cette borne, un gabarit mensuel vieux
+   * d'un an ferait compter 13 loyers (130 000 au lieu de 10 000) dans l'horizon 30 j, et
+   * +1 chaque mois indéfiniment — une sur-estimation croissante sur un montant AFFICHÉ.
+   * La rendre optionnelle laisserait un appelant la réintroduire en silence.
+   * Décision Etienne du 2026-07-17, sur constat de cross-review.
+   */
+  deriveesDepuis: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -218,68 +239,94 @@ function restantTeteCentimes(e: EcheanceProjetable): bigint | null {
 }
 
 /**
+ * Premier rang DÉRIVÉ (≥ 1) dont la date atteint `depuis`. Calculé par arithmétique
+ * directe puis AJUSTÉ de quelques crans : le quantième (et son clamp) peut décaler
+ * l'estimation d'un pas. On ne parcourt donc JAMAIS les rangs périmés un à un — c'est ce
+ * qui empêche `MAX_OCCURRENCES` de mordre avant la fenêtre sur un gabarit ancien.
+ */
+function premierRangDerive(tete: DateNue, depuis: DateNue, pas: number): number {
+  const deltaMois = (depuis.annee - tete.annee) * 12 + (depuis.mois - tete.mois);
+  let rang = Math.max(1, Math.floor(deltaMois / pas));
+  const cible = composer(depuis);
+  // Bornes d'ajustement (≤ 4) : l'estimation est exacte à un pas près par construction.
+  for (let g = 0; g < 4 && rang > 1; g += 1) {
+    if (composer(decalerMois(tete, (rang - 1) * pas)) < cible) break;
+    rang -= 1;
+  }
+  for (let g = 0; g < 4; g += 1) {
+    if (composer(decalerMois(tete, rang * pas)) >= cible) break;
+    rang += 1;
+  }
+  return rang;
+}
+
+/**
  * Expanse les occurrences d'UNE échéance dans `bornes` (inclusives).
  *
  * Règles (D1 « gabarit + tête ») :
  *  1. Montant illisible → `[]` (on ne projette jamais un montant inventé).
- *  2. Non récurrente : la tête seule, si elle est dans les bornes ET non terminale.
- *  3. Récurrente : tête (si non terminale) + dérivées, pas `mensuelle` = 1 mois /
- *     `trimestrielle` = 3 mois, tant qu'on reste ≤ `bornes.fin`.
- *  4. Tête = restant dû ; dérivées = montant PLEIN.
- *  5. Un restant dû ≤ 0 ne projette PAS la tête (rien ne reste à mouvementer) — mais
- *     n'éteint pas les dérivées.
- *  6. Occurrences hors bornes ignorées ; le `rang` reste l'index réel depuis la tête
- *     (une série antérieure à `bornes.debut` qui rattrape la fenêtre garde ses rangs).
+ *  2. **TÊTE** (rang 0) : projetée à sa date si non terminale, restant dû > 0 et dans
+ *     `[debut?, fin]`. Son RETARD est compté — son `statut` est explicite, donc fiable.
+ *  3. **DÉRIVÉES** (rang ≥ 1, récurrentes seules) : toujours dues, au montant PLEIN,
+ *     mais **uniquement à partir de `deriveesDepuis`** — une dérivée passée n'a aucun
+ *     statut, rien ne dit si elle a été réglée (cf. `BornesExpansion.deriveesDepuis`).
+ *  4. Un restant dû ≤ 0 n'éteint QUE la tête, jamais la série.
+ *  5. Le `rang` reste l'index RÉEL depuis la tête (une série ancienne qui rattrape la
+ *     fenêtre garde ses rangs — ils ne repartent pas de 1).
  *
- * Retour trié par date croissante. Aucune addition ici (règle 8 : l'appelant agrège).
+ * Retour trié par date croissante (la tête précède toujours ses dérivées). Aucune
+ * addition ici (règle 8 : l'appelant agrège).
  */
 export function expanserOccurrences(
   echeance: EcheanceProjetable,
   bornes: BornesExpansion,
 ): OccurrenceProjetee[] {
   const tete = decomposer(echeance.dateEcheance);
-  const fin = decomposer(bornes.fin);
-  if (!tete || !fin) return [];
-  // Borne basse absente = pas de borne basse (cf. `BornesExpansion.debut`).
+  const depuis = decomposer(bornes.deriveesDepuis);
+  if (!tete || !depuis || !decomposer(bornes.fin)) return [];
   if (bornes.debut !== undefined && !decomposer(bornes.debut)) return [];
   if (bornes.debut !== undefined && bornes.debut > bornes.fin) return [];
 
   const montantPlein = enCentimes(echeance.montant);
   if (montantPlein === null) return [];
 
-  const estTerminale = STATUTS_TERMINAUX.includes(echeance.statut);
-  const pas = echeance.recurrence ? PAS_MOIS[echeance.recurrence] : null;
+  const dansFenetre = (d: string) =>
+    d <= bornes.fin && (bornes.debut === undefined || d >= bornes.debut);
+
+  const emettre = (dateIso: string, montantC: bigint, rang: number) => ({
+    echeanceId: echeance.id,
+    direction: echeance.direction,
+    montant: depuisCentimes(montantC),
+    devise: echeance.devise,
+    dateEcheance: dateIso,
+    mois: dateIso.slice(0, 7),
+    rang,
+  });
 
   const occurrences: OccurrenceProjetee[] = [];
 
-  for (let rang = 0; rang < MAX_OCCURRENCES; rang += 1) {
+  // 1. TÊTE — la seule à porter statut/montant_regle.
+  const dateTete = composer(tete);
+  const restant = restantTeteCentimes(echeance);
+  if (
+    !STATUTS_TERMINAUX.includes(echeance.statut) &&
+    restant !== null &&
+    restant > ZERO_CENTIMES &&
+    dansFenetre(dateTete)
+  ) {
+    occurrences.push(emettre(dateTete, restant, 0));
+  }
+
+  // 2. DÉRIVÉES — récurrentes uniquement, à partir de `deriveesDepuis`.
+  const pas = echeance.recurrence ? PAS_MOIS[echeance.recurrence] : null;
+  if (pas === null) return occurrences;
+
+  let rang = premierRangDerive(tete, depuis, pas);
+  for (let emises = 0; emises < MAX_OCCURRENCES; emises += 1, rang += 1) {
     // Chaque occurrence se calcule depuis la TÊTE (clamp non cumulatif).
-    const d = rang === 0 ? tete : decalerMois(tete, rang * (pas as number));
-    const dateIso = composer(d);
+    const dateIso = composer(decalerMois(tete, rang * pas));
     if (dateIso > bornes.fin) break;
-
-    const montantC = rang === 0 ? restantTeteCentimes(echeance) : montantPlein;
-
-    // La TÊTE porte statut/montant_regle : terminale ou soldée → pas projetée. Les
-    // DÉRIVÉES sont toujours dues (D1) — c'est la fin de l'optimisme silencieux.
-    const projetable =
-      rang === 0 ? !estTerminale && montantC !== null && montantC > ZERO_CENTIMES : true;
-
-    const dansBornes = bornes.debut === undefined || dateIso >= bornes.debut;
-
-    if (projetable && dansBornes && montantC !== null) {
-      occurrences.push({
-        echeanceId: echeance.id,
-        direction: echeance.direction,
-        montant: depuisCentimes(montantC),
-        devise: echeance.devise,
-        dateEcheance: dateIso,
-        mois: dateIso.slice(0, 7),
-        rang,
-      });
-    }
-
-    if (pas === null) break; // non récurrente : la tête et rien d'autre
+    if (dansFenetre(dateIso)) occurrences.push(emettre(dateIso, montantPlein, rang));
   }
 
   return occurrences;
