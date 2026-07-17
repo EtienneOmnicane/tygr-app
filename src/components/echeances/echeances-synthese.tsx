@@ -10,6 +10,8 @@
  * néanmoins leur COULEUR DE SENS (§3.1) — `encaissement` en `inflow`, `decaissement`
  * en `outflow`, `net` coloré par son signe — car perdre le sens entrée/sortie sur une
  * donnée financière est une régression (§3.1 prime : le vert/rouge EST l'information).
+ * EXCEPTION zéro (§4.1, même règle que le dashboard — FINDING-007/102) : un montant
+ * NUL n'est pas une donnée verte/rouge, c'est une absence → `text-faint`.
  *
  * JAMAIS d'addition cross-devise (règle 8 « Formatage ») : chaque devise a sa propre
  * ligne, ses propres virgules décimales alignées (`tabular-nums`). Un horizon sans
@@ -29,10 +31,15 @@ function cn(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
 }
 
-/** Teinte du NET selon son signe (sens §3.1) : positif=entrée, négatif=sortie, 0=neutre. */
+/** Teinte du NET selon son signe (sens §3.1) : positif=entrée, négatif=sortie, 0=absence. */
 function classeNet(net: string): string {
-  if (estZero(net)) return "text-text-muted";
+  if (estZero(net)) return "text-text-faint";
   return estNegatif(net) ? "text-outflow" : "text-inflow";
+}
+
+/** Couleur de SENS d'un montant : zéro = donnée absente → `text-faint` (§4.1). */
+function classeSens(montant: string, classe: string): string {
+  return estZero(montant) ? "text-text-faint" : classe;
 }
 
 /** Une ligne de devise dans un horizon : à encaisser / à décaisser / net. */
@@ -45,13 +52,23 @@ function LigneDevise({ ligne }: { ligne: SyntheseHorizonDeviseUI }) {
       <dl className="flex flex-col gap-0.5 text-xs">
         <div className="flex items-baseline justify-between gap-3">
           <dt className="text-text-muted">À encaisser</dt>
-          <dd className="whitespace-nowrap font-medium tabular-nums text-inflow">
+          <dd
+            className={cn(
+              "whitespace-nowrap font-medium tabular-nums",
+              classeSens(ligne.encaissement, "text-inflow"),
+            )}
+          >
             {formatMontant(ligne.encaissement, ligne.devise)}
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <dt className="text-text-muted">À décaisser</dt>
-          <dd className="whitespace-nowrap font-medium tabular-nums text-outflow">
+          <dd
+            className={cn(
+              "whitespace-nowrap font-medium tabular-nums",
+              classeSens(ligne.decaissement, "text-outflow"),
+            )}
+          >
             {formatMontant(ligne.decaissement, ligne.devise)}
           </dd>
         </div>
