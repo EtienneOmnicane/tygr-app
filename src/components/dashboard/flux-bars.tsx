@@ -117,9 +117,12 @@ const LARGEUR_DEFAUT = 640;
 const HAUTEUR_DEFAUT = 380;
 const BANDE_LABELS = 22; // px réservés sous l'axe pour les libellés de mois
 const FRACTION_BARRE = 0.5; // largeur d'une barre = 50 % de sa colonne (reste = gap)
-const LARGEUR_BARRE_MAX = 40; // px — plafond : sur peu de mois (colonnes larges) une
-// barre à 50 % deviendrait un gros bloc (« graphe cassé »). On la borne pour qu'elle
-// reste lisible et centrée. Sur « Tout » (colonnes étroites) le plafond ne mord pas.
+const LARGEUR_BARRE_MAX = 140; // px — plafond : sur TRÈS peu de mois (colonnes larges,
+// ex. « Ce mois ») une barre à 50 % deviendrait un gros bloc (« graphe cassé »). On la
+// borne pour qu'elle reste centrée. L'ancienne valeur (40) mordait dès 6 mois et rendait
+// les barres filiformes, perdues dans du vide sur une carte pleine largeur (bug « je vois
+// rien »). 140 laisse respirer 6–12 mois (fill ~50 %) tout en bornant le bloc sur 1–2 mois.
+// Sur « Tout » (colonnes étroites) le plafond ne mord pas.
 const MAX_LABELS = 8; // densité max de labels d'axe X (C3 : 1 label sur N au-delà)
 
 /**
