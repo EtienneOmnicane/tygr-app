@@ -106,7 +106,7 @@ export class ConnexionDesalignmentError extends Error {
 }
 
 /** Lit l'omnifi_client_user_id du workspace courant (scopé RLS). */
-async function clientUserIdDuWorkspace(
+export async function clientUserIdDuWorkspace(
   tx: Tx,
   workspaceId: string,
 ): Promise<string> {
@@ -542,12 +542,12 @@ const POLL_SYNC_PLAFOND_MS = 120_000;
  * terminal ni MFA → il est poll jusqu'au plafond, puis rendu INCOMPLET (jamais assimilé
  * à un succès, jamais à un échec dur).
  */
-const SYNC_STATUTS_TERMINAUX: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
+export const SYNC_STATUTS_TERMINAUX: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
   "COMPLETED",
   "FAILED",
 ]);
 /** États MFA : le re-sync attend un OTP — non fournissable côté serveur (widget natif). */
-const SYNC_STATUTS_MFA: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
+export const SYNC_STATUTS_MFA: ReadonlySet<string> = new Set<OmniFiSyncStatusConnu>([
   "OTP_REQUESTED",
   "OTP_WAITING",
 ]);
@@ -707,7 +707,7 @@ function cooldownActif(nextSyncAvailableAt: string | null | undefined): boolean 
  * abandonnée, `marquerSynchronise` jamais atteint (bug de remédiation, pas de la cause).
  * `obieCode` n'est PAS utilisé ici : il est générique/non fiable (constat de revue).
  */
-function estThrottleAmont(erreur: unknown): erreur is OmniFiApiError {
+export function estThrottleAmont(erreur: unknown): erreur is OmniFiApiError {
   return (
     erreur instanceof OmniFiApiError &&
     (erreur.estRateLimit ||

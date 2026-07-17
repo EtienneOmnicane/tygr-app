@@ -41,6 +41,7 @@ import {
   messageAucuneConnexion,
   supplementsDesync,
 } from "@/server/widget/messages-sync";
+import { demanderIngestionSync } from "@/server/inngest/emission";
 import { autoriserRedirectOrigin } from "@/server/widget/redirect-origin";
 
 export interface EtatDemarrage {
@@ -309,6 +310,32 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
       }),
     );
 
+    // RELAIS DURABLE (lot W1, PLAN-ingestion-webhook-omnifi.md §6.2) : chaque
+    // banque dont le scrape courait ENCORE au plafond de polling est confiée au
+    // job Inngest `omnifi/sync.ingest.requested`, qui attend la fin du scrape
+    // HORS du budget de cette Server Action puis ingère le reste — plus besoin
+    // de re-cliquer (SYNC-WEBHOOK-INGEST1, côté infra). Le `workspaceId` vient
+    // de la SESSION (résolution serveur — jamais un paramètre client) ; le
+    // jobId est celui observé au timeout. Fail-soft : si l'émission échoue
+    // (dev local sans dev server Inngest, panne), on garde l'invite à relancer
+    // — ne jamais promettre un travail de fond qui n'est pas parti.
+    let relaisConfies = 0;
+    if (r.incompletes.length > 0) {
+      const envois = await Promise.all(
+        r.incompletes.map((c) =>
+          demanderIngestionSync({
+            workspaceId: session.activeWorkspaceId,
+            omnifiConnectionId: c.connectionId,
+            omnifiJobId: c.jobId,
+            declencheur: "MANUAL",
+          }),
+        ),
+      );
+      relaisConfies = envois.filter(Boolean).length;
+    }
+    const relaisComplet =
+      r.incompletes.length > 0 && relaisConfies === r.incompletes.length;
+
     if (r.connexions === 0) {
       // Aucune connexion TRAITÉE. Ce n'est ni une erreur (rien n'a planté) ni un succès
       // (rien n'a été synchronisé) — mais ce n'est SURTOUT PAS « rien à dire » : le
@@ -363,13 +390,19 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
     }
     // INCOMPLET : le scrape tourne ENCORE chez la banque (il peut durer plusieurs
     // minutes, bien au-delà de notre plafond d'attente). On a importé ce qui était déjà
-    // disponible — on le DIT, et on invite à relancer. Ni rouge (rien n'a échoué, on a
-    // des données) ni triomphal (il en manque) : c'est le remplaçant du faux « à jour ».
+    // disponible — on le DIT. Ni rouge (rien n'a échoué, on a des données) ni triomphal
+    // (il en manque) : c'est le remplaçant du faux « à jour ». Deux suites possibles :
+    // le relais durable est PARTI pour toutes les banques concernées → la récupération
+    // se poursuit seule (W1) ; sinon (émission échouée, même partielle) → l'invite à
+    // relancer reste — promettre un travail de fond non parti serait un mensonge.
     if (r.incompletes.length > 0) {
-      base +=
-        ` ${r.incompletes.length} banque(s) sont encore en cours de synchronisation` +
-        ` — les transactions déjà disponibles ont été importées ;` +
-        ` relancez dans quelques minutes pour récupérer le reste.`;
+      base += relaisComplet
+        ? ` ${r.incompletes.length} banque(s) sont encore en cours de synchronisation` +
+          ` — les transactions déjà disponibles ont été importées ;` +
+          ` la récupération du reste se poursuit automatiquement en arrière-plan.`
+        : ` ${r.incompletes.length} banque(s) sont encore en cours de synchronisation` +
+          ` — les transactions déjà disponibles ont été importées ;` +
+          ` relancez dans quelques minutes pour récupérer le reste.`;
     }
     // DÉSALIGNEMENT ENDUSER (403) : état ACTIONNABLE distinct — on le DIT clairement et on
     // remonte le signal structuré pour que l'UI propose « Reconnecter cette banque ». Sans

@@ -37,7 +37,13 @@ export const config = {
   // `exigerSessionWorkspace` sur les routes `(workspace)/` (cf. en-tête).
   // ⚠️ INVARIANT : ne JAMAIS ajouter d'accès aux données réelles dans une page
   // /demo tant qu'elle est hors auth (sinon cette exclusion devient une fuite).
+  //
+  // /api/inngest HORS session (lot W1) : la route est appelée par le SERVEUR
+  // Inngest, pas par un navigateur — un cookie de session n'y a aucun sens, et
+  // la redirection 307 vers /login rendrait les jobs durables inexécutables.
+  // Son authentification est la SIGNATURE Inngest (INNGEST_SIGNING_KEY,
+  // vérifiée par `serve`, fail-closed en mode cloud) — cf. src/app/api/inngest/route.ts.
   matcher: [
-    "/((?!login|api/auth|demo|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
+    "/((?!login|api/auth|api/inngest|demo|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
   ],
 };
