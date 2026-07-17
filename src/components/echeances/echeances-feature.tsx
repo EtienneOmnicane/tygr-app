@@ -100,6 +100,13 @@ export function EcheancesFeature({
   const [statutEnCours, setStatutEnCours] = useState<string | null>(null);
   /** Échéance en cours d'édition (null = formulaire en mode création). */
   const [echeanceEnEdition, setEcheanceEnEdition] = useState<EcheanceUI | null>(null);
+  /**
+   * Génération du formulaire de CRÉATION : incrémentée à chaque création réussie pour
+   * REMONTER le formulaire (via `key`) et le vider — sans ça, les champs gardent la
+   * saisie précédente et un second clic recréerait la même échéance (FINDING-103).
+   * Même mécanique que l'édition : remount par `key`, jamais de synchro d'effet.
+   */
+  const [generationCreation, setGenerationCreation] = useState(0);
 
   // id catégorie → nom lisible, pour l'affichage de la liste.
   const nomParCategorie = useMemo(
@@ -131,6 +138,7 @@ export function EcheancesFeature({
           setErreur(messagePourCode(res.code, res.message));
           return;
         }
+        setGenerationCreation((g) => g + 1); // succès → formulaire vidé (remount)
         await recharger();
       } catch {
         setErreur("La création a échoué. Réessayez.");
@@ -266,7 +274,7 @@ export function EcheancesFeature({
           />
         ) : (
           <EcheanceForm
-            key="creation"
+            key={`creation-${generationCreation}`}
             categories={categories}
             entites={entites}
             directionInitiale={vue}

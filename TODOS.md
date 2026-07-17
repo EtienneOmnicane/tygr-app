@@ -269,16 +269,16 @@ comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et
   (portal + `fixed` + `position-menu.ts`, déjà écrit et testé). **Déclencheur** : prochain
   chantier navbar/shell (typiquement TOOLBAR-GLOBALE-CADRAGE1). Pas d'isolation.
 
-- [ ] **UI-ZINDEX-ECHELLE1 (P2, effort ~0,1 j, 2026-07-14) — `docs/UI_GUIDELINES.md` ne
-  documente AUCUNE échelle de z-index, alors qu'il en existe une de fait.** Relevé par la
-  revue de `fix/select-layout-shift`, qui a dû introduire le premier cran > 50 (`z-[60]` du
-  menu portalé, qui doit battre l'overlay Modal `z-50`). Échelle réelle constatée : `z-10`
-  (workspace-switcher, en-têtes sticky), `z-20` (perimetre-switcher, CategoryPicker),
-  `z-30` (topbar), `z-50` (overlay Modal), `z-[60]` (menu du Select). Sans registre écrit, le
+- [x] **UI-ZINDEX-ECHELLE1 (P2, effort ~0,1 j, 2026-07-14) — `docs/UI_GUIDELINES.md` ne
+  documente AUCUNE échelle de z-index, alors qu'il en existe une de fait.** ✅ **LIVRÉ
+  2026-07-17** (passe PROD-UX-REVIEW1, branche `chore/design-review-20260717`) : registre
+  ajouté à UI_GUIDELINES §4.4, échelle re-vérifiée au grep avant écriture (z-10 ×6, z-20 ×3,
+  z-30 ×1, z-50 ×4, z-[60] ×2 — inchangée depuis le relevé). Le token `z-popover` Tailwind
+  (« éventuellement ») n'a PAS été posé : hors périmètre docs de cette passe, à raccrocher
+  au prochain composant flottant s'il naît. Historique :
+  Relevé par la revue de `fix/select-layout-shift`, qui a dû introduire le premier cran > 50
+  (`z-[60]` du menu portalé, qui doit battre l'overlay Modal `z-50`). Sans registre écrit, le
   prochain composant flottant tirera un z-index au jugé et passera un jour DERRIÈRE une modale.
-  Correctif : 4 lignes dans UI_GUIDELINES §4.4 (+ éventuellement un token `z-popover` dans le
-  thème Tailwind, pour tuer la valeur arbitraire). **Déclencheur** : prochain composant
-  flottant, ou la passe `PROD-UX-REVIEW1`.
 
 - [x] **TOOLBAR-GLOBALE-CADRAGE1 (P2, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
   GLOBALE cohérente : présente là où c'est pertinent, retirée là où c'est obsolète.**
@@ -2719,15 +2719,19 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
   pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
 
-- [ ] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
-  Effort L (CC: ~½j par passe), gardien Front + Design. Ouvert 2026-06-23. Passe
-  /design-review sur les écrans clés (dashboard, /transactions, /regles, sas entités)
-  contre `docs/UI_GUIDELINES.md` : hiérarchie, densités, `tabular-nums`, états
-  loading/vide/erreur/partiel, focus visibles, alignement des virgules décimales
-  multi-devises. Sortie = findings priorisés, écarts OBJECTIFS (tokens) traités comme
-  bloquants (Gate 4), écarts de goût renvoyés en backlog. PAS une refonte from scratch :
-  itération sur l'existant. **Déclencheur** : avant le premier déploiement production
-  (P1). Raccrocher les findings tokens/sémantique à des sous-tickets datés.
+- [x] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
+  ✅ **RÉALISÉ en 2 passes** : 2026-07-15 (PR #215 — 19 findings, 9 fixés, 10 différés
+  tracés en sous-tickets DESIGN-* datés, score B− → B+) et 2026-07-17 (branche
+  `chore/design-review-20260717` — écrans re-audités contre UI_GUIDELINES §6 AU DOM,
+  vraie donnée locale ; 4 findings nouveaux, 4 fixés dont 1 HIGH : scroll horizontal de
+  page à 1024-1279 causé par la barre globale [F-104], zéros colorés vert/rouge sur
+  Synthèse du mois [F-101] et Synthèse prévisionnelle [F-102], formulaire d'échéance non
+  réinitialisé au succès [F-103] ; conformités PROUVÉES : tabular-nums, inflow/outflow,
+  surface-forecast, focus-visible, header sans flex-wrap, suppression 2 temps #216).
+  Rapports : `~/.gstack/projects/tygr-app/designs/design-audit-20260715/` et
+  `…/design-audit-20260717/`. Historique : ouvert 2026-06-23, effort L, gardien
+  Front + Design ; écrans clés dashboard, /transactions, /regles, sas entités ; écarts
+  OBJECTIFS (tokens) bloquants (Gate 4), écarts de goût renvoyés en backlog (faits).
 
 ### Sync / widget (2026-07-13) — dettes de code
 

@@ -92,12 +92,12 @@ export function CashFlowSummary({
                 valeur={formatMontant(lignes[0]!.entrees, lignes[0]!.currency, {
                   signeExplicite: true,
                 })}
-                couleur="text-inflow-700"
+                couleur={couleurSens(lignes[0]!.entrees, "text-inflow-700")}
               />
               <ColonneKpi
                 label="Sorties"
                 valeur={formatMontant(lignes[0]!.sorties, lignes[0]!.currency)}
-                couleur="text-outflow-700"
+                couleur={couleurSens(lignes[0]!.sorties, "text-outflow-700")}
               />
               <ColonneKpi
                 label="Variation nette"
@@ -127,12 +127,18 @@ export function CashFlowSummary({
 
 /**
  * Couleur d'un montant de VARIATION selon son signe (§3.1) : excédent → inflow,
- * déficit → outflow, nul → texte neutre. Source UNIQUE de la règle, partagée par
- * `BlocDevise` (empilé) ET le bandeau mono-devise — pas de duplication (règle 6).
+ * déficit → outflow, nul → `text-faint` (zéro = donnée absente, pas une donnée
+ * verte/rouge — même règle que l'Évolution mensuelle, FINDING-007). Source UNIQUE
+ * de la règle, partagée par `BlocDevise` (empilé) ET le bandeau mono-devise.
  */
 function couleurVariation(variation: string): string {
-  if (estZero(variation)) return "text-text";
+  if (estZero(variation)) return "text-text-faint";
   return estNegatif(variation) ? "text-outflow-700" : "text-inflow-700";
+}
+
+/** Couleur de SENS (entrées/sorties) : zéro = donnée absente → `text-faint` (§4.1). */
+function couleurSens(montant: string, couleur: string): string {
+  return estZero(montant) ? "text-text-faint" : couleur;
 }
 
 /**
@@ -208,12 +214,12 @@ function BlocDevise({
         valeur={formatMontant(synthese.entrees, devise, {
           signeExplicite: true,
         })}
-        couleur="text-inflow-700"
+        couleur={couleurSens(synthese.entrees, "text-inflow-700")}
       />
       <LigneSynthese
         label="Sorties"
         valeur={formatMontant(synthese.sorties, devise)}
-        couleur="text-outflow-700"
+        couleur={couleurSens(synthese.sorties, "text-outflow-700")}
       />
       <LigneSynthese
         label="Variation nette"
