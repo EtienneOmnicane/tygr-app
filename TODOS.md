@@ -1077,17 +1077,45 @@ total sur entité cross-tenant), liste des membres, message email-existant véri
 Deux dettes tracées ci-dessous (aucune ne touche l'isolation/append-only/montants →
 autorisées, règle 9).
 
-- [ ] **AUTH-MDP-TEMPO1 (P1, effort M) — flux « mot de passe temporaire » absent.**
-  L'ADMIN fixe le mot de passe initial du membre à la création (`provisionnerMembre`),
-  mais **rien** n'oblige le membre à le changer : pas de colonne `must_change_password`,
-  pas de gate au premier login, **aucune page self-service de changement de mot de passe**
-  (seul `scripts/reset-password.mjs`, dev-local). Conséquence : l'ADMIN connaît
-  indéfiniment le mot de passe de chaque membre qu'il crée. **À faire** : migration expand
-  (`users.must_change_password boolean default false`), pose du flag à la création, gate
-  au login (rediriger vers un écran de changement tant que le flag est vrai), page + Server
-  Action de changement de mot de passe (argon2 côté action, garde session). **Déclencheur** :
-  premier onboarding de membres réels hors équipe fondatrice (aujourd'hui : seul l'ADMIN
-  seed existe). Réfère `PLAN-membres-creation-scopes.md` §6.
+- [x] **AUTH-MDP-TEMPO1 (P1, effort M) — flux « mot de passe temporaire » : LOT A LIVRÉ**
+  (2026-07-17, plan `PLAN-auth-mdp-temporaire.md`, décisions D1-D9). Migration 0022
+  (`must_change_password` + `password_changed_at`), pose du flag au provisioning (D7),
+  gate par-requête modèle E6 (`etatCompte`, `MotDePasseAChangerError` mappée sur 9 sites),
+  **invalidation de session** par claim `pwdAt` comparé par égalité stricte (D4 — une
+  session ouverte avec le mot de passe temporaire meurt au changement), écran + action
+  self-service `/account/password` (copie EN, Q-LANG), lockout E18 mutualisé sous FOR
+  UPDATE (D6), `reset-password.mjs` (posage systématique + `RESET_MUST_CHANGE`).
+  Dettes filles : lot B ci-dessous + AUTH-AUDIT-EVENT1 / AUTH-INVITATION1 / AUTH-MDP-UX1
+  (§10 du plan).
+
+- [ ] **AUTH-MDP-TEMPO1-LOT-B (P1, effort S-M) — expiration TTL 7 j + reset admin,
+  indissociables** (2026-07-17). L'expiration seule serait une impasse : provisioning
+  anti-écrasement + `reset-password.mjs` refuse la prod → un temporaire expiré bloquerait
+  le membre DÉFINITIVEMENT. À livrer ensemble (plan §D8) : check
+  `TEMP_PASSWORD_EXPIRED` au login (APRÈS vérification argon2, constante
+  `DUREE_VIE_MDP_TEMPORAIRE_MS` = 7 j) + action admin « Issue a new temporary
+  password » dans `liste-membres.tsx` (nouveau hash, flag + posage → tue les sessions
+  du membre via D4, RAZ lockout). **Déclencheur** : premier onboarding de membres réels
+  hors équipe fondatrice (inchangé).
+
+- [ ] **AUTH-AUDIT-EVENT1 (P2, effort S) — événement « password changed »** (2026-07-17).
+  `audit.consigner` exige `ctx.workspaceId` (table tenant-scopée) ; le changement de mot
+  de passe est un fait USER-global → pas d'événement au lot A (plan §D9), logs structurés
+  en attendant. **Déclencheur** : panneau `/audit` / modèle d'événement user-global
+  (Epic 1 L3.4).
+
+- [ ] **AUTH-INVITATION1 (P2, effort M-L) — flux « lien d'invitation »** (2026-07-17).
+  Posture cible SaaS-ready : l'admin ne détient JAMAIS le secret du membre (plan §2 —
+  table `invitation_tokens`, surface publique `/invite/[token]` rate-limitée,
+  anti-énumération). Le socle lot A (gate, invalidation D4, reset D8) reste au passage
+  aux invitations. **Déclencheur** : infra email posée OU premier workspace
+  `EXTERNAL_CLIENT`.
+
+- [ ] **AUTH-MDP-UX1 (P2, effort S) — découvrabilité self-service + blocklist**
+  (2026-07-17). `/account/password` existe mais AUCUNE entrée de menu n'y mène (pas de
+  menu utilisateur dans le shell — on n'en crée pas pour ça, plan §D5) ; blocklist de
+  mots de passe courants (NIST 800-63B, optionnel). **Déclencheur** : refonte du menu
+  utilisateur du shell.
 
 - [ ] **PROV-EMAIL-EXISTANT1 (P2, effort S) — durcir la réutilisation d'utilisateur par
   email (léger oracle d'énumération cross-tenant).** `creerUtilisateurEtRattacher` réutilise
@@ -2410,11 +2438,11 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   déclencheur : polish du widget). **Hygiène de session**, à ne pas confondre avec la
   révocation de consentement (`DELETE /connections/{id}`, lot L3.3). Sans elle, un
   SessionToken de widget survit à la fermeture de l'onglet jusqu'à son expiration.
-- [ ] **Changement de mot de passe par l'utilisateur** (`AUTH-MDP-TEMPO1`) — Effort M
-  (**P1**, déclencheur : premier déploiement de production). Le provisioning ADMIN et
-  `seed-admin.mjs` posent un mot de passe temporaire ; la rotation passe aujourd'hui
-  par `scripts/reset-password.mjs` (opération d'administration, hors application).
-  Documenté dans `docs/DEMARRAGE-SANDBOX-PROD.md` § « Bootstrap du premier ADMIN ».
+- [x] **Changement de mot de passe par l'utilisateur** (`AUTH-MDP-TEMPO1`) — **LOT A
+  LIVRÉ** (2026-07-17) : page + action self-service `/account/password`, gate
+  `must_change_password`, invalidation de session `pwdAt` (D4). Voir l'entrée détaillée
+  § « Provisioning membres » et `PLAN-auth-mdp-temporaire.md` ; reste le lot B
+  (expiration 7 j + reset admin, entrée AUTH-MDP-TEMPO1-LOT-B).
 
 ### Dette relevée au contrat widget natif (UI, 2026-06-15)
 

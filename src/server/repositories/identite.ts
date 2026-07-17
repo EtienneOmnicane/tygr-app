@@ -168,63 +168,87 @@ export function creerRepositoryIdentite<TDb extends AnyPgDatabase>(db: TDb) {
       },
     ): Promise<void> {
       const { verifierAncien, nouveauHash, maintenant } = options;
-      await db.transaction(async (tx) => {
-        const lignes = await tx
-          .select({
-            id: users.id,
-            passwordHash: users.passwordHash,
-            failedLoginCount: users.failedLoginCount,
-            lockedUntil: users.lockedUntil,
-            isActive: users.isActive,
-          })
-          .from(users)
-          .where(eq(users.id, userId))
-          .for("update");
+      // ⚠️ La transaction RETOURNE l'issue au lieu de la jeter : un throw dans
+      // le callback drizzle ROLLBACK — l'incrément lockout d'un échec de mot
+      // de passe (D6) doit COMMITTER, sinon l'échec ne compte jamais (attrapé
+      // par le test d'intégration). L'erreur nommée est levée APRÈS le commit.
+      const issue = await db.transaction(
+        async (
+          tx,
+        ): Promise<
+          "indisponible" | "verrouille" | "sans_mdp" | "actuel_incorrect" | "ok"
+        > => {
+          const lignes = await tx
+            .select({
+              id: users.id,
+              passwordHash: users.passwordHash,
+              failedLoginCount: users.failedLoginCount,
+              lockedUntil: users.lockedUntil,
+              isActive: users.isActive,
+            })
+            .from(users)
+            .where(eq(users.id, userId))
+            .for("update");
 
-        // Fail-closed : inexistant ou désactivé ≡ non connecté (non-énumérant).
-        if (lignes.length === 0 || !lignes[0].isActive) {
-          throw new CompteIndisponibleError();
-        }
-        const compte = lignes[0];
+          // Fail-closed : inexistant ou désactivé ≡ non connecté (non-énumérant).
+          if (lignes.length === 0 || !lignes[0].isActive) {
+            return "indisponible";
+          }
+          const compte = lignes[0];
 
-        // Verrou actif : refus SANS écriture (politique lockout.ts — pas
-        // d'extension de verrou sans information nouvelle).
-        if (estVerrouille(compte.lockedUntil, maintenant)) {
-          throw new CompteVerrouilleError();
-        }
+          // Verrou actif : refus SANS écriture (politique lockout.ts — pas
+          // d'extension de verrou sans information nouvelle).
+          if (estVerrouille(compte.lockedUntil, maintenant)) {
+            return "verrouille";
+          }
 
-        // SSO futur : jamais de verify sur un hash NULL.
-        if (compte.passwordHash === null) {
-          throw new CompteSansMotDePasseError();
-        }
+          // SSO futur : jamais de verify sur un hash NULL.
+          if (compte.passwordHash === null) {
+            return "sans_mdp";
+          }
 
-        const ancienValide = await verifierAncien(compte.passwordHash);
-        if (!ancienValide) {
-          // Échec = échec de connexion (D6) : transition lockout DANS la tx.
-          const etat = evaluerEchec(compte.failedLoginCount, maintenant);
+          const ancienValide = await verifierAncien(compte.passwordHash);
+          if (!ancienValide) {
+            // Échec = échec de connexion (D6) : transition lockout, COMMITTÉE.
+            const etat = evaluerEchec(compte.failedLoginCount, maintenant);
+            await tx
+              .update(users)
+              .set({
+                failedLoginCount: etat.failedLoginCount,
+                lockedUntil: etat.lockedUntil,
+              })
+              .where(eq(users.id, userId));
+            return "actuel_incorrect";
+          }
+
+          // Succès : nouveau posage (invalide les autres sessions via pwdAt,
+          // D4), flag levé, lockout remis à zéro (comme un login réussi).
           await tx
             .update(users)
             .set({
-              failedLoginCount: etat.failedLoginCount,
-              lockedUntil: etat.lockedUntil,
+              passwordHash: nouveauHash,
+              mustChangePassword: false,
+              passwordChangedAt: maintenant,
+              failedLoginCount: 0,
+              lockedUntil: null,
             })
             .where(eq(users.id, userId));
-          throw new MotDePasseActuelIncorrectError();
-        }
+          return "ok";
+        },
+      );
 
-        // Succès : nouveau posage (invalide les autres sessions via pwdAt, D4),
-        // flag levé, lockout remis à zéro (comme un login réussi).
-        await tx
-          .update(users)
-          .set({
-            passwordHash: nouveauHash,
-            mustChangePassword: false,
-            passwordChangedAt: maintenant,
-            failedLoginCount: 0,
-            lockedUntil: null,
-          })
-          .where(eq(users.id, userId));
-      });
+      switch (issue) {
+        case "ok":
+          return;
+        case "indisponible":
+          throw new CompteIndisponibleError();
+        case "verrouille":
+          throw new CompteVerrouilleError();
+        case "sans_mdp":
+          throw new CompteSansMotDePasseError();
+        case "actuel_incorrect":
+          throw new MotDePasseActuelIncorrectError();
+      }
     },
 
     /**
