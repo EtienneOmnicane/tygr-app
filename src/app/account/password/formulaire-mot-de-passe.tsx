@@ -75,9 +75,29 @@ export function FormulaireMotDePasse({
       </label>
 
       {etat.erreur !== null && (
-        <p role="alert" className="text-xs text-danger">
-          {etat.erreur}
-        </p>
+        // Erreur ≠ sortie (UI_GUIDELINES §3.4, plan §7) : fond danger-bg +
+        // icône + message — jamais un rouge nu (réservé aux montants outflow).
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-control bg-danger-bg p-3"
+        >
+          <svg
+            aria-hidden
+            viewBox="0 0 20 20"
+            fill="none"
+            className="mt-0.5 size-4 shrink-0 text-danger"
+          >
+            <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="1.5" />
+            <path
+              d="M10 6.5v4"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <circle cx="10" cy="13.75" r="0.9" fill="currentColor" />
+          </svg>
+          <p className="text-xs text-danger">{etat.erreur}</p>
+        </div>
       )}
 
       <button
