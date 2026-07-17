@@ -7,8 +7,11 @@
 **Parent :** `PLAN-cadrage-scenario-previsionnel-fygr.md` — roadmap A→D. Ce plan couvre
 **C uniquement** (A = vue tableau du réalisé, dépend de `categorySummary` ; B = registre
 d'échéances, **livré** ; D = scénarios nommés, plus tard).
-**Statut :** ⛔ **NE PAS IMPLÉMENTER** — 4 décisions ouvertes (§7), dont **D1 qui est
-bloquante et structurelle**. L'humain arbitre.
+**Statut :** ✅ **D1 TRANCHÉE le 2026-07-17 par Etienne — option (b) « gabarit + tête »** :
+une échéance récurrente = UNE ligne gabarit, occurrences projetées à la volée ; un statut
+terminal sur la tête **n'éteint plus** les occurrences futures ; occurrences matérialisées
+(§2 option 2) = dette **P1 `ECH-OCCURRENCES1`** (TODOS.md). D2/D3/D4 restent ouvertes → à
+trancher avant le lot UI.
 
 ---
 
