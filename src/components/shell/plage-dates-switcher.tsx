@@ -155,9 +155,12 @@ export function PlageDatesSwitcher() {
       className={cn(
         // CONDENSATION (règle UI : condenser sous le breakpoint, JAMAIS `flex-wrap` sur le
         // header) : ce contrôle ajoute ~280 px à une barre qui porte déjà les presets, le
-        // périmètre et le CTA. Sous `lg` il s'efface — les presets, eux, restent : on ne perd
+        // périmètre et le CTA. Sous `xl` il s'efface — les presets, eux, restent : on ne perd
         // pas la capacité de borner l'écran, seulement la saisie au jour (outil d'analyste).
-        "hidden shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 transition-colors lg:flex",
+        // `xl` et non `lg` : à lg (1024-1279), la barre complète mesure ~1220 px → le header
+        // débordait et TOUTE la page scrollait horizontalement au plancher produit 1024
+        // (FINDING-104, /design-review 2026-07-17). xl = seuil desktop normatif (§ breakpoints).
+        "hidden shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 transition-colors xl:flex",
         // Saisie refusée (du > au tapé au clavier) : on le SIGNALE, on ne l'applique pas.
         // `danger` est ici un état d'ERREUR de saisie (UI_GUIDELINES §3.4), pas une donnée —
         // le rouge « réservé aux montants » vise les VALEURS (outflow), pas la validation.
