@@ -9,7 +9,14 @@
 > Cahier des charges v2.1 : §1 (architecture), §2.4 (ordre de traitement webhook),
 > FEAT-1.2, §3.ter (stratégie anti-sur-ingénierie), §4.1/§4.3 (modèle + critères).
 >
-> **Statut : EN ATTENTE d'arbitrage humain (décisions D1→D4, §10). NE PAS CODER avant.**
+> **Statut : DÉCISIONS ACTÉES (Etienne, 2026-07-17, règle 10).** D1 = C (cron pull
+> d'abord, webhook additif) · D2 = OUI (extension `tygr_service` → lecture
+> `workspaces(id, omnifi_environment)`, **avec mise à jour explicite de CLAUDE.md
+> règle 2** au lot W3) · D3 = différé (inscrit dans l'entrée TODOS du contract 0019) ·
+> D4 = OUI, avant W4 (point OMNIFI_API_FEEDBACK — les 3 questions routées à l'équipe
+> Omni-FI par Etienne). Ordre d'implémentation : **W1 (socle Inngest, non installé) →
+> W2 → W3 (cross-review) → W4**. Chaque lot reste en phase implémentation référençant
+> ce plan (règle 1).
 > Surface sécurité (HMAC + rôle `tygr_service`) ⇒ **cross-review OBLIGATOIRE à chaque
 > lot d'implémentation** (règle 6), gravé en §8.5.
 
@@ -465,22 +472,25 @@ Chaque lot = une PR applicative séparée, plan référencé, Human-in-the-Loop 
 
 ---
 
-## 10. Décisions demandées (l'humain tranche — rien ne se code avant)
+## 10. Décisions demandées (ACTÉES par Etienne le 2026-07-17, règle 10)
 
-- **D1 — Séquençage** : option **C recommandée** (pull d'abord, webhook additif —
-  §0.2) vs A (webhook d'abord). Le contenu des lots est identique, seul l'ordre change.
-- **D2 — Extension de la liste fermée (CLAUDE.md règle 2)** : autoriser
-  `tygr_service` à lire AUSSI `workspaces (id, omnifi_environment)` pour le
-  cross-check env (§3.4). Sans D2 : pas de cross-check, la foi repose sur le seul
-  HMAC dual-env. **Recommandé : OUI** (défense en profondeur, 2 colonnes non métier).
-- **D3 — Confirmation amont** (`GET /connections?clientUserId=`) au premier événement
-  de chaque connexion (§3.5). **Recommandé : différé, inscrit dans l'entrée TODOS du
-  contract 0019** (redondant tant que l'unique globale vit).
-- **D4 — Feedback Omni-FI** (nouveau point OMNIFI_API_FEEDBACK) : demander (a) l'ajout
-  de `ClientUserId` au payload webhook (alignerait la lettre de tenant-first, rendrait
-  D3 inutile), (b) la documentation de la politique de retry, (c) la confirmation de
-  l'émission réelle en sandbox. **Recommandé : OUI, avant W4** (les réponses
-  conditionnent §1.3).
+- **D1 — Séquençage : ✅ C (pull d'abord, webhook additif — §0.2).** Aligné sur la
+  décision utilisateur du 2026-06-11 (cahier §3.ter, « temps réel PAS requis ») ; B seul
+  referme DASH-AUTOSYNC1(a) + SYNC-WEBHOOK-INGEST1. Contenu des lots identique, seul
+  l'ordre change.
+- **D2 — Extension de la liste fermée (CLAUDE.md règle 2) : ✅ OUI.** `tygr_service`
+  lit AUSSI `workspaces (id, omnifi_environment)` pour le cross-check env (§3.4).
+  **Condition actée : l'extension DOIT être écrite noir sur blanc dans CLAUDE.md règle 2
+  au lot W3** (sinon un futur audit la lit comme un contournement de la liste fermée).
+  Défense en profondeur, 2 colonnes non métier, sous cross-review W3.
+- **D3 — Confirmation amont** (`GET /connections?clientUserId=`) : ✅ **différé**,
+  inscrit dans l'entrée TODOS du contract 0019 (redondant tant que l'unique globale
+  vit). Le lookup `LIMIT 2` + refus d'ambiguïté suffit.
+- **D4 — Feedback Omni-FI** (point OMNIFI_API_FEEDBACK) : ✅ **OUI, avant W4.** Trois
+  questions à router vers l'équipe Omni-FI (par Etienne) : (a) ajout de `ClientUserId`
+  au payload webhook (alignerait la lettre de tenant-first, rendrait D3 inutile), (b)
+  documentation de la politique de retry, (c) confirmation de l'émission réelle en
+  sandbox. Les réponses conditionnent §1.3.
 
 ---
 
