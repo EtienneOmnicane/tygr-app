@@ -632,6 +632,37 @@ export function grilleMois(nbMois: number, moisAncrage: string): string[] {
 }
 
 /**
+ * Grille des `nbMois` mois qui SUIVENT `moisAncrage` (du plus proche au plus lointain),
+ * ancrage EXCLU. Pendant exact de `grilleMois` (qui recule) : même arithmétique entière,
+ * même pureté (sans DB, sans `Date` locale → aucune dérive de fuseau).
+ *
+ * Sert l'axe PRÉVISIONNEL du dashboard (C1) : `grilleMois` couvre le réalisé jusqu'au
+ * mois d'ancrage, `grilleMoisSuivants` prolonge la fenêtre vers l'avant, où les colonnes
+ * sont alimentées par les occurrences d'échéances (jamais par des transactions).
+ *
+ * L'ancrage est EXCLU parce qu'il appartient déjà à la grille du réalisé : le mois
+ * courant est une colonne MIXTE (réalisé + prévision empilés, décision D2) — il n'est
+ * pas dupliqué en tête de la zone future.
+ *
+ * @returns ex. nbMois=3, moisAncrage="2026-11" → ["2026-12","2027-01","2027-02"].
+ */
+export function grilleMoisSuivants(nbMois: number, moisAncrage: string): string[] {
+  const [anneeStr, moisStr] = moisAncrage.split("-");
+  let annee = Number(anneeStr);
+  let mois = Number(moisStr); // 1..12
+  const grille: string[] = [];
+  for (let i = 0; i < nbMois; i++) {
+    mois += 1;
+    if (mois === 13) {
+      mois = 1;
+      annee += 1;
+    }
+    grille.push(`${annee}-${String(mois).padStart(2, "0")}`);
+  }
+  return grille; // déjà du plus proche au plus lointain
+}
+
+/**
  * N transactions les plus récentes (hors tombstone), triées date desc puis
  * booking desc. Expose `bankLabelRaw` (narratif OBIE brut) comme ultime filet de la
  * cascade de libellé (alignement dashboard ↔ /transactions, dette TECH-DASHBOARD-CASCADE

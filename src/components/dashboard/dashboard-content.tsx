@@ -48,6 +48,7 @@ import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { SyncButton } from "@/components/dashboard/sync-button";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
+import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
 import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
@@ -67,6 +68,13 @@ export interface DonneesDashboard {
   serieMensuelle: SyntheseMensuelle[];
   /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
   grilleMensuelle: string[];
+  /**
+   * Zone PRÉVISIONNELLE (C1) — échéances projetées, occurrences récurrentes comprises.
+   * `null` = pas de zone prévision (fenêtre qui n'atteint pas le mois courant, D4, ou
+   * workspace sans aucune échéance) : l'axe reste alors exactement celui d'aujourd'hui.
+   * Jamais additionnée au réalisé : deux sources, deux séries, deux rendus (§3.5).
+   */
+  prevision: PrevisionFlux | null;
   transactionsRecentes: TransactionRecente[];
 }
 
@@ -103,6 +111,7 @@ export function DashboardContent({
     topVendors,
     serieMensuelle,
     grilleMensuelle,
+    prevision,
     transactionsRecentes,
   } = donnees;
   // NB : `donnees.flux` n'est PLUS déstructuré ici — le graphe ne le consomme plus
@@ -177,6 +186,7 @@ export function DashboardContent({
         <FluxTresorerieCard
           serieMensuelle={serieMensuelle}
           grilleMensuelle={grilleMensuelle}
+          prevision={prevision}
           devise={devise}
           libellePeriode={libellePeriode}
         />

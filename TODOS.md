@@ -37,6 +37,31 @@ Etienne du 2026-07-17, cf. `PLAN-conception-previsionnel-C.md`).
   récurrente, ou le premier besoin d'un arriéré exact sur une série. **Ne PAS** rouvrir
   en même temps que le lot UI (C1) : celui-ci consomme le moteur, pas le modèle.
 
+### Prévisionnel C1 — zone prévisionnelle du dashboard (2026-07-17, PR `feat/previsionnel-c1-dashboard`)
+
+Lot C1 livré : les barres de flux ne montraient que le **réalisé** — une échéance saisie
+ne faisait bouger aucune trésorerie prévisionnelle. L'axe se prolonge désormais de 3 mois
+vers l'avant, alimentés par les occurrences du moteur C0 (lecture dans le `Promise.all`
+existant de la page, sous le même `tx` — jamais un second `withWorkspace`).
+
+Décisions tranchées par Etienne le 2026-07-17 (les 3 étaient ouvertes, cf.
+`PLAN-conception-previsionnel-C.md` §7) : **D2 = barre empilée** sur le mois courant
+(réalisé à date + échéances restantes) · **D3 = 3 mois fixes** (aligné sur les horizons
+30/60/90) · **D4 = pas de zone prévision** si la fenêtre n'atteint pas le mois courant.
+
+Choix DÉLIBÉRÉ à connaître (pas une dette séparée — c'est la face dashboard de
+`ECH-OCCURRENCES1` ci-dessus) : **une tête EN RETARD n'est pas projetée sur les barres**
+(borne basse = aujourd'hui). La verser dans un mois PASSÉ la mélangerait au réalisé d'une
+colonne rendue à 100 % d'opacité — un montant jamais mouvementé qui se lirait comme
+encaissé. L'arriéré reste porté par l'onglet Échéances, qui le compte (« une dette
+exigible hier reste due »). Divergence VOLONTAIRE entre les deux écrans, prouvée par le
+test d'isolation 26.
+
+Hors périmètre, inchangé : **courbe de position** de trésorerie (solde de départ +
+variations cumulées) — elle exige un solde de départ fiable, or `balance_history` est vide
+en Staging (la courbe du dashboard a déjà dû être recâblée sur le flux net pour cette
+raison). À rouvrir quand les soldes historiques existeront (cf. plan §5.1).
+
 Bug de schéma corrigé au passage (migration `0023`, **pas une dette** — il est fixé) :
 `recurrence` était `varchar(12)` alors que `'trimestrielle'` fait **13** caractères. La
 valeur était donc impossible à stocker (Postgres `22001`) **alors que le formulaire la

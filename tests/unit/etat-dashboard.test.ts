@@ -28,6 +28,9 @@ function donnees(over: Partial<DonneesDashboard>): DonneesDashboard {
     topVendors: { direction: "outflow", lignes: [] },
     serieMensuelle: [],
     grilleMensuelle: [],
+    // La prévision ne discrimine PAS l'état d'onboarding (vide/partiel/complet) : elle
+    // dépend d'échéances saisies à la main, pas de la connexion bancaire.
+    prevision: null,
     transactionsRecentes: [],
     ...over,
   };

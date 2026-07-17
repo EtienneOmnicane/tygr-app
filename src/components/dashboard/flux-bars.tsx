@@ -1,29 +1,34 @@
 "use client";
 
 /**
- * Rendu SVG des BARRES entrées/sorties mensuelles — EXTRAIT verbatim de
- * `monthly-cashflow.tsx` (L8a) pour être réutilisé par la carte d'ancre
- * `flux-tresorerie-card.tsx`. La GÉOMÉTRIE des barres est INCHANGÉE (ligne de base
+ * Rendu SVG des BARRES entrées/sorties mensuelles — corps de la carte d'ancre
+ * `flux-tresorerie-card.tsx`. La GÉOMÉTRIE du réalisé est INCHANGÉE (ligne de base
  * centrale, entrée vers le haut `inflow`, sortie vers le bas `outflow`, hauteur ∝
- * valeur/max, labels) : déplacement, pas réécriture.
+ * valeur/max, labels).
  *
- * `FluxBarres` rend UNIQUEMENT le corps (barres ou message « pas de mouvement »).
- * Le tableau récapitulatif mensuel RESTE dans `monthly-cashflow.tsx` (carte
- * « Évolution mensuelle »), qui réutilise `projeterSurGrille` (module NEUTRE
- * `flux-projection.ts`, importé ici aussi) pour ne pas dupliquer la projection.
+ * ## Prévisionnel (C1 — PLAN-conception-previsionnel-C.md §5, UI_GUIDELINES §3.5)
  *
- * Survol (îlot client) : chaque colonne porte une zone de HIT pleine hauteur ; au
- * survol, un tooltip (§4.2, carte blanche) détaille le mois — Entrées / Sorties /
- * Net — via `formatMontant` (source unique, `tabular-nums`, jamais de float). Design
- * REPRIS verbatim de l'ancien tooltip de la courbe pour garder le même langage visuel.
+ * L'axe se prolonge vers le FUTUR : les mois qui suivent le mois courant sont alimentés
+ * par les ÉCHÉANCES projetées (occurrences récurrentes comprises), jamais par des
+ * transactions. Les deux séries ne sont JAMAIS additionnées en un chiffre — elles
+ * arrivent séparées (`ColonneFlux`) et se rendent séparément :
  *
- * ⚠️ La projection (`projeterSurGrille`/`maxFenetre`/`MoisAffiche`) vit dans
- * `flux-projection.ts` (`.ts` neutre, SANS `"use client"`) car `monthly-cashflow.tsx`
- * — un Server Component — l'appelle ; une fonction d'un module client ne peut pas être
- * invoquée depuis le serveur (fix C2). Ce fichier-ci reste client (JSX/SVG des barres).
+ *  - **Mois passés** : réalisé seul, opacité 100 %.
+ *  - **Mois courant (colonne PIVOT, D2)** : réalisé à date (100 %) + échéances restantes
+ *    du mois (45 %) EMPILÉES sur la même colonne — c'est le comportement FYGR.
+ *  - **Mois futurs** : prévision seule (45 %) sur fond `surface-forecast`.
+ *
+ * Le basculement réalisé→prévisionnel porte TOUJOURS deux signaux (§3.5, accessibilité) :
+ * fond/opacité ET label — jamais la couleur seule. Pour un lecteur d'écran, ni l'opacité
+ * ni le fond ne sont perceptibles : l'`aria-label` annonce donc explicitement la projection.
+ *
+ * ⚠️ La projection (`projeterSurGrille`/`maxFenetre*`/`composerColonnes`) vit dans
+ * `flux-projection.ts` (`.ts` neutre, SANS `"use client"`) car `monthly-cashflow.tsx` — un
+ * Server Component — l'appelle ; une fonction d'un module client ne peut pas être invoquée
+ * depuis le serveur (fix C2). Ce fichier-ci reste client (JSX/SVG des barres).
  *
  * ⚠️ Multi-devises (règle 8) : MONO-AFFICHÉ sur la devise de BASE ; aucune addition
- * cross-devise, aucune conversion FX.
+ * cross-devise, aucune conversion FX — pour les échéances comme pour le réalisé.
  */
 import { useState } from "react";
 
@@ -32,27 +37,39 @@ import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant, estNegatif } from "@/lib/format-montant";
 import {
-  maxFenetre,
+  composerColonnes,
+  maxFenetreColonnes,
   projeterSurGrille,
+  type ColonneFlux,
   type MoisAffiche,
+  type PrevisionFlux,
 } from "@/components/dashboard/flux-projection";
 import { echelleNice } from "@/components/dashboard/echelle-nice";
 import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
 import { useDimensionsSvg } from "@/components/dashboard/use-dimensions-svg";
 
+/** Opacité des barres PRÉVISIONNELLES (§3.5 : réalisé 100 % → prévisionnel 45 %). */
+const OPACITE_PREVISION = 0.45;
+
 /**
- * Corps « barres » de l'ancre Flux : projette la série sur la grille puis rend les
- * barres empilées. Vide (aucun mouvement sur la fenêtre dans la devise de base) →
- * message neutre, la carte garde sa place.
+ * Corps « barres » de l'ancre Flux : projette la série sur la grille, compose l'axe
+ * (réalisé + prévision) puis rend les barres. Vide → message neutre, la carte garde sa place.
  */
 export function FluxBarres({
   serie,
   grille,
+  prevision,
   devise,
   libellePeriode,
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
+  /**
+   * Zone prévisionnelle résolue par la page (`null` = aucune : fenêtre qui n'atteint pas
+   * le mois courant, ou workspace sans échéance). Composant PUR : il ne décide pas si la
+   * prévision s'applique, il rend ce qu'on lui donne.
+   */
+  prevision?: PrevisionFlux | null;
   devise: string;
   /**
    * Libellé de la fenêtre appliquée (source unique : la page) — porté par l'`aria-label`
@@ -61,15 +78,28 @@ export function FluxBarres({
    */
   libellePeriode?: string;
 }) {
-  const mois = projeterSurGrille(serie, grille, devise);
+  const realises = projeterSurGrille(serie, grille, devise);
+  const colonnes = composerColonnes(
+    realises,
+    prevision?.moisFuturs ?? [],
+    prevision?.moisCourant ?? null,
+  );
+
   // Le max BRUT pilote la détection « aucun mouvement » (0 = fenêtre vide) ; le max
   // « nice » (toujours ≥ 1, jamais 0) sert UNIQUEMENT à l'échelle du rendu des barres
   // non-vides — sans cette séparation, une fenêtre vide afficherait des barres à
   // plat au lieu du message neutre (echelleNice(0) = 1 ≠ 0).
-  const maxBrut = maxFenetre(mois);
+  //
+  // ⚠️ Il court sur les COLONNES, pas sur le seul réalisé : un workspace neuf SANS
+  // transactions mais AVEC des échéances saisies doit voir sa prévision, pas « Aucun
+  // mouvement » (défaut n°1 du plan §5.2). L'échelle englobe donc aussi la prévision —
+  // sinon une grosse échéance future déborderait de la zone traçable (défaut n°2).
+  const maxBrut = maxFenetreColonnes(colonnes);
   const aucunMouvement = maxBrut === 0;
   const max = echelleNice(maxBrut);
-  const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
+  const ilExisteAutresDevises = colonnes.some(
+    (c) => c.realise?.autresDevises || c.prevision?.autresDevises,
+  );
 
   if (aucunMouvement) {
     return (
@@ -94,16 +124,17 @@ export function FluxBarres({
           les barres ne sont plus « perdues » dans du vide (C1) et s'étalent sur
           toute la largeur de la carte (C2). */}
       <BarresMensuelles
-        mois={mois}
+        colonnes={colonnes}
         max={max}
         devise={devise}
         libellePeriode={libellePeriode}
       />
-      {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
+      {/* Note multi-devises : présente dès qu'un mois porte une autre devise — RÉALISÉE
+          ou PROJETÉE (une échéance en USD n'est pas plus additionnable qu'une transaction). */}
       {ilExisteAutresDevises && (
         <p className="mt-3 text-[11px] text-text-faint">
-          Certains mois comportent aussi des mouvements dans d’autres devises, non
-          additionnés ici (affichage en {devise}).
+          Certains mois comportent aussi des mouvements ou des échéances dans d’autres
+          devises, non additionnés ici (affichage en {devise}).
         </p>
       )}
     </div>
@@ -116,6 +147,9 @@ export function FluxBarres({
 const LARGEUR_DEFAUT = 640;
 const HAUTEUR_DEFAUT = 380;
 const BANDE_LABELS = 22; // px réservés sous l'axe pour les libellés de mois
+// Bande ÉLARGIE quand la colonne pivot porte son sous-label « Réalisé à date » (§3.5) :
+// il lui faut une SECONDE ligne sous le libellé de mois, sinon les deux se superposent.
+const BANDE_LABELS_PIVOT = 38;
 const FRACTION_BARRE = 0.5; // largeur d'une barre = 50 % de sa colonne (reste = gap)
 const LARGEUR_BARRE_MAX = 40; // px — plafond : sur peu de mois (colonnes larges) une
 // barre à 50 % deviendrait un gros bloc (« graphe cassé »). On la borne pour qu'elle
@@ -135,12 +169,12 @@ const MAX_LABELS = 8; // densité max de labels d'axe X (C3 : 1 label sur N au-d
  * jamais à un montant affiché (frontière float, règle 8).
  */
 function BarresMensuelles({
-  mois,
+  colonnes,
   max,
   devise,
   libellePeriode,
 }: {
-  mois: MoisAffiche[];
+  colonnes: ColonneFlux[];
   max: number;
   devise: string;
   /** Libellé de la fenêtre appliquée — seule description de la période pour un lecteur d'écran. */
@@ -151,34 +185,56 @@ function BarresMensuelles({
     HAUTEUR_DEFAUT,
   );
 
-  // Index du mois survolé (îlot client). `null` = aucun survol → pas de tooltip.
+  // Index de la colonne survolée (îlot client). `null` = aucun survol → pas de tooltip.
   const [survol, setSurvol] = useState<number | null>(null);
-  const moisActif = survol != null ? mois[survol] : null;
+  const colonneActive = survol != null ? colonnes[survol] : null;
+
+  // FRONTIÈRE réalisé / prévisionnel. Le PIVOT est la colonne qui porte les DEUX (le mois
+  // courant, D2) ; tout ce qui suit le premier mois sans réalisé est purement projeté.
+  // Calculé AVANT la géométrie : la présence du pivot élargit la bande de labels.
+  const idxPivot = colonnes.findIndex((c) => c.realise !== null && c.prevision !== null);
+  const premierFutur = colonnes.findIndex((c) => c.realise === null);
+  const ilExistePrevision = colonnes.some((c) => c.prevision !== null);
 
   // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
   // centre de cette zone (entrées au-dessus, sorties en dessous). `hauteurDemi`
   // borné ≥ 0 par sécurité (cartes très basses).
-  const hauteurDemi = Math.max((hauteur - BANDE_LABELS) / 2, 0);
+  const bandeLabels = idxPivot >= 0 ? BANDE_LABELS_PIVOT : BANDE_LABELS;
+  const hauteurDemi = Math.max((hauteur - bandeLabels) / 2, 0);
   const yAxe = hauteurDemi;
 
   // Une colonne par mois ; la barre occupe `FRACTION_BARRE` de sa colonne, centrée
   // (le reste fait l'espace inter-barres), MAIS bornée à `LARGEUR_BARRE_MAX` pour ne
   // pas devenir un bloc sur peu de mois (colonnes larges). Le `cx` ci-dessous lit
   // cette largeur EFFECTIVE (plafonnée) → la barre reste centrée dans sa colonne.
-  // Garde-fou `mois.length` (jamais 0 ici : l'appelant a déjà filtré `aucunMouvement`,
-  // mais on ne divise pas par zéro).
-  const pas = mois.length > 0 ? largeur / mois.length : largeur;
+  // Garde-fou `colonnes.length` (jamais 0 ici : l'appelant a déjà filtré
+  // `aucunMouvement`, mais on ne divise pas par zéro).
+  const pas = colonnes.length > 0 ? largeur / colonnes.length : largeur;
   const largeurBarre = Math.min(pas * FRACTION_BARRE, LARGEUR_BARRE_MAX);
 
   // C3 — densité des labels : au-delà de MAX_LABELS mois, on n'affiche qu'un label
   // sur `pasLabel`, régulièrement espacé, en garantissant TOUJOURS le premier (i=0)
   // et le dernier (lisibilité des bornes de la fenêtre).
-  const pasLabel = Math.max(1, Math.ceil(mois.length / MAX_LABELS));
-  const dernier = mois.length - 1;
+  //
+  // ⚠️ La zone prévisionnelle ALLONGE l'axe → le pas des labels grossit (défaut n°3 du
+  // plan §5.2) : sur 6 mois + 3 projetés, il passe de 1 à 2 et le PIVOT perd son libellé.
+  // Or c'est la colonne la plus lourde de sens — « Réalisé à date » y pointerait un mois
+  // anonyme. Le pivot est donc garanti au même titre que les bornes (constat de Visual QA).
+  const pasLabel = Math.max(1, Math.ceil(colonnes.length / MAX_LABELS));
+  const dernier = colonnes.length - 1;
 
   // Hauteur de la zone traçable (hors bande de labels) — sert au bandeau de survol
   // qui met en évidence la colonne active sur toute la hauteur des barres.
-  const hauteurZone = Math.max(hauteur - BANDE_LABELS, 0);
+  const hauteurZone = Math.max(hauteur - bandeLabels, 0);
+
+  const xFrontiere = premierFutur >= 0 ? premierFutur * pas : null;
+  // Ligne des libellés de mois : remontée d'un cran quand le pivot porte son sous-label.
+  const yLabelMois = hauteur - (idxPivot >= 0 ? 20 : 6);
+
+  const hauteurDe = (montant: string | undefined) =>
+    max > 0 && montant !== undefined
+      ? (Math.abs(parseFloat(montant)) / max) * hauteurDemi
+      : 0;
 
   return (
     <div className="relative">
@@ -188,18 +244,43 @@ function BarresMensuelles({
         className="w-full"
         style={{ height: HAUTEUR_ANCRE }}
         role="img"
-        aria-label={`Entrées et sorties — ${libellePeriode ?? `${mois.length} derniers mois`}, en ${devise}`}
+        // Deux signaux visuels (fond + opacité) ne s'entendent PAS : la projection doit
+        // être ANNONCÉE, sinon un lecteur d'écran lit du prévisionnel comme du réalisé (§3.5).
+        aria-label={
+          ilExistePrevision
+            ? `Entrées et sorties — ${libellePeriode ?? `${colonnes.length} derniers mois`}, en ${devise}. Inclut une projection des échéances à venir sur les mois suivants.`
+            : `Entrées et sorties — ${libellePeriode ?? `${colonnes.length} derniers mois`}, en ${devise}`
+        }
       >
-        {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre :
-            `surface-inset`, jamais une couleur de donnée). Rendu AVANT l'axe et les
-            barres → il reste en arrière-plan. */}
+        {/* ZONE PRÉVISIONNELLE (§3.5) : fond `surface-forecast` continu sur les colonnes
+            PUREMENT projetées. Le mois pivot en est EXCLU — il est majoritairement réalisé ;
+            un fond continu sur toute sa colonne dirait « tout est prévision », ce qui serait
+            faux. Sa part projetée se signale par l'opacité + le sous-label « Réalisé à date ». */}
+        {xFrontiere !== null && (
+          <rect
+            x={xFrontiere}
+            y={0}
+            width={largeur - xFrontiere}
+            height={hauteurZone}
+            fill="var(--color-surface-forecast)"
+          />
+        )}
+        {/* Bandeau de mise en évidence de la colonne survolée (chrome neutre, jamais une
+            couleur de donnée). Rendu AVANT l'axe et les barres → il reste en arrière-plan.
+            ⚠️ `line-strong` et NON `surface-inset` (#f0ecdf) : ce dernier est à 2 unités RGB
+            de `surface-forecast` (#efebdd) — indistinguable. Depuis que la zone
+            prévisionnelle existe, il produisait DEUX faux signaux (constat de Visual QA) :
+            survoler un mois PASSÉ le peignait comme du prévisionnel, et dans la zone
+            prévisionnelle le survol devenait invisible. `line-strong` se détache des deux
+            fonds (blanc et forecast) sans emprunter de couleur sémantique. */}
         {survol != null && (
           <rect
             x={survol * pas}
             y={0}
             width={pas}
             height={hauteurZone}
-            fill="var(--color-surface-inset)"
+            fill="var(--color-line-strong)"
+            fillOpacity={0.5}
           />
         )}
         {/* Ligne de base (axe zéro). Couleur en var() inline : convention SVG du
@@ -213,32 +294,69 @@ function BarresMensuelles({
           stroke="var(--color-line)"
           strokeWidth={1}
         />
-        {mois.map((m, i) => {
+        {/* Séparateur « aujourd'hui » (§3.5) : pointillé 1px `line-strong` sur toute la
+            hauteur, posé à la frontière — à partir d'ici, plus aucun montant n'est réalisé.
+            Il ne tombe PAS au jour près : la granularité de l'axe est le mois, et le mois
+            courant est à cheval (son sous-label « Réalisé à date » dit où l'on en est). */}
+        {xFrontiere !== null && (
+          <line
+            x1={xFrontiere}
+            y1={0}
+            x2={xFrontiere}
+            y2={hauteurZone}
+            stroke="var(--color-line-strong)"
+            strokeWidth={1}
+            strokeDasharray="3 3"
+          />
+        )}
+        {colonnes.map((c, i) => {
           const cx = i * pas + (pas - largeurBarre) / 2;
-          const hEntree =
-            max > 0 ? (Math.abs(parseFloat(m.entrees)) / max) * hauteurDemi : 0;
-          const hSortie =
-            max > 0 ? (Math.abs(parseFloat(m.sorties)) / max) * hauteurDemi : 0;
-          const labelVisible = i % pasLabel === 0 || i === dernier;
+          const hEntreeR = hauteurDe(c.realise?.entrees);
+          const hSortieR = hauteurDe(c.realise?.sorties);
+          const hEntreeP = hauteurDe(c.prevision?.entrees);
+          const hSortieP = hauteurDe(c.prevision?.sorties);
+          const labelVisible = i % pasLabel === 0 || i === dernier || i === idxPivot;
           return (
-            <g key={m.libelleMois}>
-              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
+            <g key={c.libelleMois}>
+              {/* Entrée RÉALISÉE (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
               <rect
                 x={cx}
-                y={yAxe - hEntree}
+                y={yAxe - hEntreeR}
                 width={largeurBarre}
-                height={hEntree}
+                height={hEntreeR}
                 rx={2}
                 fill="var(--color-inflow)"
               />
-              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
+              {/* Sortie RÉALISÉE (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
               <rect
                 x={cx}
                 y={yAxe}
                 width={largeurBarre}
-                height={hSortie}
+                height={hSortieR}
                 rx={2}
                 fill="var(--color-outflow)"
+              />
+              {/* Parts PROJETÉES — EMPILÉES au-delà du réalisé (D2). Sur un mois futur
+                  `hEntreeR`/`hSortieR` valent 0 : la même formule les fait partir de l'axe.
+                  Même teinte sémantique que le réalisé (une sortie reste une sortie) mais à
+                  45 % : c'est l'opacité, jamais une couleur inventée, qui porte le statut. */}
+              <rect
+                x={cx}
+                y={yAxe - hEntreeR - hEntreeP}
+                width={largeurBarre}
+                height={hEntreeP}
+                rx={2}
+                fill="var(--color-inflow)"
+                fillOpacity={OPACITE_PREVISION}
+              />
+              <rect
+                x={cx}
+                y={yAxe + hSortieR}
+                width={largeurBarre}
+                height={hSortieP}
+                rx={2}
+                fill="var(--color-outflow)"
+                fillOpacity={OPACITE_PREVISION}
               />
               {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
                   court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
@@ -246,12 +364,32 @@ function BarresMensuelles({
               {labelVisible && (
                 <text
                   x={cx + largeurBarre / 2}
-                  y={hauteur - 6}
+                  y={yLabelMois}
                   textAnchor="middle"
-                  fill="var(--color-text-muted)"
+                  fill={
+                    c.realise === null
+                      ? "var(--color-text-faint)"
+                      : "var(--color-text-muted)"
+                  }
                   className="text-[11px]"
                 >
-                  {formaterMoisCourt(m.libelleMois)}
+                  {formaterMoisCourt(c.libelleMois)}
+                </text>
+              )}
+              {/* Sous-label de la colonne PIVOT (§3.5) — le second signal, TEXTUEL, du
+                  basculement : ce mois n'est réalisé que jusqu'à aujourd'hui, le reste de
+                  sa barre est projeté. Rendu DANS le SVG, en unités de viewBox : le SVG
+                  est étiré (`w-full`), donc un positionnement en px CSS se décalerait de
+                  tout le facteur d'échelle (constat de Visual QA). */}
+              {i === idxPivot && (
+                <text
+                  x={cx + largeurBarre / 2}
+                  y={hauteur - 6}
+                  textAnchor="middle"
+                  fill="var(--color-primary)"
+                  className="text-[11px] italic"
+                >
+                  Réalisé à date
                 </text>
               )}
             </g>
@@ -260,9 +398,9 @@ function BarresMensuelles({
         {/* Zones de HIT : une par colonne, PLEINE largeur/hauteur et transparentes,
             posées en DERNIER (au-dessus des barres) pour capter le survol partout
             dans la colonne — pas seulement sur la barre étroite. */}
-        {mois.map((m, i) => (
+        {colonnes.map((c, i) => (
           <rect
-            key={`hit-${m.libelleMois}`}
+            key={`hit-${c.libelleMois}`}
             x={i * pas}
             y={0}
             width={pas}
@@ -276,34 +414,77 @@ function BarresMensuelles({
 
       {/* Tooltip (§4.2) : carte blanche, mois + entrées/sorties/net tabular. Centré
           en haut (même patron que l'ancienne courbe), inerte au pointeur. */}
-      {moisActif && (
+      {colonneActive && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
           <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {formaterMoisAnnee(moisActif.libelleMois)}
+            {formaterMoisAnnee(colonneActive.libelleMois)}
           </p>
-          <dl className="mt-1 flex flex-col gap-0.5">
-            <LigneTooltip
-              label="Entrées"
-              valeur={formatMontant(moisActif.entrees, devise, {
-                signeExplicite: true,
-              })}
-              couleur="text-inflow-700"
+          {/* Un chiffre projeté ne doit JAMAIS se lire comme du réalisé au survol
+              (défaut n°5 du plan §5.2) : chaque bloc est ÉTIQUETÉ dès que les deux
+              coexistent, et la zone prévisionnelle porte toujours sa mention. */}
+          {colonneActive.realise && (
+            <BlocTooltip
+              titre={colonneActive.prevision ? "Réalisé à date" : null}
+              mois={colonneActive.realise}
+              devise={devise}
             />
-            <LigneTooltip
-              label="Sorties"
-              valeur={formatMontant(moisActif.sorties, devise)}
-              couleur="text-outflow-700"
+          )}
+          {colonneActive.prevision && (
+            <BlocTooltip
+              titre="Prévision"
+              mois={colonneActive.prevision}
+              devise={devise}
+              attenue
             />
-            <LigneTooltip
-              label="Net"
-              valeur={formatMontant(moisActif.variation, devise, {
-                signeExplicite: true,
-              })}
-              couleur={estNegatif(moisActif.variation) ? "text-outflow-700" : "text-text"}
-            />
-          </dl>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Un bloc du tooltip : entrées / sorties / net d'UNE série (réalisé ou prévision).
+ * `titre` est optionnel — sur un mois passé, il n'y a rien à distinguer.
+ */
+function BlocTooltip({
+  titre,
+  mois,
+  devise,
+  attenue = false,
+}: {
+  titre: string | null;
+  mois: MoisAffiche;
+  devise: string;
+  /** Bloc prévisionnel : libellés en `text-faint` (§3.5 — le prévisionnel s'atténue). */
+  attenue?: boolean;
+}) {
+  return (
+    <div className={attenue ? "mt-2 border-t border-line pt-2" : "mt-1"}>
+      {titre && (
+        <p
+          className={`mb-0.5 text-[11px] ${attenue ? "italic text-text-faint" : "text-primary"}`}
+        >
+          {titre}
+        </p>
+      )}
+      <dl className="flex flex-col gap-0.5">
+        <LigneTooltip
+          label="Entrées"
+          valeur={formatMontant(mois.entrees, devise, { signeExplicite: true })}
+          couleur="text-inflow-700"
+        />
+        <LigneTooltip
+          label="Sorties"
+          valeur={formatMontant(mois.sorties, devise)}
+          couleur="text-outflow-700"
+        />
+        <LigneTooltip
+          label="Net"
+          valeur={formatMontant(mois.variation, devise, { signeExplicite: true })}
+          couleur={estNegatif(mois.variation) ? "text-outflow-700" : "text-text"}
+        />
+      </dl>
     </div>
   );
 }
