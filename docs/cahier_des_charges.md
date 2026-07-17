@@ -273,8 +273,9 @@ WORKSPACES (tenant)             USERS                    WORKSPACE_MEMBERS
 | base_currency                 | is_active
 | omnifi_client_user_id UNIQUE  | failed_login_count     WORKSPACE_GRANTS
 | omnifi_environment:           | locked_until           | (consolidation, v2 —
-|   sandbox | production        +------------------      |  conçu, build différé)
-+------------------
+|   sandbox | production        | must_change_password   |  conçu, build différé)
++------------------             | password_changed_at
+                                +------------------
 
 BANK_CONNECTIONS ─< BANK_ACCOUNTS ─< TRANSACTIONS_CACHE (partitionnée par date)
 (workspace_id,      (workspace_id,    (workspace_id, omnifi_txn_id,

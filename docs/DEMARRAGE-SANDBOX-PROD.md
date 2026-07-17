@@ -86,11 +86,16 @@ Garanties du script (à ne pas contourner) :
 - **Secret par variable d'environnement uniquement**, jamais en dur ni dans un log
   (règle 8). Ne pas le mettre dans `.env` : le passer à la commande.
 
-> ⚠️ **Rotation du mot de passe initial.** L'ADMIN ainsi créé porte un mot de passe
-> temporaire. Le changement de mot de passe par l'utilisateur lui-même **n'existe pas
-> encore** (dette `AUTH-MDP-TEMPO1`, P1) : en attendant, la rotation passe par
-> `scripts/reset-password.mjs`. Sur un déploiement de production, changez-le
-> immédiatement après le premier accès.
+> ⚠️ **Rotation du mot de passe initial.** L'ADMIN ainsi créé choisit son propre
+> mot de passe (le seed ne pose PAS le flag de forçage). Le changement de mot de
+> passe self-service existe : **`/account/password`** (AUTH-MDP-TEMPO1 lot A). En
+> dev local, `scripts/reset-password.mjs` reste le recours « mot de passe oublié » :
+> il pose systématiquement `password_changed_at = now()` — **toute session ouverte
+> du compte est invalidée** (voulu) — et `RESET_MUST_CHANGE=1` (défaut `0`) pose en
+> plus le flag de forçage, à utiliser quand on resette un **tiers** (il devra choisir
+> son propre secret au prochain accès). Les membres provisionnés via `/admin/membres`
+> reçoivent, eux, TOUJOURS un mot de passe temporaire : gate vers `/account/password`
+> jusqu'au changement.
 
 > `omnifi_client_user_id` est un **placeholder** à ce stade. Il est remplacé lors de
 > l'enrôlement Omni-FI réel (`POST /clients/end-users`) — c'est la frontière tenant côté

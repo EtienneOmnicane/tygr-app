@@ -43,6 +43,7 @@ import { dernierJourMois, resoudrePeriode } from "@/lib/periode";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 
@@ -64,6 +65,9 @@ export default async function PageDashboard({
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
+    }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
     }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");

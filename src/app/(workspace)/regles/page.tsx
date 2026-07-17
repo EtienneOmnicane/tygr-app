@@ -26,6 +26,7 @@ import { peutModifier } from "@/lib/permissions";
 import {
   AucunWorkspaceActifError,
   exigerSessionSansPerimetre,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { withWorkspace } from "@/server/db";
@@ -59,6 +60,7 @@ export default async function PageRegles({
     session = await exigerSessionSansPerimetre();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) redirect("/login");
+    if (erreur instanceof MotDePasseAChangerError) redirect("/account/password");
     if (erreur instanceof AucunWorkspaceActifError) redirect("/selection");
     throw erreur;
   }

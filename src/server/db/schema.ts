@@ -86,6 +86,18 @@ export const users = pgTable(
     /** Lockout anti brute-force (plan E7/E18). */
     failedLoginCount: integer("failed_login_count").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    /**
+     * Flux mot de passe temporaire (AUTH-MDP-TEMPO1, D2) : true tant que le
+     * membre n'a pas remplacé le secret posé par l'ADMIN au provisioning.
+     */
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
+    /**
+     * Dernier POSAGE de mot de passe, par qui que ce soit (admin, membre, reset).
+     * NULL = jamais posé depuis la migration 0022. Trois usages (D2/D4) :
+     * expiration dérivée du temporaire (lot B), invalidation de session (claim
+     * `pwdAt` comparé par égalité stricte), fait d'audit minimal.
+     */
+    passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

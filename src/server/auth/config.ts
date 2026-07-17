@@ -70,6 +70,9 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
           id: resultat.utilisateur.id,
           email: resultat.utilisateur.email,
           name: resultat.utilisateur.fullName,
+          // Claim d'invalidation D4 (AUTH-MDP-TEMPO1) : dernier posage de mot
+          // de passe en epoch ms, null = jamais posé depuis la migration 0022.
+          pwdAt: resultat.utilisateur.passwordChangedAt?.getTime() ?? null,
         };
       },
     }),
@@ -86,6 +89,10 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
       if (user?.id) {
         token.userId = user.id;
         token.activeWorkspaceId = await identite.membershipParDefaut(user.id);
+        // pwdAt (D4) : figé à la connexion depuis la valeur DB lue par
+        // authorize. Toute session dont ce claim divergera de la base mourra
+        // à sa prochaine requête gardée (exigerCompteValide, session.ts).
+        token.pwdAt = user.pwdAt ?? null;
       }
 
       // Bascule de workspace (Epic 2 / unstable_update) — DÉFENSE EN PROFONDEUR
@@ -161,6 +168,29 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
           token.viewFilter = undefined;
         }
       }
+
+      // pwdAt (AUTH-MDP-TEMPO1 D4) — survie de la session courante après un
+      // changement de mot de passe réussi : l'action /account/password appelle
+      // unstable_update({ pwdAt }). MÊME discipline que activeWorkspaceId
+      // ci-dessus : on n'écrit JAMAIS la valeur cliente — on RE-LIT la base et
+      // on pose la valeur DB. Sur échec de lecture, le claim reste inchangé :
+      // fail-closed (la garde par-requête comparera et déconnectera au pire).
+      if (
+        trigger === "update" &&
+        typeof token.userId === "string" &&
+        session !== null &&
+        session !== undefined &&
+        "pwdAt" in session
+      ) {
+        try {
+          const etat = await identite.etatCompte(token.userId);
+          if (etat) {
+            token.pwdAt = etat.passwordChangedAt?.getTime() ?? null;
+          }
+        } catch {
+          // Base injoignable : claim conservé — jamais la valeur cliente.
+        }
+      }
       return token;
     },
     async session({ session, token }) {
@@ -171,6 +201,8 @@ export const { handlers, auth, signIn, signOut, unstable_update } = NextAuth({
       // viewFilter (L8b-1) : restitué pour exigerSessionWorkspace (session.ts).
       // null/absent du token ⇒ null ⇒ « Groupe » côté lecture.
       session.viewFilter = token.viewFilter ?? null;
+      // pwdAt (D4) : restitué pour la comparaison par-requête (session.ts).
+      session.pwdAt = token.pwdAt ?? null;
       return session;
     },
   },

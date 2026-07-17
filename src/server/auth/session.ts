@@ -32,6 +32,20 @@ export class AucunWorkspaceActifError extends Error {
 }
 
 /**
+ * Gate « mot de passe à changer » (AUTH-MDP-TEMPO1 D3) : le compte porte
+ * `must_change_password` — la seule surface autorisée est /account/password.
+ * Mappée par le layout et les pages → redirect("/account/password"), jamais
+ * un message (registre S2).
+ */
+export class MotDePasseAChangerError extends Error {
+  readonly code = "PASSWORD_CHANGE_REQUIRED";
+  constructor() {
+    super("Changement de mot de passe requis");
+    this.name = "MotDePasseAChangerError";
+  }
+}
+
+/**
  * Erreur d'INFRASTRUCTURE pendant le chemin d'auth (base injoignable, timeout
  * Neon/wsproxy). Distincte des erreurs métier ci-dessus : elle signale un
  * incident temporaire, pas un défaut d'autorisation.
@@ -57,27 +71,80 @@ export class ServiceIndisponibleError extends Error {
   }
 }
 
+/**
+ * Normalisation du claim `pwdAt` et de `password_changed_at` pour la
+ * comparaison D4 : claim absent / null / colonne NULL ≡ null ; sinon epoch ms.
+ * ÉGALITÉ STRICTE (pas de `<`) : insensible aux horloges, et un posage
+ * ultérieur par l'admin (lot B) tue aussi les sessions du membre — voulu.
+ * Les sessions pré-migration (claim absent) face à une colonne NULL sont
+ * ÉGALES → valides : la migration 0022 n'éjecte personne ; le premier
+ * changement, si.
+ */
+export function normaliserPwdAt(
+  valeur: number | Date | null | undefined,
+): number | null {
+  if (valeur === null || valeur === undefined) {
+    return null;
+  }
+  return typeof valeur === "number" ? valeur : valeur.getTime();
+}
+
+/**
+ * Checks par-requête communs aux deux gardes (ordre STRICT §5.3 du plan
+ * AUTH-MDP-TEMPO1) :
+ *   1. compte inexistant OU inactif  → NonAuthentifieError   (E6, inchangé)
+ *   2. pwdAt(session) ≠ pwdAt(base)  → NonAuthentifieError   (D4 — une session
+ *      périmée est INDISTINGUABLE d'un non-connecté : on ne confirme jamais à
+ *      un porteur de session volée que « le mot de passe a changé »)
+ * Le check 3 (gate mustChangePassword) reste chez l'appelant : la surface de
+ * changement et /selection consomment le FLAG retourné, pas l'erreur.
+ */
+async function exigerCompteValide(session: {
+  userId: string;
+  pwdAt?: number | null;
+}): Promise<{ mustChangePassword: boolean }> {
+  // E6 — FAIL-CLOSED : si la base est injoignable, on ne peut PAS prouver que
+  // le compte est actif → on REFUSE en signalant un incident d'infra (jamais
+  // « on suppose actif »). On convertit l'erreur brute du driver (cause
+  // ErrorEvent non sérialisable) en une erreur PROPRE rendable par un boundary.
+  let etat: Awaited<ReturnType<typeof identite.etatCompte>>;
+  try {
+    etat = await identite.etatCompte(session.userId);
+  } catch {
+    // On n'inspecte pas l'erreur driver (et on ne la chaîne pas en `cause` :
+    // c'est précisément ce qui cassait la sérialisation RSC→Client).
+    throw new ServiceIndisponibleError();
+  }
+  if (!etat || !etat.isActive) {
+    throw new NonAuthentifieError();
+  }
+
+  // D4 — invalidation : toute session émise avant le dernier posage de mot de
+  // passe (claim ≠ base) meurt ici, à sa prochaine requête gardée — dont une
+  // session ouverte par l'ADMIN avec le mot de passe temporaire.
+  if (normaliserPwdAt(session.pwdAt) !== normaliserPwdAt(etat.passwordChangedAt)) {
+    throw new NonAuthentifieError();
+  }
+
+  return { mustChangePassword: etat.mustChangePassword };
+}
+
 export async function exigerSessionWorkspace(): Promise<WorkspaceSession> {
   const session = await auth();
   if (!session?.userId) {
     throw new NonAuthentifieError();
   }
 
-  // E6 — re-validation is_active à chaque requête. FAIL-CLOSED : si la base est
-  // injoignable, on ne peut PAS prouver que le compte est actif → on REFUSE en
-  // signalant un incident d'infra (jamais « on suppose actif »). On convertit
-  // l'erreur brute du driver (cause ErrorEvent non sérialisable) en une erreur
-  // PROPRE rendable par un error boundary.
-  let actif: boolean;
-  try {
-    actif = await identite.estActif(session.userId);
-  } catch {
-    // On n'inspecte pas l'erreur driver (et on ne la chaîne pas en `cause` :
-    // c'est précisément ce qui cassait la sérialisation RSC→Client).
-    throw new ServiceIndisponibleError();
-  }
-  if (!actif) {
-    throw new NonAuthentifieError();
+  const { mustChangePassword } = await exigerCompteValide({
+    userId: session.userId,
+    pwdAt: session.pwdAt,
+  });
+
+  // D3 — gate : APRÈS le check d'invalidation (ordre 2-avant-3, §5.3) : une
+  // session pré-changement d'un compte au flag retombé est déconnectée,
+  // jamais re-gatée.
+  if (mustChangePassword) {
+    throw new MotDePasseAChangerError();
   }
 
   if (!session.activeWorkspaceId) {
@@ -157,3 +224,30 @@ export async function exigerSessionSansPerimetre(): Promise<WorkspaceSession> {
  * ment pas (ces pages ne sont pas de l'administration).
  */
 export const exigerSessionAdministration = exigerSessionSansPerimetre;
+
+/**
+ * Garde légère PRÉ-WORKSPACE (AUTH-MDP-TEMPO1 D3) : checks 1 (E6) et 2 (D4)
+ * de l'ordre §5.3, SANS exiger de workspace et SANS jeter
+ * `MotDePasseAChangerError` — le flag est RETOURNÉ, l'appelant décide.
+ *
+ * Deux surfaces la consomment :
+ * - /account/password (page + action) : c'est la surface AUTORISÉE au compte
+ *   gaté — elle ne peut pas jeter le gate qui la vise.
+ * - /selection : gagne le re-check E6 qui lui manquait (constat §0 du plan) ;
+ *   `mustChangePassword` true → la page redirige vers /account/password (un
+ *   membre multi-workspace change son mot de passe AVANT de choisir un espace).
+ */
+export async function exigerSessionUtilisateur(): Promise<{
+  userId: string;
+  mustChangePassword: boolean;
+}> {
+  const session = await auth();
+  if (!session?.userId) {
+    throw new NonAuthentifieError();
+  }
+  const { mustChangePassword } = await exigerCompteValide({
+    userId: session.userId,
+    pwdAt: session.pwdAt,
+  });
+  return { userId: session.userId, mustChangePassword };
+}

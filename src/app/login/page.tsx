@@ -11,16 +11,38 @@
 import Image from "next/image";
 import { redirect } from "next/navigation";
 
-import { auth } from "@/server/auth/config";
+import {
+  exigerSessionUtilisateur,
+  NonAuthentifieError,
+  ServiceIndisponibleError,
+} from "@/server/auth/session";
 
 import { FormulaireConnexion } from "./formulaire-connexion";
 
 export const metadata = { title: "Connexion — Dodo" };
 
 export default async function PageConnexion() {
-  const session = await auth();
-  if (session?.userId) {
-    redirect("/");
+  // Re-VALIDATION (pas un simple test de présence du cookie) — constat C1 de
+  // la cross-review AUTH-MDP-TEMPO1 : une session invalidée par D4 (mot de
+  // passe changé ailleurs) porte un JWT encore cryptographiquement valide ;
+  // un `if (session?.userId) redirect("/")` bouclerait /login ↔ / sans jamais
+  // montrer le formulaire (le cookie ne peut pas être effacé pendant un rendu
+  // RSC). Ici : session VALIDE → accueil (ou forçage) ; périmée/absente →
+  // formulaire (le signIn réussi écrasera le cookie périmé) ; base injoignable
+  // → formulaire aussi (page publique — authorize refusera de toute façon).
+  let compte: Awaited<ReturnType<typeof exigerSessionUtilisateur>> | null = null;
+  try {
+    compte = await exigerSessionUtilisateur();
+  } catch (erreur) {
+    if (
+      !(erreur instanceof NonAuthentifieError) &&
+      !(erreur instanceof ServiceIndisponibleError)
+    ) {
+      throw erreur;
+    }
+  }
+  if (compte) {
+    redirect(compte.mustChangePassword ? "/account/password" : "/");
   }
 
   return (

@@ -10,7 +10,10 @@
  */
 import { redirect } from "next/navigation";
 
-import { auth } from "@/server/auth/config";
+import {
+  exigerSessionUtilisateur,
+  NonAuthentifieError,
+} from "@/server/auth/session";
 import { identite } from "@/server/db";
 
 import { ListeWorkspaces } from "./liste-workspaces";
@@ -18,12 +21,24 @@ import { ListeWorkspaces } from "./liste-workspaces";
 export const metadata = { title: "Choisir un workspace — Dodo" };
 
 export default async function PageSelection() {
-  const session = await auth();
-  if (!session?.userId) {
-    redirect("/login");
+  // Re-check E6 + invalidation D4 par la garde légère (AUTH-MDP-TEMPO1) — la
+  // page appelait auth() directement, SANS re-validation is_active (constat §0
+  // du plan) : un compte désactivé gardait cet écran jusqu'à expiration du JWT.
+  let compte: Awaited<ReturnType<typeof exigerSessionUtilisateur>>;
+  try {
+    compte = await exigerSessionUtilisateur();
+  } catch (erreur) {
+    if (erreur instanceof NonAuthentifieError) redirect("/login");
+    throw erreur;
   }
 
-  const memberships = await identite.membershipsAvecNom(session.userId);
+  // Gate D3 : le changement de mot de passe précède même le choix d'un espace
+  // (un membre multi-workspace change son secret AVANT /selection).
+  if (compte.mustChangePassword) {
+    redirect("/account/password");
+  }
+
+  const memberships = await identite.membershipsAvecNom(compte.userId);
 
   // SKIP AUTO (D2) : un seul workspace → on bascule droit vers l'accueil.
   if (memberships.length === 1) {

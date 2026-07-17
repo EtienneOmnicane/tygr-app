@@ -47,7 +47,16 @@ export type CodeEchecConnexion =
   | "COMPTE_INACTIF";
 
 export type ResultatVerification =
-  | { ok: true; utilisateur: { id: string; email: string; fullName: string } }
+  | {
+      ok: true;
+      utilisateur: {
+        id: string;
+        email: string;
+        fullName: string;
+        /** Dernier posage de mot de passe → claim `pwdAt` (invalidation D4). */
+        passwordChangedAt: Date | null;
+      };
+    }
   | { ok: false; code: CodeEchecConnexion };
 
 /**
@@ -139,6 +148,7 @@ export async function verifierIdentifiants(
       id: utilisateur.id,
       email: utilisateur.email,
       fullName: utilisateur.fullName,
+      passwordChangedAt: utilisateur.passwordChangedAt,
     },
   };
 }
