@@ -15,6 +15,13 @@
  * Le mot de passe vient de l'ENV (jamais en argument, jamais loggé). Min 12 car.
  * Rôle OWNER (DATABASE_URL_ADMIN) : opération d'administration, comme seed-admin.
  *
+ * AUTH-MDP-TEMPO1 (D7) : un reset est un POSAGE de mot de passe →
+ * `password_changed_at = now()` systématique — toute session ouverte du compte
+ * meurt à sa prochaine requête gardée (invalidation D4, voulu). Et
+ * `RESET_MUST_CHANGE=1` (défaut 0) pose en plus le flag de forçage : à utiliser
+ * quand on resette un TIERS (il devra choisir son propre secret) ; l'usage dev
+ * courant — se resetter soi-même — ne se re-gate pas.
+ *
  * ⚠️ DEV LOCAL UNIQUEMENT. Ne jamais pointer une base de production avec ce script.
  */
 import { neonConfig, Pool } from "@neondatabase/serverless";
@@ -56,13 +63,16 @@ if (/neon\.tech/.test(dbUrl)) {
   process.exit(1);
 }
 
+const doitChanger = process.env.RESET_MUST_CHANGE === "1";
+
 const pool = new Pool({ connectionString: dbUrl });
 try {
   const hash = await argon2.hash(motDePasse);
   const res = await pool.query(
-    `UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL
+    `UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL,
+       password_changed_at = now(), must_change_password = $3
      WHERE lower(email) = lower($1) RETURNING email`,
-    [email, hash],
+    [email, hash, doitChanger],
   );
   if (res.rowCount === 0) {
     console.error(`Aucun utilisateur '${email}' dans cette base — rien modifié.`);
