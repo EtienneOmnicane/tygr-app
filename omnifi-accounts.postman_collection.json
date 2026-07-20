@@ -1,0 +1,75 @@
+{
+  "info": {
+    "name": "Omni-FI — Inspection nommage des comptes",
+    "description": "Collection pour visualiser les vraies réponses de l'API Omni-FI sur le nommage des comptes (Nickname / Account[].Identification / Account[].Name / Description / Servicer / PartyName). Renseigne les variables d'environnement (clientId, secret, clientUserId, connectionId, jobId) avant de tirer. NE COMMITTE JAMAIS ta clé : garde-la dans un environnement Postman, pas dans la collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://sandbox.omni-fi.co/v1", "type": "string" },
+    { "key": "clientId", "value": "<TON_CLIENT_ID>", "type": "string" },
+    { "key": "secret", "value": "<TON_SECRET>", "type": "string" },
+    { "key": "clientUserId", "value": "<workspaces.omnifi_client_user_id>", "type": "string" },
+    { "key": "connectionId", "value": "<UUID_CONNEXION>", "type": "string" },
+    { "key": "jobId", "value": "<UUID_JOB_SYNC>", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "GET /accounts (tous les comptes de l'EndUser)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "ApiKey {{clientId}}:{{secret}}" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/accounts?page=1&pageSize=20",
+          "host": ["{{baseUrl}}"],
+          "path": ["accounts"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "pageSize", "value": "20" }
+          ]
+        },
+        "description": "Réponse OBReadAccount6. Regarde pour CHAQUE compte : Nickname, Account[].Identification (numéro/IBAN, REQUIS), Account[].Name (titulaire), Description, Servicer.Name, PartyName. C'est exactement le payload que TYGR reçoit — mais TYGR ne lit que Nickname puis PartyName."
+      }
+    },
+    {
+      "name": "GET /accounts?connectionId= (comptes d'UNE connexion — requête de TYGR)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "ApiKey {{clientId}}:{{secret}}" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/accounts?connectionId={{connectionId}}&client_user_id={{clientUserId}}&page=1&pageSize=20",
+          "host": ["{{baseUrl}}"],
+          "path": ["accounts"],
+          "query": [
+            { "key": "connectionId", "value": "{{connectionId}}" },
+            { "key": "client_user_id", "value": "{{clientUserId}}" },
+            { "key": "page", "value": "1" },
+            { "key": "pageSize", "value": "20" }
+          ]
+        },
+        "description": "LA requête que TYGR envoie (client.ts:589, listerComptesConnexion). Compare Nickname (souvent null) vs Account[].Identification (toujours présent) pour comprendre pourquoi le libellé retombe sur le repli."
+      }
+    },
+    {
+      "name": "GET /sync/job/{jobId}/accounts (découverte post-sync, Bearer)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer <SessionToken>" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/sync/job/{{jobId}}/accounts",
+          "host": ["{{baseUrl}}"],
+          "path": ["sync", "job", "{{jobId}}", "accounts"]
+        },
+        "description": "Variante widget (auth Bearer SessionToken, pas ApiKey). Même forme de payload OmniFiAccount. Utile pour vérifier le nommage juste après un scraping."
+      }
+    }
+  ]
+}

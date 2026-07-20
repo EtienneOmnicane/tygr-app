@@ -17,7 +17,9 @@ import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
   DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  DEMO_DASHBOARD_PREVISION_FAIBLE,
   DEMO_DASHBOARD_PREVISION_SANS_REALISE,
+  DEMO_DASHBOARD_PREVISION_ZERO,
   DEMO_DASHBOARD_UN_MOIS,
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
@@ -30,6 +32,8 @@ import {
 
 type EtatDemo =
   | "succes"
+  | "prevision-faible"
+  | "prevision-zero"
   | "prevision-sans-realise"
   | "prevision-autre-devise"
   | "sans-prevision"
@@ -41,6 +45,10 @@ type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "succes", label: "Succès (avec prévision)" },
+  // Le cas du défaut (lot 0) : prévision écrasée par l'échelle du réalisé — c'est l'onglet
+  // à capturer en priorité au Visual QA, celui qui manquait au corpus.
+  { id: "prevision-faible", label: "Prévision FAIBLE (barre écrasée)" },
+  { id: "prevision-zero", label: "Prévision à ZÉRO" },
   { id: "prevision-sans-realise", label: "Prévision SEULE (sans réalisé)" },
   { id: "prevision-autre-devise", label: "Prévision autre devise" },
   { id: "sans-prevision", label: "Sans prévision (fenêtre passée)" },
@@ -71,6 +79,11 @@ const DEMO_SOLDES_CINQ_DEVISES: DonneesDashboard["soldesParDevise"] = [
  */
 const FIXTURE_PAR_ETAT: Record<EtatDemo, DonneesDashboard> = {
   succes: DEMO_DASHBOARD,
+  // Le défaut d'origine (rapport ~1:520) : la barre projetée rend 0,23 px. Sans étiquette
+  // de substitution, la zone paraît VIDE alors qu'elle porte de la donnée.
+  "prevision-faible": DEMO_DASHBOARD_PREVISION_FAIBLE,
+  // §5.4 : zone présente, tout à zéro → message explicite, jamais un aplat beige muet.
+  "prevision-zero": DEMO_DASHBOARD_PREVISION_ZERO,
   // Défaut n°1 du plan §5.2 : la prévision doit s'afficher SEULE, jamais « Aucun mouvement ».
   "prevision-sans-realise": DEMO_DASHBOARD_PREVISION_SANS_REALISE,
   // §5.3 : colonnes futures à ZÉRO + note — jamais un montant étranger, jamais de FX.

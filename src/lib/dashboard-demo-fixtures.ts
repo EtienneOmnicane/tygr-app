@@ -327,6 +327,96 @@ export const DEMO_DASHBOARD_PREVISION_SANS_REALISE: DonneesDashboard = {
 };
 
 /**
+ * État PRÉVISIONNEL « FAIBLE MONTANT » — LE CAS QUI MANQUAIT (PLAN-flux-previsionnel
+ * -lisibilite.md §0.2, lot 0).
+ *
+ * ⚠️ Fixture d'INTÉGRITÉ DE TEST, pas de décoration : sans elle, le défaut « la zone
+ * prévisionnelle paraît vide » n'était pas CAPTURABLE en Visual QA, donc la Gate 4 du
+ * prévisionnel C1 (#226) est passée au vert sans mentir — toutes les fixtures d'alors
+ * portaient un rapport ~1:6 (barres de 17 à 72 px, parfaitement visibles).
+ *
+ * Ici : réalisé 5 200 000 MUR contre des échéances de 10 000 MUR, soit le rapport RÉEL
+ * observé en production (~1:520). À l'échelle qui en découle, la barre projetée rend
+ * **0,23 px** — sous-pixel, invisible. C'est le cas que tout correctif doit régler et que
+ * `tests/unit/dashboard-demo-couverture-echelle.test.ts` garde en permanence.
+ *
+ * Ne PAS « adoucir » ces montants pour faire joli : cette fixture est censée être moche.
+ */
+export const DEMO_DASHBOARD_PREVISION_FAIBLE: DonneesDashboard = {
+  ...DEMO_DASHBOARD,
+  prevision: {
+    // Mois pivot : part projetée minuscule EMPILÉE sur un réalisé de 5,2 M (D2).
+    moisCourant: {
+      libelleMois: "2026-06",
+      entrees: "0.00",
+      sorties: "4000.00",
+      variation: "-4000.00",
+      autresDevises: false,
+    },
+    moisFuturs: [
+      {
+        libelleMois: "2026-07",
+        entrees: "0.00",
+        sorties: "10000.00",
+        variation: "-10000.00",
+        autresDevises: false,
+      },
+      {
+        // Le mois du constat d'origine : « Sorties Rs 10 000 / Net −Rs 10 000 » au survol,
+        // et RIEN à l'écran.
+        libelleMois: "2026-08",
+        entrees: "0.00",
+        sorties: "10000.00",
+        variation: "-10000.00",
+        autresDevises: false,
+      },
+      {
+        // Une entrée AUSSI faible : le défaut n'est pas propre aux sorties.
+        libelleMois: "2026-09",
+        entrees: "25000.00",
+        sorties: "10000.00",
+        variation: "15000.00",
+        autresDevises: false,
+      },
+    ],
+  },
+};
+
+/**
+ * État PRÉVISIONNEL « ZÉRO » (§5.4) : la zone prévisionnelle EXISTE (la fenêtre atteint le
+ * mois courant, il y a des échéances dans le workspace) mais AUCUNE ne tombe sur ces mois —
+ * toutes les colonnes sont à zéro, dans la devise de base ET ailleurs.
+ *
+ * À ne pas confondre avec les deux voisins, que le rendu doit DISTINGUER :
+ *  - `prevision: null` (D4, fenêtre passée) → aucune zone du tout ;
+ *  - `DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE` → colonnes à zéro AUSSI, mais parce que les
+ *    échéances sont dans une autre devise (`autresDevises: true`) — dire « aucune
+ *    échéance » y serait un FAUX constat.
+ *
+ * Attendu : un message explicite dans la zone, jamais un aplat beige muet (qui se lit
+ * comme « la donnée n'a pas chargé »).
+ */
+export const DEMO_DASHBOARD_PREVISION_ZERO: DonneesDashboard = {
+  ...DEMO_DASHBOARD,
+  prevision: {
+    moisCourant: {
+      libelleMois: "2026-06",
+      entrees: "0.00",
+      sorties: "0.00",
+      variation: "0.00",
+      autresDevises: false,
+    },
+    moisFuturs: ["2026-07", "2026-08", "2026-09"].map((libelleMois) => ({
+      libelleMois,
+      entrees: "0.00",
+      sorties: "0.00",
+      variation: "0.00",
+      autresDevises: false,
+    })),
+  },
+};
+
+/**
  * État PRÉVISIONNEL « AUTRE DEVISE SEULE » (§5.3) : les mois futurs ne portent QUE des
  * échéances en devise ≠ base. Attendu : colonnes à ZÉRO + note multi-devises — jamais le
  * montant étranger affiché à la place, jamais une conversion inventée (DASH-FX1).

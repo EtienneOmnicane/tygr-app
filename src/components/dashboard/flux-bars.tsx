@@ -35,7 +35,19 @@ import { useState } from "react";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
-import { formatMontant, estNegatif } from "@/lib/format-montant";
+import {
+  formatMontant,
+  formatMontantCompact,
+  estNegatif,
+  estZero,
+} from "@/lib/format-montant";
+import {
+  ECART_ETIQUETTE_PX,
+  EPAISSEUR_TICK_PX,
+  estIllisible,
+  etiquetteVerticale,
+  largeurEtiquette,
+} from "@/components/dashboard/flux-etiquettes";
 import {
   composerColonnes,
   maxFenetreColonnes,
@@ -100,6 +112,10 @@ export function FluxBarres({
   const ilExisteAutresDevises = colonnes.some(
     (c) => c.realise?.autresDevises || c.prevision?.autresDevises,
   );
+  // Une zone prévisionnelle est rendue dès qu'une colonne porte une projection — y compris
+  // quand toutes ses valeurs sont à zéro : la mention de couverture qualifie la ZONE, pas
+  // les montants qu'elle contient.
+  const ilExistePrevision = colonnes.some((c) => c.prevision !== null);
 
   if (aucunMouvement) {
     return (
@@ -129,10 +145,23 @@ export function FluxBarres({
         devise={devise}
         libellePeriode={libellePeriode}
       />
+      {/* MENTION DE COUVERTURE (lot 1) — la note la plus importante de la carte.
+          Le réalisé est une MESURE EXHAUSTIVE (tout ce qui a transité en banque) ; la
+          prévision est un SOUS-ENSEMBLE DÉCLARÉ (les seules échéances saisies à la main).
+          Sans cette phrase, une prévision de faible montant à côté de mois réalisés se lit
+          « la trésorerie s'effondre » — un faux constat produit par la mise en regard
+          elle-même, qu'aucun habillage de la zone ne corrige. Libellé validé par Etienne
+          (2026-07-20) ; ne pas l'adoucir sans arbitrage. */}
+      {ilExistePrevision && (
+        <p className="mt-3 text-[11px] text-text-faint">
+          Prévision : échéances saisies uniquement — partielle, non comparable aux mois
+          réalisés.
+        </p>
+      )}
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise — RÉALISÉE
           ou PROJETÉE (une échéance en USD n'est pas plus additionnable qu'une transaction). */}
       {ilExisteAutresDevises && (
-        <p className="mt-3 text-[11px] text-text-faint">
+        <p className="mt-2 text-[11px] text-text-faint">
           Certains mois comportent aussi des mouvements ou des échéances dans d’autres
           devises, non additionnés ici (affichage en {devise}).
         </p>
@@ -228,6 +257,23 @@ function BarresMensuelles({
   const hauteurZone = Math.max(hauteur - bandeLabels, 0);
 
   const xFrontiere = premierFutur >= 0 ? premierFutur * pas : null;
+
+  // ZONE FUTURE MUETTE (§5.4) — la zone existe mais n'a AUCUNE barre à dessiner. Sans
+  // message, elle rend un aplat beige nu, que l'œil lit « la donnée n'a pas chargé » et non
+  // « il n'y a rien de prévu ». Trois situations à ne pas confondre, dont deux arrivent ici :
+  //  - `prevision === null` (D4, fenêtre passée) → aucune zone : traité en amont, pas ici ;
+  //  - colonnes à zéro, aucune autre devise → il n'y a réellement aucune échéance ;
+  //  - colonnes à zéro PARCE QUE les échéances sont dans une autre devise → dire « aucune
+  //    échéance » serait un FAUX constat : la donnée existe, elle n'est simplement pas
+  //    convertie (DASH-FX1, aucune FX inventée).
+  const colonnesFutures = premierFutur >= 0 ? colonnes.slice(premierFutur) : [];
+  const zoneFutureMuette =
+    colonnesFutures.length > 0 &&
+    colonnesFutures.every(
+      (c) =>
+        estZero(c.prevision?.entrees ?? "0") && estZero(c.prevision?.sorties ?? "0"),
+    );
+  const zoneFutureAutreDevise = colonnesFutures.some((c) => c.prevision?.autresDevises);
   // Ligne des libellés de mois : remontée d'un cran quand le pivot porte son sous-label.
   const yLabelMois = hauteur - (idxPivot >= 0 ? 20 : 6);
 
@@ -309,13 +355,42 @@ function BarresMensuelles({
             strokeDasharray="3 3"
           />
         )}
+        {/* Message de zone muette (§5.4). Rendu DANS le SVG, en unités de viewBox : le SVG
+            est étiré (`w-full`), donc un positionnement en px CSS se décalerait de tout le
+            facteur d'échelle. Posé AVANT les barres — sur une zone muette il n'y en a
+            aucune, l'ordre n'a donc pas d'incidence, mais il reste sous les zones de hit. */}
+        {xFrontiere !== null && zoneFutureMuette && (
+          <text
+            x={xFrontiere + (largeur - xFrontiere) / 2}
+            y={yAxe}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill="var(--color-text-faint)"
+            className="text-[11px]"
+          >
+            {zoneFutureAutreDevise
+              ? "Échéances dans une autre devise"
+              : "Aucune échéance sur ces mois"}
+          </text>
+        )}
         {colonnes.map((c, i) => {
           const cx = i * pas + (pas - largeurBarre) / 2;
           const hEntreeR = hauteurDe(c.realise?.entrees);
           const hSortieR = hauteurDe(c.realise?.sorties);
           const hEntreeP = hauteurDe(c.prevision?.entrees);
           const hSortieP = hauteurDe(c.prevision?.sorties);
-          const labelVisible = i % pasLabel === 0 || i === dernier || i === idxPivot;
+          // Une colonne PROJETÉE porte désormais une étiquette de valeur : sans son libellé
+          // de mois, « Rs 10 k » devient orphelin (« de quel mois ? »). La décimation C3 en
+          // sautait un sur deux — sur 6 mois + 3 projetés, Août perdait le sien alors qu'il
+          // affichait une valeur (constat de Visual QA). On force donc le libellé sur les
+          // colonnes projetées, mais SEULEMENT s'il tient dans la colonne : sur une fenêtre
+          // très dense (preset « tout »), le forcer produirait des libellés qui se
+          // chevauchent — pire que l'absence. Elles sont au plus 3 ou 4 (D3).
+          const texteMois = formaterMoisCourt(c.libelleMois);
+          const labelProjete =
+            c.realise === null && largeurEtiquette(texteMois) <= pas;
+          const labelVisible =
+            i % pasLabel === 0 || i === dernier || i === idxPivot || labelProjete;
           return (
             <g key={c.libelleMois}>
               {/* Entrée RÉALISÉE (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
@@ -358,6 +433,34 @@ function BarresMensuelles({
                 fill="var(--color-outflow)"
                 fillOpacity={OPACITE_PREVISION}
               />
+              {/* Substituts textuels des parts projetées illisibles (lot 2). Rendus APRÈS
+                  les barres pour rester au-dessus d'elles, et pour les DEUX sens : le
+                  défaut n'est pas propre aux sorties. Sur la colonne pivot, le point de
+                  départ est le sommet de la barre réalisée (prévision empilée, D2). */}
+              {c.prevision && (
+                <>
+                  <EtiquetteProjection
+                    valeur={c.prevision.entrees}
+                    devise={devise}
+                    sens="entree"
+                    hauteurRendue={hEntreeP}
+                    yBase={yAxe - hEntreeR}
+                    cx={cx}
+                    largeurBarre={largeurBarre}
+                    pas={pas}
+                  />
+                  <EtiquetteProjection
+                    valeur={c.prevision.sorties}
+                    devise={devise}
+                    sens="sortie"
+                    hauteurRendue={hSortieP}
+                    yBase={yAxe + hSortieR}
+                    cx={cx}
+                    largeurBarre={largeurBarre}
+                    pas={pas}
+                  />
+                </>
+              )}
               {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
                   court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
                   complet reste dans le tableau « Évolution mensuelle ». */}
@@ -373,7 +476,7 @@ function BarresMensuelles({
                   }
                   className="text-[11px]"
                 >
-                  {formaterMoisCourt(c.libelleMois)}
+                  {texteMois}
                 </text>
               )}
               {/* Sous-label de la colonne PIVOT (§3.5) — le second signal, TEXTUEL, du
@@ -440,6 +543,112 @@ function BarresMensuelles({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * SUBSTITUT TEXTUEL d'une barre projetée trop basse pour être lue (lot 2).
+ *
+ * ## Pourquoi du texte et pas une barre plus haute
+ * Le réalisé se compte en millions de MUR, les échéances saisies en milliers : à l'échelle
+ * commune, la barre projetée rend moins d'un pixel (0,23 px mesuré). Deux réponses étaient
+ * possibles — grossir la barre, ou changer de CANAL. Grossir (plancher de hauteur, échelle
+ * secondaire) rend le graphe plus joli et MOINS VRAI : deux valeurs d'un facteur 13
+ * finissent à la même hauteur. Ici la barre reste géométriquement exacte (quasi nulle) et
+ * la valeur passe par un canal qui ne dépend pas de l'échelle : elle est ÉCRITE.
+ *
+ * ## Ce que ça ne règle pas (et qu'il ne faut pas croire réglé)
+ * L'étiquette rend la valeur LISIBLE ; elle ne rend pas la comparaison HONNÊTE. Réalisé et
+ * prévision restent incommensurables (mesure exhaustive vs sous-ensemble déclaré) — c'est
+ * la mention de couverture sous le graphe qui porte cet avertissement, et c'est la sortie
+ * de la prévision hors de cet axe (option E) qui le résoudra.
+ *
+ * Rendu DANS le SVG, en unités de viewBox : le SVG est étiré (`w-full`), donc un
+ * positionnement en px CSS se décalerait de tout le facteur d'échelle.
+ */
+function EtiquetteProjection({
+  valeur,
+  devise,
+  sens,
+  hauteurRendue,
+  yBase,
+  cx,
+  largeurBarre,
+  pas,
+}: {
+  /** Chaîne décimale de la part PROJETÉE (jamais un float — règle 8). */
+  valeur: string;
+  devise: string;
+  sens: "entree" | "sortie";
+  /** Hauteur (px) que la barre rendrait — c'est elle qui décide s'il faut un substitut. */
+  hauteurRendue: number;
+  /**
+   * Ordonnée d'où part la part projetée : l'axe sur un mois futur, mais le SOMMET de la
+   * barre réalisée sur la colonne PIVOT (où la prévision est empilée, D2). Sans ce
+   * décalage, le tick du pivot se confondrait avec l'axe et l'étiquette se poserait
+   * par-dessus la barre réalisée.
+   */
+  yBase: number;
+  cx: number;
+  largeurBarre: number;
+  /** Largeur de la colonne — arbitre l'orientation de l'étiquette. */
+  pas: number;
+}) {
+  if (!estIllisible(hauteurRendue, estZero(valeur))) return null;
+
+  const texte = formatMontantCompact(valeur, devise);
+  const vertical = etiquetteVerticale(texte, pas);
+  const xCentre = cx + largeurBarre / 2;
+  const versLeHaut = sens === "entree";
+
+  // Point d'ancrage du texte, juste au-delà du tick, du bon côté de l'axe.
+  const yTick = versLeHaut ? yBase - EPAISSEUR_TICK_PX : yBase;
+  const yTexte = versLeHaut
+    ? yBase - EPAISSEUR_TICK_PX - ECART_ETIQUETTE_PX
+    : yBase + EPAISSEUR_TICK_PX + ECART_ETIQUETTE_PX;
+
+  return (
+    <g>
+      {/* Marqueur de PRÉSENCE : trait constant, sans `rx` — délibérément différent d'une
+          barre, pour ne pas se lire comme une hauteur proportionnelle. Chrome neutre
+          (`line-strong`), jamais une couleur de donnée : la teinte sémantique appartient
+          aux barres, et un trait de 2 px teinté en `outflow` ressemblerait à une sortie
+          minuscule alors qu'il ne représente AUCUNE grandeur. */}
+      <rect
+        x={cx}
+        y={yTick}
+        width={largeurBarre}
+        height={EPAISSEUR_TICK_PX}
+        fill="var(--color-line-strong)"
+      />
+      <text
+        x={xCentre}
+        y={yTexte}
+        textAnchor={vertical ? (versLeHaut ? "start" : "end") : "middle"}
+        dominantBaseline={vertical ? "middle" : versLeHaut ? "auto" : "hanging"}
+        // rotate(−90) fait lire le texte de bas en haut (convention des axes de dataviz).
+        // Avec `start` il part vers le haut depuis l'ancre, avec `end` il occupe l'espace
+        // en dessous : la même rotation sert donc aux deux sens.
+        transform={vertical ? `rotate(-90 ${xCentre} ${yTexte})` : undefined}
+        // Teinte SÉMANTIQUE du sens, pas l'atténuation `text-faint` du prévisionnel — deux
+        // raisons, l'une bloquante :
+        //  1. ACCESSIBILITÉ (§6.6) : `text-faint` (#8a8f9f) sur `surface-forecast`
+        //     (#efebdd) donne 2,70:1, sous le minimum AA de 4,5:1 pour du texte de 11 px.
+        //     `inflow-700`/`outflow-700` donnent 6,75:1 et 6,18:1 (mesuré au Visual QA).
+        //  2. LISIBILITÉ : quand une colonne porte une entrée ET une sortie toutes deux
+        //     illisibles, deux étiquettes grises se retrouvent de part et d'autre de l'axe
+        //     sans barre pour les distinguer — la couleur dit laquelle est laquelle.
+        // Conforme §3.1 : cette étiquette EST la donnée (elle remplace la barre), ce n'est
+        // pas du chrome. Même choix que les blocs du tooltip, y compris prévisionnels. Le
+        // statut « projeté » reste porté par le fond, le pointillé, la légende et la mention.
+        fill={
+          versLeHaut ? "var(--color-inflow-700)" : "var(--color-outflow-700)"
+        }
+        className="text-[11px] tabular-nums"
+      >
+        {texte}
+      </text>
+    </g>
   );
 }
 

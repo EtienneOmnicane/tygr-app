@@ -85,6 +85,77 @@ export function formatMontant(
 }
 
 /**
+ * Suffixes d'ordre de grandeur du format compact, du plus grand au plus petit.
+ * `chiffres` = longueur de partie entière à partir de laquelle le suffixe s'applique.
+ */
+const PALIERS_COMPACTS = [
+  { suffixe: "Md", chiffres: 10 },
+  { suffixe: "M", chiffres: 7 },
+  { suffixe: "k", chiffres: 4 },
+] as const;
+
+/**
+ * Formate un montant en COMPACT pour un contexte à largeur contrainte (étiquette de
+ * barre, axe) : `Rs 10 k`, `Rs 3,1 M`, `Rs 2,4 Md`, `Rs 850`.
+ *
+ * ## Pourquoi il vit ICI et pas dans le composant
+ * Règle 8 / audit ergonomie 2026-06-22 : la source de formatage des montants est UNIQUE.
+ * Un « petit format court » recodé dans un graphe est exactement la dette C8 qui a été
+ * tuée (trois formateurs de date parallèles).
+ *
+ * ## Il TRONQUE, il n'arrondit pas — et c'est un choix
+ * `999999` rend `999,9 k`, **jamais** `1 M`. Arrondir ferait afficher un palier que le
+ * montant n'a PAS atteint : sur un outil de trésorerie (seuils, covenants, découverts),
+ * « 1 M » pour 999 999,00 est le mauvais côté de l'approximation. La troncature ne peut
+ * que sous-estimer, jamais promettre. Corollaire assumé : le compact est APPROXIMATIF par
+ * construction — il est réservé aux contextes contraints, et le montant exact reste
+ * accessible (tooltip, tableau « Évolution mensuelle »), jamais remplacé par lui.
+ *
+ * ## Zéro arithmétique flottante
+ * Tout se joue par découpage de la CHAÎNE (longueur de la partie entière → palier ;
+ * premier chiffre du reste → décimale). Aucune division, donc aucun centime perdu — même
+ * sur un montant à 15 chiffres.
+ *
+ * @param montant chaîne décimale (peut être négative)
+ * @param devise code ISO — mêmes règles que `formatMontant` (symbole préfixe / ISO suffixe
+ *   / `""` = montant nu)
+ */
+export function formatMontantCompact(montant: string, devise: string): string {
+  const { negatif, entier, decimales } = decomposer(montant);
+
+  const palier = PALIERS_COMPACTS.find((p) => entier.length >= p.chiffres);
+
+  let corps: string;
+  if (palier === undefined) {
+    // < 1 000 : aucune abréviation possible sans perdre l'ordre de grandeur. On garde la
+    // partie entière telle quelle et on laisse tomber les centimes (contexte contraint).
+    corps = entier;
+  } else {
+    const rangDecimale = palier.chiffres - 1; // 3 pour k, 6 pour M, 9 pour Md
+    const tete = entier.slice(0, entier.length - rangDecimale);
+    const premiereDecimale = entier[entier.length - rangDecimale];
+    // La décimale n'apparaît que si elle porte de l'information : « 10 k », pas « 10,0 k ».
+    // `grouperMilliers` sur la tête couvre le cas extrême (> 10^12, tête à 4 chiffres) —
+    // improbable, mais il ne coûte rien et évite un « 1234 Md » non groupé.
+    corps =
+      premiereDecimale === "0"
+        ? `${grouperMilliers(tete)}${ESPACE_FINE}${palier.suffixe}`
+        : `${grouperMilliers(tete)},${premiereDecimale}${ESPACE_FINE}${palier.suffixe}`;
+  }
+
+  // Un zéro n'a jamais de signe (même règle que `formatMontant`, y compris pour "-0.00").
+  const estZeroCompact = entier === "0" && decimales === "00";
+  const nombre = `${estZeroCompact || !negatif ? "" : "−"}${corps}`;
+
+  const code = devise.trim();
+  if (code === "") return nombre;
+  const symbole = SYMBOLES_PREFIXE[code.toUpperCase()];
+  return symbole
+    ? `${symbole}${ESPACE_FINE}${nombre}`
+    : `${nombre}${ESPACE_FINE}${code}`;
+}
+
+/**
  * Symbole de préfixe d'une devise connue (`MUR`→`Rs`, `USD`→`$`, `EUR`→`€`), ou
  * `null` si inconnue (repli ISO suffixe). Sert à l'affichage multi-devises qui
  * sépare le symbole du corps numérique pour ALIGNER les virgules décimales —
