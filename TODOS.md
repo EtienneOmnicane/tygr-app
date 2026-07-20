@@ -102,6 +102,16 @@ Baseline Design Score B− (AI Slop A) ; 10 findings fixés en
 `fix/design-review-20260715`, les suivants DIFFÉRÉS. Aucun ne touche
 l'isolation/append-only/montants-exacts (sinon corrigé, pas consigné).
 
+- [ ] **DESIGN-PERIMETRE-LARGEUR1 (P2, effort ~0,25 j, 2026-07-16) — popover
+  « Vue / Rechercher un compte » trop étroit, titres tronqués.** Le sélecteur de
+  périmètre de la barre de vue (`src/components/shell/perimetre-switcher.tsx`, popover
+  ouvert depuis « Vue · N comptes ») a une largeur fixe qui coupe les noms d'entités/
+  titulaires (« AIRPORT HOTEL LTD - 1… », « OMNICANE AGRICULTU… »). Élargir le popover
+  (ou passer à une largeur fluide plafonnée + `title`/tooltip au survol) pour lire les
+  libellés en entier. Purement présentationnel, aucun changement serveur (la sélection
+  postée reste une liste de `bankAccountId`). Lié à UI-PERIMETRE-ACCORDEON1 (même
+  composant). **Déclencheur** : ce retour terrain (clawdy 2026-07-16) — à traiter à la
+  prochaine passe sur la barre de vue.
 - [ ] **DESIGN-MOBILE1 (P2, effort ~2-3 j, 2026-07-15) — mobile <768 non conçu.**
   La sidebar (232px, sans variante responsive) ne collapse pas ; à 375px le
   contenu s'écrase (graphe illisible, chiffres masqués). Spec §1.1 « <768 =
@@ -779,6 +789,52 @@ recon/plan).
   **Réflexe immédiat** : `git rev-parse --show-toplevel` AVANT toute commande git sensible
   (doit afficher `…/tygr-app`). **Déclencheur** : avant toute opération git destructive à la
   racine OU revue d'hygiène du poste. (Cohérent avec la directive mémoire « racine git ».)
+
+### Granularité de synchronisation — cadrage par banque (2026-07-16, cf. `PLAN-sync-granularite-par-banque.md`)
+
+Constat confirmé par le code : `synchroniserConnexionsAction` (zéro argument) rafraîchit
+**TOUTES** les connexions du workspace d'un coup. La primitive scopée-connexion
+`resynchroniserConnexion` (orchestration.ts:1557) existe déjà mais n'est câblée qu'à la
+réparation MFA. Amont : `POST /sync/{ConnectionId}` est la SEULE granularité de
+déclenchement (pas de sync par compte), cooldown 1/15 min/connexion.
+
+- [ ] **SYNC-COOLDOWN-WATERMARK1 (P1, effort ~0,25 j investigation, 2026-07-16) —
+  watermark cooldown non fiable + sync auto post-connexion.** Diagnostic Absa (2026-07-16) :
+  `next_sync_available_at = NULL` alors qu'un sync avait tourné, et un sync s'est déclenché
+  ~7 min après la connexion **sans déclenchement manuel**. Deux questions : (a) l'onboarding
+  auto-déclenche-t-il un premier sync ? (b) pourquoi `NextSyncAvailableAt` n'est-il pas
+  persisté ? **Bloquant** pour toute UI qui afficherait un compte-à-rebours de cooldown par
+  banque (sinon l'UI ment). **Déclencheur** : avant de câbler l'UI par-banque
+  (SYNC-GRANULARITE-BANQUE1), ou premier retour « le bouton reste grisé/actif à tort ».
+
+- [ ] **SYNC-GRANULARITE-BANQUE1 (P2, effort ~1–1,5 j, 2026-07-16) — synchronisation PAR
+  BANQUE (grain natif Omni-FI).** Exposer `resynchroniserConnexion` via une Server Action
+  utilisateur normale (`synchroniserUneConnexionAction(connectionId)`, zod uuid, RLS tenant,
+  gating `peutModifier`, hors-tenant → 404) + UI par carte de banque sur /banques (bouton +
+  pastille fraîcheur + cooldown). Garder le sync global sur le dashboard. **NE PAS** offrir
+  de refresh « par compte » (impossible amont — `POST /sync` est par connexion ; le « par
+  compte » se règle via `is_selected`, inclusion d'ingestion, déjà en base). Bénéfice réel :
+  ne plus verrouiller 15 min toutes les banques pour n'en rafraîchir qu'une. **Déclencheur** :
+  décision produit d'ouvrir le par-banque, APRÈS résolution de SYNC-COOLDOWN-WATERMARK1.
+
+### Prévisionnel / Scénarios / Ventilation tabulaire — benchmark FYGR (2026-07-16, cf. `PLAN-cadrage-scenario-previsionnel-fygr.md`)
+
+Benchmark des captures `docs/benchmarks/FYGR/` (vue tableau catégories × mois « Réalisé à
+date → Prévision », scénarios nommés what-if, échéances = factures Customers/Suppliers
+alimentant la prévision). ⚠️ La **playlist YouTube n'a pas pu être analysée** (limite
+outil) — cadrage sur captures seules ; visionnage humain requis pour les interactions non
+capturées. Chaîne de dépendances, pas un chantier unique → découpage en 4 incréments A→D.
+
+- [ ] **PROD-SCENARIO-FYGR1 (P2, CADRAGE POSÉ — décision produit requise, 2026-07-16) —
+  roadmap prévisionnel + scénarios en 4 incréments.** A = vue tableau du RÉALISÉ (cat × mois,
+  par devise) ; B = onglet Échéances (registre factures, répond à NAV-ECHEANCES1) ; C =
+  prévisionnel simple (dérivé des échéances) ; D = scénarios nommés. Décisions bloquantes
+  avant C/D : méthode de projection, matrice par devise vs total converti (DASH-FX1),
+  nettage des virements internes, granularité entité. Pré-requis transverse : axe CATÉGORIE
+  (`categorySummary`, PROD-GRAPHS-FYGR1). **Déclencheur** : arbitrage produit sur l'ordre
+  A→D et la méthode de projection ; OU dépôt de captures FYGR complémentaires (édition
+  scénario / saisie prévision). Absorbe la question métier de **NAV-ECHEANCES1** (Échéances =
+  factures à venir qui nourrissent la prévision).
 
 ### Chantiers PRODUIT à cadrer (pas encore lancés, 2026-06-30)
 
@@ -2926,6 +2982,29 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   compte désormais 3 occurrences. À trancher en une fois : soit §3.4 s'applique (fond
   `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
   **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
+
+- [ ] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
+  échecs de scraping) tombent sur le message générique : on ferme le widget sans dire
+  POURQUOI.** Constaté en sandbox sur « Absa Pro » : la connexion passe le login
+  (`link-connect` 201) puis le job de sync bascule sur la branche `↘ FAILED` de la
+  machine SyncJob (`docs/documentation_api.md` §Sync Engine) ; le CDN émet
+  `onError({ code: "LOGIN_FAILED" })` (**vérifié console 2026-07-16** :
+  `[widget Omni-FI] échec LOGIN_FAILED`, `omnifi-link-launcher.tsx:271`). Or
+  `LOGIN_FAILED` est ABSENT de `MESSAGES_PAR_CODE` → repli sur `MESSAGE_PAR_DEFAUT`
+  (« La connexion bancaire a échoué. Réessayez dans un instant. »). L'utilisateur ne
+  sait pas que ce sont ses IDENTIFIANTS : il réessaie à l'identique et échoue en
+  boucle. **Fix envisagé** : mapper `LOGIN_FAILED` sur un message actionnable
+  non-énumérant (p.ex. « Identifiants bancaires incorrects — vérifiez-les et
+  réessayez. ») ET auditer les autres codes terminaux du Sync Engine (scraper/timeout)
+  pour ne pas laisser d'angle mort ; garder la branche par défaut OBLIGATOIRE (le CDN
+  ment sur l'union de types, cf. JSDoc `messageErreurWidget`). Ne JAMAIS afficher/logger
+  le `message` amont (anglais, PII bancaire possible — règle 8) : on mappe le CODE.
+  **Rappel sandbox** : seuls `sandbox@example.com` / `sandbox.mfa@example.com` sont
+  acceptés — un mauvais login y est attendu (mais le message doit quand même être juste).
+  Recoupe **WIDGET-ERR2** (ces codes ne sont visibles qu'en console client → invisibles
+  en prod sans télémétrie serveur) et **WIDGET-ERR3** (le canal d'erreur doit aussi
+  respecter §3.4 : fond + icône). **Déclencheur** : avant la démo BOM Innov8, OU prochain
+  passage sur `/banques`.
 
 ### Epic 8 — Intelligence Métier (interview Accountant Omnicane/OL, 2026-06-11)
 - [ ] **FEAT-8.1 Moteur de catégorisation auto (Nature/Sous-nature + score de
