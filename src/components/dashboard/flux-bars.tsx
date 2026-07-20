@@ -35,7 +35,18 @@ import { useState } from "react";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
-import { formatMontant, estNegatif, estZero } from "@/lib/format-montant";
+import {
+  formatMontant,
+  formatMontantCompact,
+  estNegatif,
+  estZero,
+} from "@/lib/format-montant";
+import {
+  ECART_ETIQUETTE_PX,
+  EPAISSEUR_TICK_PX,
+  estIllisible,
+  etiquetteVerticale,
+} from "@/components/dashboard/flux-etiquettes";
 import {
   composerColonnes,
   maxFenetreColonnes,
@@ -410,6 +421,34 @@ function BarresMensuelles({
                 fill="var(--color-outflow)"
                 fillOpacity={OPACITE_PREVISION}
               />
+              {/* Substituts textuels des parts projetées illisibles (lot 2). Rendus APRÈS
+                  les barres pour rester au-dessus d'elles, et pour les DEUX sens : le
+                  défaut n'est pas propre aux sorties. Sur la colonne pivot, le point de
+                  départ est le sommet de la barre réalisée (prévision empilée, D2). */}
+              {c.prevision && (
+                <>
+                  <EtiquetteProjection
+                    valeur={c.prevision.entrees}
+                    devise={devise}
+                    sens="entree"
+                    hauteurRendue={hEntreeP}
+                    yBase={yAxe - hEntreeR}
+                    cx={cx}
+                    largeurBarre={largeurBarre}
+                    pas={pas}
+                  />
+                  <EtiquetteProjection
+                    valeur={c.prevision.sorties}
+                    devise={devise}
+                    sens="sortie"
+                    hauteurRendue={hSortieP}
+                    yBase={yAxe + hSortieR}
+                    cx={cx}
+                    largeurBarre={largeurBarre}
+                    pas={pas}
+                  />
+                </>
+              )}
               {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
                   court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
                   complet reste dans le tableau « Évolution mensuelle ». */}
@@ -492,6 +531,99 @@ function BarresMensuelles({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * SUBSTITUT TEXTUEL d'une barre projetée trop basse pour être lue (lot 2).
+ *
+ * ## Pourquoi du texte et pas une barre plus haute
+ * Le réalisé se compte en millions de MUR, les échéances saisies en milliers : à l'échelle
+ * commune, la barre projetée rend moins d'un pixel (0,23 px mesuré). Deux réponses étaient
+ * possibles — grossir la barre, ou changer de CANAL. Grossir (plancher de hauteur, échelle
+ * secondaire) rend le graphe plus joli et MOINS VRAI : deux valeurs d'un facteur 13
+ * finissent à la même hauteur. Ici la barre reste géométriquement exacte (quasi nulle) et
+ * la valeur passe par un canal qui ne dépend pas de l'échelle : elle est ÉCRITE.
+ *
+ * ## Ce que ça ne règle pas (et qu'il ne faut pas croire réglé)
+ * L'étiquette rend la valeur LISIBLE ; elle ne rend pas la comparaison HONNÊTE. Réalisé et
+ * prévision restent incommensurables (mesure exhaustive vs sous-ensemble déclaré) — c'est
+ * la mention de couverture sous le graphe qui porte cet avertissement, et c'est la sortie
+ * de la prévision hors de cet axe (option E) qui le résoudra.
+ *
+ * Rendu DANS le SVG, en unités de viewBox : le SVG est étiré (`w-full`), donc un
+ * positionnement en px CSS se décalerait de tout le facteur d'échelle.
+ */
+function EtiquetteProjection({
+  valeur,
+  devise,
+  sens,
+  hauteurRendue,
+  yBase,
+  cx,
+  largeurBarre,
+  pas,
+}: {
+  /** Chaîne décimale de la part PROJETÉE (jamais un float — règle 8). */
+  valeur: string;
+  devise: string;
+  sens: "entree" | "sortie";
+  /** Hauteur (px) que la barre rendrait — c'est elle qui décide s'il faut un substitut. */
+  hauteurRendue: number;
+  /**
+   * Ordonnée d'où part la part projetée : l'axe sur un mois futur, mais le SOMMET de la
+   * barre réalisée sur la colonne PIVOT (où la prévision est empilée, D2). Sans ce
+   * décalage, le tick du pivot se confondrait avec l'axe et l'étiquette se poserait
+   * par-dessus la barre réalisée.
+   */
+  yBase: number;
+  cx: number;
+  largeurBarre: number;
+  /** Largeur de la colonne — arbitre l'orientation de l'étiquette. */
+  pas: number;
+}) {
+  if (!estIllisible(hauteurRendue, estZero(valeur))) return null;
+
+  const texte = formatMontantCompact(valeur, devise);
+  const vertical = etiquetteVerticale(texte, pas);
+  const xCentre = cx + largeurBarre / 2;
+  const versLeHaut = sens === "entree";
+
+  // Point d'ancrage du texte, juste au-delà du tick, du bon côté de l'axe.
+  const yTick = versLeHaut ? yBase - EPAISSEUR_TICK_PX : yBase;
+  const yTexte = versLeHaut
+    ? yBase - EPAISSEUR_TICK_PX - ECART_ETIQUETTE_PX
+    : yBase + EPAISSEUR_TICK_PX + ECART_ETIQUETTE_PX;
+
+  return (
+    <g>
+      {/* Marqueur de PRÉSENCE : trait constant, sans `rx` — délibérément différent d'une
+          barre, pour ne pas se lire comme une hauteur proportionnelle. Chrome neutre
+          (`line-strong`), jamais une couleur de donnée : la teinte sémantique appartient
+          aux barres, et un trait de 2 px teinté en `outflow` ressemblerait à une sortie
+          minuscule alors qu'il ne représente AUCUNE grandeur. */}
+      <rect
+        x={cx}
+        y={yTick}
+        width={largeurBarre}
+        height={EPAISSEUR_TICK_PX}
+        fill="var(--color-line-strong)"
+      />
+      <text
+        x={xCentre}
+        y={yTexte}
+        textAnchor={vertical ? (versLeHaut ? "start" : "end") : "middle"}
+        dominantBaseline={vertical ? "middle" : versLeHaut ? "auto" : "hanging"}
+        // rotate(−90) fait lire le texte de bas en haut (convention des axes de dataviz).
+        // Avec `start` il part vers le haut depuis l'ancre, avec `end` il occupe l'espace
+        // en dessous : la même rotation sert donc aux deux sens.
+        transform={vertical ? `rotate(-90 ${xCentre} ${yTexte})` : undefined}
+        fill="var(--color-text-faint)"
+        className="text-[11px] tabular-nums"
+      >
+        {texte}
+      </text>
+    </g>
   );
 }
 

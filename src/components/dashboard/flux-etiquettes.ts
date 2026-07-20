@@ -52,6 +52,39 @@ export function largeurEtiquette(texte: string): number {
 }
 
 /**
+ * Épaisseur (px) du TICK qui remplace une barre trop basse.
+ *
+ * Ce n'est PAS un plancher de hauteur de barre (explicitement écarté, §4.3 du plan) : un
+ * plancher ferait rendre la même hauteur à des valeurs d'un facteur 13, donc le graphe
+ * AFFIRMERAIT quelque chose de faux. Le tick est une forme DIFFÉRENTE d'une barre — un
+ * trait constant, jamais arrondi, qui ne prétend à aucune proportion. Il dit « il y a
+ * quelque chose ici », et c'est l'étiquette qui dit quoi.
+ */
+export const EPAISSEUR_TICK_PX = 2;
+
+/** Écart (px) entre le tick et son étiquette, pour que les deux ne se touchent pas. */
+export const ECART_ETIQUETTE_PX = 4;
+
+/**
+ * Marge (px) exigée de part et d'autre d'une étiquette horizontale. En dessous, elle
+ * mordrait sur les colonnes voisines et le rendu bascule en vertical.
+ */
+export const MARGE_ETIQUETTE_PX = 6;
+
+/**
+ * Vrai si l'étiquette doit être rendue à la VERTICALE (rotation −90°, lecture de bas en
+ * haut) faute de largeur de colonne.
+ *
+ * La bascule garantit la contrainte posée par Etienne — « lisible sur toutes les fenêtres » :
+ * une étiquette verticale n'occupe que la hauteur de sa police (~11 px), donc elle tient
+ * même sur le preset « tout » (jusqu'à ~39 colonnes, soit ~28 px par colonne), là où
+ * `Rs 10 k` à l'horizontale (~45 px) déborderait sur ses voisines.
+ */
+export function etiquetteVerticale(texte: string, largeurColonne: number): boolean {
+  return largeurEtiquette(texte) > largeurColonne - MARGE_ETIQUETTE_PX * 2;
+}
+
+/**
  * Vrai si la valeur EXISTE (non nulle) mais que sa barre est trop basse pour être lue —
  * le cas qui justifie une étiquette de substitution.
  *
