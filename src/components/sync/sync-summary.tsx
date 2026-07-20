@@ -45,6 +45,7 @@ import Link from "next/link";
 
 import type { EtatFinalisation } from "@/app/(workspace)/banques/actions";
 import { registreSynchro } from "@/components/sync/registre-synchro";
+import { LoaderSynchro } from "@/components/sync/loader-synchro";
 import { Callout } from "@/components/ui/states/callout";
 
 /** Cible commune des gestes de réparation : le parcours de connexion vit sur /banques. */
@@ -117,12 +118,14 @@ export function SyncSummary({
       className="flex max-w-2xl flex-col gap-2"
     >
       {/* EN COURS — remplace tout le reste : proposer « Reconnecter » pour un état
-          qu'on est justement en train de recalculer serait trompeur. */}
-      {enCours && (
-        <p role="status" className="text-sm text-text-muted">
-          Synchronisation en cours…
-        </p>
-      )}
+          qu'on est justement en train de recalculer serait trompeur.
+
+          Loader INDÉTERMINÉ + durée annoncée (cf. `LoaderSynchro`) : la synchro est
+          serveur-synchrone et dure couramment plusieurs dizaines de secondes ; la ligne
+          de texte immobile qui vivait ici se lisait comme un écran figé. Ni pourcentage
+          ni paliers minutés — l'amont n'expose aucune progression, les inventer
+          mentirait au pire moment. */}
+      {enCours && <LoaderSynchro />}
 
       {/* Ordre FIXE (sinon il dépendrait de l'ordre des champs et bougerait d'une
           synchro à l'autre) : le RÉSULTAT du geste d'abord — c'est ce que

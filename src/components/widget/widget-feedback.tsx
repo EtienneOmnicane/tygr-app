@@ -30,6 +30,7 @@ import Link from "next/link";
 import { cn } from "@/components/ui/states/primitives";
 import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
+import { LoaderSynchro } from "@/components/sync/loader-synchro";
 import {
   nommerToutes,
   resoudreNomsBanques,
@@ -81,6 +82,7 @@ export function WidgetFeedback({
   widgetOuvert,
   aReconnecter,
   connexions,
+  synchroEnCours,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
@@ -153,6 +155,12 @@ export function WidgetFeedback({
    * par la route de démo, et ce qui rend la dégradation explicite plutôt qu'accidentelle.
    */
   connexions?: ConnexionNommable[];
+  /**
+   * Une SYNCHRONISATION est en vol → loader indéterminé + durée annoncée, en TÊTE du
+   * feedback. Volontairement distinct d'une finalisation ou d'une réparation en cours :
+   * annoncer « Synchronisation en cours » pendant une réparation MFA serait faux.
+   */
+  synchroEnCours?: boolean;
 }) {
   // Traduction id amont → nom, faite ICI parce que c'est le seul endroit qui dispose des
   // deux moitiés. `null` = au moins une banque non nommable → on garde la formulation
@@ -163,6 +171,11 @@ export function WidgetFeedback({
   );
   return (
     <>
+      {/* ATTENTE en tête : c'est ce qui se passe MAINTENANT. Les messages en dessous
+          décrivent le retour PRÉCÉDENT — ils restent lisibles (on ne les vide pas au
+          clic, cf. le reste du flux), mais ils ne sont plus le sujet. */}
+      {synchroEnCours && <LoaderSynchro />}
+
       {erreurDemarrage && (
         <Callout severite="danger" role="alert">
           {erreurDemarrage}

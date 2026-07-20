@@ -114,7 +114,15 @@ export function BankConnectWidget({
   );
   const [finalisation, setFinalisation] =
     useState<EtatFinalisationUI>(ETAT_FINALISATION_VIDE);
-  const [, startFinalisation] = useTransition();
+  // Le pending de la transition était JETÉ (`const [, startFinalisation]`). Conséquence :
+  // sur cet écran, « Synchroniser mes comptes » restait cliquable pendant toute la durée
+  // du vol — l'invariant « un seul parcours à la fois », pourtant énoncé pour les autres
+  // actions, ne s'appliquait pas à celle-ci. On le récupère.
+  const [travailEnCours, startFinalisation] = useTransition();
+  // Une SYNCHRO est en vol — distinct de `travailEnCours`, qui couvre aussi la
+  // finalisation et la réparation. Seule la synchro mérite le loader dédié : afficher
+  // « Synchronisation en cours » pendant une réparation MFA serait faux.
+  const [synchroEnVol, setSynchroEnVol] = useState(false);
   // Le LinkToken courant monte le launcher. `ferme` réarme après sortie/succès.
   const [ferme, setFerme] = useState(false);
   // Verrou anti-double-déclenchement : une fois la redirection lancée, on neutralise
@@ -190,14 +198,22 @@ export function BankConnectWidget({
     // échec du widget (c'est le repli documenté ci-dessus). Sans cette purge, un succès
     // de synchro s'afficherait EN MÊME TEMPS que le rouge de l'échec précédent.
     setErreurWidget(null);
+    setSynchroEnVol(true);
     startFinalisation(async () => {
-      const r = await synchroniserConnexionsAction();
-      setFinalisation(r);
-      // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
-      // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
-      setReparation(r.reparation ?? []);
-      // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
-      setAReconnecter(r.aReconnecter ?? []);
+      try {
+        const r = await synchroniserConnexionsAction();
+        setFinalisation(r);
+        // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
+        // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
+        setReparation(r.reparation ?? []);
+        // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
+        setAReconnecter(r.aReconnecter ?? []);
+      } finally {
+        // `finally` et pas une ligne de fin : si l'action rejette (panne réseau avant
+        // même le mapping S2), un loader resté allumé donnerait une synchro éternelle,
+        // avec le bouton désarmé — l'écran figé qu'on cherche justement à supprimer.
+        setSynchroEnVol(false);
+      }
     });
   }
 
@@ -338,7 +354,10 @@ export function BankConnectWidget({
               Boolean(tokenActif) ||
               redirection ||
               Boolean(repair) ||
-              repairEnCours
+              repairEnCours ||
+              // Même invariant : pendant une finalisation/synchro/réparation en vol,
+              // ouvrir un nouveau parcours de connexion démonterait l'état en cours.
+              travailEnCours
             }
             className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
               px-4 text-sm font-semibold text-text-onink transition-colors
@@ -366,7 +385,11 @@ export function BankConnectWidget({
             // Cohérence de l'invariant « un seul parcours à la fois » : pendant que le
             // LinkToken est en vol, `tokenActif` est encore null — sans ce terme, c'était
             // la SEULE action à échapper à l'invariant.
-            demarrageEnCours
+            demarrageEnCours ||
+            // …et pendant que l'action tourne. Sans ce terme, un second clic relançait
+            // une synchro par-dessus la première : deux vols concurrents dont le dernier
+            // retour gagne, sur une action que l'amont throttle par ailleurs à 1/15 min.
+            travailEnCours
           }
           title="Relit vos connexions chez votre banque et met à jour vos comptes (y compris ceux qui n’apparaîtraient pas encore)."
           className="inline-flex h-10 items-center gap-1.5 rounded-control px-2 text-sm
@@ -380,6 +403,10 @@ export function BankConnectWidget({
       </div>
 
       <WidgetFeedback
+        // Une synchro est en vol : loader indéterminé + durée annoncée, comme sur le
+        // dashboard. Les deux écrans appellent la MÊME action — ils doivent dire la même
+        // chose de l'attente, sinon le même geste se lit différemment selon l'endroit.
+        synchroEnCours={synchroEnVol}
         erreurDemarrage={demarrage.erreur}
         erreurWidget={erreurWidget}
         erreurFinalisation={finalisation.erreur}
