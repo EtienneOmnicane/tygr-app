@@ -33,6 +33,26 @@ contrat de Server Action touché, aucune requête ajoutée.
   (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».
   **Déclencheur** : post-démo, après l'anomalie cooldown.
 
+- [ ] **WIDGET-REJET-TRANSPORT1 (P1, effort ~1 j, 2026-07-20) — un rejet de TRANSPORT sur
+  le chemin nominal laisse l'utilisateur sans message** (cross-review 8/10). **Quoi** :
+  `bank-connect-widget.tsx` contient quatre blocs `startFinalisation(async …)`. Deux
+  (`synchroniser`, `lancerReparation`) ont reçu un `try/finally` qui libère leur verrou ;
+  les deux autres — `finaliser` (le chemin NOMINAL d'après-widget) et `apresReparation`
+  (après OTP) — n'ont rien. Si l'appel REJETTE au transport (Wi-Fi coupé, 500 sur
+  l'endpoint de Server Action), le `try/catch` interne de l'action ne peut rien : il ne
+  couvre que son corps. `setFerme(true)` a déjà tourné, `setFinalisation` ne tourne
+  jamais → widget fermé, aucun message, après une connexion bancaire réussie.
+  **Pourquoi ce n'est PAS corrigé par un simple `catch`** : c'est précisément ce que j'ai
+  essayé, et il faut le REFUSER — une session expirée lève `NonAuthentifieError` avant le
+  try de l'action et arriverait donc dans ce `catch`, où elle se déguiserait en
+  « Réessayez dans un instant », un conseil qui ne peut pas aboutir. Le correctif propre
+  demande de DISCRIMINER l'échec de transport de l'échec d'authentification, ce que le
+  client ne sait pas faire aujourd'hui (Next masque les erreurs de Server Action en
+  production). **Piste** : faire porter la distinction par la couche action (retour typé
+  plutôt qu'exception pour l'auth), ou une frontière d'erreur dédiée au widget.
+  **Priorité P1** : c'est le parcours de démo, et l'échec est totalement muet.
+  **Déclencheur** : avant la première mise en production du parcours de connexion.
+
 - [ ] **NUDGE-VISION-ENTITE1 (P1, effort ~1 j, 2026-07-20) — l'invite post-connexion est
   ÉTOUFFÉE exactement dans le cas qu'elle doit couvrir** (cross-review 7/10). **Quoi** :
   `DashboardContent` retourne l'empty state global quand `comptes.length === 0`, 73 lignes
