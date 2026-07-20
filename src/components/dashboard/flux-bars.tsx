@@ -35,7 +35,7 @@ import { useState } from "react";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
-import { formatMontant, estNegatif } from "@/lib/format-montant";
+import { formatMontant, estNegatif, estZero } from "@/lib/format-montant";
 import {
   composerColonnes,
   maxFenetreColonnes,
@@ -100,6 +100,10 @@ export function FluxBarres({
   const ilExisteAutresDevises = colonnes.some(
     (c) => c.realise?.autresDevises || c.prevision?.autresDevises,
   );
+  // Une zone prévisionnelle est rendue dès qu'une colonne porte une projection — y compris
+  // quand toutes ses valeurs sont à zéro : la mention de couverture qualifie la ZONE, pas
+  // les montants qu'elle contient.
+  const ilExistePrevision = colonnes.some((c) => c.prevision !== null);
 
   if (aucunMouvement) {
     return (
@@ -129,10 +133,23 @@ export function FluxBarres({
         devise={devise}
         libellePeriode={libellePeriode}
       />
+      {/* MENTION DE COUVERTURE (lot 1) — la note la plus importante de la carte.
+          Le réalisé est une MESURE EXHAUSTIVE (tout ce qui a transité en banque) ; la
+          prévision est un SOUS-ENSEMBLE DÉCLARÉ (les seules échéances saisies à la main).
+          Sans cette phrase, une prévision de faible montant à côté de mois réalisés se lit
+          « la trésorerie s'effondre » — un faux constat produit par la mise en regard
+          elle-même, qu'aucun habillage de la zone ne corrige. Libellé validé par Etienne
+          (2026-07-20) ; ne pas l'adoucir sans arbitrage. */}
+      {ilExistePrevision && (
+        <p className="mt-3 text-[11px] text-text-faint">
+          Prévision : échéances saisies uniquement — partielle, non comparable aux mois
+          réalisés.
+        </p>
+      )}
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise — RÉALISÉE
           ou PROJETÉE (une échéance en USD n'est pas plus additionnable qu'une transaction). */}
       {ilExisteAutresDevises && (
-        <p className="mt-3 text-[11px] text-text-faint">
+        <p className="mt-2 text-[11px] text-text-faint">
           Certains mois comportent aussi des mouvements ou des échéances dans d’autres
           devises, non additionnés ici (affichage en {devise}).
         </p>
@@ -228,6 +245,23 @@ function BarresMensuelles({
   const hauteurZone = Math.max(hauteur - bandeLabels, 0);
 
   const xFrontiere = premierFutur >= 0 ? premierFutur * pas : null;
+
+  // ZONE FUTURE MUETTE (§5.4) — la zone existe mais n'a AUCUNE barre à dessiner. Sans
+  // message, elle rend un aplat beige nu, que l'œil lit « la donnée n'a pas chargé » et non
+  // « il n'y a rien de prévu ». Trois situations à ne pas confondre, dont deux arrivent ici :
+  //  - `prevision === null` (D4, fenêtre passée) → aucune zone : traité en amont, pas ici ;
+  //  - colonnes à zéro, aucune autre devise → il n'y a réellement aucune échéance ;
+  //  - colonnes à zéro PARCE QUE les échéances sont dans une autre devise → dire « aucune
+  //    échéance » serait un FAUX constat : la donnée existe, elle n'est simplement pas
+  //    convertie (DASH-FX1, aucune FX inventée).
+  const colonnesFutures = premierFutur >= 0 ? colonnes.slice(premierFutur) : [];
+  const zoneFutureMuette =
+    colonnesFutures.length > 0 &&
+    colonnesFutures.every(
+      (c) =>
+        estZero(c.prevision?.entrees ?? "0") && estZero(c.prevision?.sorties ?? "0"),
+    );
+  const zoneFutureAutreDevise = colonnesFutures.some((c) => c.prevision?.autresDevises);
   // Ligne des libellés de mois : remontée d'un cran quand le pivot porte son sous-label.
   const yLabelMois = hauteur - (idxPivot >= 0 ? 20 : 6);
 
@@ -308,6 +342,24 @@ function BarresMensuelles({
             strokeWidth={1}
             strokeDasharray="3 3"
           />
+        )}
+        {/* Message de zone muette (§5.4). Rendu DANS le SVG, en unités de viewBox : le SVG
+            est étiré (`w-full`), donc un positionnement en px CSS se décalerait de tout le
+            facteur d'échelle. Posé AVANT les barres — sur une zone muette il n'y en a
+            aucune, l'ordre n'a donc pas d'incidence, mais il reste sous les zones de hit. */}
+        {xFrontiere !== null && zoneFutureMuette && (
+          <text
+            x={xFrontiere + (largeur - xFrontiere) / 2}
+            y={yAxe}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill="var(--color-text-faint)"
+            className="text-[11px]"
+          >
+            {zoneFutureAutreDevise
+              ? "Échéances dans une autre devise"
+              : "Aucune échéance sur ces mois"}
+          </text>
         )}
         {colonnes.map((c, i) => {
           const cx = i * pas + (pas - largeurBarre) / 2;
