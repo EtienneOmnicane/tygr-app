@@ -45,8 +45,9 @@ import { DashboardShell } from "@/components/shell/dashboard-shell";
 import { DashboardEmptyState } from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
-import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { SyncButton } from "@/components/dashboard/sync-button";
+import { SynchroProvider } from "@/components/sync/sync-contexte";
+import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -145,32 +146,40 @@ export function DashboardContent({
 
   return (
     <DashboardShell>
-      <div className="flex flex-col gap-6">
-        {/* 1. EN-TÊTE — titre + sous-titre à gauche ; fraîcheur du solde +
-            « Synchroniser » à droite (repris de l'ancienne carte SOLDE : on
-            rafraîchit là où on lit l'âge de la donnée). Pas de flex-wrap sur le
-            titre lui-même ; le cluster droit s'enroule sous lg si nécessaire. */}
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+      <SynchroProvider>
+        <div className="flex flex-col gap-6">
+        {/* 1. EN-TÊTE — titre + sous-titre à gauche, « Synchroniser » à droite.
+            PAS de `flex-wrap` (CLAUDE.md § Intégration UI : on CONDENSE sous le
+            breakpoint, on n'enroule jamais un header). La condensation se fait par
+            `min-w-0` + `truncate` sur le bloc de titre — seuls des LIBELLÉS tronquent,
+            jamais un chiffre — et `shrink-0` sur l'action, qui reste toujours atteignable.
+            La pastille de fraîcheur a quitté ce cluster : elle porte désormais la ligne
+            d'état de `SyncSummary` ci-dessous, là où se lit le résultat de la synchro
+            (la dupliquer aux deux endroits n'aurait rien dit de plus). */}
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
             <h1 className="text-[26px] font-bold leading-tight tracking-tight text-text">
               Trésorerie
             </h1>
-            <p className="mt-1 text-sm text-text-muted">
+            <p className="mt-1 truncate text-sm text-text-muted">
               {libellePeriode} · {nbComptes} compte{nbComptes > 1 ? "s" : ""} connecté
               {nbComptes > 1 ? "s" : ""}
             </p>
           </div>
-          <div className="flex items-center gap-4">
-            {fraicheur && (
-              <BalanceFreshnessPill
-                fraicheur={fraicheur}
-                compteLabel={synchro?.compteLabel}
-                ctaReconnexion={false}
-              />
-            )}
+          <div className="flex shrink-0 items-center">
             <SyncButton role={role} />
           </div>
         </header>
+
+        {/* 1bis. COMPTE RENDU DE SYNCHRO — ligne d'état (pastille de fraîcheur +
+            résultat serveur) puis callouts actionnables. Aligné à gauche, largeur
+            bornée. Monté en permanence pour que le bloc ne s'effondre pas entre deux
+            synchros (sinon toute la grille ci-dessous saute à chaque clic). */}
+        <SyncSummaryConnecte
+          fraicheur={fraicheur}
+          compteLabel={synchro?.compteLabel}
+          role={role}
+        />
 
         {/* 2. RANGÉE KPI « Soldes par devise » — horizontale (une carte par devise,
             devise de base en ink). Remplace la carte SOLDE verticale du side-panel. */}
@@ -236,7 +245,8 @@ export function DashboardContent({
             </p>
           </StateCard>
         )}
-      </div>
+        </div>
+      </SynchroProvider>
     </DashboardShell>
   );
 }

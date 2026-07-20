@@ -19,7 +19,8 @@ import {
   DashboardErrorState,
   DashboardLoadingState,
 } from "@/components/dashboard/states";
-import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
+import type { Fraicheur } from "@/lib/format-date";
+import { SyncSummary } from "@/components/sync/sync-summary";
 
 type EtatDemo = "loading" | "empty" | "error" | "sync";
 
@@ -27,7 +28,7 @@ const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "loading", label: "Chargement" },
   { id: "empty", label: "Vide" },
   { id: "error", label: "Erreur" },
-  { id: "sync", label: "Bouton Synchroniser" },
+  { id: "sync", label: "Compte rendu de synchro" },
 ];
 
 export default function DashboardStatesDemoPage() {
@@ -105,70 +106,127 @@ export default function DashboardStatesDemoPage() {
 }
 
 /**
- * Vitrine FIGÉE des états du bouton « Synchroniser » (L8a) — reproduit le markup de
- * `SyncButton` dans chacun de ses 5 états + le cas VIEWER, pour la capture headless
- * (les états réels sont pilotés par le retour de la Server Action, non injectable en
- * démo — même approche que `widget-feedback.tsx` monté figé). Couleurs : succès
- * `text-success`, erreur `text-danger` (jamais un rouge de donnée, §3.4) ; le bouton
- * est un lien d'action `text-primary` (§2.3). Aucune couleur de donnée ici.
+ * Vitrine des états du COMPTE RENDU de synchro — monte le VRAI `SyncSummary` avec des
+ * retours figés, pour la capture headless (Gate 4).
+ *
+ * Avant, cette vitrine REPRODUISAIT le markup de `sync-button.tsx`. Ça a fini par
+ * mentir : elle affichait encore « Comptes à jour. », littéral supprimé du vrai
+ * composant par la PR #202 (c'était précisément le faux message de victoire corrigé).
+ * `SyncSummary` étant pur et piloté par props, la copie n'a plus lieu d'être — ce qui
+ * est capturé ici est ce qui est rendu en production.
+ *
+ * `onRelancer` est fourni mais inerte (aucune Server Action hors du workspace).
  */
 function DemoSyncStates() {
+  const fraicheurFraiche: Fraicheur = {
+    niveau: "frais",
+    libelle: "il y a 12 min",
+    horodatageAbsolu: "20/07/2026 à 09:42",
+  };
+  const fraicheurPerimee: Fraicheur = {
+    niveau: "perime",
+    libelle: "il y a 3 j",
+    horodatageAbsolu: "17/07/2026 à 08:15",
+  };
+
   return (
     <div className="rounded-card bg-surface-card p-6 shadow-card">
       <h2 className="mb-4 text-base font-semibold text-text">
-        Bouton « Synchroniser » — états
+        Compte rendu de synchronisation — états
       </h2>
-      <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
-        <CasSync titre="Repos (MANAGER/ADMIN)">
-          <BoutonRepos />
+      <div className="flex flex-col gap-6">
+        <CasSync titre="Repos (jamais synchronisé dans cette session)">
+          <SyncSummary fraicheur={fraicheurFraiche} compteLabel="MCB" retour={null} />
         </CasSync>
+
         <CasSync titre="En cours">
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary opacity-48">
-            <IconeSynchro className="h-3.5 w-3.5 motion-safe:animate-spin" />
-            Synchronisation…
-          </span>
+          <SyncSummary
+            fraicheur={fraicheurFraiche}
+            compteLabel="MCB"
+            retour={null}
+            enCours
+          />
         </CasSync>
-        <CasSync titre="Succès">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-success">Comptes à jour.</p>
-          </div>
+
+        <CasSync titre="Succès (aucune réserve)">
+          <SyncSummary
+            fraicheur={fraicheurFraiche}
+            compteLabel="MCB"
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 3 banque(s) à jour, 8 compte(s) mis à jour. 142 transaction(s) importée(s).",
+            }}
+          />
         </CasSync>
-        <CasSync titre="Erreur">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-danger">Action non autorisée.</p>
-          </div>
+
+        <CasSync titre="Partiel (scrape encore en cours chez la banque)">
+          <SyncSummary
+            fraicheur={fraicheurFraiche}
+            compteLabel="MCB"
+            peutRelancer
+            onRelancer={() => {}}
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 2 banque(s) à jour, 5 compte(s) mis à jour. 1 banque(s) sont encore en cours de synchronisation — les transactions déjà disponibles ont été importées ; relancez dans quelques minutes pour récupérer le reste.",
+              incomplet: true,
+            }}
+          />
         </CasSync>
-        <CasSync titre="Réparation MFA">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-text-muted">
-              Une vérification de sécurité est requise.{" "}
-              <span className="font-semibold text-primary underline">
-                Reconnecter
-              </span>
-            </p>
-          </div>
+
+        <CasSync titre="Banques à reconnecter (accès désaligné + réparation MFA)">
+          <SyncSummary
+            fraicheur={fraicheurPerimee}
+            compteLabel="ABSA"
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 1 banque(s) à jour, 2 compte(s) mis à jour. 1 banque(s) doivent être reconnectées — leur accès n’est plus valide.",
+              aReconnecter: [{ connectionId: "cx-demo-1" }],
+            }}
+          />
         </CasSync>
-        <CasSync titre="VIEWER (inerte)">
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-text-faint">
-            <IconeSynchro className="h-3.5 w-3.5" />
-            Synchroniser
-          </span>
+
+        <CasSync titre="Banques non rattachées (désynchronisation base ↔ amont)">
+          <SyncSummary
+            fraicheur={fraicheurPerimee}
+            compteLabel="ABSA"
+            retour={{
+              erreur: null,
+              succes: null,
+              info: "Aucune banque à synchroniser. 1 banque(s) connectée(s) chez votre fournisseur ne sont pas rattachées à cet espace — finalisez la connexion via « Connecter une banque ». 2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque ».",
+            }}
+          />
+        </CasSync>
+
+        <CasSync titre="Erreur (échec dur de toutes les banques)">
+          <SyncSummary
+            fraicheur={fraicheurPerimee}
+            compteLabel="ABSA"
+            retour={{
+              erreur:
+                "La synchronisation a échoué pour toutes vos banques. Réessayez dans un instant.",
+              succes: null,
+            }}
+          />
+        </CasSync>
+
+        <CasSync titre="VIEWER (partiel, sans bouton Relancer)">
+          <SyncSummary
+            fraicheur={fraicheurFraiche}
+            compteLabel="MCB"
+            peutRelancer={false}
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 2 banque(s) à jour, 5 compte(s) mis à jour.",
+              incomplet: true,
+            }}
+          />
         </CasSync>
       </div>
     </div>
-  );
-}
-
-/** Bouton « Synchroniser » au repos (lien d'action primary + icône). */
-function BoutonRepos() {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
-      <IconeSynchro className="h-3.5 w-3.5" />
-      Synchroniser
-    </span>
   );
 }
 
