@@ -5,6 +5,42 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
+
+Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
+post-connexion, banques nommées sur `/banques`, loader indéterminé honnête. Aucun
+contrat de Server Action touché, aucune requête ajoutée.
+
+- [ ] **SYNC-NOM-BANQUE-DASHBOARD1 (P2, effort ~0,5 j, 2026-07-20) — nommer aussi les
+  banques dans les callouts du DASHBOARD.** Le lot ne nomme les banques que sur
+  `/banques`, seul écran à disposer de la liste des connexions. `SyncSummary`
+  (dashboard) reste donc sur « L'accès d'une ou plusieurs banques doit être rétabli. »
+  **Pourquoi ce n'est pas fait ici** : `CompteConnecte` (données du dashboard) ne porte
+  PAS de `connectionId` — seulement `institutionName` par COMPTE. Il n'existe donc
+  aucune clé pour rapprocher `aReconnecter[].connectionId` d'un nom sur cet écran, et
+  fabriquer la jointure demanderait soit d'ajouter la connexion au DTO des comptes, soit
+  une seconde lecture. **Déclencheur** : le lot SYNC-GRANULARITE-BANQUE1 (cartes par
+  connexion), qui apportera cette donnée au dashboard de toute façon. Atténuation
+  actuelle : le callout pointe vers `/banques`, où les noms SONT affichés.
+
+- [ ] **SYNC-LOADER-ETAPES1 (P2, effort ~2–3 j, 2026-07-20) — loader à ÉTAPES réelles
+  (Option A du plan).** Le loader livré est indéterminé : il dit « ça travaille », pas
+  « où on en est ». Un vrai stepper suppose que `synchroniserConnexionsAction` rende les
+  `{connectionId, jobId}` **dès le 201** au lieu d'attendre `attendreFinSync`, puis que
+  le client poll par connexion et dérive le palier via `machine-mfa.ts`. **Pourquoi
+  différé** : ça change le contrat de l'action et touche le cœur de l'ingestion — hors
+  d'un lot démo-safe à J-2. **Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
+  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».
+  **Déclencheur** : post-démo, après l'anomalie cooldown.
+
+- [ ] **SYNC-MACHINE-INTERRUPTED1 (P1, effort ~0,5 j, 2026-07-20) — `INTERRUPTED` non
+  mappé dans `machine-mfa.ts`.** Statut émis par le backend mais ABSENT de l'enum
+  OpenAPI : il retombe sur le repli « statut inconnu → initialisation », donc
+  `pollingActif` reste vrai et le polling tourne jusqu'au plafond `MAX_POLLS`. Sans
+  conséquence de sécurité (la vérité reste serveur) mais c'est exactement la frustration
+  que ce chantier supprime. **Déclencheur** : bloquant pour SYNC-LOADER-ETAPES1 ; à
+  corriger avant tout loader qui réutilise la machine.
+
 ### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
 
 Lot C0 livré : le champ `recurrence` était **stocké mais jamais lu** — la synthèse
