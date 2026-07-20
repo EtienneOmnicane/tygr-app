@@ -30,6 +30,11 @@ import Link from "next/link";
 import { cn } from "@/components/ui/states/primitives";
 import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
+import {
+  nommerToutes,
+  resoudreNomsBanques,
+  type ConnexionNommable,
+} from "@/components/banques/noms-banques";
 
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
 export const ROUTE_DASHBOARD = "/";
@@ -75,6 +80,7 @@ export function WidgetFeedback({
   reparationEnCours,
   widgetOuvert,
   aReconnecter,
+  connexions,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
@@ -137,7 +143,24 @@ export function WidgetFeedback({
    * vers le bouton « Connecter une banque ». Vide/absent = aucune invite.
    */
   aReconnecter?: ConnexionAReconnecter[];
+  /**
+   * Banques du workspace, telles que la page les a déjà résolues sous RLS. Sert
+   * UNIQUEMENT à traduire les `connectionId` opaques de `reparation`/`aReconnecter` en
+   * NOMS lisibles (cf. `noms-banques.ts`) : sans elles, l'écran ne peut afficher qu'un
+   * compteur anonyme (« 2 banque(s) ») là où l'utilisateur a besoin de savoir LAQUELLE.
+   *
+   * Absent = repli anonyme intégral. C'est ce qui garde ce composant montable tel quel
+   * par la route de démo, et ce qui rend la dégradation explicite plutôt qu'accidentelle.
+   */
+  connexions?: ConnexionNommable[];
 }) {
+  // Traduction id amont → nom, faite ICI parce que c'est le seul endroit qui dispose des
+  // deux moitiés. `null` = au moins une banque non nommable → on garde la formulation
+  // anonyme (tout ou rien, cf. `nommerToutes`).
+  const nomsAReconnecter = nommerToutes(
+    (aReconnecter ?? []).map((c) => c.connectionId),
+    connexions ?? [],
+  );
   return (
     <>
       {erreurDemarrage && (
@@ -220,23 +243,45 @@ export function WidgetFeedback({
           inerte sans `onReconnecter` (route de démo / Visual QA). */}
       {reparation && reparation.length > 0 && (
         <ul className="flex flex-col gap-1.5">
-          {reparation.map((cx) => (
-            <li key={`${cx.connectionId}:${cx.jobId}`}>
-              <button
-                type="button"
-                onClick={() => onReconnecter?.(cx)}
-                disabled={!onReconnecter || reparationEnCours || widgetOuvert}
-                className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
-                  text-sm font-semibold text-primary transition-colors
-                  hover:text-primary-600 hover:underline focus:outline-none
-                  focus-visible:ring-2 focus-visible:ring-primary
-                  focus-visible:ring-offset-2 disabled:opacity-48"
+          {reparation.map((cx) => {
+            // Nom de CETTE connexion (liste à un élément → `[nom]` ou `[]`). Avec
+            // plusieurs banques à réparer, des boutons « Reconnecter » identiques
+            // empilés ne disent pas lequel ouvre laquelle : c'est le nom qui les
+            // distingue, pas leur position.
+            const [nom] = resoudreNomsBanques(
+              [cx.connectionId],
+              connexions ?? [],
+            );
+            return (
+              <li
+                key={`${cx.connectionId}:${cx.jobId}`}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1"
               >
-                <IconeReconnecter />
-                {reparationEnCours ? "Ouverture…" : "Reconnecter"}
-              </button>
-            </li>
-          ))}
+                {nom && (
+                  <span className="truncate text-sm font-medium text-text">
+                    {nom}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onReconnecter?.(cx)}
+                  disabled={!onReconnecter || reparationEnCours || widgetOuvert}
+                  // Le nom est déjà lu par le lecteur d'écran juste avant, mais il ne
+                  // fait pas partie du bouton : sans `aria-label`, une navigation de
+                  // bouton en bouton n'entendrait que « Reconnecter » à l'identique.
+                  aria-label={nom ? `Reconnecter ${nom}` : undefined}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
+                    text-sm font-semibold text-primary transition-colors
+                    hover:text-primary-600 hover:underline focus:outline-none
+                    focus-visible:ring-2 focus-visible:ring-primary
+                    focus-visible:ring-offset-2 disabled:opacity-48"
+                >
+                  <IconeReconnecter />
+                  {reparationEnCours ? "Ouverture…" : "Reconnecter"}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -246,9 +291,18 @@ export function WidgetFeedback({
           clairement (role=status, jamais un rouge de donnée §3.4) sans nommer la banque. */}
       {aReconnecter && aReconnecter.length > 0 && (
         <p role="status" className="text-sm text-text-muted">
-          {aReconnecter.length === 1
-            ? "L’accès d’une banque n’est plus valide : reconnectez-la via « Connecter une banque » ci-dessus."
-            : `L’accès de ${aReconnecter.length} banque(s) n’est plus valide : reconnectez-les via « Connecter une banque » ci-dessus.`}
+          {/* NOMMÉ quand on le peut : mettre la banque EN TÊTE de phrase est tout
+              l'objet du lot — « 2 banque(s) » n'a jamais dit à personne laquelle
+              rouvrir. La syntaxe diffère entre les deux cas à dessein (« Absa — accès
+              à rétablir » vs « L'accès d'une banque n'est plus valide ») : imposer un
+              seul moule aux deux produirait un français bancal (« L'accès de Absa »). */}
+          {nomsAReconnecter
+            ? `${nomsAReconnecter} — accès à rétablir : reconnectez-${
+                aReconnecter.length === 1 ? "la" : "les"
+              } via « Connecter une banque » ci-dessus.`
+            : aReconnecter.length === 1
+              ? "L’accès d’une banque n’est plus valide : reconnectez-la via « Connecter une banque » ci-dessus."
+              : `L’accès de ${aReconnecter.length} banque(s) n’est plus valide : reconnectez-les via « Connecter une banque » ci-dessus.`}
         </p>
       )}
     </>

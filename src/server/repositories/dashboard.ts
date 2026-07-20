@@ -226,6 +226,22 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
  */
 export interface ConnexionBancaire {
   connectionId: string;
+  /**
+   * Identifiant OMNI-FI de la connexion (`bank_connections.omnifi_connection_id`) — à ne
+   * pas confondre avec `connectionId`, qui est notre UUID INTERNE (`bank_connections.id`).
+   *
+   * ⚠️ POURQUOI IL EST EXPOSÉ : c'est la SEULE clé qui permet de rapprocher la liste des
+   * banques de l'écran des signaux `reparation[]` / `aReconnecter[]` d'`EtatFinalisation`,
+   * lesquels portent `cx.ConnectionId` — l'identifiant AMONT (`orchestration.ts`), pas le
+   * nôtre. Sans cette colonne, les deux jeux d'identifiants ne sont pas joignables et
+   * l'UI ne peut afficher qu'un compteur anonyme (« 2 banque(s) »).
+   *
+   * Aucune surface nouvelle : cet identifiant traverse DÉJÀ vers le client dans
+   * `EtatFinalisation.aReconnecter[].connectionId`. C'est un UUID opaque amont, pas de la
+   * PII — et le nom d'institution qu'il permet de résoudre, lui, reste dans l'UI
+   * authentifiée scopée (règle 8 : jamais dans un log, une erreur ou la télémétrie).
+   */
+  omnifiConnectionId: string;
   /** Nom lisible de l'institution ; null si la connexion est antérieure à la colonne. */
   institutionName: string | null;
   /** Statut STOCKÉ (« active », …) — libellé mappé côté UI. */
@@ -243,6 +259,7 @@ export async function listerConnexionsBancaires(
   const lignes = await tx
     .select({
       connectionId: bankConnections.id,
+      omnifiConnectionId: bankConnections.omnifiConnectionId,
       institutionName: bankConnections.institutionName,
       status: bankConnections.status,
       createdAt: bankConnections.createdAt,
@@ -256,6 +273,7 @@ export async function listerConnexionsBancaires(
     .leftJoin(bankAccounts, eq(bankAccounts.connectionId, bankConnections.id))
     .groupBy(
       bankConnections.id,
+      bankConnections.omnifiConnectionId,
       bankConnections.institutionName,
       bankConnections.status,
       bankConnections.createdAt,

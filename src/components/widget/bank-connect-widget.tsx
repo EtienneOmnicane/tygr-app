@@ -51,6 +51,7 @@ import {
 } from "@/app/(workspace)/banques/actions";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import { registreSynchro } from "@/components/sync/registre-synchro";
+import type { ConnexionNommable } from "@/components/banques/noms-banques";
 import {
   ROUTE_DASHBOARD_CONNEXION_ETABLIE,
   WidgetFeedback,
@@ -94,9 +95,17 @@ const OmniFiLinkLauncher = dynamic(
 
 export function BankConnectWidget({
   peutConnecter,
+  connexions = [],
 }: {
   /** Rôle autorisé (MANAGER/ADMIN) — UX seulement ; la barrière réelle est serveur. */
   peutConnecter: boolean;
+  /**
+   * Banques du workspace, DÉJÀ résolues par le RSC sous RLS (`listerConnexionsBancaires`).
+   * Traversent tel quel jusqu'à `WidgetFeedback`, qui s'en sert uniquement pour NOMMER
+   * les connexions des signaux `reparation`/`aReconnecter` — dont les identifiants sont
+   * opaques. Ce composant ne les lit pas lui-même.
+   */
+  connexions?: ConnexionNommable[];
 }) {
   const router = useRouter();
   const [demarrage, demarrer, demarrageEnCours] = useActionState(
@@ -395,6 +404,10 @@ export function BankConnectWidget({
         // banque »… et rien ne s'ouvre).
         widgetOuvert={Boolean(tokenActif) || Boolean(repair) || demarrageEnCours}
         aReconnecter={aReconnecter}
+        // Permet de NOMMER les banques des signaux ci-dessus (leurs identifiants sont
+        // opaques). Le libellé reste dans cette UI authentifiée et scopée — jamais dans
+        // un log ni un message d'erreur (règle 8).
+        connexions={connexions}
       />
     </div>
   );
