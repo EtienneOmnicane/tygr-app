@@ -51,14 +51,40 @@ import { cn } from "./primitives";
 
 /**
  * Sévérités disponibles. `success` porte un RÉSULTAT (éphémère, fermable), `warning` et
- * `danger` portent une CONDITION (elles durent tant que la condition tient).
+ * `danger` portent une CONDITION (elles durent tant que la condition tient), `info` porte
+ * une ÉTAPE SUIVANTE (rien n'a échoué, rien n'est fini — il reste un geste à faire).
+ *
+ * ⚠️ POURQUOI `info` EXISTE (et pourquoi `warning` ne pouvait pas faire l'affaire) : le
+ * canal « information » du serveur (`EtatFinalisation.info`) était jusqu'ici rendu en
+ * `warning`, faute de registre neutre. Ça passe pour une désynchronisation — c'est
+ * bien une anomalie — mais pas pour un ÉVÉNEMENT HEUREUX comme « banque connectée,
+ * lancez la première synchronisation » : l'ambre et le triangle d'alerte annoncent un
+ * problème là où il n'y en a aucun, et apprennent à l'utilisateur que le triangle ne
+ * veut rien dire. `info` est donc le registre « ni vert (rien n'a réussi) ni rouge/ambre
+ * (rien n'a échoué) » : bleu `primary-50`, icône « i », aucune dramatisation.
+ *
+ * Contrastes MESURÉS (Gate 4, pas jugés à l'œil) : message `text-text` sur `primary-50`
+ * = **15,37:1** (AA large) ; icône `text-primary` sur `primary-50` = **4,63:1**, au-dessus
+ * du seuil 3:1 des objets non textuels (WCAG 1.4.11) — et nettement mieux que l'icône
+ * `success` (2,93:1, écart connu ci-dessus). La luminance du fond face à `surface-page`
+ * (1,04) est du même ordre que celle des trois autres registres (1,05 à 1,10) : le fond
+ * porte une TEINTE, pas un saut de luminance — c'est déjà le contrat de la primitive.
  */
-export type SeveriteCallout = "danger" | "warning" | "success";
+export type SeveriteCallout = "danger" | "warning" | "success" | "info";
 
 const STYLES: Record<SeveriteCallout, { fond: string; icone: string }> = {
   danger: { fond: "bg-danger-bg", icone: "text-danger" },
   warning: { fond: "bg-warning-bg", icone: "text-warning" },
   success: { fond: "bg-success-bg", icone: "text-success" },
+  info: { fond: "bg-primary-50", icone: "text-primary" },
+};
+
+/** Icône par sévérité. Toutes décoratives : le message porte le sens accessible. */
+const ICONES: Record<SeveriteCallout, (p: { className?: string }) => ReactNode> = {
+  danger: IconeAlerte,
+  warning: IconeAlerte,
+  success: IconeSucces,
+  info: IconeInfo,
 };
 
 export function Callout({
@@ -97,7 +123,7 @@ export function Callout({
   className?: string;
 }) {
   const style = STYLES[severite];
-  const Icone = severite === "success" ? IconeSucces : IconeAlerte;
+  const Icone = ICONES[severite];
 
   return (
     <div
@@ -179,6 +205,30 @@ function IconeSucces({ className }: { className?: string }) {
     >
       <circle cx="8" cy="8" r="6.4" />
       <path d="m5.3 8.2 1.9 1.9 3.5-3.9" />
+    </svg>
+  );
+}
+
+/**
+ * Icône « i cerclé » (information). SVG inline pur (règle 9). Décorative, comme ses
+ * jumelles : le message porte le sens. Volontairement DISTINCTE du triangle d'alerte —
+ * c'est tout l'objet du registre `info` : ne pas dramatiser une étape suivante.
+ */
+function IconeInfo({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 16 16"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="8" cy="8" r="6.4" />
+      <path d="M8 7.3v4" />
+      <path d="M8 4.8h.01" />
     </svg>
   );
 }
