@@ -15,9 +15,18 @@
  * `SyncButton` restent des composants d'affichage pilotés par props / hook.
  *
  * ⚠️ Le retour N'EST PLUS remis à `null` au clic (c'était le cas dans `sync-button.tsx`).
- * Le vider faisait s'effondrer le bloc au-dessus de la rangée KPI : tout le dashboard
- * remontait puis redescendait à chaque synchro. `SyncSummary` bascule en mode « en
- * cours » à partir de `enCours` et masque lui-même les callouts périmés.
+ * Le raisonnement d'origine (« le vider fait s'effondrer le bloc, tout le dashboard
+ * remonte puis redescend ») ne tient PLUS tel quel depuis que le compte rendu est
+ * transitoire par construction : c'est le couple fraîcheur+bouton, ancré dans le header,
+ * qui ne bouge plus. La raison actuelle de conserver le retour est autre, et elle
+ * suffit : il porte les AVERTISSEMENTS (accès à rétablir, récupération inachevée,
+ * banques non rattachées), qui doivent rester lisibles après la synchro — les vider au
+ * clic suivant les ferait clignoter. `SyncSummary` bascule en mode « en cours » à partir
+ * de `enCours` et masque lui-même les callouts périmés pendant le vol.
+ *
+ * ⚠️ Chaque synchro produit un NOUVEL objet `retour` : `SyncSummaryConnecte` s'appuie sur
+ * cette identité pour ré-afficher la notice de succès après une fermeture. Ne pas
+ * introduire de mémoïsation qui réutiliserait le même objet d'une synchro à l'autre.
  */
 import {
   createContext,

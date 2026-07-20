@@ -4,18 +4,33 @@
  * `sync-button.tsx` : 4 canaux empilés en `text-xs`, alignés à droite, tous gris sauf
  * l'erreur, avec les deux ACTIONS noyées dedans.
  *
- * Structure (UI_GUIDELINES §3.4 / §3.7 / §6.5) :
+ * ⚠️ DEUX DURÉES DE VIE, DEUX TRAITEMENTS (retour Etienne 2026-07-20) — c'est L'axe de
+ * conception de ce composant, ne pas le réunifier :
  *
- *   1. LIGNE D'ÉTAT primaire — pastille de fraîcheur + résultat de la synchro. Montée
- *      EN PERMANENCE : au repos elle ne porte que la pastille. C'est ce qui empêche le
- *      bloc de s'effondrer entre deux synchros (le dashboard sautait à chaque clic).
- *   2. CALLOUTS actionnables — un par état, chacun avec SON action explicite.
+ *   1. Le SUCCÈS est le résultat du dernier clic : ÉPHÉMÈRE. Notice `success` FERMABLE.
+ *      Il n'a rien à faire en mobilier permanent — une fois lu, il ne doit plus disputer
+ *      la place aux soldes et au graphe, qui sont le héros de l'écran.
+ *   2. Les AVERTISSEMENTS (récupération inachevée, accès à rétablir, banques non
+ *      rattachées) décrivent une CONDITION qui dure : ils restent, compacts, et ne sont
+ *      **PAS fermables**. Fermer un avertissement encore vrai masquerait le problème
+ *      réel — précisément l'échec silencieux que `messages-sync.ts` existe pour
+ *      surfacer. Ils disparaissent quand la condition disparaît, jamais sur un clic.
+ *      (Si un jour on les rend fermables, la fermeture doit valoir pour CE retour-là et
+ *      ne jamais être persistée : la condition suivante doit se ré-annoncer.)
+ *
+ * La PASTILLE DE FRAÎCHEUR a quitté ce bloc : elle a rejoint le cluster statut+action du
+ * header, à côté de « Synchroniser » (même objet mental, elle était à l'opposé). Ce
+ * composant ne monte donc plus rien au repos — et c'est voulu : il ne subsiste que
+ * lorsqu'il a quelque chose à dire. Le garde « anti-effondrement » que portait l'ancienne
+ * ligne d'état permanente (cf. `sync-contexte.tsx`) devient sans objet, puisque le bloc
+ * est désormais transitoire par construction ; ce qui ne bouge plus, lui, c'est le
+ * couple fraîcheur+bouton, qui est ancré dans le header.
  *
  * ⚠️ D'OÙ VIENT LE TEXTE (contrat hérité de la PR #202, à ne pas casser) :
- *  - la ligne d'état affiche `succes` / `erreur` **VERBATIM du serveur**. On ne découpe
- *    JAMAIS cette phrase : elle est concaténée côté action (base + partiel + reconnexion
- *    + cooldown + réparation) et la re-parser recréerait une seconde source de vérité —
- *    la classe de bug que `registre-synchro.ts` a été écrit pour tuer ;
+ *  - on affiche `succes` / `erreur` **VERBATIM du serveur**. On ne découpe JAMAIS cette
+ *    phrase : elle est concaténée côté action (base + partiel + reconnexion + cooldown
+ *    + réparation) et la re-parser recréerait une seconde source de vérité — la classe
+ *    de bug que `registre-synchro.ts` a été écrit pour tuer ;
  *  - les callouts portent un libellé d'ACTION court, **sans compteur**. Les nombres
  *    restent dans la phrase serveur : deux sources qui comptent ne peuvent pas diverger
  *    si une seule compte ;
@@ -29,38 +44,40 @@
 import Link from "next/link";
 
 import type { EtatFinalisation } from "@/app/(workspace)/banques/actions";
-import type { Fraicheur } from "@/lib/format-date";
 import { registreSynchro } from "@/components/sync/registre-synchro";
-import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { Callout } from "@/components/ui/states/callout";
-import { cn } from "@/components/ui/states/primitives";
 
 /** Cible commune des gestes de réparation : le parcours de connexion vit sur /banques. */
 const ROUTE_BANQUES = "/banques";
 
 export function SyncSummary({
-  fraicheur,
-  compteLabel,
   retour,
   enCours = false,
   peutRelancer = false,
   onRelancer,
+  succesMasque = false,
+  onFermerSucces,
 }: {
-  /** Fraîcheur du solde courant déjà calculée (`formaterFraicheurRelative`). */
-  fraicheur: Fraicheur | null;
-  /** Compte concerné — enrichit le tooltip de la pastille. */
-  compteLabel?: string | null;
   /** Dernier retour de l'action. `null` = jamais lancée (repos). */
   retour: EtatFinalisation | null;
   /** Une synchro est en vol : on annonce l'attente et on masque les callouts périmés. */
   enCours?: boolean;
   /**
-   * Le rôle courant autorise-t-il de relancer ? Un VIEWER lit la ligne d'état (la
-   * fraîcheur est une information de lecture) mais n'obtient pas le bouton « Relancer ».
+   * Le rôle courant autorise-t-il de relancer ? Un VIEWER lit les avertissements (c'est
+   * une information de lecture) mais n'obtient pas le bouton « Relancer ».
    */
   peutRelancer?: boolean;
   /** Relance la synchro. Inerte si absent (route de démo / Visual QA). */
   onRelancer?: () => void;
+  /**
+   * La notice de succès a-t-elle été fermée POUR CE RETOUR ? L'état vit chez l'appelant
+   * (`SyncSummaryConnecte`), qui le rattache à l'identité du retour — ainsi la synchro
+   * suivante se ré-annonce toujours. Ne concerne QUE le succès : les avertissements ne
+   * sont pas fermables (cf. docstring).
+   */
+  succesMasque?: boolean;
+  /** Ferme la notice de succès. Absent = notice non fermable (démo / Visual QA). */
+  onFermerSucces?: () => void;
 }) {
   const registre = registreSynchro(retour ?? null);
 
@@ -70,63 +87,78 @@ export function SyncSummary({
   const accesARetablir = aReparer || aReconnecter;
   const incomplet = retour?.incomplet === true;
   const info = retour?.info;
+  // La phrase de succès n'est montrée que si le serveur en a une ET qu'elle n'a pas été
+  // fermée. `registre` distingue un vrai succès d'un compte rendu au ton neutre.
+  const succesVisible =
+    !succesMasque &&
+    !enCours &&
+    registre !== "muet" &&
+    registre !== "erreur" &&
+    Boolean(retour?.succes);
+  const erreurVisible =
+    !enCours && registre === "erreur" && Boolean(retour?.erreur);
 
-  // Rien à dire ET rien à dater : on ne monte pas un bloc vide.
-  if (!fraicheur && !retour && !enCours) return null;
+  // Rien à dire → on ne monte RIEN (pas même une `<section>` vide : le parent l'espace
+  // en `gap-6`, un conteneur de hauteur nulle y creuserait un trou visible). Au repos,
+  // la fraîcheur se lit dans le header — ce bloc n'a plus de rôle de socle, il n'existe
+  // que quand il porte un message. Le succès fermé fait donc bien disparaître le bloc.
+  const aQuelqueChoseADire =
+    enCours ||
+    succesVisible ||
+    erreurVisible ||
+    accesARetablir ||
+    incomplet ||
+    Boolean(info);
+  if (!aQuelqueChoseADire) return null;
 
   return (
     <section
       aria-label="État de la synchronisation"
       className="flex max-w-2xl flex-col gap-2"
     >
-      {/* 1. LIGNE D'ÉTAT — toujours montée (cf. docstring : anti-saut de layout). */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        {fraicheur && (
-          <BalanceFreshnessPill
-            fraicheur={fraicheur}
-            compteLabel={compteLabel}
-            // Décision produit livrée (dashboard-content.tsx) : la réparation ne
-            // s'amorce pas depuis la pastille. Les callouts ci-dessous portent le geste.
-            ctaReconnexion={false}
-          />
-        )}
-        {enCours ? (
-          <p role="status" className="text-sm text-text-muted">
-            Synchronisation en cours…
-          </p>
-        ) : (
-          registre !== "muet" &&
-          registre !== "erreur" && (
-            <p
-              role="status"
-              className={cn(
-                // `tabular-nums` : la phrase porte des compteurs (banques, comptes,
-                // transactions) — §0.
-                "text-sm tabular-nums",
-                registre === "succes" ? "text-success" : "text-text-muted",
-              )}
-            >
-              {retour?.succes}
-            </p>
-          )
-        )}
-      </div>
+      {/* EN COURS — remplace tout le reste : proposer « Reconnecter » pour un état
+          qu'on est justement en train de recalculer serait trompeur. */}
+      {enCours && (
+        <p role="status" className="text-sm text-text-muted">
+          Synchronisation en cours…
+        </p>
+      )}
 
-      {/* 2. CALLOUTS — masqués pendant une synchro en vol : proposer « Reconnecter »
-          pour un état qu'on est justement en train de recalculer serait trompeur.
-          Ordre FIXE, du plus grave au plus informatif (sinon l'ordre dépendrait de
-          l'ordre des champs et bougerait d'une synchro à l'autre). */}
+      {/* Ordre FIXE (sinon il dépendrait de l'ordre des champs et bougerait d'une
+          synchro à l'autre) : le RÉSULTAT du geste d'abord — c'est ce que
+          l'utilisateur vient de demander — puis les CONDITIONS, de la plus grave à la
+          plus informative. */}
       {!enCours && (
         <>
-          {/* ERREUR — §3.4 : fond + icône + message, jamais un rouge nu. */}
-          {registre === "erreur" && retour?.erreur && (
+          {/* SUCCÈS — éphémère, donc FERMABLE (cf. docstring §1). Le message est en
+              `text-text` sur `success-bg` : le vert ne porte plus le texte (il échoue
+              l'AA à 3,46:1), seulement le fond et la coche. Même traitement que
+              l'erreur, §3.4. */}
+          {succesVisible && (
+            <Callout
+              severite="success"
+              role="status"
+              onFermer={onFermerSucces}
+              libelleFermer="Masquer le compte rendu de synchronisation"
+              // `tabular-nums` : la phrase porte des compteurs (banques, comptes,
+              // transactions) — §0.
+              className="tabular-nums"
+            >
+              {retour?.succes}
+            </Callout>
+          )}
+
+          {/* ERREUR — §3.4 : fond + icône + message, jamais un rouge nu. NON fermable :
+              un échec dur reste à l'écran tant qu'il n'a pas été re-tenté. */}
+          {erreurVisible && (
             <Callout severite="danger" role="alert">
-              {retour.erreur}
+              {retour?.erreur}
             </Callout>
           )}
 
           {/* ACCÈS À RÉTABLIR — réparation MFA et accès désaligné (403) mènent au MÊME
-              écran : un seul callout, un seul geste. */}
+              écran : un seul callout, un seul geste. NON fermable : la condition dure
+              tant que l'accès n'est pas rétabli (cf. docstring §2). */}
           {accesARetablir && (
             <Callout
               severite="warning"

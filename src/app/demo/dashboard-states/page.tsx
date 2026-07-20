@@ -21,14 +21,17 @@ import {
 } from "@/components/dashboard/states";
 import type { Fraicheur } from "@/lib/format-date";
 import { SyncSummary } from "@/components/sync/sync-summary";
+import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
+import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 
-type EtatDemo = "loading" | "empty" | "error" | "sync";
+type EtatDemo = "loading" | "empty" | "error" | "sync" | "cluster";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "loading", label: "Chargement" },
   { id: "empty", label: "Vide" },
   { id: "error", label: "Erreur" },
   { id: "sync", label: "Compte rendu de synchro" },
+  { id: "cluster", label: "Cluster header" },
 ];
 
 export default function DashboardStatesDemoPage() {
@@ -99,6 +102,7 @@ export default function DashboardStatesDemoPage() {
             <DashboardErrorState detail="OMNIFI_SYNC_TIMEOUT · connexion expirée après 30 s" />
           )}
           {etat === "sync" && <DemoSyncStates />}
+          {etat === "cluster" && <DemoClusterHeader />}
         </main>
       </div>
     </div>
@@ -115,19 +119,19 @@ export default function DashboardStatesDemoPage() {
  * `SyncSummary` étant pur et piloté par props, la copie n'a plus lieu d'être — ce qui
  * est capturé ici est ce qui est rendu en production.
  *
- * `onRelancer` est fourni mais inerte (aucune Server Action hors du workspace).
+ * Deux cas sont montés avec `onFermerSucces` CÂBLÉ sur un état local : la fermeture est
+ * l'objet même de l'ajustement 2026-07-20, et capturer un bouton inerte ne prouverait
+ * rien. Les autres handlers (`onRelancer`) restent inertes — aucune Server Action hors
+ * du workspace. La pastille de fraîcheur ne vit plus dans ce bloc : elle est capturée
+ * par `DemoClusterHeader`, avec le cluster du header.
  */
 function DemoSyncStates() {
-  const fraicheurFraiche: Fraicheur = {
-    niveau: "frais",
-    libelle: "il y a 12 min",
-    horodatageAbsolu: "20/07/2026 à 09:42",
-  };
-  const fraicheurPerimee: Fraicheur = {
-    niveau: "perime",
-    libelle: "il y a 3 j",
-    horodatageAbsolu: "17/07/2026 à 08:15",
-  };
+  // Fermeture RÉELLE de la notice, cas par cas. L'état applicatif vit dans
+  // `SyncSummaryConnecte` (non montable hors workspace) ; on en reproduit ici le seul
+  // effet observable, sans persistance — cf. sa docstring.
+  const [fermes, setFermes] = useState<Record<string, boolean>>({});
+  const fermer = (cle: string) => () =>
+    setFermes((etat) => ({ ...etat, [cle]: true }));
 
   return (
     <div className="rounded-card bg-surface-card p-6 shadow-card">
@@ -135,23 +139,18 @@ function DemoSyncStates() {
         Compte rendu de synchronisation — états
       </h2>
       <div className="flex flex-col gap-6">
-        <CasSync titre="Repos (jamais synchronisé dans cette session)">
-          <SyncSummary fraicheur={fraicheurFraiche} compteLabel="MCB" retour={null} />
+        <CasSync titre="Repos (jamais synchronisé dans cette session) — ne monte RIEN">
+          <SyncSummary retour={null} />
         </CasSync>
 
         <CasSync titre="En cours">
-          <SyncSummary
-            fraicheur={fraicheurFraiche}
-            compteLabel="MCB"
-            retour={null}
-            enCours
-          />
+          <SyncSummary retour={null} enCours />
         </CasSync>
 
-        <CasSync titre="Succès (aucune réserve)">
+        <CasSync titre="Succès (aucune réserve) — notice FERMABLE">
           <SyncSummary
-            fraicheur={fraicheurFraiche}
-            compteLabel="MCB"
+            succesMasque={fermes.succes === true}
+            onFermerSucces={fermer("succes")}
             retour={{
               erreur: null,
               succes:
@@ -160,12 +159,12 @@ function DemoSyncStates() {
           />
         </CasSync>
 
-        <CasSync titre="Partiel (scrape encore en cours chez la banque)">
+        <CasSync titre="Partiel — fermer le succès NE ferme PAS l’avertissement">
           <SyncSummary
-            fraicheur={fraicheurFraiche}
-            compteLabel="MCB"
             peutRelancer
             onRelancer={() => {}}
+            succesMasque={fermes.partiel === true}
+            onFermerSucces={fermer("partiel")}
             retour={{
               erreur: null,
               succes:
@@ -177,8 +176,6 @@ function DemoSyncStates() {
 
         <CasSync titre="Banques à reconnecter (accès désaligné + réparation MFA)">
           <SyncSummary
-            fraicheur={fraicheurPerimee}
-            compteLabel="ABSA"
             retour={{
               erreur: null,
               succes:
@@ -190,8 +187,6 @@ function DemoSyncStates() {
 
         <CasSync titre="Banques non rattachées (désynchronisation base ↔ amont)">
           <SyncSummary
-            fraicheur={fraicheurPerimee}
-            compteLabel="ABSA"
             retour={{
               erreur: null,
               succes: null,
@@ -200,10 +195,8 @@ function DemoSyncStates() {
           />
         </CasSync>
 
-        <CasSync titre="Erreur (échec dur de toutes les banques)">
+        <CasSync titre="Erreur (échec dur de toutes les banques) — NON fermable">
           <SyncSummary
-            fraicheur={fraicheurPerimee}
-            compteLabel="ABSA"
             retour={{
               erreur:
                 "La synchronisation a échoué pour toutes vos banques. Réessayez dans un instant.",
@@ -214,8 +207,6 @@ function DemoSyncStates() {
 
         <CasSync titre="VIEWER (partiel, sans bouton Relancer)">
           <SyncSummary
-            fraicheur={fraicheurFraiche}
-            compteLabel="MCB"
             peutRelancer={false}
             retour={{
               erreur: null,
@@ -225,6 +216,82 @@ function DemoSyncStates() {
             }}
           />
         </CasSync>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Cluster STATUT + ACTION du header (ajustement 2026-07-20) — reproduit la géométrie de
+ * `dashboard-content.tsx` : titre à gauche (`min-w-0` + `truncate`), pastille +
+ * séparateur + « Synchroniser » à droite (`shrink-0`), JAMAIS de `flex-wrap`.
+ *
+ * ⚠️ Le bouton est un FAC-SIMILÉ : le vrai `SyncButton` exige le `SynchroProvider`, donc
+ * une Server Action, donc l'auth — indisponible sur cette route. Ce qui est capturé ici
+ * fait foi pour la GÉOMÉTRIE du cluster et pour la pastille (composant réel, aux trois
+ * niveaux) ; ça ne prouve rien sur le rendu du bouton, qui se vérifie sur le vrai
+ * dashboard. Si le style du bouton change, ce fac-similé dérive.
+ */
+function DemoClusterHeader() {
+  const niveaux: Array<{ titre: string; fraicheur: Fraicheur }> = [
+    {
+      titre: "Frais (<6 h)",
+      fraicheur: {
+        niveau: "frais",
+        libelle: "il y a 12 min",
+        horodatageAbsolu: "20/07/2026 à 09:42",
+      },
+    },
+    {
+      titre: "Récent (<24 h)",
+      fraicheur: {
+        niveau: "recent",
+        libelle: "il y a 9 h",
+        horodatageAbsolu: "19/07/2026 à 23:10",
+      },
+    },
+    {
+      titre: "Périmé (≥24 h)",
+      fraicheur: {
+        niveau: "perime",
+        libelle: "il y a 3 j",
+        horodatageAbsolu: "17/07/2026 à 08:15",
+      },
+    },
+  ];
+
+  return (
+    <div className="rounded-card bg-surface-card p-6 shadow-card">
+      <h2 className="mb-4 text-base font-semibold text-text">
+        Cluster statut + action du header — trois niveaux de fraîcheur
+      </h2>
+      <div className="flex flex-col gap-6">
+        {niveaux.map(({ titre, fraicheur }) => (
+          <CasSync key={titre} titre={titre}>
+            <header className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-[26px] font-bold leading-tight tracking-tight text-text">
+                  Trésorerie
+                </h3>
+                <p className="mt-1 truncate text-sm text-text-muted">
+                  6 derniers mois · 8 comptes connectés
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <BalanceFreshnessPill
+                  fraicheur={fraicheur}
+                  compteLabel="MCB"
+                  ctaReconnexion={false}
+                />
+                <span aria-hidden className="h-4 w-px bg-line-strong" />
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+                  <IconeSynchro className="h-3.5 w-3.5" />
+                  Synchroniser
+                </span>
+              </div>
+            </header>
+          </CasSync>
+        ))}
       </div>
     </div>
   );
