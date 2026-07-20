@@ -6,24 +6,30 @@
  * d'arrivée, et laisse `NudgePremiereSynchro` pur — donc montable avec des états FIGÉS
  * par la route de démo (Visual QA, Gate 4).
  *
- * ⚠️ LE JETON EST CONSOMMÉ DÈS LE PREMIER RENDU, et c'est LA correction du défaut relevé
- * en cross-review (8/10). La version précédente n'armait/désarmait l'invite qu'avec
- * l'état du contexte (`retour !== null`). Or cet état meurt avec le sous-arbre, tandis
- * que l'URL est restaurée verbatim par le navigateur : connexion → synchro réussie →
- * « Transactions » → bouton Précédent, et « lancez une première synchronisation »
- * réapparaissait au-dessus d'un dashboard déjà plein. Aucune garde d'ÉTAT ne pouvait
- * corriger ça — le problème vit dans l'HISTORIQUE, il fallait donc agir sur l'historique.
+ * ⚠️ LE DÉFAUT CORRIGÉ (cross-review, 8/10) : l'invite n'était désarmée que par l'état du
+ * contexte (`retour !== null`), qui meurt avec le sous-arbre, tandis que l'URL est
+ * restaurée verbatim par le navigateur. Connexion → synchro réussie → « Transactions » →
+ * bouton Précédent, et « lancez une première synchronisation » réapparaissait au-dessus
+ * d'un dashboard déjà plein.
  *
- * `window.history.replaceState` (supporté par le routeur App Router, cf. « Native History
- * API » dans la doc Next) remplace l'entrée courante : le drapeau n'est plus atteignable
- * par le bouton Précédent, et — contrairement à `router.replace` — l'opération ne
- * déclenche AUCUN aller-retour RSC. L'invite déjà rendue reste donc affichée, sans
- * scintillement ni refetch, jusqu'à ce que l'utilisateur agisse.
+ * ⚠️ ET SURTOUT — CE QUI N'A PAS SUFFI, parce que deux tentatives s'y sont cassé les
+ * dents : nettoyer l'URL ne corrige PAS le retour arrière. C'est contre-intuitif, donc
+ * c'est écrit ici en toutes lettres. `window.history.replaceState` remplace bien l'entrée
+ * d'historique, mais le Router Cache de Next restitue le PAYLOAD RSC tel qu'il avait été
+ * rendu — c'est-à-dire avec le drapeau armé. Mesuré sur la sonde `/demo/nudge-jeton`, et
+ * reproduit indépendamment en revue : au retour, l'URL est propre ET le serveur dit
+ * encore « armé ». `replaceState` corrige la barre d'adresse, pas le nœud de cache.
  *
- * Effet volontairement SANS dépendance réactive : il consomme un jeton d'ARRIVÉE, une
- * fois. Il ne pose aucun état (donc jamais de `react-hooks/set-state-in-effect`), et il
- * est idempotent — `urlSansDrapeauConnexion` rend `null` au second passage, ce qui neutralise
- * le double-montage des effets en développement.
+ * D'où un mécanisme à DEUX ÉTAGES, dont AUCUN n'est redondant :
+ *   1. `ConsommerDrapeauConnexion` retire le drapeau de l'URL — sans quoi un rechargement
+ *      ou un partage de lien réarmerait l'invite. Son effet dépend des PARAMÈTRES (pas du
+ *      montage) : une arrivée par navigation souple sur une route déjà montée ne remonte
+ *      rien, et un effet en `[]` n'y rejouerait jamais ;
+ *   2. le GEL ci-dessous tranche l'affichage à partir de l'URL lue AU MONTAGE — c'est lui,
+ *      et lui seul, qui neutralise le payload périmé restitué par le cache.
+ *
+ * Ne pas « simplifier » en supprimant l'un des deux : chacun couvre un chemin que l'autre
+ * laisse passer.
  */
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
