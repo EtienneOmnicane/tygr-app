@@ -25,21 +25,49 @@
  * est idempotent — `urlSansDrapeauConnexion` rend `null` au second passage, ce qui neutralise
  * le double-montage des effets en développement.
  */
+import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+
 import type { WorkspaceRole } from "@/server/db/schema";
 import { peutModifier } from "@/lib/permissions";
 import { useSynchro } from "@/components/sync/sync-contexte";
 import { NudgePremiereSynchro } from "@/components/sync/nudge-premiere-synchro";
 import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
-import { nudgeEstVisible } from "@/components/sync/drapeau-connexion";
+import {
+  CLE_DRAPEAU_CONNEXION,
+  drapeauConnexionArme,
+  nudgeEstVisible,
+} from "@/components/sync/drapeau-connexion";
 
 export function NudgePremiereSynchroConnecte({ role }: { role: WorkspaceRole }) {
   const { retour, enCours, synchroniser } = useSynchro();
+  const params = useSearchParams();
 
-  // Ce composant n'est monté QUE si la page a lu le drapeau (`arme` est donc vrai ici) ;
-  // les deux autres gardes couvrent la synchro faite SANS quitter la page, où le rendu
+  // ⚠️ LA DÉCISION EST GELÉE ICI, CÔTÉ CLIENT, ET C'EST LE CŒUR DE LA CORRECTION.
+  //
+  // Nettoyer l'URL ne suffit PAS — mesuré, pas supposé (sonde `/demo/nudge-jeton`) : au
+  // retour arrière, le Router Cache restitue le PAYLOAD RSC tel qu'il avait été rendu,
+  // c'est-à-dire avec le drapeau armé. L'adresse est propre, le rendu serveur restauré
+  // dit encore « armé », et l'invite revenait — au-dessus d'un dashboard déjà
+  // synchronisé. `replaceState` corrige la barre d'adresse, pas le nœud de cache.
+  //
+  // L'initialiseur PARESSEUX s'exécute au MONTAGE, pendant le rendu :
+  //   - première arrivée : le composant monte alors que l'URL porte encore le drapeau
+  //     (les effets, dont la consommation, ne se sont pas encore exécutés) → gelé à vrai,
+  //     l'invite s'affiche et RESTE affichée même après nettoyage de l'URL ;
+  //   - retour arrière : le sous-arbre a été démonté en partant, il remonte donc à neuf,
+  //     et lit cette fois l'URL déjà nettoyée → gelé à faux, aucune invite.
+  //
+  // Le gel est indispensable : sans lui, la lecture réactive de `useSearchParams`
+  // masquerait l'invite dans la seconde suivant son affichage, dès la consommation.
+  const [armeALArrivee] = useState(() =>
+    drapeauConnexionArme(params.get(CLE_DRAPEAU_CONNEXION) ?? undefined),
+  );
+
+  // Les deux autres gardes couvrent la synchro faite SANS quitter la page, où le rendu
   // courant porte encore l'invite alors que le compte rendu vient de la démentir.
   const visible = nudgeEstVisible({
-    arme: true,
+    arme: armeALArrivee,
     enCours,
     aUnRetour: retour !== null,
   });

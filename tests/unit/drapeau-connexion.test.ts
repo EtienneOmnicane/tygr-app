@@ -75,16 +75,27 @@ describe("urlSansDrapeauConnexion — consommation du jeton", () => {
   });
 });
 
-describe("nudgeEstVisible", () => {
-  it("s'arme au PREMIER passage légitime — le chemin qui doit continuer de marcher", () => {
+/**
+ * ⚠️ CE QUE CE BLOC PROUVE, ET CE QU'IL NE PROUVE PAS (constat de cross-review 7/10 sur
+ * une version antérieure, où le seul appelant passait `arme: true` en dur — le test du
+ * retour arrière était alors tautologique).
+ *
+ * `arme` est désormais une vraie variable de production : `NudgePremiereSynchroConnecte`
+ * la GÈLE au montage depuis l'URL. Ces tests couvrent donc la table de décision.
+ *
+ * Ils ne prouvent PAS, en revanche, le comportement du retour arrière lui-même : celui-ci
+ * dépend du Router Cache de Next, qui restitue le rendu serveur AVEC le drapeau. Cette
+ * partie-là se prouve au navigateur, sur la sonde `/demo/nudge-jeton` — et elle a
+ * effectivement pris en défaut une première correction qui ne nettoyait que l'URL.
+ */
+describe("nudgeEstVisible — table de décision", () => {
+  it("s'affiche au PREMIER passage légitime — le chemin qui doit continuer de marcher", () => {
     expect(nudgeEstVisible({ arme: true, enCours: false, aUnRetour: false })).toBe(
       true,
     );
   });
 
-  it("ne s'arme pas sans drapeau (cas du RETOUR ARRIÈRE, jeton déjà consommé)", () => {
-    // Après consommation, l'entrée d'historique ne porte plus le drapeau : la page se
-    // re-rend avec `arme: false`. C'est ça qui tue la réapparition.
+  it("ne s'affiche pas quand le drapeau est absent au montage (URL déjà nettoyée)", () => {
     expect(
       nudgeEstVisible({ arme: false, enCours: false, aUnRetour: false }),
     ).toBe(false);

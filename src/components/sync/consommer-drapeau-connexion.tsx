@@ -24,23 +24,38 @@
  * refetch ni scintillement.
  */
 import { useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { urlSansDrapeauConnexion } from "@/components/sync/drapeau-connexion";
 
 export function ConsommerDrapeauConnexion() {
+  // ⚠️ DÉPENDANCE OBLIGATOIRE, ET ELLE A ÉTÉ APPRISE À LA DURE. Une première version
+  // n'avait AUCUNE dépendance (`[]`), au motif qu'un jeton d'arrivée se consomme une
+  // fois. Faux dès que l'arrivée se fait par navigation SOUPLE vers la route où le
+  // composant est DÉJÀ monté : React re-rend sans remonter, l'effet ne rejoue pas, et le
+  // drapeau reste dans l'URL — donc restaurable par le bouton Précédent, c'est-à-dire le
+  // défaut qu'on prétendait corriger. La sonde `/demo/nudge-jeton` l'a attrapé en
+  // reproduisant le `router.push` réel ; la sonde précédente, purement cliente, ne le
+  // pouvait pas.
+  //
+  // On dépend donc des PARAMÈTRES, pas du montage : le jeton est consommé dès qu'il
+  // apparaît, quel que soit le chemin d'arrivée.
+  const params = useSearchParams();
+
   useEffect(() => {
     const url = urlSansDrapeauConnexion(
       window.location.pathname,
       window.location.search,
     );
     // `null` = rien à consommer → on ne touche pas à l'historique. C'est ce qui rend
-    // l'effet idempotent, y compris sous le double-montage du mode strict en dev.
+    // l'effet idempotent : après consommation, `replaceState` synchronise
+    // `useSearchParams`, l'effet rejoue une fois et ne trouve plus rien. Couvre aussi le
+    // double-montage du mode strict en développement.
     if (url !== null) {
       window.history.replaceState(null, "", url);
     }
-    // Aucune dépendance : c'est un jeton d'ARRIVÉE, consommé une fois. L'effet ne pose
-    // aucun état, donc jamais de `react-hooks/set-state-in-effect`.
-  }, []);
+    // L'effet ne pose AUCUN état : jamais de `react-hooks/set-state-in-effect`.
+  }, [params]);
 
   return null;
 }

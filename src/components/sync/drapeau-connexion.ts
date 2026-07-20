@@ -47,7 +47,11 @@ export function drapeauConnexionArme(
  * rien à consommer (l'appelant ne touche alors pas à l'historique — ce qui rend
  * l'opération idempotente, y compris sous le double-montage des effets en développement).
  *
- * ⚠️ PRÉSERVE TOUS LES AUTRES PARAMÈTRES. C'est le vrai piège de cette fonction : la
+ * Contrat exact : opère sur `pathname` + `search`. Le FRAGMENT (`#ancre`) ne fait pas
+ * partie de l'entrée et n'est donc pas restitué — sans conséquence ici (aucune surface du
+ * dashboard n'utilise d'ancre), mais à savoir avant de réutiliser cette fonction ailleurs.
+ *
+ * ⚠️ PRÉSERVE TOUS LES AUTRES PARAMÈTRES DE REQUÊTE. C'est le vrai piège de cette fonction : la
  * version naïve (« remplacer par le pathname nu ») effacerait `periode`/`du`/`au` et
  * ferait SAUTER la fenêtre choisie par l'utilisateur au moment précis où il arrive sur
  * son dashboard — on aurait corrigé un mensonge en introduisant une régression visible.

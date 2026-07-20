@@ -50,6 +50,7 @@ import { SyncButton } from "@/components/dashboard/sync-button";
 import { SynchroProvider } from "@/components/sync/sync-contexte";
 import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
 import { NudgePremiereSynchroConnecte } from "@/components/sync/nudge-premiere-synchro-connecte";
+import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -138,6 +139,13 @@ export function DashboardContent({
   if (choisirEtatDashboard(donnees) === "vide") {
     return (
       <DashboardShell>
+        {/* Le jeton se consomme MÊME ICI, où l'invite ne monte pas. Sans ça il
+            survivait dans l'URL, et `periode-switcher` le RECOPIE à chaque changement
+            de période (il ne retire que du/au/periode) : le drapeau se propageait donc
+            indéfiniment et pouvait réarmer l'invite bien plus tard, une fois les comptes
+            devenus visibles. Un jeton d'arrivée se consomme à l'arrivée — pas seulement
+            quand on a quelque chose à en faire. */}
+        {connexionEtablie && <ConsommerDrapeauConnexion />}
         <DashboardEmptyState />
       </DashboardShell>
     );
