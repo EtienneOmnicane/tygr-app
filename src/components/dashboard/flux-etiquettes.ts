@@ -62,8 +62,14 @@ export function largeurEtiquette(texte: string): number {
  */
 export const EPAISSEUR_TICK_PX = 2;
 
-/** Écart (px) entre le tick et son étiquette, pour que les deux ne se touchent pas. */
-export const ECART_ETIQUETTE_PX = 4;
+/**
+ * Écart (px) entre le tick et son étiquette.
+ *
+ * Porté à 6 px au Visual QA : quand une colonne porte une entrée ET une sortie toutes deux
+ * illisibles, les deux étiquettes se retrouvent collées de part et d'autre de l'axe (la
+ * hauteur des barres, qui les séparerait normalement, est nulle par construction).
+ */
+export const ECART_ETIQUETTE_PX = 6;
 
 /**
  * Marge (px) exigée de part et d'autre d'une étiquette horizontale. En dessous, elle

@@ -46,6 +46,7 @@ import {
   EPAISSEUR_TICK_PX,
   estIllisible,
   etiquetteVerticale,
+  largeurEtiquette,
 } from "@/components/dashboard/flux-etiquettes";
 import {
   composerColonnes,
@@ -378,7 +379,18 @@ function BarresMensuelles({
           const hSortieR = hauteurDe(c.realise?.sorties);
           const hEntreeP = hauteurDe(c.prevision?.entrees);
           const hSortieP = hauteurDe(c.prevision?.sorties);
-          const labelVisible = i % pasLabel === 0 || i === dernier || i === idxPivot;
+          // Une colonne PROJETÉE porte désormais une étiquette de valeur : sans son libellé
+          // de mois, « Rs 10 k » devient orphelin (« de quel mois ? »). La décimation C3 en
+          // sautait un sur deux — sur 6 mois + 3 projetés, Août perdait le sien alors qu'il
+          // affichait une valeur (constat de Visual QA). On force donc le libellé sur les
+          // colonnes projetées, mais SEULEMENT s'il tient dans la colonne : sur une fenêtre
+          // très dense (preset « tout »), le forcer produirait des libellés qui se
+          // chevauchent — pire que l'absence. Elles sont au plus 3 ou 4 (D3).
+          const texteMois = formaterMoisCourt(c.libelleMois);
+          const labelProjete =
+            c.realise === null && largeurEtiquette(texteMois) <= pas;
+          const labelVisible =
+            i % pasLabel === 0 || i === dernier || i === idxPivot || labelProjete;
           return (
             <g key={c.libelleMois}>
               {/* Entrée RÉALISÉE (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
@@ -464,7 +476,7 @@ function BarresMensuelles({
                   }
                   className="text-[11px]"
                 >
-                  {formaterMoisCourt(c.libelleMois)}
+                  {texteMois}
                 </text>
               )}
               {/* Sous-label de la colonne PIVOT (§3.5) — le second signal, TEXTUEL, du
@@ -618,7 +630,20 @@ function EtiquetteProjection({
         // Avec `start` il part vers le haut depuis l'ancre, avec `end` il occupe l'espace
         // en dessous : la même rotation sert donc aux deux sens.
         transform={vertical ? `rotate(-90 ${xCentre} ${yTexte})` : undefined}
-        fill="var(--color-text-faint)"
+        // Teinte SÉMANTIQUE du sens, pas l'atténuation `text-faint` du prévisionnel — deux
+        // raisons, l'une bloquante :
+        //  1. ACCESSIBILITÉ (§6.6) : `text-faint` (#8a8f9f) sur `surface-forecast`
+        //     (#efebdd) donne 2,70:1, sous le minimum AA de 4,5:1 pour du texte de 11 px.
+        //     `inflow-700`/`outflow-700` donnent 6,75:1 et 6,18:1 (mesuré au Visual QA).
+        //  2. LISIBILITÉ : quand une colonne porte une entrée ET une sortie toutes deux
+        //     illisibles, deux étiquettes grises se retrouvent de part et d'autre de l'axe
+        //     sans barre pour les distinguer — la couleur dit laquelle est laquelle.
+        // Conforme §3.1 : cette étiquette EST la donnée (elle remplace la barre), ce n'est
+        // pas du chrome. Même choix que les blocs du tooltip, y compris prévisionnels. Le
+        // statut « projeté » reste porté par le fond, le pointillé, la légende et la mention.
+        fill={
+          versLeHaut ? "var(--color-inflow-700)" : "var(--color-outflow-700)"
+        }
         className="text-[11px] tabular-nums"
       >
         {texte}

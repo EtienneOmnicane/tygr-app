@@ -69,6 +69,53 @@ proposait** et que zod l'acceptait ; le `22001` n'étant mappé nulle part, tout
 d'échéance trimestrielle finissait en **500 brute**. La branche `'trimestrielle'` du
 CHECK était morte depuis `0019`. Élargi à `varchar(20)`, prouvé par le test 25.
 
+### Lisibilité du prévisionnel sur l'axe du réalisé (2026-07-20, PR `feat/flux-previsionnel-lisibilite-lots012`, plan `PLAN-flux-previsionnel-lisibilite.md`)
+
+Lots 0-2 livrés (fixtures + garde Gate 4, mention de couverture, zone muette, étiquettes de
+valeur). Ils rendent la prévision LISIBLE ; ils ne rendent pas la comparaison HONNÊTE — cette
+distinction est le cœur du sujet et ne doit pas se perdre.
+
+- [ ] **FLUX-PREV-AXE1 (P2) — sortir la prévision de l'axe du réalisé (option E du plan §4.1).**
+      **Direction RETENUE par Etienne le 2026-07-20**, à exécuter après les lots 0-2.
+      *Quoi* : le graphe « Flux de trésorerie » redevient 100 % réalisé ; les échéances vivent
+      dans un encart dédié à échelle propre (ou dans la page Échéances).
+      *Pourquoi* : réalisé et prévision ne sont pas commensurables — mesure exhaustive
+      (`transactions_cache`) contre sous-ensemble déclaré (échéances saisies). Sur l'axe
+      partagé, un rapport 1:520 produit un faux constat (« la trésorerie s'effondre ») que les
+      lots 0-2 atténuent sans le supprimer.
+      *Effort* : ~5-8 h agent, ~1 h humain. *Déclencheur* : dès que les lots 0-2 sont mergés.
+      *Réutilisable* : `formatMontantCompact` et `flux-etiquettes.ts` servent aussi à l'encart.
+
+- [ ] **FLUX-PREV-BASELINE1 (P2) — homogénéiser la série prévisionnelle (option F du plan §4.2).**
+      Le VRAI fix : la prévision cesse d'être « les échéances saisies » pour devenir une
+      projection du flux attendu (baseline dérivée des mois réalisés / récurrents détectés,
+      + échéances en supplément identifié). La série redevient commensurable et l'axe partagé
+      redevient légitime.
+      *NON lancé délibérément* (décision Etienne 2026-07-20) : c'est la question de **méthode
+      de projection** laissée ouverte dans `PLAN-cadrage-scenario-previsionnel-fygr.md` §5, et
+      elle se tranche DANS ce cadrage, comme chantier nommé — pas en réaction à un défaut
+      d'affichage.
+      *Effort* : 2-3 j agent + décision produit. *Déclencheur* : **reprise du cadrage
+      prévisionnel FYGR**. *Risque à porter au cadrage* : une baseline est une hypothèse ; non
+      annotée, elle remplace un faux constat visuel par un faux constat chiffré, donc plus
+      crédible et plus dangereux.
+
+- [ ] **FLUX-PREV-LABEL-DENSE1 (P2 cosmétique) — libellés de mois forcés sur les colonnes
+      projetées.** Le libellé est forcé pour ne pas laisser une étiquette de valeur orpheline,
+      mais seulement s'il tient dans la colonne (`largeurEtiquette <= pas`) ; sur une fenêtre
+      très dense (preset « tout », ~28 px/colonne) il retombe donc dans la décimation C3 et un
+      mois projeté peut afficher « Rs 10 k » sans son mois. Non reproductible sur `/demo/dashboard`
+      (fixée à 6 mois). *Effort* : ~1 h. *Déclencheur* : si un utilisateur le signale sur « tout »,
+      ou à la reprise de FLUX-PREV-AXE1 (qui le rend caduc).
+
+- [ ] **FLUX-PREV-CONTRASTE1 (P2 accessibilité, PRÉ-EXISTANT) — `text-faint` sous AA.**
+      Mesuré au Visual QA : `text-faint` (#8a8f9f) donne **3,23:1 sur blanc** et **2,70:1 sur
+      `surface-forecast`**, sous le minimum AA de 4,5:1 pour du texte de 11 px. Les étiquettes de
+      valeur ont été passées en `inflow-700`/`outflow-700` (6,75:1 / 6,18:1), mais les **libellés
+      de mois**, les **notes sous le graphe** et les autres usages de `text-faint` restent
+      concernés — au-delà de ce composant. *Effort* : ~2 h (arbitrage token + balayage des usages).
+      *Déclencheur* : prochain passage d'accessibilité, ou audit régulateur (audience BOM).
+
 ### QA runtime du 2026-07-15 — constats différés (rapport `.gstack/qa-reports/`)
 
 Passe /qa complète sur main@747c4f3 (build local, vraie donnée, compte jetable).
