@@ -21,6 +21,7 @@ import {
 } from "@/components/dashboard/states";
 import type { Fraicheur } from "@/lib/format-date";
 import { SyncSummary } from "@/components/sync/sync-summary";
+import { NudgePremiereSynchro } from "@/components/sync/nudge-premiere-synchro";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 
@@ -143,8 +144,28 @@ function DemoSyncStates() {
           <SyncSummary retour={null} />
         </CasSync>
 
-        <CasSync titre="En cours">
+        <CasSync titre="En cours — loader INDÉTERMINÉ + durée annoncée">
+          {/* À vérifier par vision : aucune barre qui se REMPLIT, aucun palier nommé
+              (« Récupération… »). L'amont n'expose aucune progression pendant le scrape —
+              une barre qui progresse ou un stepper minuté mentiraient, et mentiraient
+              au pire moment : quand le job traîne. La navette dit « ça travaille, durée
+              inconnue », la phrase donne l'ordre de grandeur. */}
           <SyncSummary retour={null} enCours />
+        </CasSync>
+
+        <CasSync titre="Nudge post-connexion — invite à la PREMIÈRE synchronisation">
+          {/* Registre `info` (bleu, icône « i ») : ni vert — rien n'a réussi — ni ambre —
+              rien n'a échoué. La finalisation rattache les COMPTES, jamais les
+              transactions : sans cette invite, l'utilisateur atterrit sur un graphe vide
+              sans savoir que le geste suivant lui appartient. */}
+          <NudgePremiereSynchro peutSynchroniser onSynchroniser={() => {}} />
+        </CasSync>
+
+        <CasSync titre="Nudge post-connexion — VIEWER (message seul, sans CTA)">
+          {/* Le message reste : il explique pourquoi le dashboard est vide. Le bouton
+              disparaît — proposer une action que le serveur refusera est une fausse
+              promesse. */}
+          <NudgePremiereSynchro />
         </CasSync>
 
         <CasSync titre="Succès (aucune réserve) — notice FERMABLE">

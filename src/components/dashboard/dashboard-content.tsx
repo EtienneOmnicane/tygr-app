@@ -49,6 +49,8 @@ import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-p
 import { SyncButton } from "@/components/dashboard/sync-button";
 import { SynchroProvider } from "@/components/sync/sync-contexte";
 import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
+import { NudgePremiereSynchroConnecte } from "@/components/sync/nudge-premiere-synchro-connecte";
+import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -87,6 +89,7 @@ export function DashboardContent({
   syntheseTitre,
   syntheseLibelle,
   role,
+  connexionEtablie = false,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
@@ -105,6 +108,15 @@ export function DashboardContent({
   syntheseLibelle: string;
   /** Rôle résolu serveur — gate le bouton « Synchroniser » du side-panel (confort UI). */
   role: WorkspaceRole;
+  /**
+   * L'utilisateur ARRIVE d'un parcours de connexion réussi (`?connexion=etablie`, posé
+   * par la redirection du widget). Arme le nudge « lancez une première synchronisation ».
+   *
+   * ⚠️ C'est un signal d'ARRIVÉE, pas un état du workspace : il ne se déduit NI de
+   * `comptes`, NI de `flux` (tous deux filtrés par période/devise — cf. docstring de
+   * `NudgePremiereSynchro`). Ne pas « l'améliorer » en le dérivant des données.
+   */
+  connexionEtablie?: boolean;
 }) {
   const {
     comptes,
@@ -127,6 +139,13 @@ export function DashboardContent({
   if (choisirEtatDashboard(donnees) === "vide") {
     return (
       <DashboardShell>
+        {/* Le jeton se consomme MÊME ICI, où l'invite ne monte pas. Sans ça il
+            survivait dans l'URL, et `periode-switcher` le RECOPIE à chaque changement
+            de période (il ne retire que du/au/periode) : le drapeau se propageait donc
+            indéfiniment et pouvait réarmer l'invite bien plus tard, une fois les comptes
+            devenus visibles. Un jeton d'arrivée se consomme à l'arrivée — pas seulement
+            quand on a quelque chose à en faire. */}
+        {connexionEtablie && <ConsommerDrapeauConnexion />}
         <DashboardEmptyState />
       </DashboardShell>
     );
@@ -191,7 +210,15 @@ export function DashboardContent({
           </div>
         </header>
 
-        {/* 1bis. COMPTE RENDU DE SYNCHRO — transitoire par construction : notice de
+        {/* 1bis. NUDGE POST-CONNEXION — l'utilisateur vient de relier une banque : ses
+            COMPTES sont là (le solde s'affiche), ses TRANSACTIONS non (la finalisation
+            n'en importe aucune). Sans cette invite, il découvre un graphe vide sans
+            savoir que le geste suivant lui appartient. S'efface dès la première synchro
+            (cf. `NudgePremiereSynchroConnecte`) pour ne jamais contredire le compte
+            rendu ci-dessous. */}
+        {connexionEtablie && <NudgePremiereSynchroConnecte role={role} />}
+
+        {/* 1ter. COMPTE RENDU DE SYNCHRO — transitoire par construction : notice de
             succès FERMABLE (résultat du dernier clic) + callouts d'avertissement qui
             durent tant que leur condition tient. Ne monte rien quand il n'a rien à
             dire, pour que soldes et graphe remontent. */}

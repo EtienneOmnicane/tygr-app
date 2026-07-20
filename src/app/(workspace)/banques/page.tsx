@@ -66,7 +66,14 @@ export default async function PageBanques() {
         <ConnexionsBancaires connexions={connexions} />
 
         <div className="rounded-card bg-surface-card p-6 shadow-card">
-          <BankConnectWidget peutConnecter={peutConnecter} />
+          {/* Les connexions descendent aussi ici : c'est ce qui permet au feedback de
+              NOMMER les banques à reconnecter/réparer (leurs identifiants amont sont
+              opaques). Même liste, déjà résolue sous RLS ci-dessus — aucune requête
+              supplémentaire. */}
+          <BankConnectWidget
+            peutConnecter={peutConnecter}
+            connexions={connexions}
+          />
         </div>
       </div>
     </main>

@@ -51,8 +51,9 @@ import {
 } from "@/app/(workspace)/banques/actions";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import { registreSynchro } from "@/components/sync/registre-synchro";
+import type { ConnexionNommable } from "@/components/banques/noms-banques";
 import {
-  ROUTE_DASHBOARD,
+  ROUTE_DASHBOARD_CONNEXION_ETABLIE,
   WidgetFeedback,
   type ConnexionAReparer,
   type ConnexionAReconnecter,
@@ -94,9 +95,17 @@ const OmniFiLinkLauncher = dynamic(
 
 export function BankConnectWidget({
   peutConnecter,
+  connexions = [],
 }: {
   /** Rôle autorisé (MANAGER/ADMIN) — UX seulement ; la barrière réelle est serveur. */
   peutConnecter: boolean;
+  /**
+   * Banques du workspace, DÉJÀ résolues par le RSC sous RLS (`listerConnexionsBancaires`).
+   * Traversent tel quel jusqu'à `WidgetFeedback`, qui s'en sert uniquement pour NOMMER
+   * les connexions des signaux `reparation`/`aReconnecter` — dont les identifiants sont
+   * opaques. Ce composant ne les lit pas lui-même.
+   */
+  connexions?: ConnexionNommable[];
 }) {
   const router = useRouter();
   const [demarrage, demarrer, demarrageEnCours] = useActionState(
@@ -105,7 +114,15 @@ export function BankConnectWidget({
   );
   const [finalisation, setFinalisation] =
     useState<EtatFinalisationUI>(ETAT_FINALISATION_VIDE);
-  const [, startFinalisation] = useTransition();
+  // Le pending de la transition était JETÉ (`const [, startFinalisation]`). Conséquence :
+  // sur cet écran, « Synchroniser mes comptes » restait cliquable pendant toute la durée
+  // du vol — l'invariant « un seul parcours à la fois », pourtant énoncé pour les autres
+  // actions, ne s'appliquait pas à celle-ci. On le récupère.
+  const [travailEnCours, startFinalisation] = useTransition();
+  // Une SYNCHRO est en vol — distinct de `travailEnCours`, qui couvre aussi la
+  // finalisation et la réparation. Seule la synchro mérite le loader dédié : afficher
+  // « Synchronisation en cours » pendant une réparation MFA serait faux.
+  const [synchroEnVol, setSynchroEnVol] = useState(false);
   // Le LinkToken courant monte le launcher. `ferme` réarme après sortie/succès.
   const [ferme, setFerme] = useState(false);
   // Verrou anti-double-déclenchement : une fois la redirection lancée, on neutralise
@@ -161,7 +178,11 @@ export function BankConnectWidget({
       // l'état — jamais de redirection qui masquerait un échec (cf. type UI).
       if (r.erreur === null && r.complet === true) {
         setRedirection(true);
-        router.push(ROUTE_DASHBOARD);
+        // On PORTE le signal dans la redirection : sans lui, le dashboard n'a aucun
+        // moyen de savoir qu'une banque vient d'être reliée (le push était nu), et
+        // l'utilisateur y atterrit devant un graphe vide sans savoir qu'il lui reste à
+        // synchroniser. La finalisation rattache les comptes, jamais les transactions.
+        router.push(ROUTE_DASHBOARD_CONNEXION_ETABLIE);
       }
     });
   }
@@ -177,14 +198,32 @@ export function BankConnectWidget({
     // échec du widget (c'est le repli documenté ci-dessus). Sans cette purge, un succès
     // de synchro s'afficherait EN MÊME TEMPS que le rouge de l'échec précédent.
     setErreurWidget(null);
+    setSynchroEnVol(true);
     startFinalisation(async () => {
-      const r = await synchroniserConnexionsAction();
-      setFinalisation(r);
-      // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
-      // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
-      setReparation(r.reparation ?? []);
-      // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
-      setAReconnecter(r.aReconnecter ?? []);
+      try {
+        const r = await synchroniserConnexionsAction();
+        setFinalisation(r);
+        // Le re-sync peut signaler des connexions à réparer (OTP redemandé) → on les
+        // expose pour faire apparaître le(s) bouton(s) « Reconnecter ».
+        setReparation(r.reparation ?? []);
+        // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
+        setAReconnecter(r.aReconnecter ?? []);
+      } finally {
+        // `finally` et pas une ligne de fin : le verrou doit être relâché sur TOUTE
+        // sortie, y compris un `return` anticipé ou un rejet. (Sur un rejet, le
+        // sous-arbre part de toute façon vers la frontière d'erreur — ce n'est donc pas
+        // « le loader reste allumé » qui motive ce `finally`, contrairement à ce que
+        // disait cette note : c'est la robustesse du relâchement lui-même.)
+        //
+        // ⚠️ PAS de `catch` ici, et c'est délibéré (constat de cross-review 6/10) : une
+        // session expirée lève `NonAuthentifieError` AVANT le try de l'action, donc elle
+        // arrive ici comme un rejet. L'attraper pour afficher « Réessayez dans un
+        // instant » ferait boucler l'utilisateur sur un conseil qui ne peut pas marcher,
+        // au lieu de le renvoyer se reconnecter. On laisse donc l'erreur remonter à la
+        // frontière d'erreur — un échec NOMMÉ et visible — et on se contente de libérer
+        // le verrou. Ne pas « améliorer » ça en rajoutant un catch générique.
+        setSynchroEnVol(false);
+      }
     });
   }
 
@@ -203,20 +242,32 @@ export function BankConnectWidget({
     // token d'onboarding est perdu de toute façon — on l'acte.
     setFerme(true);
     startFinalisation(async () => {
-      const r = await creerLinkTokenRepairAction(
-        cx.connectionId,
-        cx.jobId,
-        redirectOrigin,
-      );
-      setRepairEnCours(false);
-      if (r.erreur !== null || !r.linkToken) {
-        // Échec de création du token : message d'erreur, l'état réparation RESTE
-        // (le bouton reste cliquable pour réessayer). Pas de launcher monté.
-        setFinalisation({ erreur: r.erreur ?? MESSAGE_REPAIR_ECHEC, succes: null });
-        return;
+      try {
+        const r = await creerLinkTokenRepairAction(
+          cx.connectionId,
+          cx.jobId,
+          redirectOrigin,
+        );
+        if (r.erreur !== null || !r.linkToken) {
+          // Échec de création du token : message d'erreur, l'état réparation RESTE
+          // (le bouton reste cliquable pour réessayer). Pas de launcher monté.
+          setFinalisation({
+            erreur: r.erreur ?? MESSAGE_REPAIR_ECHEC,
+            succes: null,
+          });
+          return;
+        }
+        setFinalisation(ETAT_FINALISATION_VIDE);
+        setRepair({ connectionId: cx.connectionId, token: r.linkToken });
+      } finally {
+        // `finally`, et pas une ligne après le `await` : un rejet sautait par-dessus, et
+        // `repairEnCours` restait vrai POUR TOUJOURS. Or ce drapeau désarme AUSSI
+        // « Connecter une banque » et « Synchroniser mes comptes » : l'écran entier
+        // restait mort jusqu'au rechargement. Symétrique du `finally` de `synchroniser`,
+        // et sans `catch` pour la même raison qu'ici (cf. `synchroniser`) : une session
+        // expirée doit remonter, pas se déguiser en « réessayez ».
+        setRepairEnCours(false);
       }
-      setFinalisation(ETAT_FINALISATION_VIDE);
-      setRepair({ connectionId: cx.connectionId, token: r.linkToken });
     });
   }
 
@@ -325,7 +376,10 @@ export function BankConnectWidget({
               Boolean(tokenActif) ||
               redirection ||
               Boolean(repair) ||
-              repairEnCours
+              repairEnCours ||
+              // Même invariant : pendant une finalisation/synchro/réparation en vol,
+              // ouvrir un nouveau parcours de connexion démonterait l'état en cours.
+              travailEnCours
             }
             className="inline-flex h-10 items-center gap-2 rounded-control bg-primary
               px-4 text-sm font-semibold text-text-onink transition-colors
@@ -353,7 +407,11 @@ export function BankConnectWidget({
             // Cohérence de l'invariant « un seul parcours à la fois » : pendant que le
             // LinkToken est en vol, `tokenActif` est encore null — sans ce terme, c'était
             // la SEULE action à échapper à l'invariant.
-            demarrageEnCours
+            demarrageEnCours ||
+            // …et pendant que l'action tourne. Sans ce terme, un second clic relançait
+            // une synchro par-dessus la première : deux vols concurrents dont le dernier
+            // retour gagne, sur une action que l'amont throttle par ailleurs à 1/15 min.
+            travailEnCours
           }
           title="Relit vos connexions chez votre banque et met à jour vos comptes (y compris ceux qui n’apparaîtraient pas encore)."
           className="inline-flex h-10 items-center gap-1.5 rounded-control px-2 text-sm
@@ -367,6 +425,10 @@ export function BankConnectWidget({
       </div>
 
       <WidgetFeedback
+        // Une synchro est en vol : loader indéterminé + durée annoncée, comme sur le
+        // dashboard. Les deux écrans appellent la MÊME action — ils doivent dire la même
+        // chose de l'attente, sinon le même geste se lit différemment selon l'endroit.
+        synchroEnCours={synchroEnVol}
         erreurDemarrage={demarrage.erreur}
         erreurWidget={erreurWidget}
         erreurFinalisation={finalisation.erreur}
@@ -389,8 +451,24 @@ export function BankConnectWidget({
         // vol, `tokenActif` est encore null, et lancer une réparation à cet instant ferait
         // AVALER en silence le token frais qui arrive (l'utilisateur clique « Connecter une
         // banque »… et rien ne s'ouvre).
-        widgetOuvert={Boolean(tokenActif) || Boolean(repair) || demarrageEnCours}
+        // `travailEnCours` compte AUSSI ici, et c'est le terme qui manquait : sans lui,
+        // « Reconnecter » restait le seul bouton cliquable pendant une synchro. Un clic
+        // ouvrait une SECONDE transition concurrente — le widget REPAIR s'ouvrait
+        // pendant que le loader continuait d'annoncer « Synchronisation en cours », et
+        // le retour de la synchro écrasait ensuite l'état de la réparation (dernier
+        // arrivé gagne). C'est exactement le mensonge que la séparation
+        // `synchroEnVol`/`travailEnCours` existe pour empêcher.
+        widgetOuvert={
+          Boolean(tokenActif) ||
+          Boolean(repair) ||
+          demarrageEnCours ||
+          travailEnCours
+        }
         aReconnecter={aReconnecter}
+        // Permet de NOMMER les banques des signaux ci-dessus (leurs identifiants sont
+        // opaques). Le libellé reste dans cette UI authentifiée et scopée — jamais dans
+        // un log ni un message d'erreur (règle 8).
+        connexions={connexions}
       />
     </div>
   );

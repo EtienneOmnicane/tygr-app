@@ -107,6 +107,34 @@
   --color-chart-cat-neutral: #b3b9c9;
 }
 
+/*
+ * LOADER INDÉTERMINÉ — une navette qui traverse sa piste, sans jamais prétendre
+ * mesurer une avancée.
+ *
+ * ⚠️ INDÉTERMINÉ AU SENS STRICT, et c'est une contrainte AMONT, pas un choix d'esthétique :
+ * l'API Omni-FI n'expose AUCUN compteur incrémental pendant un scrape (le total ne tombe
+ * qu'à `COMPLETED`, dans `PersistenceStats`). Toute barre qui se remplirait de 0 à 100 %,
+ * ou tout palier minuté (« Récupération… » → « Traitement… »), serait donc décorrélé du
+ * vrai statut — et mentirait précisément quand le job traîne, c'est-à-dire au moment où
+ * l'utilisateur regarde le plus. La navette dit « ça travaille, durée inconnue » : c'est
+ * tout ce qu'on sait, donc tout ce qu'on montre.
+ *
+ * Déclaré ici plutôt qu'en style inline : `motion-safe:` doit pouvoir le neutraliser
+ * (prefers-reduced-motion), ce qu'un `style={{animation}}` ne permet pas.
+ */
+@keyframes tygr-navette {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@theme {
+  --animate-navette: tygr-navette 1.4s ease-in-out infinite;
+}
+
 body {
   background: var(--color-surface-page);
   color: var(--color-text);
