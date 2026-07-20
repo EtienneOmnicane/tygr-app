@@ -32,6 +32,10 @@ import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
 import { LoaderSynchro } from "@/components/sync/loader-synchro";
 import {
+  CLE_DRAPEAU_CONNEXION,
+  VALEUR_DRAPEAU_CONNEXION,
+} from "@/components/sync/drapeau-connexion";
+import {
   nommerToutes,
   resoudreNomsBanques,
   type ConnexionNommable,
@@ -51,7 +55,8 @@ export const ROUTE_DASHBOARD = "/";
  * SYNCHRONISATION manuelle (les deux gestes alimentent le même `succes`), où l'invite
  * serait fausse — l'utilisateur vient précisément de faire ce qu'elle demande.
  */
-export const ROUTE_DASHBOARD_CONNEXION_ETABLIE = "/?connexion=etablie";
+export const ROUTE_DASHBOARD_CONNEXION_ETABLIE =
+  `${ROUTE_DASHBOARD}?${CLE_DRAPEAU_CONNEXION}=${VALEUR_DRAPEAU_CONNEXION}` as const;
 
 /** Une connexion à réparer (signal `reparation` du serveur). Identifiants opaques. */
 export interface ConnexionAReparer {

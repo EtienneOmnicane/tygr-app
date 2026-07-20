@@ -2,43 +2,62 @@
 
 /**
  * Branchement du nudge post-connexion sur le contexte de synchro. Coquille MINIMALE,
- * même partition que `SyncSummaryConnecte` : elle lit `useSynchro()` et laisse
- * `NudgePremiereSynchro` pur — donc montable avec des états FIGÉS par la route de démo
- * (Visual QA, Gate 4).
+ * même partition que `SyncSummaryConnecte` : elle lit `useSynchro()`, consomme le jeton
+ * d'arrivée, et laisse `NudgePremiereSynchro` pur — donc montable avec des états FIGÉS
+ * par la route de démo (Visual QA, Gate 4).
  *
- * ⚠️ POURQUOI LE NUDGE S'EFFACE DÈS LE PREMIER CLIC (le défaut qu'on évite) : le nudge
- * est armé par `?connexion=etablie`, et ce paramètre SURVIT au `router.refresh()` que
- * `sync-contexte.tsx` déclenche en fin de synchro. Sans la garde ci-dessous, l'invite
- * « lancez une première synchronisation » resterait donc affichée APRÈS la
- * synchronisation — juste à côté du compte rendu qui annonce, lui, que les transactions
- * sont importées. Deux messages contradictoires sur le même écran, et c'est le nudge qui
- * aurait tort.
+ * ⚠️ LE JETON EST CONSOMMÉ DÈS LE PREMIER RENDU, et c'est LA correction du défaut relevé
+ * en cross-review (8/10). La version précédente n'armait/désarmait l'invite qu'avec
+ * l'état du contexte (`retour !== null`). Or cet état meurt avec le sous-arbre, tandis
+ * que l'URL est restaurée verbatim par le navigateur : connexion → synchro réussie →
+ * « Transactions » → bouton Précédent, et « lancez une première synchronisation »
+ * réapparaissait au-dessus d'un dashboard déjà plein. Aucune garde d'ÉTAT ne pouvait
+ * corriger ça — le problème vit dans l'HISTORIQUE, il fallait donc agir sur l'historique.
  *
- * On ne purge PAS l'URL pour autant (`router.replace`) : sur cet écran, réécrire l'URL
- * pendant que la synchro est en vol ferait re-rendre la page pour une raison purement
- * cosmétique. L'état de vérité — « une synchro a-t-elle été lancée depuis cet
- * atterrissage ? » — vit déjà dans le contexte ; on le lit, on n'en fabrique pas un
- * second. Un rechargement manuel ré-arme le nudge : c'est acceptable (la question
- * « ai-je importé mes transactions ? » redevient légitime) et sans persistance.
+ * `window.history.replaceState` (supporté par le routeur App Router, cf. « Native History
+ * API » dans la doc Next) remplace l'entrée courante : le drapeau n'est plus atteignable
+ * par le bouton Précédent, et — contrairement à `router.replace` — l'opération ne
+ * déclenche AUCUN aller-retour RSC. L'invite déjà rendue reste donc affichée, sans
+ * scintillement ni refetch, jusqu'à ce que l'utilisateur agisse.
+ *
+ * Effet volontairement SANS dépendance réactive : il consomme un jeton d'ARRIVÉE, une
+ * fois. Il ne pose aucun état (donc jamais de `react-hooks/set-state-in-effect`), et il
+ * est idempotent — `urlSansDrapeauConnexion` rend `null` au second passage, ce qui neutralise
+ * le double-montage des effets en développement.
  */
 import type { WorkspaceRole } from "@/server/db/schema";
 import { peutModifier } from "@/lib/permissions";
 import { useSynchro } from "@/components/sync/sync-contexte";
 import { NudgePremiereSynchro } from "@/components/sync/nudge-premiere-synchro";
+import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
+import { nudgeEstVisible } from "@/components/sync/drapeau-connexion";
 
 export function NudgePremiereSynchroConnecte({ role }: { role: WorkspaceRole }) {
   const { retour, enCours, synchroniser } = useSynchro();
 
-  // Une synchro est en vol (`enCours`) ou a déjà rendu un compte rendu (`retour`) :
-  // l'invite n'a plus lieu d'être, le compte rendu prend le relais et dit la vérité du
-  // moment. Cf. docstring — c'est la garde qui empêche le nudge de se contredire.
-  if (enCours || retour !== null) return null;
+  // Ce composant n'est monté QUE si la page a lu le drapeau (`arme` est donc vrai ici) ;
+  // les deux autres gardes couvrent la synchro faite SANS quitter la page, où le rendu
+  // courant porte encore l'invite alors que le compte rendu vient de la démentir.
+  const visible = nudgeEstVisible({
+    arme: true,
+    enCours,
+    aUnRetour: retour !== null,
+  });
 
   return (
-    <NudgePremiereSynchro
-      // Confort UX seulement — la garde réelle est SERVEUR.
-      peutSynchroniser={peutModifier(role)}
-      onSynchroniser={synchroniser}
-    />
+    <>
+      {/* Rendu INCONDITIONNELLEMENT, y compris quand l'invite est masquée : le jeton
+          doit être consommé du seul fait d'être arrivé ici. Le placer sous la condition
+          le laisserait dans l'URL pendant une synchro en vol — et le bouton Précédent
+          le ressusciterait, ce que cette correction supprime. */}
+      <ConsommerDrapeauConnexion />
+      {visible && (
+        <NudgePremiereSynchro
+          // Confort UX seulement — la garde réelle est SERVEUR.
+          peutSynchroniser={peutModifier(role)}
+          onSynchroniser={synchroniser}
+        />
+      )}
+    </>
   );
 }

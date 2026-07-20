@@ -59,6 +59,10 @@ import {
 } from "@/server/auth/session";
 
 import { DashboardContent } from "@/components/dashboard/dashboard-content";
+import {
+  CLE_DRAPEAU_CONNEXION,
+  drapeauConnexionArme,
+} from "@/components/sync/drapeau-connexion";
 
 /**
  * Next 16 : `searchParams` est un Promise à `await` (AGENTS.md « This is NOT the
@@ -107,11 +111,17 @@ export default async function PageDashboard({
   // ARRIVÉE d'un parcours de connexion réussi — posé par la redirection du widget
   // (`bank-connect-widget.tsx`). Arme le nudge « lancez une première synchronisation ».
   //
-  // Validation = l'égalité stricte elle-même, et elle suffit : toute autre valeur (autre
-  // chaîne, tableau si le paramètre est répété, absence) retombe sur `false`. Le drapeau
-  // ne pilote QU'UN affichage — il n'atteint ni le SQL, ni une action, ni une décision
-  // d'autorisation ; il n'y a donc aucune surface à durcir au-delà de ce fail-safe.
-  const connexionEtablie = parametres.connexion === "etablie";
+  // JETON À USAGE UNIQUE : le composant client le CONSOMME de l'historique dès le premier
+  // rendu (cf. `drapeau-connexion.ts`). Sans cette consommation, le bouton Précédent
+  // restaurait l'URL et ressuscitait l'invite au-dessus d'un dashboard déjà synchronisé.
+  //
+  // La lecture passe par le module partagé plutôt que par une comparaison en dur : clé et
+  // valeur sont définies une seule fois, et la règle de validation (égalité stricte,
+  // fail-safe sur tout le reste) est prouvée par test. Le drapeau ne pilote QU'UN
+  // affichage — ni SQL, ni action, ni décision d'autorisation.
+  const connexionEtablie = drapeauConnexionArme(
+    parametres[CLE_DRAPEAU_CONNEXION],
+  );
 
   // `preset === null` ⇔ une PLAGE EXPLICITE (?du/?au) prime (contrat de resoudrePeriode).
   const sousPlage = preset === null;
