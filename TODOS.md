@@ -33,6 +33,61 @@ contrat de Server Action touché, aucune requête ajoutée.
   (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».
   **Déclencheur** : post-démo, après l'anomalie cooldown.
 
+- [ ] **NUDGE-VISION-ENTITE1 (P1, effort ~1 j, 2026-07-20) — l'invite post-connexion est
+  ÉTOUFFÉE exactement dans le cas qu'elle doit couvrir** (cross-review 7/10). **Quoi** :
+  `DashboardContent` retourne l'empty state global quand `comptes.length === 0`, 73 lignes
+  AVANT le point de montage du nudge — celui-ci ne monte donc jamais dans cet état.
+  **Pourquoi ça mord** : le dashboard lit sous `entity_scope` (`exigerSessionWorkspace`
+  porte le `viewFilter`), et l'ingestion crée les comptes avec `entity_id = NULL`
+  (invariant assumé : elle n'assigne jamais d'entité). Un membre en Vision Entité qui
+  connecte une banque ne voit donc AUCUN compte → l'écran lui affiche « Aucune banque
+  n'est encore connectée à cet espace » juste après qu'il en a connecté une, et l'invite
+  écrite pour cet atterrissage ne se déclenche pas. **La contradiction de l'empty state
+  est ANTÉRIEURE au lot** ; ce qui est nouveau, c'est que le correctif ne la couvre pas.
+  **Priorité P1** : c'est un parcours utilisateur qui se contredit lui-même, pas un
+  fignolage. **Déclencheur** : le premier workspace multi-entités avec un membre scopé
+  (Omnicane) — ou plus tôt si la démo se fait sous Vision Entité. **Piste** : traiter
+  « comptes invisibles sous le périmètre » comme un état DISTINCT de « aucun compte », ce
+  que le modèle actuel ne distingue pas.
+
+- [ ] **SYNC-NOM-BANQUE-HOMONYMES1 (P2, effort ~0,5 j, 2026-07-20) — deux connexions vers
+  la même banque redeviennent indiscernables** (cross-review 7/10). **Quoi** :
+  `institution_name` n'est pas unique. Deux connexions vers la même institution
+  (utilisateur ayant reconnecté au lieu de réparer, ou deux credentials MCB) produisent
+  « MCB Juice et MCB Juice — accès à rétablir », et dans la liste de réparation deux
+  boutons portant le même libellé et le même `aria-label`. **Pourquoi** : c'est très
+  exactement le défaut que le lot « nom de banque » existe pour corriger (« empilés sans
+  libellé, ils étaient indiscernables ») — il réapparaît dès qu'il y a homonymie. Ni
+  `nommerToutes` ni les 11 tests ne couvrent le cas doublon. **Pourquoi différé** : le
+  repli demande un ARBITRAGE PRODUIT (retomber sur l'anonyme ? désambiguïser par la date
+  de connexion ? par les 4 derniers caractères de l'identifiant ?) — aucun choix n'est
+  évident et aucun n'est neutre pour la démo. **Déclencheur** : premier workspace réel
+  portant deux connexions vers la même institution.
+
+- [ ] **UI-TRUNCATE-MINW01 (P2, effort ~0,25 j, 2026-07-20) — `truncate` inopérant sur le
+  nom de banque** (cross-review 6/10, à confirmer au Visual QA). **Quoi** : le `<li>` de
+  la liste de réparation est `flex flex-wrap items-center` ; `min-width` d'un flex item
+  vaut `auto`, donc le `<span class="truncate">` ne peut pas rétrécir sous son contenu et
+  l'ellipse ne mord pas. Un `institution_name` long (la colonne va jusqu'à `varchar(140)`)
+  pousse le bouton au lieu de s'ellipser. **Pourquoi P2** : `flex-wrap` fait d'abord
+  passer le bouton à la ligne, donc le débordement n'apparaît qu'au-delà de la largeur du
+  conteneur — dégradation cosmétique, jamais une perte d'information (et un LIBELLÉ peut
+  tronquer, contrairement à un montant). **Fix connu** : `min-w-0` sur le span.
+  **Déclencheur** : ta passe Visual QA, ou le premier nom d'institution > ~40 caractères.
+
+- [ ] **NUDGE-SUCCES-PARTIEL1 (P2, effort ~0,25 j, 2026-07-20) — l'atterrissage le plus
+  déroutant est le seul sans invite** (cross-review 6/10). **Quoi** : sur une finalisation
+  PARTIELLE, il n'y a pas de redirection (décision WIDGET-RD1 : ne jamais masquer un
+  échec) ; l'utilisateur suit « Voir mon tableau de bord », qui pointe volontairement sur
+  `ROUTE_DASHBOARD` NU — il arrive donc sur un dashboard sans aucune invite à
+  synchroniser. **Pourquoi le lien est nu** : il est PARTAGÉ avec le chemin « synchro
+  manuelle », où l'invite serait fausse (l'utilisateur vient de faire ce qu'elle demande).
+  **Pourquoi différé** : c'est un ARBITRAGE, pas un défaut — le parent sait quelle action
+  a produit `succes`, une seconde prop discriminerait, mais il faut décider si un
+  atterrissage partiel mérite l'invite alors qu'une partie des banques a échoué.
+  **Déclencheur** : première finalisation partielle observée en usage réel, ou ton
+  arbitrage produit.
+
 - [ ] **SYNC-MACHINE-INTERRUPTED1 (P1, effort ~0,5 j, 2026-07-20) — `INTERRUPTED` non
   mappé dans `machine-mfa.ts`.** Statut émis par le backend mais ABSENT de l'enum
   OpenAPI : il retombe sur le repli « statut inconnu → initialisation », donc
