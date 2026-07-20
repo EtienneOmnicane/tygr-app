@@ -80,6 +80,14 @@ const MESSAGE_REPAIR_ECHEC =
   "La reconnexion n’a pas pu démarrer. Réessayez dans un instant.";
 
 /**
+ * Repli quand l'appel de synchro REJETTE au lieu de répondre (réseau coupé, 500 sur
+ * l'endpoint de Server Action) : l'action ne peut pas mapper une erreur qu'elle n'a
+ * jamais reçue. Non énumérant, aucune cause relayée (règle 8).
+ */
+const MESSAGE_GENERIQUE_SYNCHRO =
+  "La synchronisation n’a pas pu aboutir. Réessayez dans un instant.";
+
+/**
  * Launcher chargé via `next/dynamic` (`ssr:false`) : le hook `useOmniFILink` touche
  * `window` / un script CDN et ne doit pas s'exécuter côté serveur.
  */
@@ -208,6 +216,12 @@ export function BankConnectWidget({
         setReparation(r.reparation ?? []);
         // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
         setAReconnecter(r.aReconnecter ?? []);
+      } catch {
+        // REJET de la promesse (réseau coupé, 500 sur l'endpoint de Server Action) :
+        // l'action ne peut pas mapper une erreur qu'elle n'a jamais reçue. Mon `finally`
+        // seul rendait cet échec MUET — le loader s'éteignait sans un mot, exactement
+        // l'écran figé que ce lot supprime. Message S2 générique, aucune cause relayée.
+        setFinalisation({ erreur: MESSAGE_GENERIQUE_SYNCHRO, succes: null });
       } finally {
         // `finally` et pas une ligne de fin : si l'action rejette (panne réseau avant
         // même le mapping S2), un loader resté allumé donnerait une synchro éternelle,
@@ -232,20 +246,37 @@ export function BankConnectWidget({
     // token d'onboarding est perdu de toute façon — on l'acte.
     setFerme(true);
     startFinalisation(async () => {
-      const r = await creerLinkTokenRepairAction(
-        cx.connectionId,
-        cx.jobId,
-        redirectOrigin,
-      );
-      setRepairEnCours(false);
-      if (r.erreur !== null || !r.linkToken) {
-        // Échec de création du token : message d'erreur, l'état réparation RESTE
-        // (le bouton reste cliquable pour réessayer). Pas de launcher monté.
-        setFinalisation({ erreur: r.erreur ?? MESSAGE_REPAIR_ECHEC, succes: null });
-        return;
+      try {
+        const r = await creerLinkTokenRepairAction(
+          cx.connectionId,
+          cx.jobId,
+          redirectOrigin,
+        );
+        if (r.erreur !== null || !r.linkToken) {
+          // Échec de création du token : message d'erreur, l'état réparation RESTE
+          // (le bouton reste cliquable pour réessayer). Pas de launcher monté.
+          setFinalisation({
+            erreur: r.erreur ?? MESSAGE_REPAIR_ECHEC,
+            succes: null,
+          });
+          return;
+        }
+        setFinalisation(ETAT_FINALISATION_VIDE);
+        setRepair({ connectionId: cx.connectionId, token: r.linkToken });
+      } catch {
+        // REJET de la promesse — coupure réseau ou 500 sur l'endpoint de Server Action.
+        // Le try/catch interne de l'action ne couvre que son CORPS : il ne peut rien pour
+        // un appel qui n'arrive jamais. Sans cette branche, l'échec était MUET (catch-all
+        // silencieux interdit) : l'utilisateur voyait « Ouverture… » s'éteindre sans un
+        // mot. On ne relaie AUCUN détail de la cause (règle 8) — juste le message S2.
+        setFinalisation({ erreur: MESSAGE_REPAIR_ECHEC, succes: null });
+      } finally {
+        // `finally`, et pas une ligne après le `await` : un rejet sautait par-dessus, et
+        // `repairEnCours` restait vrai POUR TOUJOURS. Or ce drapeau désarme AUSSI
+        // « Connecter une banque » et « Synchroniser mes comptes » : l'écran entier
+        // restait mort jusqu'au rechargement. Symétrique du `finally` de `synchroniser`.
+        setRepairEnCours(false);
       }
-      setFinalisation(ETAT_FINALISATION_VIDE);
-      setRepair({ connectionId: cx.connectionId, token: r.linkToken });
     });
   }
 
