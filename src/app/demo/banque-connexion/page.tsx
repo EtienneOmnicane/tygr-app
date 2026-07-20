@@ -10,7 +10,8 @@
  * donc incapturable en headless).
  *
  * À vérifier par vision :
- *   - succès = `text-success` (jamais de rouge, réservé aux montants sortants) ;
+ *   - succès = `text-text` appuyé (jamais de rouge, réservé aux montants sortants ; et
+ *     plus de vert en texte non plus — 3,46:1, sous l'AA, A11Y-VERT-SUCCES1) ;
  *   - erreur = `Callout severite="danger"` (fond + icône + message, §3.4) + alerte ;
  *   - le lien « Voir mon tableau de bord » a une cible (#) et un focus visible ;
  *   - le message de redirection est bref et neutre.

@@ -15,7 +15,12 @@
  *     rien ne distinguait plus une panne de connexion d'une sortie d'argent. Le
  *     prétexte « feedback inline court » ne tenait pas — §3.4 ne prévoit pas
  *     d'exception de taille.
- *   - Succès = `text-success`, JAMAIS de rouge (réservé aux montants sortants).
+ *   - Succès = `text-text` (neutre appuyé), JAMAIS de rouge (réservé aux montants
+ *     sortants) et plus de vert non plus : `text-success` mesure 3,46:1, sous l'AA de
+ *     4,5 en corps de texte (A11Y-VERT-SUCCES1). Ici le succès n'a pas de surface
+ *     teintée — c'est une ligne inline, pas une notice — donc le vert n'a nulle part
+ *     où subsister ; le ton se joue entre `text-text` (plein) et `text-text-muted`
+ *     (à réserve).
  *   - Redirection (succès COMPLET) : message bref `role="status"`.
  *   - Succès sans redirection (partiel, ou flag `complet` pas encore exposé) :
  *     confirmation + lien d'action explicite vers le Dashboard (§2.3).
@@ -145,7 +150,7 @@ export function WidgetFeedback({
           `router.push` du parent emmène vers le Dashboard ; ce repère reste le
           temps que la navigation s'effectue (le widget est démonté à l'arrivée). */}
       {redirection && (
-        <p role="status" className="text-sm text-success">
+        <p role="status" className="text-sm text-text">
           Connexion établie — redirection vers votre tableau de bord…
         </p>
       )}
@@ -158,11 +163,16 @@ export function WidgetFeedback({
         <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* Le TON suit les signaux structurés, pas la simple présence du message : une
               banque en échec dur (fail-soft ⇒ `erreur` reste null, l'échec est écrit DANS
-              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre. */}
+              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre.
+              Le ton plein ne colore PLUS le texte en vert (A11Y-VERT-SUCCES1 : 3,46:1,
+              sous l'AA) — il l'appuie en `text-text` face au `text-muted` des comptes
+              rendus à réserve. La MÊME phrase serveur est rendue à l'identique par
+              `SyncSummary` sur le dashboard : les deux écrans doivent bouger ensemble,
+              sans quoi le même message se lit différemment selon l'endroit. */}
           <span
             className={cn(
               "text-sm",
-              registre === "succes" ? "text-success" : "text-text-muted",
+              registre === "succes" ? "text-text" : "text-text-muted",
             )}
           >
             {succes}

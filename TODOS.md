@@ -3056,12 +3056,24 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
      en couleur d'état système sans casser l'étanchéité sémantique du §3.4.
   **Portée** : tout message de succès de l'app, pas seulement la synchro — `SyncSummary`
   et `widget-feedback` rendent la MÊME phrase serveur, un correctif unilatéral sur un seul
-  des deux écrans les ferait diverger (classe de bug tuée par la PR #202). D'où le report :
-  c'est un arbitrage de token global, pas une retouche d'écran, et il tombe à 2 jours d'une
-  démo. **Fix à trancher** : assombrir `--color-success` jusqu'à ≥4,5:1 sur `surface-card`
-  puis corriger la ligne 409 de la doc, OU appliquer au succès le même partage que la
-  primitive `Callout` (texte en `text-text`, couleur portée par une icône).
-  **Déclencheur** : avant la démo BOM Innov8 (audience régulateur = a11y opposable).
+  des deux écrans les ferait diverger (classe de bug tuée par la PR #202).
+  **PARTIELLEMENT TRAITÉ (2026-07-20, `fix/ux-synchro-et-erreur-connexion`)** — l'option
+  « partage `Callout` » a été retenue et appliquée aux surfaces du feedback de synchro :
+  notice de succès (`text-text` sur `success-bg`, vert en fond + coche), pastille de
+  fraîcheur (libellé neutre, point coloré), et `widget-feedback` — inclus DÉLIBÉRÉMENT
+  malgré son absence du brief, précisément pour ne pas créer la divergence annoncée
+  ci-dessus (arbitrage Etienne, 2026-07-20). `docs/UI_GUIDELINES.md:409` est corrigée
+  (les deux valeurs annoncées échouaient l'AA) et §3.7 précise que le niveau colore le
+  point, pas le libellé.
+  **RESTE À FAIRE (le P1 ne se ferme PAS)** : les ~10 `text-success` hors périmètre —
+  `admin/entites/{bandeau-recap,assignation-comptes,assignation-entites,propositions}`,
+  `admin/membres/formulaire-provisioning`, `echeance-badge` (badge « Payée »),
+  `connexions-bancaires` (badge « Connectée »), `workspace-switcher`. Plusieurs sont des
+  BADGES `bg-success-bg` + `text-success` : leur ratio est encore plus bas que sur blanc,
+  et le partage `Callout` ne s'y applique pas tel quel (un badge n'a pas d'icône). D'où
+  l'ajout d'un token **`success-700` AA** à trancher, qui reste le vrai objet de ce P1.
+  **Déclencheur** : après la démo BOM Innov8 (branche dédiée, audience régulateur = a11y
+  opposable).
 
 - [x] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
   échecs de scraping) tombent sur le message générique : on ferme le widget sans dire
