@@ -3030,9 +3030,25 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
   **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
 
-- [ ] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
+- [x] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
   échecs de scraping) tombent sur le message générique : on ferme le widget sans dire
-  POURQUOI.** Constaté en sandbox sur « Absa Pro » : la connexion passe le login
+  POURQUOI.** ✅ **LIVRÉ (2026-07-20, branche `fix/widget-err6-login-failed`)** — 10
+  `SyncJob.Error.Type` mappés au registre S2, lus À LA SOURCE (`omni-fi-core`,
+  `apps/sync_engine/orchestrator.py`, appels `_handle_failure`), aucun code inventé.
+  Le pont `Error.Type → onError.code` est PROUVÉ, pas supposé : le bundle CDN
+  (`staging-cdn.omni-fi.co/v1/omni-fi-connect.js`, relu le 2026-07-20) n'est qu'un
+  relais postMessage sans filtrage (`case ERROR: onError({code: t.code || "UNKNOWN"})`),
+  et `LOGIN_FAILED` — qui n'existe QUE comme `Error.Type` — a bien été observé en
+  console. Trois messages selon l'ACTION possible : identifiants refusés / délai MFA
+  dépassé / panne de la chaîne de récupération (« réessayez **plus tard** », jamais
+  « dans un instant » : un `SCRAPER_UI_CHANGE` exige un correctif amont). Nuance
+  trouvée en implémentant : `LOGIN_FAILED` couvre AUSSI le 3e code MFA erroné
+  (`documentation_api.md`) → le message nomme les deux causes sans dire laquelle.
+  `UNKNOWN_ERROR` laissé au repli DÉLIBÉRÉMENT (angle mort visible), verrouillé par un
+  test. Couverture : 7 cas dans `tests/unit/omnifi-link-erreur.test.ts`. **Reste
+  ouvert** : WIDGET-ERR2 (ces codes ne vivent qu'en console client → invisibles en prod
+  sans télémétrie serveur) et WIDGET-ERR3 (canal d'erreur §3.4 : fond + icône).
+  **Constat d'origine :** Constaté en sandbox sur « Absa Pro » : la connexion passe le login
   (`link-connect` 201) puis le job de sync bascule sur la branche `↘ FAILED` de la
   machine SyncJob (`docs/documentation_api.md` §Sync Engine) ; le CDN émet
   `onError({ code: "LOGIN_FAILED" })` (**vérifié console 2026-07-16** :
