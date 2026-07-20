@@ -47,9 +47,9 @@ export function LoaderSynchro({ className }: { className?: string }) {
           mouvement. */}
       <div
         aria-hidden
-        className="h-1 w-full max-w-xs overflow-hidden rounded-pill bg-surface-inset"
+        className="h-1 w-full max-w-xs overflow-hidden rounded-full bg-surface-inset"
       >
-        <div className="h-full w-1/4 rounded-pill bg-primary motion-safe:animate-navette" />
+        <div className="h-full w-1/4 rounded-full bg-primary motion-safe:animate-navette" />
       </div>
     </div>
   );

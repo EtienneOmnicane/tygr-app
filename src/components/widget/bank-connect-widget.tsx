@@ -429,7 +429,19 @@ export function BankConnectWidget({
         // vol, `tokenActif` est encore null, et lancer une réparation à cet instant ferait
         // AVALER en silence le token frais qui arrive (l'utilisateur clique « Connecter une
         // banque »… et rien ne s'ouvre).
-        widgetOuvert={Boolean(tokenActif) || Boolean(repair) || demarrageEnCours}
+        // `travailEnCours` compte AUSSI ici, et c'est le terme qui manquait : sans lui,
+        // « Reconnecter » restait le seul bouton cliquable pendant une synchro. Un clic
+        // ouvrait une SECONDE transition concurrente — le widget REPAIR s'ouvrait
+        // pendant que le loader continuait d'annoncer « Synchronisation en cours », et
+        // le retour de la synchro écrasait ensuite l'état de la réparation (dernier
+        // arrivé gagne). C'est exactement le mensonge que la séparation
+        // `synchroEnVol`/`travailEnCours` existe pour empêcher.
+        widgetOuvert={
+          Boolean(tokenActif) ||
+          Boolean(repair) ||
+          demarrageEnCours ||
+          travailEnCours
+        }
         aReconnecter={aReconnecter}
         // Permet de NOMMER les banques des signaux ci-dessus (leurs identifiants sont
         // opaques). Le libellé reste dans cette UI authentifiée et scopée — jamais dans
