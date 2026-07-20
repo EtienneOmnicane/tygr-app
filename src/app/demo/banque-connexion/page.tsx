@@ -60,7 +60,7 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="2. Succès SANS redirection — bandeau + lien"
-          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre : le partiel est NEUTRE (une phrase d'échec en vert, c'était le faux message de victoire), le complet est vert."
+          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre, mais ne passe PLUS par le vert (3,46:1, sous l'AA — A11Y-VERT-SUCCES1) : le partiel est en `text-muted`, le complet en `text-text` appuyé. Une phrase d'échec rendue en vert était le faux message de victoire corrigé par la PR #202 ; la distinction subsiste, elle se joue désormais entre deux neutres."
         >
           {/* PARTIEL — registre `neutre` : le message DIT l'échec, le ton ne le contredit pas. */}
           <WidgetFeedback

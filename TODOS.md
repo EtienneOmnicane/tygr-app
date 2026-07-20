@@ -3072,6 +3072,14 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   BADGES `bg-success-bg` + `text-success` : leur ratio est encore plus bas que sur blanc,
   et le partage `Callout` ne s'y applique pas tel quel (un badge n'a pas d'icône). D'où
   l'ajout d'un token **`success-700` AA** à trancher, qui reste le vrai objet de ce P1.
+  **Mesure supplémentaire à intégrer au fix** (Gate 4 du 2026-07-20) : l'ICÔNE de la
+  notice de succès (`text-success` sur `success-bg`) tombe à **2,93:1**, 0,07 sous le
+  seuil 3:1 des objets non textuels — le fond teinté rabote le vert (3,46 sur blanc →
+  2,93 sur `success-bg`). Sans conséquence fonctionnelle (icône `aria-hidden`, redondante
+  avec un message à 15,1:1, donc hors champ de 1.4.11), mais `success-700` doit être
+  choisi en visant **≥3:1 sur `success-bg`**, pas seulement sur blanc — sinon le token
+  « corrigé » laissera cet écart en place. Les icônes warning (4,56) et danger (4,40)
+  passent déjà.
   **Déclencheur** : après la démo BOM Innov8 (branche dédiée, audience régulateur = a11y
   opposable).
 

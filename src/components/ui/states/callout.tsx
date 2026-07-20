@@ -24,6 +24,18 @@
  * fait qu'un succès est FERMABLE (cf. `onFermer`) — un résultat est éphémère, une
  * alerte non.
  *
+ * ⚠️ ÉCART CONNU, mesuré au DOM (Gate 4, 2026-07-20) : l'icône `text-success` sur
+ * `success-bg` tombe à **2,93:1**, soit 0,07 sous le seuil 3:1 des objets non textuels
+ * (le fond teinté, plus sombre que le blanc, rabote le contraste du vert : 3,46 → 2,93).
+ * Non corrigé ICI à dessein — le seul correctif propre est un token `success-700` plus
+ * sombre, qui est l'objet même de A11Y-VERT-SUCCES1 (P1, branche dédiée post-démo) ;
+ * l'introduire en catimini reviendrait à trancher cet arbitrage sans le dire. Recycler
+ * `inflow-700` (5,36:1) serait pire : c'est un token de DONNÉE financière, et §3.7
+ * interdit de le détourner en couleur d'état système. L'écart reste sans conséquence
+ * fonctionnelle : l'icône est `aria-hidden` et strictement redondante avec le message,
+ * qui porte le sens à 15,1:1 — 1.4.11 vise les objets graphiques NÉCESSAIRES à la
+ * compréhension. Les icônes `warning` (4,56:1) et `danger` (4,40:1) passent, elles.
+ *
  * Facture APP UI (pas « mosaïque de cartes ») : `rounded-control`, aucune ombre, aucune
  * bordure gauche colorée (motif générique), hauteur compacte. Un callout est une LIGNE
  * d'information, pas une carte.
