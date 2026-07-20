@@ -22,7 +22,9 @@ import type { EtatFinalisation } from "@/app/(workspace)/banques/actions";
 /**
  * Ton du message rendu :
  *  - `erreur` : quelque chose a planté → `text-danger` + `role="alert"` ;
- *  - `succes` : synchro pleine, AUCUNE réserve → `text-success` (le seul vert autorisé) ;
+ *  - `succes` : synchro pleine, AUCUNE réserve → surface `success` (fond + icône verts,
+ *    message en `text-text`) ou, à défaut de surface teintée, simple `text-text` appuyé.
+ *    Le vert ne porte JAMAIS le texte : 3,46:1, sous l'AA (A11Y-VERT-SUCCES1) ;
  *  - `neutre` : la synchro a abouti mais une RÉSERVE subsiste (échec partiel, scrape encore
  *    en cours, réparation, reconnexion) → `text-text-muted`. Ni rouge (rien n'a planté), ni
  *    vert (ce n'est pas « à jour ») ;

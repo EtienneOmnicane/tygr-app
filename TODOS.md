@@ -3020,15 +3020,68 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   **Déclencheur** : immédiat — avant toute démo sur un env non piloté par `dev-server.sh`.
   **Effort** : XS.
 
-- [ ] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
-  `docs/UI_GUIDELINES.md` §3.4 : « une erreur a TOUJOURS un fond teinté, une icône et un
-  texte » — or les 3 canaux d'erreur du composant (`erreurDemarrage`, `erreurWidget`,
-  `erreurFinalisation`) rendent un `text-danger` NU. Écart **préexistant** et assumé dans le
-  JSDoc du composant (« feedback inline court ») ; `fix/widget-erreur-visible` s'y conforme
-  par cohérence plutôt que de rouvrir une décision UI dans un correctif de bug — mais l'écart
-  compte désormais 3 occurrences. À trancher en une fois : soit §3.4 s'applique (fond
-  `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
-  **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
+- [x] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
+  ✅ **LIVRÉ (2026-07-20, branche `fix/ux-synchro-et-erreur-connexion`)** — arbitrage rendu
+  dans le premier sens : **§3.4 s'applique**, aucune exception « feedback inline » (la règle
+  ne prévoit pas de dérogation de taille). Les 3 canaux (`erreurDemarrage`, `erreurWidget`,
+  `erreurFinalisation`) passent par la primitive `Callout severite="danger"`
+  (`src/components/ui/states/callout.tsx`) : fond `danger-bg` + icône + message + `role="alert"`.
+  Registre de messages et logique non-énumérante (#229) NON touchés — seul le contenant change.
+  **Trouvaille de la passe design** : le motif `text-danger` sur `bg-danger-bg` plafonne à
+  **4,40:1** et ÉCHOUE l'AA en corps de texte (mesuré, WCAG 2.1). La primitive met donc le
+  MESSAGE en `text-text` (11,46:1) et réserve la couleur de sévérité à l'ICÔNE.
+  **Constat d'origine** : l'écart comptait 3 occurrences, assumé dans le JSDoc du composant.
+
+- [ ] **UI-CALLOUT-MIGRATION1 (P2, effort S, 2026-07-20) — 4 callouts ad-hoc à migrer vers
+  la primitive `Callout`.** Le markup « fond teinté + icône + message » est dupliqué à
+  l'identique dans `components/echeances/echeances-feature.tsx:246`,
+  `components/regles/regles-feature.tsx:260`, `components/transactions/transactions-feature.tsx:459`
+  et `components/admin/avertissement-vue-restreinte.tsx:38` (variante `warning`). Tous portent
+  le défaut de contraste mesuré ci-dessus (`text-danger` sur `danger-bg` = **4,40:1**, sous
+  l'AA de 4,5) : ce n'est donc pas qu'une déduplication, c'est une correction d'accessibilité.
+  Hors périmètre de WIDGET-ERR3 (livré à 2 jours d'une démo, on ne touche pas 4 écrans
+  supplémentaires). **Déclencheur** : prochain chantier UI transverse, OU premier audit a11y.
+
+- [ ] **A11Y-VERT-SUCCES1 (P1, effort S, 2026-07-20) — le token `success` échoue l'AA en
+  corps de texte, ET la doc affirme le contraire.** Mesuré au DOM pendant la Gate 4 de
+  `fix/ux-synchro-et-erreur-connexion` (WCAG 2.1, sur `surface-card`) :
+  `text-success` rendu = **3,46:1**, sous le seuil AA de 4,5. Or `docs/UI_GUIDELINES.md:409`
+  annonce « `success` #079455 (AA sur blanc) » en qualifiant l'accessibilité de « non
+  négociable (audience régulateur) ». **Deux défauts distincts** :
+  1. **dérive de token** — `globals.css:32` livre `--color-success: #1d9e55`, pas le
+     `#079455` documenté ;
+  2. **l'affirmation de la doc est fausse dans les deux cas** — `#079455` mesure **3,91:1**,
+     il échoue l'AA lui aussi. Le seul vert conforme du système est `inflow #157a4a`
+     (**5,36:1**), mais il est RÉSERVÉ à la donnée financière : on ne peut pas le recycler
+     en couleur d'état système sans casser l'étanchéité sémantique du §3.4.
+  **Portée** : tout message de succès de l'app, pas seulement la synchro — `SyncSummary`
+  et `widget-feedback` rendent la MÊME phrase serveur, un correctif unilatéral sur un seul
+  des deux écrans les ferait diverger (classe de bug tuée par la PR #202).
+  **PARTIELLEMENT TRAITÉ (2026-07-20, `fix/ux-synchro-et-erreur-connexion`)** — l'option
+  « partage `Callout` » a été retenue et appliquée aux surfaces du feedback de synchro :
+  notice de succès (`text-text` sur `success-bg`, vert en fond + coche), pastille de
+  fraîcheur (libellé neutre, point coloré), et `widget-feedback` — inclus DÉLIBÉRÉMENT
+  malgré son absence du brief, précisément pour ne pas créer la divergence annoncée
+  ci-dessus (arbitrage Etienne, 2026-07-20). `docs/UI_GUIDELINES.md:409` est corrigée
+  (les deux valeurs annoncées échouaient l'AA) et §3.7 précise que le niveau colore le
+  point, pas le libellé.
+  **RESTE À FAIRE (le P1 ne se ferme PAS)** : les ~10 `text-success` hors périmètre —
+  `admin/entites/{bandeau-recap,assignation-comptes,assignation-entites,propositions}`,
+  `admin/membres/formulaire-provisioning`, `echeance-badge` (badge « Payée »),
+  `connexions-bancaires` (badge « Connectée »), `workspace-switcher`. Plusieurs sont des
+  BADGES `bg-success-bg` + `text-success` : leur ratio est encore plus bas que sur blanc,
+  et le partage `Callout` ne s'y applique pas tel quel (un badge n'a pas d'icône). D'où
+  l'ajout d'un token **`success-700` AA** à trancher, qui reste le vrai objet de ce P1.
+  **Mesure supplémentaire à intégrer au fix** (Gate 4 du 2026-07-20) : l'ICÔNE de la
+  notice de succès (`text-success` sur `success-bg`) tombe à **2,93:1**, 0,07 sous le
+  seuil 3:1 des objets non textuels — le fond teinté rabote le vert (3,46 sur blanc →
+  2,93 sur `success-bg`). Sans conséquence fonctionnelle (icône `aria-hidden`, redondante
+  avec un message à 15,1:1, donc hors champ de 1.4.11), mais `success-700` doit être
+  choisi en visant **≥3:1 sur `success-bg`**, pas seulement sur blanc — sinon le token
+  « corrigé » laissera cet écart en place. Les icônes warning (4,56) et danger (4,40)
+  passent déjà.
+  **Déclencheur** : après la démo BOM Innov8 (branche dédiée, audience régulateur = a11y
+  opposable).
 
 - [x] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
   échecs de scraping) tombent sur le message générique : on ferme le widget sans dire

@@ -47,6 +47,8 @@ import { StateCard } from "@/components/dashboard/states/primitives";
 import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { SyncButton } from "@/components/dashboard/sync-button";
+import { SynchroProvider } from "@/components/sync/sync-contexte";
+import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -145,32 +147,55 @@ export function DashboardContent({
 
   return (
     <DashboardShell>
-      <div className="flex flex-col gap-6">
-        {/* 1. EN-TÊTE — titre + sous-titre à gauche ; fraîcheur du solde +
-            « Synchroniser » à droite (repris de l'ancienne carte SOLDE : on
-            rafraîchit là où on lit l'âge de la donnée). Pas de flex-wrap sur le
-            titre lui-même ; le cluster droit s'enroule sous lg si nécessaire. */}
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+      <SynchroProvider>
+        <div className="flex flex-col gap-6">
+        {/* 1. EN-TÊTE — titre + sous-titre à gauche, CLUSTER STATUT+ACTION à droite.
+            PAS de `flex-wrap` (CLAUDE.md § Intégration UI : on CONDENSE sous le
+            breakpoint, on n'enroule jamais un header). La condensation se fait par
+            `min-w-0` + `truncate` sur le bloc de titre — seuls des LIBELLÉS tronquent,
+            jamais un chiffre — et `shrink-0` sur le cluster, qui reste toujours
+            atteignable.
+
+            La pastille de fraîcheur est REVENUE ici (retour Etienne 2026-07-20) :
+            « quand la donnée date-t-elle ? » et « rafraîchir » sont le même objet
+            mental, et ils étaient aux deux coins opposés de l'écran — la pastille sous
+            le titre, le bouton en haut à droite. Regroupés, ils se lisent d'un seul
+            regard, et le compte rendu ci-dessous n'a plus à porter de socle permanent :
+            il ne montre que ce qui est nouveau. Le séparateur reste décoratif
+            (`aria-hidden`) : c'est la proximité qui fait le groupe, pas le trait. */}
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
             <h1 className="text-[26px] font-bold leading-tight tracking-tight text-text">
               Trésorerie
             </h1>
-            <p className="mt-1 text-sm text-text-muted">
+            <p className="mt-1 truncate text-sm text-text-muted">
               {libellePeriode} · {nbComptes} compte{nbComptes > 1 ? "s" : ""} connecté
               {nbComptes > 1 ? "s" : ""}
             </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex shrink-0 items-center gap-3">
             {fraicheur && (
-              <BalanceFreshnessPill
-                fraicheur={fraicheur}
-                compteLabel={synchro?.compteLabel}
-                ctaReconnexion={false}
-              />
+              <>
+                <BalanceFreshnessPill
+                  fraicheur={fraicheur}
+                  compteLabel={synchro?.compteLabel}
+                  // Décision produit inchangée : la réparation ne s'amorce pas depuis la
+                  // pastille — sur le Dashboard elle vit dans les callouts du compte
+                  // rendu, qui portent le geste avec son contexte.
+                  ctaReconnexion={false}
+                />
+                <span aria-hidden className="h-4 w-px bg-line-strong" />
+              </>
             )}
             <SyncButton role={role} />
           </div>
         </header>
+
+        {/* 1bis. COMPTE RENDU DE SYNCHRO — transitoire par construction : notice de
+            succès FERMABLE (résultat du dernier clic) + callouts d'avertissement qui
+            durent tant que leur condition tient. Ne monte rien quand il n'a rien à
+            dire, pour que soldes et graphe remontent. */}
+        <SyncSummaryConnecte role={role} />
 
         {/* 2. RANGÉE KPI « Soldes par devise » — horizontale (une carte par devise,
             devise de base en ink). Remplace la carte SOLDE verticale du side-panel. */}
@@ -236,7 +261,8 @@ export function DashboardContent({
             </p>
           </StateCard>
         )}
-      </div>
+        </div>
+      </SynchroProvider>
     </DashboardShell>
   );
 }

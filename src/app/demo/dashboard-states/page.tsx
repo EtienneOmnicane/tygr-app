@@ -19,15 +19,19 @@ import {
   DashboardErrorState,
   DashboardLoadingState,
 } from "@/components/dashboard/states";
+import type { Fraicheur } from "@/lib/format-date";
+import { SyncSummary } from "@/components/sync/sync-summary";
+import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 
-type EtatDemo = "loading" | "empty" | "error" | "sync";
+type EtatDemo = "loading" | "empty" | "error" | "sync" | "cluster";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "loading", label: "Chargement" },
   { id: "empty", label: "Vide" },
   { id: "error", label: "Erreur" },
-  { id: "sync", label: "Bouton Synchroniser" },
+  { id: "sync", label: "Compte rendu de synchro" },
+  { id: "cluster", label: "Cluster header" },
 ];
 
 export default function DashboardStatesDemoPage() {
@@ -98,6 +102,7 @@ export default function DashboardStatesDemoPage() {
             <DashboardErrorState detail="OMNIFI_SYNC_TIMEOUT · connexion expirée après 30 s" />
           )}
           {etat === "sync" && <DemoSyncStates />}
+          {etat === "cluster" && <DemoClusterHeader />}
         </main>
       </div>
     </div>
@@ -105,70 +110,190 @@ export default function DashboardStatesDemoPage() {
 }
 
 /**
- * Vitrine FIGÉE des états du bouton « Synchroniser » (L8a) — reproduit le markup de
- * `SyncButton` dans chacun de ses 5 états + le cas VIEWER, pour la capture headless
- * (les états réels sont pilotés par le retour de la Server Action, non injectable en
- * démo — même approche que `widget-feedback.tsx` monté figé). Couleurs : succès
- * `text-success`, erreur `text-danger` (jamais un rouge de donnée, §3.4) ; le bouton
- * est un lien d'action `text-primary` (§2.3). Aucune couleur de donnée ici.
+ * Vitrine des états du COMPTE RENDU de synchro — monte le VRAI `SyncSummary` avec des
+ * retours figés, pour la capture headless (Gate 4).
+ *
+ * Avant, cette vitrine REPRODUISAIT le markup de `sync-button.tsx`. Ça a fini par
+ * mentir : elle affichait encore « Comptes à jour. », littéral supprimé du vrai
+ * composant par la PR #202 (c'était précisément le faux message de victoire corrigé).
+ * `SyncSummary` étant pur et piloté par props, la copie n'a plus lieu d'être — ce qui
+ * est capturé ici est ce qui est rendu en production.
+ *
+ * Deux cas sont montés avec `onFermerSucces` CÂBLÉ sur un état local : la fermeture est
+ * l'objet même de l'ajustement 2026-07-20, et capturer un bouton inerte ne prouverait
+ * rien. Les autres handlers (`onRelancer`) restent inertes — aucune Server Action hors
+ * du workspace. La pastille de fraîcheur ne vit plus dans ce bloc : elle est capturée
+ * par `DemoClusterHeader`, avec le cluster du header.
  */
 function DemoSyncStates() {
+  // Fermeture RÉELLE de la notice, cas par cas. L'état applicatif vit dans
+  // `SyncSummaryConnecte` (non montable hors workspace) ; on en reproduit ici le seul
+  // effet observable, sans persistance — cf. sa docstring.
+  const [fermes, setFermes] = useState<Record<string, boolean>>({});
+  const fermer = (cle: string) => () =>
+    setFermes((etat) => ({ ...etat, [cle]: true }));
+
   return (
     <div className="rounded-card bg-surface-card p-6 shadow-card">
       <h2 className="mb-4 text-base font-semibold text-text">
-        Bouton « Synchroniser » — états
+        Compte rendu de synchronisation — états
       </h2>
-      <div className="grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2">
-        <CasSync titre="Repos (MANAGER/ADMIN)">
-          <BoutonRepos />
+      <div className="flex flex-col gap-6">
+        <CasSync titre="Repos (jamais synchronisé dans cette session) — ne monte RIEN">
+          <SyncSummary retour={null} />
         </CasSync>
+
         <CasSync titre="En cours">
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary opacity-48">
-            <IconeSynchro className="h-3.5 w-3.5 motion-safe:animate-spin" />
-            Synchronisation…
-          </span>
+          <SyncSummary retour={null} enCours />
         </CasSync>
-        <CasSync titre="Succès">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-success">Comptes à jour.</p>
-          </div>
+
+        <CasSync titre="Succès (aucune réserve) — notice FERMABLE">
+          <SyncSummary
+            succesMasque={fermes.succes === true}
+            onFermerSucces={fermer("succes")}
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 3 banque(s) à jour, 8 compte(s) mis à jour. 142 transaction(s) importée(s).",
+            }}
+          />
         </CasSync>
-        <CasSync titre="Erreur">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-danger">Action non autorisée.</p>
-          </div>
+
+        <CasSync titre="Partiel — fermer le succès NE ferme PAS l’avertissement">
+          <SyncSummary
+            peutRelancer
+            onRelancer={() => {}}
+            succesMasque={fermes.partiel === true}
+            onFermerSucces={fermer("partiel")}
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 2 banque(s) à jour, 5 compte(s) mis à jour. 1 banque(s) sont encore en cours de synchronisation — les transactions déjà disponibles ont été importées ; relancez dans quelques minutes pour récupérer le reste.",
+              incomplet: true,
+            }}
+          />
         </CasSync>
-        <CasSync titre="Réparation MFA">
-          <div className="flex flex-col items-start gap-1.5">
-            <BoutonRepos />
-            <p className="text-xs text-text-muted">
-              Une vérification de sécurité est requise.{" "}
-              <span className="font-semibold text-primary underline">
-                Reconnecter
-              </span>
-            </p>
-          </div>
+
+        <CasSync titre="Banques à reconnecter (accès désaligné + réparation MFA)">
+          <SyncSummary
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 1 banque(s) à jour, 2 compte(s) mis à jour. 1 banque(s) doivent être reconnectées — leur accès n’est plus valide.",
+              aReconnecter: [{ connectionId: "cx-demo-1" }],
+            }}
+          />
         </CasSync>
-        <CasSync titre="VIEWER (inerte)">
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-text-faint">
-            <IconeSynchro className="h-3.5 w-3.5" />
-            Synchroniser
-          </span>
+
+        <CasSync titre="Banques non rattachées (désynchronisation base ↔ amont)">
+          <SyncSummary
+            retour={{
+              erreur: null,
+              succes: null,
+              info: "Aucune banque à synchroniser. 1 banque(s) connectée(s) chez votre fournisseur ne sont pas rattachées à cet espace — finalisez la connexion via « Connecter une banque ». 2 banque(s) de cet espace ne répondent plus — reconnectez-les via « Connecter une banque ».",
+            }}
+          />
+        </CasSync>
+
+        <CasSync titre="Erreur (échec dur de toutes les banques) — NON fermable">
+          <SyncSummary
+            retour={{
+              erreur:
+                "La synchronisation a échoué pour toutes vos banques. Réessayez dans un instant.",
+              succes: null,
+            }}
+          />
+        </CasSync>
+
+        <CasSync titre="VIEWER (partiel, sans bouton Relancer)">
+          <SyncSummary
+            peutRelancer={false}
+            retour={{
+              erreur: null,
+              succes:
+                "Synchronisation effectuée — 2 banque(s) à jour, 5 compte(s) mis à jour.",
+              incomplet: true,
+            }}
+          />
         </CasSync>
       </div>
     </div>
   );
 }
 
-/** Bouton « Synchroniser » au repos (lien d'action primary + icône). */
-function BoutonRepos() {
+/**
+ * Cluster STATUT + ACTION du header (ajustement 2026-07-20) — reproduit la géométrie de
+ * `dashboard-content.tsx` : titre à gauche (`min-w-0` + `truncate`), pastille +
+ * séparateur + « Synchroniser » à droite (`shrink-0`), JAMAIS de `flex-wrap`.
+ *
+ * ⚠️ Le bouton est un FAC-SIMILÉ : le vrai `SyncButton` exige le `SynchroProvider`, donc
+ * une Server Action, donc l'auth — indisponible sur cette route. Ce qui est capturé ici
+ * fait foi pour la GÉOMÉTRIE du cluster et pour la pastille (composant réel, aux trois
+ * niveaux) ; ça ne prouve rien sur le rendu du bouton, qui se vérifie sur le vrai
+ * dashboard. Si le style du bouton change, ce fac-similé dérive.
+ */
+function DemoClusterHeader() {
+  const niveaux: Array<{ titre: string; fraicheur: Fraicheur }> = [
+    {
+      titre: "Frais (<6 h)",
+      fraicheur: {
+        niveau: "frais",
+        libelle: "il y a 12 min",
+        horodatageAbsolu: "20/07/2026 à 09:42",
+      },
+    },
+    {
+      titre: "Récent (<24 h)",
+      fraicheur: {
+        niveau: "recent",
+        libelle: "il y a 9 h",
+        horodatageAbsolu: "19/07/2026 à 23:10",
+      },
+    },
+    {
+      titre: "Périmé (≥24 h)",
+      fraicheur: {
+        niveau: "perime",
+        libelle: "il y a 3 j",
+        horodatageAbsolu: "17/07/2026 à 08:15",
+      },
+    },
+  ];
+
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
-      <IconeSynchro className="h-3.5 w-3.5" />
-      Synchroniser
-    </span>
+    <div className="rounded-card bg-surface-card p-6 shadow-card">
+      <h2 className="mb-4 text-base font-semibold text-text">
+        Cluster statut + action du header — trois niveaux de fraîcheur
+      </h2>
+      <div className="flex flex-col gap-6">
+        {niveaux.map(({ titre, fraicheur }) => (
+          <CasSync key={titre} titre={titre}>
+            <header className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-[26px] font-bold leading-tight tracking-tight text-text">
+                  Trésorerie
+                </h3>
+                <p className="mt-1 truncate text-sm text-text-muted">
+                  6 derniers mois · 8 comptes connectés
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <BalanceFreshnessPill
+                  fraicheur={fraicheur}
+                  compteLabel="MCB"
+                  ctaReconnexion={false}
+                />
+                <span aria-hidden className="h-4 w-px bg-line-strong" />
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary">
+                  <IconeSynchro className="h-3.5 w-3.5" />
+                  Synchroniser
+                </span>
+              </div>
+            </header>
+          </CasSync>
+        ))}
+      </div>
+    </div>
   );
 }
 

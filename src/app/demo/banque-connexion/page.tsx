@@ -10,8 +10,9 @@
  * donc incapturable en headless).
  *
  * À vérifier par vision :
- *   - succès = `text-success` (jamais de rouge, réservé aux montants sortants) ;
- *   - erreur = `text-danger` + alerte ;
+ *   - succès = `text-text` appuyé (jamais de rouge, réservé aux montants sortants ; et
+ *     plus de vert en texte non plus — 3,46:1, sous l'AA, A11Y-VERT-SUCCES1) ;
+ *   - erreur = `Callout severite="danger"` (fond + icône + message, §3.4) + alerte ;
  *   - le lien « Voir mon tableau de bord » a une cible (#) et un focus visible ;
  *   - le message de redirection est bref et neutre.
  */
@@ -59,7 +60,7 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="2. Succès SANS redirection — bandeau + lien"
-          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre : le partiel est NEUTRE (une phrase d'échec en vert, c'était le faux message de victoire), le complet est vert."
+          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre, mais ne passe PLUS par le vert (3,46:1, sous l'AA — A11Y-VERT-SUCCES1) : le partiel est en `text-muted`, le complet en `text-text` appuyé. Une phrase d'échec rendue en vert était le faux message de victoire corrigé par la PR #202 ; la distinction subsiste, elle se joue désormais entre deux neutres."
         >
           {/* PARTIEL — registre `neutre` : le message DIT l'échec, le ton ne le contredit pas. */}
           <WidgetFeedback
@@ -75,14 +76,14 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="3. Erreur de finalisation"
-          description="Message déjà mappé S2 (non énumérant), affiché en text-danger avec role=alert. Pas de redirection."
+          description="Message déjà mappé S2 (non énumérant), rendu en Callout danger (fond danger-bg + icône, §3.4) avec role=alert. Pas de redirection."
         >
           <WidgetFeedback erreurFinalisation="La connexion n'a pas pu être finalisée. Réessayez dans un instant." />
         </Bloc>
 
         <Bloc
           titre="4. Erreur de démarrage (LinkToken)"
-          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Affiché en text-danger."
+          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Rendu en Callout danger (§3.4)."
         >
           <WidgetFeedback erreurDemarrage="Paramètres invalides." />
         </Bloc>

@@ -9,10 +9,18 @@
  *     Visual QA (Gate 4) — hors auth/DB, capturable en headless.
  *
  * Règles d'affichage (UI_GUIDELINES) :
- *   - Erreur = `text-danger` + `role="alert"` (le fond `danger-bg` est porté au
- *     niveau des états de page ; ici on reste sur le feedback inline court du
- *     widget, cohérent avec l'existant).
- *   - Succès = `text-success`, JAMAIS de rouge (réservé aux montants sortants).
+ *   - Erreur = `Callout severite="danger"` + `role="alert"` — fond `danger-bg`,
+ *     icône et message, les TROIS signaux du §3.4 (WIDGET-ERR3). Le rouge NU qui
+ *     était rendu ici violait la règle : il appartient aux montants `outflow`, et
+ *     rien ne distinguait plus une panne de connexion d'une sortie d'argent. Le
+ *     prétexte « feedback inline court » ne tenait pas — §3.4 ne prévoit pas
+ *     d'exception de taille.
+ *   - Succès = `text-text` (neutre appuyé), JAMAIS de rouge (réservé aux montants
+ *     sortants) et plus de vert non plus : `text-success` mesure 3,46:1, sous l'AA de
+ *     4,5 en corps de texte (A11Y-VERT-SUCCES1). Ici le succès n'a pas de surface
+ *     teintée — c'est une ligne inline, pas une notice — donc le vert n'a nulle part
+ *     où subsister ; le ton se joue entre `text-text` (plein) et `text-text-muted`
+ *     (à réserve).
  *   - Redirection (succès COMPLET) : message bref `role="status"`.
  *   - Succès sans redirection (partiel, ou flag `complet` pas encore exposé) :
  *     confirmation + lien d'action explicite vers le Dashboard (§2.3).
@@ -20,6 +28,7 @@
 import Link from "next/link";
 
 import { cn } from "@/components/ui/states/primitives";
+import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
 
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
@@ -119,29 +128,29 @@ export function WidgetFeedback({
   return (
     <>
       {erreurDemarrage && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurDemarrage}
-        </p>
+        </Callout>
       )}
       {/* Échec DU WIDGET (onError du CDN) : sans ceci, le widget se fermait sans un
           mot. Le message est déjà mappé (jamais le texte amont, qui peut porter de
           la PII) ; le code machine, lui, est parti au log côté launcher. */}
       {erreurWidget && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurWidget}
-        </p>
+        </Callout>
       )}
       {erreurFinalisation && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurFinalisation}
-        </p>
+        </Callout>
       )}
 
       {/* Redirection en cours (succès COMPLET) : message bref et annoncé. Le
           `router.push` du parent emmène vers le Dashboard ; ce repère reste le
           temps que la navigation s'effectue (le widget est démonté à l'arrivée). */}
       {redirection && (
-        <p role="status" className="text-sm text-success">
+        <p role="status" className="text-sm text-text">
           Connexion établie — redirection vers votre tableau de bord…
         </p>
       )}
@@ -154,11 +163,16 @@ export function WidgetFeedback({
         <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* Le TON suit les signaux structurés, pas la simple présence du message : une
               banque en échec dur (fail-soft ⇒ `erreur` reste null, l'échec est écrit DANS
-              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre. */}
+              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre.
+              Le ton plein ne colore PLUS le texte en vert (A11Y-VERT-SUCCES1 : 3,46:1,
+              sous l'AA) — il l'appuie en `text-text` face au `text-muted` des comptes
+              rendus à réserve. La MÊME phrase serveur est rendue à l'identique par
+              `SyncSummary` sur le dashboard : les deux écrans doivent bouger ensemble,
+              sans quoi le même message se lit différemment selon l'endroit. */}
           <span
             className={cn(
               "text-sm",
-              registre === "succes" ? "text-success" : "text-text-muted",
+              registre === "succes" ? "text-text" : "text-text-muted",
             )}
           >
             {succes}
