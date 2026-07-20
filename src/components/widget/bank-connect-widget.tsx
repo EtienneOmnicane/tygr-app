@@ -209,9 +209,11 @@ export function BankConnectWidget({
         // …ou des connexions dont l'accès est désaligné (403) → invite à reconnecter.
         setAReconnecter(r.aReconnecter ?? []);
       } finally {
-        // `finally` et pas une ligne de fin : si l'action rejette (panne réseau avant
-        // même le mapping S2), un loader resté allumé donnerait une synchro éternelle,
-        // avec le bouton désarmé — l'écran figé qu'on cherche justement à supprimer.
+        // `finally` et pas une ligne de fin : le verrou doit être relâché sur TOUTE
+        // sortie, y compris un `return` anticipé ou un rejet. (Sur un rejet, le
+        // sous-arbre part de toute façon vers la frontière d'erreur — ce n'est donc pas
+        // « le loader reste allumé » qui motive ce `finally`, contrairement à ce que
+        // disait cette note : c'est la robustesse du relâchement lui-même.)
         //
         // ⚠️ PAS de `catch` ici, et c'est délibéré (constat de cross-review 6/10) : une
         // session expirée lève `NonAuthentifieError` AVANT le try de l'action, donc elle
