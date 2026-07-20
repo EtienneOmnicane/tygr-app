@@ -11,7 +11,7 @@
  *
  * À vérifier par vision :
  *   - succès = `text-success` (jamais de rouge, réservé aux montants sortants) ;
- *   - erreur = `text-danger` + alerte ;
+ *   - erreur = `Callout severite="danger"` (fond + icône + message, §3.4) + alerte ;
  *   - le lien « Voir mon tableau de bord » a une cible (#) et un focus visible ;
  *   - le message de redirection est bref et neutre.
  */
@@ -75,14 +75,14 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="3. Erreur de finalisation"
-          description="Message déjà mappé S2 (non énumérant), affiché en text-danger avec role=alert. Pas de redirection."
+          description="Message déjà mappé S2 (non énumérant), rendu en Callout danger (fond danger-bg + icône, §3.4) avec role=alert. Pas de redirection."
         >
           <WidgetFeedback erreurFinalisation="La connexion n'a pas pu être finalisée. Réessayez dans un instant." />
         </Bloc>
 
         <Bloc
           titre="4. Erreur de démarrage (LinkToken)"
-          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Affiché en text-danger."
+          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Rendu en Callout danger (§3.4)."
         >
           <WidgetFeedback erreurDemarrage="Paramètres invalides." />
         </Bloc>

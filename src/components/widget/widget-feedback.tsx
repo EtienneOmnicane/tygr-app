@@ -9,9 +9,12 @@
  *     Visual QA (Gate 4) — hors auth/DB, capturable en headless.
  *
  * Règles d'affichage (UI_GUIDELINES) :
- *   - Erreur = `text-danger` + `role="alert"` (le fond `danger-bg` est porté au
- *     niveau des états de page ; ici on reste sur le feedback inline court du
- *     widget, cohérent avec l'existant).
+ *   - Erreur = `Callout severite="danger"` + `role="alert"` — fond `danger-bg`,
+ *     icône et message, les TROIS signaux du §3.4 (WIDGET-ERR3). Le rouge NU qui
+ *     était rendu ici violait la règle : il appartient aux montants `outflow`, et
+ *     rien ne distinguait plus une panne de connexion d'une sortie d'argent. Le
+ *     prétexte « feedback inline court » ne tenait pas — §3.4 ne prévoit pas
+ *     d'exception de taille.
  *   - Succès = `text-success`, JAMAIS de rouge (réservé aux montants sortants).
  *   - Redirection (succès COMPLET) : message bref `role="status"`.
  *   - Succès sans redirection (partiel, ou flag `complet` pas encore exposé) :
@@ -20,6 +23,7 @@
 import Link from "next/link";
 
 import { cn } from "@/components/ui/states/primitives";
+import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
 
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
@@ -119,22 +123,22 @@ export function WidgetFeedback({
   return (
     <>
       {erreurDemarrage && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurDemarrage}
-        </p>
+        </Callout>
       )}
       {/* Échec DU WIDGET (onError du CDN) : sans ceci, le widget se fermait sans un
           mot. Le message est déjà mappé (jamais le texte amont, qui peut porter de
           la PII) ; le code machine, lui, est parti au log côté launcher. */}
       {erreurWidget && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurWidget}
-        </p>
+        </Callout>
       )}
       {erreurFinalisation && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurFinalisation}
-        </p>
+        </Callout>
       )}
 
       {/* Redirection en cours (succès COMPLET) : message bref et annoncé. Le

@@ -3020,15 +3020,48 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   **Déclencheur** : immédiat — avant toute démo sur un env non piloté par `dev-server.sh`.
   **Effort** : XS.
 
-- [ ] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
-  `docs/UI_GUIDELINES.md` §3.4 : « une erreur a TOUJOURS un fond teinté, une icône et un
-  texte » — or les 3 canaux d'erreur du composant (`erreurDemarrage`, `erreurWidget`,
-  `erreurFinalisation`) rendent un `text-danger` NU. Écart **préexistant** et assumé dans le
-  JSDoc du composant (« feedback inline court ») ; `fix/widget-erreur-visible` s'y conforme
-  par cohérence plutôt que de rouvrir une décision UI dans un correctif de bug — mais l'écart
-  compte désormais 3 occurrences. À trancher en une fois : soit §3.4 s'applique (fond
-  `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
-  **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
+- [x] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
+  ✅ **LIVRÉ (2026-07-20, branche `fix/ux-synchro-et-erreur-connexion`)** — arbitrage rendu
+  dans le premier sens : **§3.4 s'applique**, aucune exception « feedback inline » (la règle
+  ne prévoit pas de dérogation de taille). Les 3 canaux (`erreurDemarrage`, `erreurWidget`,
+  `erreurFinalisation`) passent par la primitive `Callout severite="danger"`
+  (`src/components/ui/states/callout.tsx`) : fond `danger-bg` + icône + message + `role="alert"`.
+  Registre de messages et logique non-énumérante (#229) NON touchés — seul le contenant change.
+  **Trouvaille de la passe design** : le motif `text-danger` sur `bg-danger-bg` plafonne à
+  **4,40:1** et ÉCHOUE l'AA en corps de texte (mesuré, WCAG 2.1). La primitive met donc le
+  MESSAGE en `text-text` (11,46:1) et réserve la couleur de sévérité à l'ICÔNE.
+  **Constat d'origine** : l'écart comptait 3 occurrences, assumé dans le JSDoc du composant.
+
+- [ ] **UI-CALLOUT-MIGRATION1 (P2, effort S, 2026-07-20) — 4 callouts ad-hoc à migrer vers
+  la primitive `Callout`.** Le markup « fond teinté + icône + message » est dupliqué à
+  l'identique dans `components/echeances/echeances-feature.tsx:246`,
+  `components/regles/regles-feature.tsx:260`, `components/transactions/transactions-feature.tsx:459`
+  et `components/admin/avertissement-vue-restreinte.tsx:38` (variante `warning`). Tous portent
+  le défaut de contraste mesuré ci-dessus (`text-danger` sur `danger-bg` = **4,40:1**, sous
+  l'AA de 4,5) : ce n'est donc pas qu'une déduplication, c'est une correction d'accessibilité.
+  Hors périmètre de WIDGET-ERR3 (livré à 2 jours d'une démo, on ne touche pas 4 écrans
+  supplémentaires). **Déclencheur** : prochain chantier UI transverse, OU premier audit a11y.
+
+- [ ] **A11Y-VERT-SUCCES1 (P1, effort S, 2026-07-20) — le token `success` échoue l'AA en
+  corps de texte, ET la doc affirme le contraire.** Mesuré au DOM pendant la Gate 4 de
+  `fix/ux-synchro-et-erreur-connexion` (WCAG 2.1, sur `surface-card`) :
+  `text-success` rendu = **3,46:1**, sous le seuil AA de 4,5. Or `docs/UI_GUIDELINES.md:409`
+  annonce « `success` #079455 (AA sur blanc) » en qualifiant l'accessibilité de « non
+  négociable (audience régulateur) ». **Deux défauts distincts** :
+  1. **dérive de token** — `globals.css:32` livre `--color-success: #1d9e55`, pas le
+     `#079455` documenté ;
+  2. **l'affirmation de la doc est fausse dans les deux cas** — `#079455` mesure **3,91:1**,
+     il échoue l'AA lui aussi. Le seul vert conforme du système est `inflow #157a4a`
+     (**5,36:1**), mais il est RÉSERVÉ à la donnée financière : on ne peut pas le recycler
+     en couleur d'état système sans casser l'étanchéité sémantique du §3.4.
+  **Portée** : tout message de succès de l'app, pas seulement la synchro — `SyncSummary`
+  et `widget-feedback` rendent la MÊME phrase serveur, un correctif unilatéral sur un seul
+  des deux écrans les ferait diverger (classe de bug tuée par la PR #202). D'où le report :
+  c'est un arbitrage de token global, pas une retouche d'écran, et il tombe à 2 jours d'une
+  démo. **Fix à trancher** : assombrir `--color-success` jusqu'à ≥4,5:1 sur `surface-card`
+  puis corriger la ligne 409 de la doc, OU appliquer au succès le même partage que la
+  primitive `Callout` (texte en `text-text`, couleur portée par une icône).
+  **Déclencheur** : avant la démo BOM Innov8 (audience régulateur = a11y opposable).
 
 - [x] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
   échecs de scraping) tombent sur le message générique : on ferme le widget sans dire
