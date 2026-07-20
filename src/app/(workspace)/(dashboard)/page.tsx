@@ -95,13 +95,23 @@ export default async function PageDashboard({
   // touche jamais le SQL. Pour « tout », from = plancher 1re partition ("2024-01-01") →
   // from ≤ to garanti et pruning des partitions préservé (filtre sur transaction_date,
   // jamais booking_date_time).
+  const parametres = await searchParams;
   const {
     preset,
     from: fromFlux,
     to,
     nbMois,
     moisAncrage: mois,
-  } = resoudrePeriode(await searchParams);
+  } = resoudrePeriode(parametres);
+
+  // ARRIVÉE d'un parcours de connexion réussi — posé par la redirection du widget
+  // (`bank-connect-widget.tsx`). Arme le nudge « lancez une première synchronisation ».
+  //
+  // Validation = l'égalité stricte elle-même, et elle suffit : toute autre valeur (autre
+  // chaîne, tableau si le paramètre est répété, absence) retombe sur `false`. Le drapeau
+  // ne pilote QU'UN affichage — il n'atteint ni le SQL, ni une action, ni une décision
+  // d'autorisation ; il n'y a donc aucune surface à durcir au-delà de ce fail-safe.
+  const connexionEtablie = parametres.connexion === "etablie";
 
   // `preset === null` ⇔ une PLAGE EXPLICITE (?du/?au) prime (contrat de resoudrePeriode).
   const sousPlage = preset === null;
@@ -260,6 +270,7 @@ export default async function PageDashboard({
           : formaterMoisAnnee(mois)
       }
       role={role}
+      connexionEtablie={connexionEtablie}
     />
   );
 }

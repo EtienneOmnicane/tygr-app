@@ -34,6 +34,19 @@ import type { RegistreSynchro } from "@/components/sync/registre-synchro";
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
 export const ROUTE_DASHBOARD = "/";
 
+/**
+ * Atterrissage APRÈS une CONNEXION tout juste finalisée. Le paramètre arme le nudge
+ * « lancez une première synchronisation » sur le dashboard (cf. `NudgePremiereSynchro`) :
+ * la finalisation rattache les comptes mais n'importe AUCUNE transaction, et la
+ * redirection emmène l'utilisateur loin de cet écran avant qu'il ait pu l'apprendre.
+ *
+ * ⚠️ RÉSERVÉ à la redirection post-finalisation. Le lien « Voir mon tableau de bord »
+ * ci-dessous garde `ROUTE_DASHBOARD` NU, à dessein : ce lien s'affiche aussi après une
+ * SYNCHRONISATION manuelle (les deux gestes alimentent le même `succes`), où l'invite
+ * serait fausse — l'utilisateur vient précisément de faire ce qu'elle demande.
+ */
+export const ROUTE_DASHBOARD_CONNEXION_ETABLIE = "/?connexion=etablie";
+
 /** Une connexion à réparer (signal `reparation` du serveur). Identifiants opaques. */
 export interface ConnexionAReparer {
   connectionId: string;

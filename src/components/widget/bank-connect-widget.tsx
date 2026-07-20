@@ -52,7 +52,7 @@ import {
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 import { registreSynchro } from "@/components/sync/registre-synchro";
 import {
-  ROUTE_DASHBOARD,
+  ROUTE_DASHBOARD_CONNEXION_ETABLIE,
   WidgetFeedback,
   type ConnexionAReparer,
   type ConnexionAReconnecter,
@@ -161,7 +161,11 @@ export function BankConnectWidget({
       // l'état — jamais de redirection qui masquerait un échec (cf. type UI).
       if (r.erreur === null && r.complet === true) {
         setRedirection(true);
-        router.push(ROUTE_DASHBOARD);
+        // On PORTE le signal dans la redirection : sans lui, le dashboard n'a aucun
+        // moyen de savoir qu'une banque vient d'être reliée (le push était nu), et
+        // l'utilisateur y atterrit devant un graphe vide sans savoir qu'il lui reste à
+        // synchroniser. La finalisation rattache les comptes, jamais les transactions.
+        router.push(ROUTE_DASHBOARD_CONNEXION_ETABLIE);
       }
     });
   }
