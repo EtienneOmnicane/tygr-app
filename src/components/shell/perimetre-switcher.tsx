@@ -125,7 +125,14 @@ function optionCompte(
       >
         {coche ? "✓" : ""}
       </span>
-      <span className="min-w-0 flex-1 truncate text-text">
+      {/* Nom COMPLET, sur deux lignes si besoin (PERIMETRE-NOMS-COMPLETS1). Il portait
+          `truncate` : dans un popover de 300 px, un libellé réaliste (« State Bank of
+          Mauritius · Compte épargne entreprise », 323 px) perdait plus de la moitié de
+          ses caractères — or c'est précisément sur ce nom qu'on coche. Élargir ne suffit
+          pas : le design system plafonne les popovers à 360 px (UI_GUIDELINES §221), soit
+          ~245 px utiles. Le repli lisible est donc le RETOUR À LA LIGNE, pas la coupe.
+          `break-words` protège du cas pathologique (nom d'un seul tenant sans espace). */}
+      <span className="min-w-0 flex-1 break-words text-text">
         {libelleCompte(c)}
       </span>
       <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
@@ -365,8 +372,13 @@ export function PerimetreSwitcher({
 
       {ouvert && (
         <div
-          className="absolute right-0 z-20 mt-2 w-[300px] rounded-control bg-surface-card
-            p-2 text-text shadow-popover"
+          // 360 px = HAUT de la fourchette du design system (UI_GUIDELINES §221 :
+          // « popovers, largeur 320-360px ») ; les 300 px précédents étaient SOUS la
+          // spec, ce qui privait les noms de comptes de ~60 px. `max-w` : sur un écran
+          // étroit, le popover est ancré à droite — sans borne il déborderait hors du
+          // viewport au lieu de rétrécir.
+          className="absolute right-0 z-20 mt-2 w-[360px] max-w-[calc(100vw-1.5rem)]
+            rounded-control bg-surface-card p-2 text-text shadow-popover"
           role="dialog"
           aria-label="Choisir le périmètre d'affichage"
         >
