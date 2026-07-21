@@ -53,8 +53,13 @@ const COMPTES: CompteConnecte[] = [
   },
   {
     bankAccountId: "33333333-3333-4333-8333-333333333333",
-    accountName: "Épargne",
-    institutionName: "SBM",
+    // Libellé LONG à dessein (PERIMETRE-NOMS-COMPLETS1) : les banques mauriciennes
+    // remontent leur raison sociale complète, pas le sigle. Avec des fixtures toutes
+    // courtes, l'option tenait dans la largeur et le défaut de troncature était
+    // INCAPTURABLE au Visual QA — la démo validait un écran que la prod cassait.
+    // Les autres comptes restent courts : les deux cas doivent rester visibles.
+    accountName: "Compte épargne entreprise",
+    institutionName: "State Bank of Mauritius",
     currency: "MUR",
     currentBalance: "540000.00",
     lastSyncedAt: new Date(),
