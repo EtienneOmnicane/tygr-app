@@ -26,7 +26,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/server/db/schema";
-import { createWithWorkspace } from "@/server/db/tenancy";
+import { createWithWorkspace, estLecteurBorne } from "@/server/db/tenancy";
 import {
   compterConnexionsTenant,
   listerComptes,
@@ -45,15 +45,25 @@ const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ADMIN_A = "11111111-1111-4111-8111-111111111111"; // WS_A, aucun scope → Globale
 const SCOPED_VIDE = "22222222-2222-4222-8222-222222222222"; // WS_A, scopé sur ENT_VIDE
 const MEMBRE_B = "33333333-3333-4333-8333-333333333333"; // WS_B (témoin étage 1)
+// WS_A, borné UNIQUEMENT par `user_scopes` (aucune ligne member_entity_scopes) : il
+// épingle la clause `accountScope` de `estLecteurBorne` À ELLE SEULE. Sans lui, la
+// fixture entité rendait les DEUX clauses vraies en même temps et aucune n'était
+// réellement testée — supprimer la clause compte laissait la suite verte (constat de
+// cross-review).
+const SCOPED_COMPTE = "44444444-4444-4444-8444-444444444444";
 
 const ENT_LOGISTIQUE = "e0100000-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // WS_A, PORTE un compte
 const ENT_VIDE = "e0200000-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // WS_A, AUCUN compte
 const ENT_B = "e0300000-cccc-4ccc-8ccc-cccccccccccc"; // WS_B (témoin)
 
-// WS_A porte DEUX connexions : un COUNT qui renverrait 1 (un `limit` oublié) ou 3
-// (la connexion de WS_B comptée) échouerait de façon distincte.
+// WS_A porte TROIS connexions pour DEUX comptes — dissymétrie VOLONTAIRE. Avec 2 et 2,
+// un compteur qui viserait `bank_accounts` au lieu de `bank_connections` renverrait la
+// même valeur et les tests tenant passeraient sur une coïncidence de fixture (mutation
+// vérifiée en cross-review : `.from(bankConnections)` → `.from(bankAccounts)` laissait
+// les tests 1 et 2 verts). 3 ≠ 2 rend la confusion des deux tables détectable.
 const CONN_A1 = "c0a10000-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CONN_A2 = "c0a20000-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const CONN_A3 = "c0a30000-dddd-4ddd-8ddd-dddddddddddd"; // sans compte rattaché
 const CONN_B = "c0b00000-cccc-4ccc-8ccc-cccccccccccc";
 
 const ACC_LOGISTIQUE = "acc01000-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // → ENT_LOGISTIQUE
@@ -62,6 +72,7 @@ const ACC_B = "acc0b000-cccc-4ccc-8ccc-cccccccccccc"; // WS_B
 
 const sessGlobale = { userId: ADMIN_A, activeWorkspaceId: WS_A };
 const sessScopedVide = { userId: SCOPED_VIDE, activeWorkspaceId: WS_A };
+const sessScopedCompte = { userId: SCOPED_COMPTE, activeWorkspaceId: WS_A };
 const sessB = { userId: MEMBRE_B, activeWorkspaceId: WS_B };
 
 beforeAll(async () => {
@@ -80,20 +91,36 @@ beforeAll(async () => {
   //    `entity_scope`, le compteur deviendrait silencieusement dépendant du périmètre
   //    (l'état « hors périmètre » ne se déclencherait plus jamais) : cette suite doit
   //    échouer BRUYAMMENT ce jour-là, pas rendre un vert trompeur.
-  const pol = await client.query<{ policyname: string; permissive: string }>(
-    `select policyname, permissive from pg_policies where tablename = 'bank_connections'`,
+  const pol = await client.query<{
+    policyname: string;
+    permissive: string;
+    roles: string;
+  }>(
+    `select policyname, permissive, roles::text as roles
+     from pg_policies where tablename = 'bank_connections'`,
   );
-  const noms = pol.rows.map((r) => r.policyname).sort();
-  if (!noms.includes("tenant_isolation")) {
+  if (!pol.rows.some((r) => r.policyname === "tenant_isolation")) {
     throw new Error(
-      `bank_connections doit porter tenant_isolation (étage 1) — trouvé : ${JSON.stringify(noms)}.`,
+      `bank_connections doit porter tenant_isolation (étage 1) — trouvé : ` +
+        `${JSON.stringify(pol.rows.map((r) => r.policyname))}.`,
     );
   }
-  const parasites = noms.filter((n) => n !== "tenant_isolation");
-  if (parasites.length > 0) {
+  // On asserte la PROPRIÉTÉ qui compte — « aucune policy RESTRICTIVE ne s'applique au
+  // rôle applicatif » — et non une liste de noms attendus. Une liste noire par nom
+  // rougirait sur toute policy future inoffensive : le lot webhook, par exemple, doit
+  // poser une policy `TO tygr_service` sur cette table (exception documentée de la
+  // règle 2), qui ne change rien au comptage sous `tygr_app`. Un faux rouge coûte cher :
+  // il apprend à désactiver la garde.
+  const restrictivesApplicables = pol.rows.filter(
+    (r) =>
+      r.permissive === "RESTRICTIVE" &&
+      (r.roles.includes("public") || r.roles.includes("tygr_app")),
+  );
+  if (restrictivesApplicables.length > 0) {
     throw new Error(
-      `bank_connections porte une policy de périmètre inattendue : ${JSON.stringify(parasites)}. ` +
-        `compterConnexionsTenant suppose un comptage NON scopé par entité — relire ` +
+      `bank_connections porte une policy RESTRICTIVE applicable au rôle applicatif : ` +
+        `${JSON.stringify(restrictivesApplicables.map((r) => r.policyname))}. ` +
+        `compterConnexionsTenant suppose un comptage NON scopé par périmètre — relire ` +
         `PLAN-nudge-vision-entite.md §2 avant de toucher à cette table.`,
     );
   }
@@ -108,10 +135,12 @@ beforeAll(async () => {
     insert into users (id, email, full_name) values
       ('${ADMIN_A}','admin@a.mu','Admin A'),
       ('${SCOPED_VIDE}','scoped@a.mu','Scoped Vide'),
+      ('${SCOPED_COMPTE}','compte@a.mu','Scoped Compte'),
       ('${MEMBRE_B}','membre@b.mu','Membre B');
     insert into workspace_members (user_id, workspace_id, role) values
       ('${ADMIN_A}','${WS_A}','ADMIN'),
       ('${SCOPED_VIDE}','${WS_A}','VIEWER'),
+      ('${SCOPED_COMPTE}','${WS_A}','VIEWER'),
       ('${MEMBRE_B}','${WS_B}','MANAGER');
     insert into entities (id, workspace_id, name, code, is_active) values
       ('${ENT_LOGISTIQUE}','${WS_A}','Logistique','LOG',true),
@@ -120,6 +149,7 @@ beforeAll(async () => {
     insert into bank_connections (id, workspace_id, omnifi_connection_id, institution_id, created_by) values
       ('${CONN_A1}','${WS_A}','oc-a1','mcb','${ADMIN_A}'),
       ('${CONN_A2}','${WS_A}','oc-a2','sbm','${ADMIN_A}'),
+      ('${CONN_A3}','${WS_A}','oc-a3','abc','${ADMIN_A}'),
       ('${CONN_B}','${WS_B}','oc-b','mcb','${MEMBRE_B}');
     insert into bank_accounts (id, workspace_id, connection_id, omnifi_account_id, account_name, currency, current_balance, is_selected, entity_id) values
       ('${ACC_LOGISTIQUE}','${WS_A}','${CONN_A1}','oa-log','Compte Logistique','MUR','5000.00',true,'${ENT_LOGISTIQUE}'),
@@ -129,6 +159,12 @@ beforeAll(async () => {
     -- AUCUNE ligne → Vision Globale.
     insert into member_entity_scopes (workspace_id, user_id, entity_id) values
       ('${WS_A}','${SCOPED_VIDE}','${ENT_VIDE}');
+    -- Maille COMPTE PURE : SCOPED_COMPTE n'a AUCUNE ligne member_entity_scopes — son
+    -- périmètre ne vient QUE d'ici. Il résout donc entityScope=GLOBALE et
+    -- accountScope=COMPTES, la seule combinaison qui épingle la clause « compte » de
+    -- estLecteurBorne isolément.
+    insert into user_scopes (workspace_id, user_id, bank_account_id) values
+      ('${WS_A}','${SCOPED_COMPTE}','${ACC_LOGISTIQUE}');
   `);
 
   // 4. Rôle applicatif non-propriétaire (source unique : provisioning prod).
@@ -152,26 +188,28 @@ describe("préconditions", () => {
 });
 
 describe("étage 1 — le compteur de connexions ne franchit pas la frontière tenant", () => {
-  it("1. WS_A ne compte QUE ses 2 connexions (celle de WS_B est invisible)", async () => {
+  it("1. WS_A ne compte QUE ses 3 connexions (celle de WS_B est invisible)", async () => {
     const n = await withWorkspace(sessGlobale, (tx) =>
       compterConnexionsTenant(tx),
     );
-    expect(n).toBe(2);
+    // 3 connexions pour 2 comptes : la valeur discrimine aussi la TABLE comptée
+    // (un COUNT sur bank_accounts renverrait 2).
+    expect(n).toBe(3);
   });
 
-  it("2. WS_B ne compte QUE la sienne — et le total de la table vaut 3 (contre-preuve)", async () => {
+  it("2. WS_B ne compte QUE la sienne — et le total de la table vaut 4 (contre-preuve)", async () => {
     const n = await withWorkspace(sessB, (tx) => compterConnexionsTenant(tx));
     expect(n).toBe(1);
 
-    // Contre-preuve : sans RLS (owner), la table en contient bien 3. Si les deux
-    // assertions ci-dessus renvoyaient 3, le test passerait « par hasard » sur un
+    // Contre-preuve : sans RLS (owner), la table en contient bien 4. Si les deux
+    // assertions ci-dessus renvoyaient 4, le test passerait « par hasard » sur un
     // compteur non filtré — c'est ce total qui rend l'écart significatif.
     await client.exec(`reset role;`);
     const total = await client.query<{ n: number }>(
       `select count(*)::int as n from bank_connections`,
     );
     await client.exec(`set role tygr_app;`);
-    expect(total.rows[0].n).toBe(3);
+    expect(total.rows[0].n).toBe(4);
   });
 });
 
@@ -187,7 +225,7 @@ describe("étage 2 — le compteur n'achète aucune visibilité sur les comptes"
       compterConnexionsTenant(tx),
     );
     expect(scope).toBe(globale);
-    expect(scope).toBe(2);
+    expect(scope).toBe(3);
   });
 
   it("4. sous Vision Entité vide, AUCUN compte ne devient visible", async () => {
@@ -238,9 +276,9 @@ describe("bout en bout — l'état d'affichage résolu depuis les VRAIES lecture
       async (tx, ctx) => ({
         comptes: await listerComptes(tx),
         nbConnexions: await compterConnexionsTenant(tx),
-        borne:
-          ctx.entityScope.mode === "ENTITES" ||
-          ctx.accountScope.mode === "COMPTES",
+        // La VRAIE fonction de production, pas une copie de sa formule : recopiée ici,
+        // le test validerait sa propre copie pendant que la page dériverait en silence.
+        borne: estLecteurBorne(ctx),
       }),
     );
 
@@ -262,9 +300,7 @@ describe("bout en bout — l'état d'affichage résolu depuis les VRAIES lecture
       sessGlobale,
       async (tx, ctx) => ({
         nbConnexions: await compterConnexionsTenant(tx),
-        borne:
-          ctx.entityScope.mode === "ENTITES" ||
-          ctx.accountScope.mode === "COMPTES",
+        borne: estLecteurBorne(ctx),
       }),
     );
 
@@ -273,5 +309,26 @@ describe("bout en bout — l'état d'affichage résolu depuis les VRAIES lecture
     expect(
       choisirEtatDashboard(donneesDepuis([], nbConnexions > 0, borne)),
     ).toBe("vide");
+  });
+
+  it("8. un membre borné UNIQUEMENT par user_scopes est bien « borné »", async () => {
+    // Épingle la clause `accountScope` d'`estLecteurBorne` À ELLE SEULE. La fixture
+    // entité ne le pouvait pas : `withWorkspace` traduit les entités en comptes, donc un
+    // membre scopé par entité a AUSSI accountScope=COMPTES — les deux clauses étaient
+    // vraies ensemble et l'on pouvait supprimer celle-ci sans faire rougir un test
+    // (constat de cross-review). Ici entityScope reste GLOBALE : seule la maille compte
+    // borne ce lecteur, exactement le cas d'un membre L4/L5.
+    const { modeEntite, modeCompte, borne } = await withWorkspace(
+      sessScopedCompte,
+      async (_tx, ctx) => ({
+        modeEntite: ctx.entityScope.mode,
+        modeCompte: ctx.accountScope.mode,
+        borne: estLecteurBorne(ctx),
+      }),
+    );
+
+    expect(modeEntite).toBe("GLOBALE"); // aucune ligne member_entity_scopes
+    expect(modeCompte).toBe("COMPTES"); // borné par user_scopes seul
+    expect(borne).toBe(true);
   });
 });

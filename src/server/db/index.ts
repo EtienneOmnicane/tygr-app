@@ -24,6 +24,11 @@ import {
   type WorkspaceSession,
   type WorkspaceTx,
 } from "@/server/db/tenancy";
+
+// Prédicat PUR sur le contexte (aucun accès DB) — ré-exporté ici pour que les pages
+// le consomment par la même frontière que le reste (`@/server/db`), sans importer
+// `@/server/db/tenancy` en direct.
+export { estLecteurBorne } from "@/server/db/tenancy";
 import {
   creerRepositoryIdentite,
   type RepositoryIdentite,

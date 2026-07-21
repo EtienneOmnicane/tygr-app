@@ -26,6 +26,7 @@ import { redirect } from "next/navigation";
 import {
   cashflowParDevise,
   compterConnexionsTenant,
+  estLecteurBorne,
   grilleMois,
   grilleMoisSuivants,
   listerComptes,
@@ -274,12 +275,9 @@ export default async function PageDashboard({
         aDesConnexionsTenant: nbConnexionsTenant > 0,
         // Le lecteur est-il réellement borné ? Résolu depuis le CONTEXTE serveur
         // (member_entity_scopes / user_scopes via withWorkspace), jamais d'un paramètre
-        // client. Les DEUX axes comptent : un membre borné par COMPTE (user_scopes, L4/L5)
-        // voit `comptes = []` exactement comme un membre en Vision Entité — ne tester que
-        // l'axe entité laisserait l'écran mentir à celui-là.
-        lecteurBorne:
-          ctx.entityScope.mode === "ENTITES" ||
-          ctx.accountScope.mode === "COMPTES",
+        // client. La formule vit dans `tenancy.ts` (source unique, partagée avec la preuve
+        // d'isolation) : recopiée ici, elle pourrait dériver sans faire rougir son test.
+        lecteurBorne: estLecteurBorne(ctx),
       },
     };
   });

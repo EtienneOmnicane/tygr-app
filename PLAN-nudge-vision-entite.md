@@ -108,11 +108,18 @@ prod** (`orchestration.ts:378-383`) et que `dashboard.ts:221` documente. Un ADMI
 Vision Globale, sans aucune entité, tomberait alors sur « un administrateur doit rattacher
 ces comptes à votre entité » : il **est** l'administrateur, et il n'y a rien à rattacher.
 
-→ L'état n'est monté **que si le lecteur est réellement borné** :
-`ctx.entityScope.mode === "ENTITES" || ctx.accountScope.mode === "COMPTES"`
-(`tenancy.ts:155-163`, déjà disponible dans le `withWorkspace` de `page.tsx:171`). Ne lit
-pas `bank_accounts`, ne touche pas l'étage 2. Couvre aussi l'axe `user_scopes`/`viewFilter`
-(constat F6). Exposé à l'UI comme un booléen `lecteurBorne`.
+→ L'état n'est monté **que si le lecteur est réellement borné** : `estLecteurBorne(ctx)`
+(`tenancy.ts`, fonction PARTAGÉE entre la page et la preuve — une copie de la formule dans
+chacune rendrait le test tautologique). Ne lit pas `bank_accounts`, ne touche pas l'étage 2.
+
+⚠️ **Ce qu'elle couvre, et ce qu'elle NE couvre PAS** (correction post-revue) : elle couvre
+les deux axes de DROIT — `member_entity_scopes` et `user_scopes`. Elle **ne couvre pas le
+`viewFilter`**, qui n'affecte ni l'un ni l'autre `mode` (`tenancy.ts:400-427` : il ne pose
+qu'un GUC). Deux angles morts subsistent donc, tous deux ANTÉRIEURS à ce lot :
+un lecteur non borné dont le `viewFilter` ne résout à rien relit l'empty trompeur ; un
+lecteur borné dont l'intersection droit ∩ filtre est vide lit « un administrateur peut vous
+donner accès » alors qu'il lui suffirait de vider son propre sélecteur. Ne pas s'appuyer sur
+une couverture `viewFilter` inexistante dans un lot futur.
 
 ### 3.2 Sélection
 
