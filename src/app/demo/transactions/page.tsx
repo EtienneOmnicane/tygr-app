@@ -35,6 +35,7 @@ import type {
   ActionsTransactions,
   CurseurTransactions,
   FiltresTransactions,
+  SommeNetteDevise,
   TransactionListItem,
 } from "@/components/transactions/types-transactions";
 import type {
@@ -262,6 +263,27 @@ const ACTIONS_REFERENTIEL_STUB: ActionsReferentielCategories = {
   archiverCategorie: async () => ({ ok: true, data: undefined }),
 };
 
+/**
+ * Totaux du bandeau « Total des résultats filtrés », en FIXTURE CONSTANTE.
+ *
+ * `sommeNette` est optionnelle à dessein (cf. `types-transactions.ts`) : un stub ne doit
+ * PAS sommer les lignes affichées — la pagination est en keyset, il ne totaliserait que
+ * la page visible (piège TX-FILTRE1). Cette décision est respectée ici : ces chiffres
+ * sont une CONSTANTE qui imite un agrégat serveur, jamais un calcul sur `LIGNES`. Ils ne
+ * sont donc volontairement pas cohérents avec la liste affichée — c'est une fixture de
+ * mise en page, pas une donnée.
+ *
+ * Raison d'être : sans elle, le bandeau est absent du DOM et l'écran est INCAPTURABLE au
+ * Visual QA (Gate 4) — même motif que `ACTIONS_REFERENTIEL_STUB` ci-dessus. Les trois
+ * devises sont présentes à dessein : « Roupie mauricienne » et « Dollar américain » sont
+ * les libellés les plus longs de `nomDevise`, donc ceux qui exposent un défaut de largeur.
+ */
+const SOMME_NETTE_DEMO: SommeNetteDevise[] = [
+  { devise: "MUR", entrees: "482350.00", sorties: "215480.25", net: "266869.75", nbTransactions: 128 },
+  { devise: "USD", entrees: "12400.00", sorties: "18750.40", net: "-6350.40", nbTransactions: 14 },
+  { devise: "EUR", entrees: "3200.00", sorties: "1150.00", net: "2050.00", nbTransactions: 6 },
+];
+
 export default function TransactionsDemoPage() {
   const [scenario, setScenario] = useState<Scenario>("liste");
 
@@ -285,6 +307,23 @@ export default function TransactionsDemoPage() {
           return true;
         });
         return { ok: true as const, data: { lignes, curseurSuivant: null } };
+      },
+      async sommeNette(args: { filtres?: FiltresTransactions }) {
+        // Les MONTANTS sont une constante (aucune somme côté client, cf.
+        // SOMME_NETTE_DEMO). Seule la CARDINALITÉ suit le filtre : un filtre qui ne
+        // ramène aucune ligne rend un tableau VIDE, comme le ferait l'agrégat serveur.
+        // Sans ça, le bandeau se superposait à l'état vide « aucune transaction ne
+        // correspond » — un écran que la prod ne produit jamais (`sommeNette.length > 0`
+        // y démonte le bloc) — et l'état vide filtré devenait, lui, incapturable.
+        const f = args.filtres ?? {};
+        const terme = f.recherche?.trim().toLowerCase();
+        const auMoinsUne = LIGNES.some((l) => {
+          if (f.statutCategorisation && l.statutCategorisation !== f.statutCategorisation)
+            return false;
+          if (terme && !(l.cleanLabel ?? "").toLowerCase().includes(terme)) return false;
+          return true;
+        });
+        return { ok: true as const, data: auMoinsUne ? SOMME_NETTE_DEMO : [] };
       },
       async chargerSplits(ref) {
         // Démonstration du garde-fou : la ligne « t5 » simule un échec serveur —

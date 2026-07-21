@@ -14,8 +14,10 @@
  * source unique `@/lib/format-montant` (aucun formateur local, cf. dette C8).
  *
  * Multi-devises (règle 8) : UNE LIGNE PAR DEVISE, JAMAIS d'addition cross-devise, aucune
- * conversion FX. Aucun montant n'est tronqué (`whitespace-nowrap`) — seul le libellé de
- * devise peut l'être.
+ * conversion FX. RIEN n'est tronqué ici : ni les montants (jamais un chiffre clé), ni le
+ * nom de devise — « Roupie mauricienne » coupé en « Roupie mauricienn… » se lit comme un
+ * bug, pas comme une abréviation. Sur un écran trop étroit pour les quatre colonnes,
+ * c'est la table qui DÉFILE (conteneur `overflow-x-auto`) plutôt qu'un mot qui se casse.
  *
  * ALIGNEMENT DES VIRGULES (contrat `UI-SOLDE-MULTIDEVISE-POLISH1`, cf. `format-montant`) :
  * chaque montant est rendu en DEUX morceaux — l'indicateur de devise (`indicateurDevise`,
@@ -105,64 +107,92 @@ export function TransactionsSommeNette({
           colonnes ET de ligne → association valeur↔en-tête gratuite pour le lecteur
           d'écran, et alignement des colonnes (donc des virgules) garanti par le moteur de
           rendu, sans largeur en dur. */}
-      <table className="mt-2 w-full text-xs">
-        <thead>
-          <tr className="text-[11px] uppercase tracking-wide text-text-faint">
-            <th scope="col" className="text-left font-medium">
-              Devise
-            </th>
-            <th scope="col" className="px-3 text-right font-medium">
-              Entrées
-            </th>
-            <th scope="col" className="px-3 text-right font-medium">
-              Sorties
-            </th>
-            <th scope="col" className="pl-3 text-right font-medium">
-              Net
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {totaux.map((t) => (
-            <tr key={t.devise}>
-              {/* Seul le LIBELLÉ peut tronquer — jamais un chiffre clé. */}
-              <th
-                scope="row"
-                className="max-w-0 truncate py-0.5 text-left font-normal text-text-muted"
-              >
-                {nomDevise(t.devise)}
-                <span className="text-text-faint">
-                  {" · "}
-                  {t.nbTransactions} opération{t.nbTransactions > 1 ? "s" : ""}
-                </span>
+      {/* Sous ~400 px, quatre colonnes dont trois de montants INSÉCABLES ne tiennent pas :
+          la table défile alors DANS ce conteneur (la page, elle, ne défile jamais). C'est
+          le moindre mal — l'alternative serait de raboter un chiffre.
+          `role=region` + `tabIndex=0` : une zone défilante doit être atteignable au
+          CLAVIER, sinon le Net devient inaccessible sans souris dès qu'elle défile.
+          `aria-label` PROPRE (et non un `aria-labelledby` vers le titre de la section) :
+          la section porte déjà ce titre, le réutiliser ferait annoncer deux fois le même
+          nom pour deux niveaux imbriqués. Inerte tant qu'il n'y a rien à faire défiler. */}
+      <div
+        role="region"
+        aria-label="Totaux par devise"
+        tabIndex={0}
+        className="mt-2 overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wide text-text-faint">
+              <th scope="col" className="text-left font-medium">
+                Devise
               </th>
-              <td className="whitespace-nowrap px-3 py-0.5 text-right font-medium tabular-nums text-inflow-700">
-                <Montant valeur={t.entrees} devise={t.devise} />
-              </td>
-              <td className="whitespace-nowrap px-3 py-0.5 text-right font-medium tabular-nums text-outflow-700">
-                <Montant valeur={t.sorties} devise={t.devise} />
-              </td>
-              {/* Le NET est le chiffre clé du bandeau : plus gros, plus gras, coloré par
-                  son signe. */}
-              <td
-                className={cn(
-                  "whitespace-nowrap py-0.5 pl-3 text-right text-sm font-semibold tabular-nums",
-                  classeNet(t.net),
-                )}
-              >
-                <Montant valeur={t.net} devise={t.devise} signeExplicite />
-              </td>
+              <th scope="col" className="px-3 text-right font-medium">
+                Entrées
+              </th>
+              <th scope="col" className="px-3 text-right font-medium">
+                Sorties
+              </th>
+              <th scope="col" className="pl-3 text-right font-medium">
+                Net
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {totaux.map((t) => (
+              <tr key={t.devise}>
+                {/* Cellule ÉLASTIQUE, et c'est voulu. Elle portait `max-w-0 truncate` —
+                  le hack qui écrase une cellule de table au minimum pour forcer la
+                  coupe : sur une table de 942 px il ne laissait que 105 px au libellé et
+                  hachait « Roupie mauricienne » EN PLEIN MOT alors que la place était là.
+                  Ce qui est proscrit, c'est le mot haché, pas le retour à la ligne : sans
+                  contrainte, le repli CSS tombe entre « Roupie » et « mauricienne » et les
+                  deux mots restent entiers.
+                  Surtout, ne PAS mettre `whitespace-nowrap` ici : mesuré, la colonne
+                  devenait alors incompressible et poussait le NET — le chiffre clé —
+                  hors de l'écran sous 640 px. Les seuls éléments rigides de la ligne
+                  doivent être les montants. Un libellé cède, jamais un chiffre
+                  (CLAUDE.md, formatage des données financières). */}
+                <th
+                  scope="row"
+                  className="py-0.5 pr-3 text-left font-normal text-text-muted"
+                >
+                  {nomDevise(t.devise)}
+                  <span className="text-text-faint">
+                    {" · "}
+                    {t.nbTransactions} opération
+                    {t.nbTransactions > 1 ? "s" : ""}
+                  </span>
+                </th>
+                <td className="whitespace-nowrap px-3 py-0.5 text-right font-medium tabular-nums text-inflow-700">
+                  <Montant valeur={t.entrees} devise={t.devise} />
+                </td>
+                <td className="whitespace-nowrap px-3 py-0.5 text-right font-medium tabular-nums text-outflow-700">
+                  <Montant valeur={t.sorties} devise={t.devise} />
+                </td>
+                {/* Le NET est le chiffre clé du bandeau : plus gros, plus gras, coloré par
+                  son signe. */}
+                <td
+                  className={cn(
+                    "whitespace-nowrap py-0.5 pl-3 text-right text-sm font-semibold tabular-nums",
+                    classeNet(t.net),
+                  )}
+                >
+                  <Montant valeur={t.net} devise={t.devise} signeExplicite />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {/* Honnêteté multi-devises : on n'additionne JAMAIS des roupies et des dollars, et
           on n'invente aucun taux de change (chantier DASH-FX1). On le DIT plutôt que de
           laisser croire à un total manquant. */}
       {totaux.length > 1 && (
         <p className="mt-2 text-[11px] text-text-faint">
-          Chaque devise est totalisée séparément — jamais d’addition entre devises.
+          Chaque devise est totalisée séparément — jamais d’addition entre
+          devises.
         </p>
       )}
     </section>

@@ -20,11 +20,20 @@ import type { PartCategorie } from "@/server/insights/types";
 import { couleurCategorie } from "./palette-categories";
 import { pourcentPart } from "./pourcent-part";
 
-// Géométrie du viewBox (unités SVG = px après mise à l'échelle CSS). Anneau centré.
+// Géométrie du viewBox (unités SVG — le SVG est mis à l'échelle par la CSS, donc ces
+// unités ne sont PAS des pixels écran : ne jamais en dériver une largeur CSS en px).
+// Anneau centré.
+//
+// Rayons élargis (DONUT-CENTRE-DEBORDE1) : le total central débordait sur l'anneau. Le
+// trou n'est pas un carré mais un CERCLE — une ligne de texte décalée du centre dispose
+// d'une CORDE, plus courte que le diamètre. Mesuré à 1440 px : « Rs 4 500 000,00 » =
+// 127,9 px pour une corde de 120,2 px à sa hauteur, soit 7,7 px mordus sur l'anneau.
+// Les deux rayons montent de 6 : l'ÉPAISSEUR D'ANNEAU RESTE 36 (on agrandit le trou,
+// on ne rogne pas la donnée) et le trou gagne 9 % de diamètre.
 const VB = 220;
 const CENTRE = VB / 2;
-const RAYON_EXT = 100;
-const RAYON_INT = 64; // épaisseur d'anneau = 36
+const RAYON_EXT = 106; // marge au bord du viewBox : 4 (stroke inter-secteurs = 1,5)
+const RAYON_INT = 70; // épaisseur d'anneau = 36, inchangée
 const DEBUT = -Math.PI / 2; // 12 h (haut), sens horaire
 
 /** Fraction d'une part POUR LA GÉOMÉTRIE uniquement (jamais un montant). */
@@ -121,15 +130,23 @@ export function DonutCategories({
       </svg>
 
       {/* Centre : total mono-devise (chaîne SQL formatée) ou détail de la part survolée.
-          Overlay HTML (pas du <text> SVG) → tabular-nums + retour à la ligne propre pour
-          les gros montants. `pointer-events-none` : ne bloque pas le survol des secteurs. */}
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
+          Overlay HTML (pas du <text> SVG) → `tabular-nums` et mise en forme CSS normale.
+          Un montant ne se replie JAMAIS sur deux lignes : son séparateur de milliers est
+          une espace fine INSÉCABLE (U+202F, cf. `format-montant`), le `whitespace-nowrap`
+          ci-dessous ne fait qu'expliciter cette garantie. S'il ne tient pas, c'est la
+          géométrie qu'on corrige (rayons), pas le montant qu'on casse.
+          `pointer-events-none` : ne bloque pas le survol des secteurs. */}
+      {/* Largeur en POURCENTAGE, pas en px : le SVG est fluide (`w-full`), donc un
+          padding fixe (`px-8`) ne suit pas l'échelle — il laissait 156 px de texte pour
+          un trou de 128 px. 58 % du côté reste inscrit dans le cercle intérieur (2×70/220
+          = 63,6 %) avec la marge qu'exige une ligne décalée du centre. */}
+      <div className="pointer-events-none absolute inset-0 mx-auto flex w-[58%] flex-col items-center justify-center text-center">
         {partActive ? (
           <>
             <span className="max-w-full truncate text-xs font-medium text-text-muted">
               {partActive.categorie}
             </span>
-            <span className="text-lg font-bold tabular-nums text-text">
+            <span className="whitespace-nowrap text-base font-bold tabular-nums text-text">
               {formatMontant(partActive.montant, devise)}
             </span>
             <span className="text-xs tabular-nums text-text-faint">
@@ -141,7 +158,7 @@ export function DonutCategories({
             <span className="text-xs font-medium uppercase tracking-wide text-text-muted">
               Total
             </span>
-            <span className="text-lg font-bold tabular-nums text-text">
+            <span className="whitespace-nowrap text-base font-bold tabular-nums text-text">
               {formatMontant(total, devise)}
             </span>
           </>

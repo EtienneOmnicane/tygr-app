@@ -108,7 +108,10 @@ function optionCompte(
       aria-selected={coche}
       onClick={() => basculer(c.bankAccountId)}
       className={cn(
-        "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+        // `items-start` : le libellé peut tenir sur deux lignes (cf. plus bas). Centrées,
+        // la case et le badge devise flotteraient à mi-hauteur du bloc au lieu d'être en
+        // regard de la PREMIÈRE ligne du nom.
+        "flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left",
         "text-sm transition-colors focus:outline-none focus-visible:ring-2",
         "focus-visible:ring-primary",
         coche ? "bg-primary-50" : "hover:bg-surface-inset",
@@ -117,7 +120,8 @@ function optionCompte(
       <span
         aria-hidden
         className={cn(
-          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
+          // `mt-0.5` : recale la case (16 px) sur la hauteur de ligne du texte (20 px).
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
           coche
             ? "border-primary bg-primary text-text-onink"
             : "border-line",
@@ -125,10 +129,18 @@ function optionCompte(
       >
         {coche ? "✓" : ""}
       </span>
-      <span className="min-w-0 flex-1 truncate text-text">
+      {/* Nom COMPLET, sur deux lignes si besoin (PERIMETRE-NOMS-COMPLETS1). Il portait
+          `truncate` : dans un popover de 300 px, un libellé réaliste (« State Bank of
+          Mauritius · Compte épargne entreprise », 323 px) perdait plus de la moitié de
+          ses caractères — or c'est précisément sur ce nom qu'on coche. Élargir ne suffit
+          pas : le design system plafonne les popovers à 360 px (UI_GUIDELINES §2.2), soit
+          ~245 px utiles. Le repli lisible est donc le RETOUR À LA LIGNE, pas la coupe.
+          `break-words` protège du cas pathologique (nom d'un seul tenant sans espace). */}
+      <span className="min-w-0 flex-1 break-words text-text">
         {libelleCompte(c)}
       </span>
-      <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
+      {/* `mt-0.5` : même recalage que la case — le badge reste sur la 1re ligne du nom. */}
+      <span className="mt-0.5 shrink-0 text-xs text-text-muted">{c.currency}</span>
     </button>
   );
 }
@@ -365,8 +377,19 @@ export function PerimetreSwitcher({
 
       {ouvert && (
         <div
+          // 360 px = HAUT de la fourchette du design system (UI_GUIDELINES §2.2 :
+          // « popovers, largeur 320-360px ») ; les 300 px précédents étaient SOUS la
+          // spec, ce qui privait les noms de comptes de ~60 px.
+          //
+          // Mais l'élargissement est GARDÉ PAR `sm:` : le popover est ancré à droite du
+          // déclencheur, donc il grandit vers la GAUCHE. Mesuré sous 640 px, un popover
+          // de 360 px sort du viewport par la gauche (−44 px à 480 px de large) — un
+          // `max-w` n'y peut rien, il borne la largeur, pas le point d'ancrage. Sous le
+          // breakpoint on garde donc les 300 px d'origine. L'affichage du nom complet ne
+          // dépend pas de cette largeur : il vient du `break-words` de l'option, qui joue
+          // à toutes les tailles ; ces 60 px ne font qu'économiser des retours à la ligne.
           className="absolute right-0 z-20 mt-2 w-[300px] rounded-control bg-surface-card
-            p-2 text-text shadow-popover"
+            p-2 text-text shadow-popover sm:w-[360px]"
           role="dialog"
           aria-label="Choisir le périmètre d'affichage"
         >
@@ -500,7 +523,10 @@ export function PerimetreSwitcher({
                     const nb = groupe.comptes.length;
                     return (
                       <div key={cle} role="group" aria-label={titre}>
-                        <div className="flex items-center gap-2 px-2 py-1.5">
+                        {/* `items-start` : le nom de titulaire peut tenir sur deux
+                            lignes (cf. `break-words` plus bas) — la case tri-état et le
+                            compteur restent alors en regard de la PREMIÈRE ligne. */}
+                        <div className="flex items-start gap-2 px-2 py-1.5">
                           {/* Tri-état natif : indeterminate posé par ref (pas un
                               attribut HTML). Pas de `name` → jamais posté. */}
                           <input
@@ -513,35 +539,42 @@ export function PerimetreSwitcher({
                               setCoches((prev) => basculerGroupe(prev, groupe.comptes))
                             }
                             aria-label={`Tout cocher — ${titre}`}
-                            className="h-4 w-4 shrink-0 cursor-pointer accent-primary
+                            className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-primary
                               focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                           />
                           <button
                             type="button"
                             onClick={() => basculerOuverture(cle)}
                             aria-expanded={voletOuvert}
-                            className="flex min-w-0 flex-1 items-center gap-2 rounded-control
+                            className="flex min-w-0 flex-1 items-start gap-2 rounded-control
                               text-left focus:outline-none focus-visible:ring-2
                               focus-visible:ring-primary"
                           >
                             <span
                               aria-hidden
                               className={cn(
-                                "shrink-0 text-[10px] text-text-muted transition-transform",
+                                // `mt-1` : le chevron reste sur la 1re ligne du titre.
+                                // `origin-center` : sans lui, la rotation d'ouverture
+                                // pivoterait autour d'un centre décalé par la marge.
+                                "mt-1 shrink-0 origin-center text-[10px] text-text-muted transition-transform",
                                 voletOuvert && "rotate-90",
                               )}
                             >
                               ▸
                             </span>
+                            {/* Nom de titulaire COMPLET : « OMNICANE MILLING COMPANY
+                                LIMITED » amputé, c'est le groupe qu'on ne sait plus
+                                identifier. Le `title` reste — il sert encore de secours
+                                si la raison sociale déborde même sur deux lignes. */}
                             <span
-                              className="truncate text-[11px] font-semibold uppercase
+                              className="break-words text-[11px] font-semibold uppercase
                                 tracking-[0.08em] text-text-muted"
                               title={titre}
                             >
                               {titre}
                             </span>
                           </button>
-                          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-text-muted">
+                          <span className="mt-0.5 shrink-0 whitespace-nowrap text-xs tabular-nums text-text-muted">
                             {nb} compte{nb > 1 ? "s" : ""}
                           </span>
                         </div>
@@ -656,7 +689,9 @@ export function PerimetreSwitcher({
                         aria-selected={actif}
                         onClick={() => setEntiteChoisie(e.entityId)}
                         className={cn(
-                          "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+                          // `items-start` + `mt-0.5` : même traitement que l'option
+                          // compte — le nom d'entité peut tenir sur deux lignes.
+                          "flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left",
                           "text-sm transition-colors focus:outline-none focus-visible:ring-2",
                           "focus-visible:ring-primary",
                           actif ? "bg-primary-50" : "hover:bg-surface-inset",
@@ -665,7 +700,7 @@ export function PerimetreSwitcher({
                         <span
                           aria-hidden
                           className={cn(
-                            "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
+                            "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
                             actif
                               ? "border-primary bg-primary text-text-onink"
                               : "border-line",
@@ -673,8 +708,11 @@ export function PerimetreSwitcher({
                         >
                           {actif ? "✓" : ""}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-text">{e.name}</span>
-                        <span className="shrink-0 text-xs text-text-muted">
+                        {/* Nom d'entité COMPLET, comme l'option compte : une raison
+                            sociale (« Omnicane Milling Company Limited ») ne se lit pas
+                            amputée, et c'est sur elle qu'on choisit son périmètre. */}
+                        <span className="min-w-0 flex-1 break-words text-text">{e.name}</span>
+                        <span className="mt-0.5 shrink-0 text-xs text-text-muted">
                           {e.nbComptes} compte{e.nbComptes > 1 ? "s" : ""}
                         </span>
                       </button>
