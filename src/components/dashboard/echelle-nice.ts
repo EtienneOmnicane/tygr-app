@@ -14,8 +14,12 @@
  */
 
 /** Mantisses « nice » couvertes, dans l'ordre croissant. Le `10` ferme la boucle :
- *  il capture les mantisses proches de la décade suivante (ex. 6 → 10, pas 5). */
-const MANTISSES_NICE = [1, 2, 2.5, 5, 10] as const;
+ *  il capture les mantisses proches de la décade suivante (ex. 8,1 → 10). Les paliers
+ *  intermédiaires (1.5, 3, 4, 6, 8) EXISTENT pour éviter que l'axe ne double le max :
+ *  sans eux, un max de mantisse 5,2 sautait à 10 → la plus haute barre ne remplissait
+ *  que ~52 % de la hauteur, laissant le haut de la carte vide (bug « je vois rien »).
+ *  Avec ces paliers le pire cas de remplissage passe de ~50 % à ~67 %. */
+const MANTISSES_NICE = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] as const;
 
 /** Tolérance pour les cas « pile » (ex. 50 → mantisse 5.000000000000001 en float à
  *  cause de la division par la puissance de 10) : sans elle, 50 sauterait à 10×10^1
