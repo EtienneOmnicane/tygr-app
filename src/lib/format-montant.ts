@@ -156,6 +156,28 @@ export function formatMontantCompact(montant: string, devise: string): string {
 }
 
 /**
+ * Nombre de chiffres de la partie ENTIÈRE d'un montant : « 1234.56 » → 4, « 0.99 » → 1,
+ * « -12345.00 » → 5, « 007.00 » → 1 (les zéros de tête ne comptent pas, ils ne
+ * s'affichent pas).
+ *
+ * C'est une mesure de LARGEUR, pas de valeur. Elle sert aux contextes à largeur
+ * contrainte (centre d'un graphe, cellule étroite) à décider s'ils peuvent afficher le
+ * format plein ou doivent basculer sur `formatMontantCompact` — décision qui doit se
+ * prendre sur la longueur RÉELLE de la chaîne, jamais sur un seuil de valeur (comparer
+ * un montant à 10^8 supposerait de le convertir en `number`, donc de perdre des
+ * centimes : exactement l'interdit de la règle 8).
+ *
+ * Elle vit ici, et pas dans le composant qui l'utilise, parce que le découpage d'une
+ * chaîne décimale (signe, zéros de tête, séparateur) est précisément ce que
+ * `decomposer` sait déjà faire : le refaire ailleurs rouvrirait la dette C8.
+ * En revanche le SEUIL, lui, appartient à l'appelant — il dépend de sa géométrie, pas
+ * du montant.
+ */
+export function chiffresPartieEntiere(montant: string): number {
+  return decomposer(montant).entier.length;
+}
+
+/**
  * Symbole de préfixe d'une devise connue (`MUR`→`Rs`, `USD`→`$`, `EUR`→`€`), ou
  * `null` si inconnue (repli ISO suffixe). Sert à l'affichage multi-devises qui
  * sépare le symbole du corps numérique pour ALIGNER les virgules décimales —
