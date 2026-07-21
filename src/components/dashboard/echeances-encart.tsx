@@ -53,6 +53,8 @@
  * `outflow-700` 6,18:1 — tous AA. `text-faint` y tombe à 2,70:1 : il est BANNI de ce
  * composant (dette FLUX-PREV-CONTRASTE1, à ne pas aggraver).
  */
+import Link from "next/link";
+
 import {
   largeurRelative,
   maxPrevision,
@@ -100,13 +102,18 @@ export function EcheancesEncart({
           </p>
         </div>
         {/* UN seul CTA (§4.4) : le détail vit sur la page Échéances, l'encart n'en est
-            que le résumé. Lien discret — l'encart reste secondaire (§6.1). */}
-        <a
+            que le résumé. Lien discret — l'encart reste secondaire (§6.1).
+            `Link` et non `<a>` : navigation client, comme partout ailleurs dans le
+            dashboard (un `<a>` interne relancerait un chargement complet de page).
+            Cohabite avec le renvoi de `cash-flow-summary.tsx`, qui n'est pas un doublon :
+            celui-là est une aide CONDITIONNELLE (« aucune entrée sur la période »), pas le
+            renvoi permanent au détail. */}
+        <Link
           href="/echeances"
-          className="rounded-control text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="rounded-[2px] text-xs font-medium text-primary underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
         >
           Voir les échéances
-        </a>
+        </Link>
       </div>
 
       <div className="rounded-control bg-surface-forecast p-4">
