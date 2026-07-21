@@ -42,6 +42,11 @@
  * le MÊME payload serveur que le réalisé. Les états loading et erreur appartiennent à la
  * route (`loading.tsx` / `error.tsx`) ; l'encart porte ses états VIDE et PARTIEL.
  *
+ * ⚠️ Le skeleton de `loading.tsx` ne montre DÉLIBÉRÉMENT pas cet encart : sa présence est
+ * conditionnelle (`prevision !== null`), donc un skeleton qui l'annonce promettrait une
+ * carte qui n'arrive pas — un saut de layout inverse, pire que celui qu'il évite. Le
+ * squelette s'arrête à ce qui est toujours rendu.
+ *
  * ## Contrastes (Gate 4, §6.6 — mesurés sur le fond RÉEL, jamais sur blanc)
  * La liste est posée sur `surface-forecast` (#efebdd) : c'est le marquage prévisionnel
  * (§6.4, fond + label). Sur CE fond, `text-muted` donne 5,09:1, `inflow-700` 6,75:1 et

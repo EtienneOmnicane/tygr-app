@@ -109,15 +109,20 @@ export function estIllisible(hauteurPx: number, estValeurNulle: boolean): boolea
  *
  * L'encart ne mesure pas son conteneur (composant serveur pur, barres en `%`) : cette
  * référence ne sert donc PAS au rendu, uniquement à la garde de couverture, pour traduire
- * un pourcentage en pixels plausibles. Valeur observée au Visual QA sur carte pleine
- * largeur (~1100 px), moins les paddings, la colonne de sens et celle du montant.
+ * un pourcentage en pixels plausibles.
+ *
+ * MESURÉE, pas estimée : `getBoundingClientRect()` sur la barre pleine de
+ * `DEMO_DASHBOARD_PREVISION_CONTRASTEE`, viewport 1440, carte pleine largeur → 1146,94 px
+ * (Visual QA du 2026-07-21). Une première version supposait 800 px « au jugé » : la garde
+ * en devenait PERMISSIVE (elle aurait accepté comme « sous-pixel » une barre de 2,9 px,
+ * pourtant visible). Le seuil doit venir de la mesure, jamais de l'estimation.
  *
  * ⚠️ L'augmenter DURCIT la garde (une piste plus large rend visible une barre plus petite,
  * donc il faut une fixture plus extrême pour prouver le cas sous-pixel). Ne pas la baisser
  * pour « faire passer » une fixture : ce serait exactement l'assouplissement de seuil que
  * le lot 0 interdit.
  */
-export const LARGEUR_PISTE_ENCART_REF_PX = 800;
+export const LARGEUR_PISTE_ENCART_REF_PX = 1147;
 
 /**
  * Part (%) en dessous de laquelle une barre de l'encart cesse d'être représentable et se
