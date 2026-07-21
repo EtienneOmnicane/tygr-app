@@ -72,14 +72,45 @@ export const CORRESPONDANCE_FR: Record<string, string> = {
   payroll: "Salaires",
   "banking & finance": "Frais bancaires",
   "bank charges": "Frais bancaires",
+  // Virement entre deux comptes du groupe. Nommé (≠ neutralisé) : son TRAITEMENT dans
+  // les totaux relève de la décision D3 du plan graphiques (« annoter en v1 »), pas de
+  // l'affichage. Observé en base le 2026-07-21 (`INTER_ACCOUNT_TRANSFER`).
+  "inter account transfer": "Virements internes",
 };
+
+/**
+ * Normalise une clé OBIE avant recherche dans {@link CORRESPONDANCE_FR}.
+ *
+ * POURQUOI (constat de QA sur donnée RÉELLE, 2026-07-21) : l'amont émet ses catégories
+ * en `SCREAMING_SNAKE_CASE` (`BANKING_AND_FINANCE`, `INTER_ACCOUNT_TRANSFER`,
+ * `UTILITIES`), alors que ce dictionnaire a été bâti sur la sonde du 2026-06-23, qui
+ * observait des libellés en minuscules à espaces (`banking & finance`). Les clés d'un
+ * seul mot matchaient encore (`UTILITIES` → `utilities`), mais TOUTES les clés composées
+ * échouaient silencieusement et retombaient sur « Non catégorisé ».
+ *
+ * Plutôt que de dupliquer chaque entrée dans les deux graphies (deux vérités à maintenir),
+ * on normalise à la LECTURE : `_and_` → ` & `, puis `_` → ` `. Cette seule règle fait
+ * matcher toutes les entrées composées du dictionnaire — `FOOD_AND_DRINK` → `food & drink`,
+ * `BUSINESS_EXPENSES` → `business expenses` — et laisse les clés simples inchangées.
+ *
+ * ⚠️ Doit rester STRICTEMENT équivalente à la normalisation SQL de `caseCategorieFr`
+ * (`src/server/insights/categorie-fr-sql.ts`) : si les deux divergent, le donut et
+ * `/transactions` afficheront des catégories différentes pour la même transaction.
+ */
+export function normaliserCleObie(primaryCategory: string): string {
+  return primaryCategory
+    .trim()
+    .toLowerCase()
+    .replaceAll("_and_", " & ")
+    .replaceAll("_", " ");
+}
 
 /**
  * Traduit une catégorie OBIE en français pour l'affichage. `null`/`undefined`/vide
  * ou clé inconnue → « Non catégorisé ». Aucune mutation de la donnée d'origine.
  */
 export function categorieFr(primaryCategory: string | null | undefined): string {
-  const clef = primaryCategory?.trim().toLowerCase();
-  if (!clef) return CATEGORIE_FR_PAR_DEFAUT;
+  if (!primaryCategory?.trim()) return CATEGORIE_FR_PAR_DEFAUT;
+  const clef = normaliserCleObie(primaryCategory);
   return CORRESPONDANCE_FR[clef] ?? CATEGORIE_FR_PAR_DEFAUT;
 }

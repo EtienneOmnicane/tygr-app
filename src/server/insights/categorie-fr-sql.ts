@@ -55,7 +55,15 @@ export function caseCategorieFr(colonne: AnyColumn | SQL): SQL<string> {
     ([cleObie, libelleFr]) => sql`when ${cleObie}::text then ${libelleFr}::text`,
   );
 
-  return sql<string>`case lower(btrim(${colonne})) ${sql.join(
+  // Normalisation de la clé — miroir SQL EXACT de `normaliserCleObie` (TS) : l'amont
+  // émet en SCREAMING_SNAKE_CASE (`BANKING_AND_FINANCE`, constat de QA sur donnée réelle
+  // le 2026-07-21) alors que le dictionnaire est en minuscules à espaces. Les deux
+  // implémentations DOIVENT rester équivalentes, sinon le donut et /transactions
+  // afficheraient des catégories différentes pour la MÊME transaction — divergence
+  // invisible au lint et au typecheck, verrouillée par un test clé-par-clé.
+  const cleNormalisee = sql`replace(replace(lower(btrim(${colonne})), '_and_', ' & '), '_', ' ')`;
+
+  return sql<string>`case ${cleNormalisee} ${sql.join(
     branches,
     sql` `,
   )} else ${CATEGORIE_FR_PAR_DEFAUT}::text end`;

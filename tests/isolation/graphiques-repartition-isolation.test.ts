@@ -24,6 +24,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -35,6 +36,8 @@ import {
   repartitionParCategorie,
 } from "@/server/repositories/insights";
 import type { SensFlux } from "@/server/insights/types";
+import { caseCategorieFr } from "@/server/insights/categorie-fr-sql";
+import { categorieFr, CORRESPONDANCE_FR } from "@/lib/categories-fr";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -380,6 +383,58 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
       ?.parts.find((p) => p.categorie === "Revenus");
     expect(revenus?.montant).toBe("1100.00");
     expect(revenus?.montantPrecedent).toBe("1000.00");
+  });
+
+  it("LOT 0 — le CASE SQL et categorieFr (TS) donnent le MÊME libellé, clé par clé", async () => {
+    // Deux implémentations de la même règle vivent côte à côte : `categorieFr` (rendu,
+    // /transactions + dashboard) et `caseCategorieFr` (agrégat, donut). Si elles
+    // divergent, la MÊME transaction s'affiche sous deux catégories selon l'écran — une
+    // incohérence invisible au lint, au typecheck et au build. Ce test les confronte.
+    const echantillons = [
+      // Toutes les clés du dictionnaire, dans leur graphie canonique…
+      ...Object.keys(CORRESPONDANCE_FR),
+      // …puis les graphies RÉELLEMENT observées en base le 2026-07-21 (l'amont émet en
+      // SCREAMING_SNAKE_CASE, le dictionnaire est en minuscules à espaces).
+      "UTILITIES",
+      "BANKING_AND_FINANCE",
+      "INTER_ACCOUNT_TRANSFER",
+      "UNCLASSIFIED",
+      // …et les cas limites : casse mixte, espaces parasites, hors catalogue, vide.
+      "Income",
+      "  rent  ",
+      "FOOD_AND_DRINK",
+      "crypto-mining",
+      "",
+    ];
+
+    for (const brut of echantillons) {
+      const [ligne] = await db
+        .select({ fr: caseCategorieFr(sql`${brut}::text`) })
+        .from(sql`(select 1) as _`);
+      expect(
+        ligne.fr,
+        `divergence TS/SQL sur la clé « ${brut} »`,
+      ).toBe(categorieFr(brut));
+    }
+  });
+
+  it("LOT 0 — SCREAMING_SNAKE_CASE de l'amont : BANKING_AND_FINANCE → « Frais bancaires »", async () => {
+    // Constat de QA sur donnée réelle (2026-07-21) : sans normalisation de la clé, les
+    // 180 transactions BANKING_AND_FINANCE de la base tombaient en « Non catégorisé » —
+    // une RÉGRESSION (le donut affichait au moins l'étiquette brute avant le Lot 0).
+    const cas = [
+      ["BANKING_AND_FINANCE", "Frais bancaires"],
+      ["INTER_ACCOUNT_TRANSFER", "Virements internes"],
+      ["UTILITIES", "Charges"],
+      ["UNCLASSIFIED", "Non catégorisé"],
+    ] as const;
+
+    for (const [brut, attendu] of cas) {
+      const [ligne] = await db
+        .select({ fr: caseCategorieFr(sql`${brut}::text`) })
+        .from(sql`(select 1) as _`);
+      expect(ligne.fr, `clé amont « ${brut} »`).toBe(attendu);
+    }
   });
 
   it("borne haute INCLUSIVE : une transaction le jour `to` est comptée", async () => {
