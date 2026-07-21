@@ -226,16 +226,34 @@ Lots 0-2 livrés (fixtures + garde Gate 4, mention de couverture, zone muette, �
 valeur). Ils rendent la prévision LISIBLE ; ils ne rendent pas la comparaison HONNÊTE — cette
 distinction est le cœur du sujet et ne doit pas se perdre.
 
-- [ ] **FLUX-PREV-AXE1 (P2) — sortir la prévision de l'axe du réalisé (option E du plan §4.1).**
-      **Direction RETENUE par Etienne le 2026-07-20**, à exécuter après les lots 0-2.
-      *Quoi* : le graphe « Flux de trésorerie » redevient 100 % réalisé ; les échéances vivent
-      dans un encart dédié à échelle propre (ou dans la page Échéances).
-      *Pourquoi* : réalisé et prévision ne sont pas commensurables — mesure exhaustive
-      (`transactions_cache`) contre sous-ensemble déclaré (échéances saisies). Sur l'axe
-      partagé, un rapport 1:520 produit un faux constat (« la trésorerie s'effondre ») que les
-      lots 0-2 atténuent sans le supprimer.
-      *Effort* : ~5-8 h agent, ~1 h humain. *Déclencheur* : dès que les lots 0-2 sont mergés.
-      *Réutilisable* : `formatMontantCompact` et `flux-etiquettes.ts` servent aussi à l'encart.
+- [x] **FLUX-PREV-AXE1 (P2) — sortir la prévision de l'axe du réalisé (option E du plan §4.1).**
+      **LIVRÉ le 2026-07-21** (direction retenue par Etienne le 2026-07-20).
+      *Livré* : le graphe « Flux de trésorerie » est 100 % réalisé ; les échéances vivent dans
+      `echeances-encart.tsx`, carte SECONDAIRE à échelle propre sous l'ancre, avec renvoi vers
+      `/echeances`. Le montant ÉCRIT y est le canal principal, la barre l'appui comparatif —
+      parce que l'écart d'ordre de grandeur se REPRODUIT à l'intérieur de la prévision
+      (1:1260 mesuré) : sous le tick, la barre ne dit plus rien, le montant si.
+      *Garde* : la couverture Gate 4 est re-ciblée sur l'écart INTERNE à la prévision
+      (l'écrasement contre le réalisé n'existe plus) + fixture
+      `DEMO_DASHBOARD_PREVISION_CONTRASTEE`, sans laquelle le corpus plafonnait à ~1:6.
+      *Réversibilité* : `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes` restent dans
+      `flux-projection.ts`, débranchés du rendu mais testés — cf. FLUX-PREV-BASELINE1.
+
+- [ ] **ENCART-ECHEANCES-VIDE1 (P2 produit, 2026-07-21) — l'encart « Échéances à venir »
+      monte même quand le workspace n'a AUCUNE échéance.** Relevé en cross-review de
+      FLUX-PREV-AXE1. `previsionActive` (`(dashboard)/page.tsx`) ne teste QUE « la fenêtre
+      atteint le mois courant » (D4) ; l'existence d'une occurrence n'entre pas dans la
+      condition, et `projeterEcheancesSurGrille` remplit toujours la grille de zéros. Un
+      workspace neuf porte donc en permanence une carte « Aucune échéance sur ces mois » +
+      sa mention de couverture.
+      *Deux lectures défendables, d'où l'arbitrage* : (a) c'est du BRUIT sur un dashboard
+      neuf → ne monter l'encart que si une occurrence existe ; (b) c'est une INFORMATION
+      (« rien n'est prévu » ≠ « la fonction n'existe pas ») → statu quo, et c'est cohérent
+      avec §5.4 du plan qui refuse les zones muettes.
+      *Non tranché par l'agent* : changer un comportement produit visible sans arbitrage
+      sortirait du périmètre du lot. Le code dit désormais la vérité (docstrings corrigées).
+      *Effort* : ~30 min si (a). *Déclencheur* : arbitrage d'Etienne, ou premier retour
+      d'un utilisateur sans échéances.
 
 - [ ] **FLUX-PREV-BASELINE1 (P2) — homogénéiser la série prévisionnelle (option F du plan §4.2).**
       Le VRAI fix : la prévision cesse d'être « les échéances saisies » pour devenir une
@@ -250,14 +268,23 @@ distinction est le cœur du sujet et ne doit pas se perdre.
       prévisionnel FYGR**. *Risque à porter au cadrage* : une baseline est une hypothèse ; non
       annotée, elle remplace un faux constat visuel par un faux constat chiffré, donc plus
       crédible et plus dangereux.
+      *Point de reprise (FLUX-PREV-AXE1, 2026-07-21)* : la machinerie d'axe partagé est
+      conservée débranchée — `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes`
+      (`flux-projection.ts`) et les helpers d'étiquette encore TESTÉS de
+      `flux-etiquettes.ts` (`estIllisible`, `etiquetteVerticale`, `largeurEtiquette`,
+      `SEUIL_LISIBILITE_PX`, `RAPPORT_BARRE_INVISIBLE`, `MARGE_ETIQUETTE_PX`). Ce chantier
+      les rebranche ; il ne repart pas de zéro. `ECART_ETIQUETTE_PX` a en revanche été
+      SUPPRIMÉ : sans consommateur NI test, il aurait dérivé en silence — le geler ne se
+      justifiait que pour ce qui reste couvert. Il se réécrit en une ligne (git le garde).
+      Ce chantier réactive aussi FLUX-PREV-LABEL-DENSE1, clos par disparition de sa cause.
 
-- [ ] **FLUX-PREV-LABEL-DENSE1 (P2 cosmétique) — libellés de mois forcés sur les colonnes
-      projetées.** Le libellé est forcé pour ne pas laisser une étiquette de valeur orpheline,
-      mais seulement s'il tient dans la colonne (`largeurEtiquette <= pas`) ; sur une fenêtre
-      très dense (preset « tout », ~28 px/colonne) il retombe donc dans la décimation C3 et un
-      mois projeté peut afficher « Rs 10 k » sans son mois. Non reproductible sur `/demo/dashboard`
-      (fixée à 6 mois). *Effort* : ~1 h. *Déclencheur* : si un utilisateur le signale sur « tout »,
-      ou à la reprise de FLUX-PREV-AXE1 (qui le rend caduc).
+- [x] **FLUX-PREV-LABEL-DENSE1 (P2 cosmétique) — CADUC le 2026-07-21, résolu de fait par
+      FLUX-PREV-AXE1.** Le défaut était : un mois projeté pouvait afficher « Rs 10 k » sans son
+      libellé de mois sur une fenêtre dense, l'étiquette de valeur devenant orpheline. Il n'y a
+      plus ni colonne projetée ni étiquette de valeur dans le graphe — la prévision a quitté
+      l'axe. Rien à corriger : la cause a disparu avec la structure qui la portait.
+      ⚠️ Reviendrait avec FLUX-PREV-BASELINE1 (option F) si une série prévisionnelle
+      retournait sur l'axe partagé.
 
 - [ ] **FLUX-PREV-CONTRASTE1 (P2 accessibilité, PRÉ-EXISTANT) — `text-faint` sous AA.**
       Mesuré au Visual QA : `text-faint` (#8a8f9f) donne **3,23:1 sur blanc** et **2,70:1 sur

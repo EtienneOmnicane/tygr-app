@@ -155,9 +155,69 @@ export interface PrevisionFlux {
 }
 
 /**
+ * Les mois de la prévision dans l'ORDRE d'affichage : le mois d'ancrage (ses échéances
+ * RESTANTES, D2) puis les mois futurs. Source UNIQUE de cet ordre — l'encart et les tests
+ * le lisent d'ici plutôt que de recomposer `[moisCourant, ...moisFuturs]` chacun de leur
+ * côté (c'est exactement la duplication qui fait diverger une garde de son rendu).
+ */
+export function moisPrevision(prevision: PrevisionFlux): MoisAffiche[] {
+  return [prevision.moisCourant, ...prevision.moisFuturs];
+}
+
+/**
+ * Plus grande valeur (entrée OU sortie) de la SEULE prévision — l'échelle PROPRE de
+ * l'encart « Échéances à venir » (FLUX-PREV-AXE1, option E du plan §4.1).
+ *
+ * ⚠️ C'est le cœur de l'option E, et la raison pour laquelle cette fonction ne peut PAS
+ * être `maxFenetreColonnes` : cette dernière court sur l'axe COMPLET (réalisé + prévision),
+ * donc elle porte l'échelle du réalisé — des millions de MUR mesurés en banque. Rapportées
+ * à ce plafond, des échéances saisies en milliers rendent moins d'un pixel (rapport mesuré
+ * jusqu'à 1:520). Ici le plafond est celui des échéances SEULES : la plus grosse échéance
+ * fait une barre pleine, et les autres se comparent ENTRE ELLES — la seule comparaison qui
+ * ait un sens, puisque les deux séries ne sont pas commensurables (mesure exhaustive de
+ * `transactions_cache` contre sous-ensemble déclaré d'`echeances`).
+ *
+ * `parseFloat` est cantonné à la GÉOMÉTRIE (hauteur/largeur relative), jamais à un montant
+ * affiché — même frontière que `maxFenetre`/`maxFenetreColonnes` (règle 8).
+ */
+export function maxPrevision(mois: MoisAffiche[]): number {
+  let max = 0;
+  for (const m of mois) {
+    max = Math.max(max, Math.abs(parseFloat(m.entrees)), Math.abs(parseFloat(m.sorties)));
+  }
+  return max;
+}
+
+/**
+ * Largeur d'une barre en POURCENTAGE de sa piste, pour l'encart à échelle propre.
+ *
+ * Rendu en `%` et non en px : l'encart ne mesure pas son conteneur (aucun `ResizeObserver`,
+ * donc aucun îlot client — c'est un composant serveur pur). Le pourcentage suit la largeur
+ * réelle quelle qu'elle soit, sans jamais dériver un px CSS d'une unité de viewBox — le
+ * piège que le SVG étiré du graphe a appris (`flux-bars.tsx`, PLAN §6.3).
+ *
+ * Borné à [0, 100] : un plafond nul (aucune échéance) rend 0 plutôt qu'`Infinity`/`NaN`.
+ * Géométrie pure (règle 8) — `parseFloat` ne touche ici qu'une largeur, pas un montant.
+ */
+export function largeurRelative(valeur: string, max: number): number {
+  if (!Number.isFinite(max) || max <= 0) return 0;
+  const v = Math.abs(parseFloat(valeur));
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min((v / max) * 100, 100);
+}
+
+/**
  * Une colonne de l'axe : ce que la barre du mois porte, réalisé et prévision SÉPARÉS.
  * Jamais fusionnés en un chiffre — deux sources (`transactions_cache` vs `echeances`)
  * ne s'additionnent pas dans une même valeur (§3.5, frontière non ambiguë).
+ *
+ * ⚠️ DÉBRANCHÉ DU RENDU depuis FLUX-PREV-AXE1 (option E) : le graphe « Flux de trésorerie »
+ * est redevenu 100 % réalisé, donc plus aucune colonne ne porte de prévision. Ce type et
+ * les deux fonctions qui le produisent (`composerColonnes`, `maxFenetreColonnes`) restent
+ * ici — testés — parce que l'option E est explicitement RÉVERSIBLE (plan §4.1) et que
+ * FLUX-PREV-BASELINE1 (option F, TODOS.md) remettra une série prévisionnelle sur l'axe le
+ * jour où elle sera commensurable. Ils décrivent la FRONTIÈRE réalisé/projection, qui reste
+ * la règle du domaine même quand elle n'est plus dessinée.
  */
 export interface ColonneFlux {
   libelleMois: string;

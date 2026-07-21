@@ -20,7 +20,10 @@ import { expanserOccurrences } from "@/lib/echeances-recurrence";
 import type { OccurrenceProjetee } from "@/lib/echeances-recurrence";
 import {
   composerColonnes,
+  largeurRelative,
   maxFenetreColonnes,
+  maxPrevision,
+  moisPrevision,
   projeterEcheancesSurGrille,
   projeterSurGrille,
   type MoisAffiche,
@@ -286,5 +289,93 @@ describe("cohérence avec le réalisé (projeterSurGrille)", () => {
     const prevu = projeterEcheancesSurGrille([], grille, "MUR");
 
     expect(reel.map((m) => m.libelleMois)).toEqual(prevu.map((m) => m.libelleMois));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* ENCART « Échéances à venir » (FLUX-PREV-AXE1, option E)             */
+/* ------------------------------------------------------------------ */
+
+describe("moisPrevision — ordre d'affichage de l'encart", () => {
+  it("place le mois d'ANCRAGE en tête, puis les mois futurs", () => {
+    const mois = moisPrevision({
+      moisCourant: realise({ libelleMois: "2026-06" }),
+      moisFuturs: [
+        realise({ libelleMois: "2026-07" }),
+        realise({ libelleMois: "2026-08" }),
+      ],
+    });
+
+    expect(mois.map((m) => m.libelleMois)).toEqual(["2026-06", "2026-07", "2026-08"]);
+  });
+
+  it("rend le seul mois d'ancrage quand il n'y a aucun mois futur", () => {
+    const mois = moisPrevision({
+      moisCourant: realise({ libelleMois: "2026-06" }),
+      moisFuturs: [],
+    });
+
+    expect(mois).toHaveLength(1);
+  });
+});
+
+describe("maxPrevision — échelle PROPRE de l'encart", () => {
+  it("ignore totalement le réalisé : seules les échéances fixent le plafond", () => {
+    // C'est l'invariant du lot. Sur l'axe partagé, ces mêmes valeurs étaient rapportées à
+    // un réalisé de plusieurs millions et rendaient moins d'un pixel.
+    const max = maxPrevision([
+      realise({ libelleMois: "2026-07", sorties: "10000.00" }),
+      realise({ libelleMois: "2026-08", entrees: "25000.00" }),
+    ]);
+
+    expect(max).toBe(25000);
+  });
+
+  it("prend la plus grande valeur tous SENS confondus", () => {
+    const max = maxPrevision([
+      realise({ entrees: "3000.00", sorties: "9000.00" }),
+      realise({ entrees: "4000.00", sorties: "1000.00" }),
+    ]);
+
+    expect(max).toBe(9000);
+  });
+
+  it("rend 0 quand aucune échéance ne tombe (zone muette)", () => {
+    expect(maxPrevision([realise(), realise()])).toBe(0);
+    expect(maxPrevision([])).toBe(0);
+  });
+});
+
+describe("largeurRelative — géométrie de la barre d'encart", () => {
+  it("donne 100 % à la valeur qui fixe l'échelle", () => {
+    expect(largeurRelative("25000.00", 25000)).toBe(100);
+  });
+
+  it("reste proportionnelle en dessous", () => {
+    expect(largeurRelative("5000.00", 25000)).toBe(20);
+  });
+
+  it("rend une part MINUSCULE mais non nulle sur un fort écart interne", () => {
+    // Rs 2 500 face à Rs 3 150 000 : la barre est irreprésentable (le tick prend le relais)
+    // MAIS elle n'est pas nulle — la valeur existe, et son montant reste écrit.
+    const largeur = largeurRelative("2500.00", 3150000);
+
+    expect(largeur).toBeGreaterThan(0);
+    expect(largeur).toBeLessThan(0.1);
+  });
+
+  it("rend 0 sur une valeur nulle (aucune barre à dessiner, pas une barre écrasée)", () => {
+    expect(largeurRelative("0.00", 25000)).toBe(0);
+  });
+
+  it("rend 0 sur un plafond inexploitable plutôt qu'Infinity ou NaN", () => {
+    expect(largeurRelative("1000.00", 0)).toBe(0);
+    expect(largeurRelative("1000.00", Number.NaN)).toBe(0);
+  });
+
+  it("borne à 100 % une valeur qui dépasserait son plafond", () => {
+    // Défense en profondeur : le plafond vient de `maxPrevision` sur les mêmes cellules,
+    // donc ce cas ne peut pas arriver — mais une barre à 300 % déborderait sa carte.
+    expect(largeurRelative("50000.00", 25000)).toBe(100);
   });
 });
