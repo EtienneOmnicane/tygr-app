@@ -128,6 +128,17 @@ DEUX étages d'isolation, à ne JAMAIS confondre ni inverser :
   d'entity_id sur l'append-only) — d'où la règle « jamais de lecture des tables filles sans
   joindre bank_accounts » (ENTITY-READ-JOIN1). Fuite ici = intra-groupe (grave, pas
   cross-client) — mais traitée comme un gate bloquant.
+  ⚠️ **ENTITY-READ-JOIN1 est une CEINTURE, plus l'unique défense** (depuis 0017 pour les
+  filles de `transactions_cache`/`balance_history`, et 0024 pour `account_party_role`) : ces
+  tables portent désormais leur PROPRE policy `account_scope`, qui mord quelle que soit la
+  forme de la requête. La raison de ce doublement : la convention de jointure est une
+  garantie **syntaxique** — `from(bankAccounts).leftJoin(fille)` borne, mais
+  `from(fille).leftJoin(bankAccounts)` **ne borne pas**, et les deux sont indiscernables au
+  lint. Un oubli de jointure ne doit pas pouvoir créer une fuite intra-groupe. La convention
+  reste néanmoins exigée : elle porte aussi la correction des agrégats, pas seulement
+  l'isolation. **Exception à connaître** : `parties` n'a PAS de policy de périmètre (elle est
+  ADMIN-only strict — TODOS `ENTITY-PARTIES-P2`), et `user_scopes` n'en aura JAMAIS (table de
+  droits : la scoper par le périmètre qu'elle définit serait circulaire).
 
 Invariants :
 - `entity_id` vit UNIQUEMENT sur `bank_accounts` (NULLABLE = « non assigné »). Ne JAMAIS

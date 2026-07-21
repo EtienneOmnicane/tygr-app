@@ -162,6 +162,13 @@
       "when": 1784288189194,
       "tag": "0023_echeances-recurrence-varchar20",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784615257975,
+      "tag": "0024_account-party-role-scope",
+      "breakpoints": true
     }
   ]
 }

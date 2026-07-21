@@ -7,8 +7,19 @@ jour)** : voir le decision log du plan
 
 ### ⛔ NON-DETTE — à corriger, pas à consigner (règle 9 : l'isolation ne se met pas en dette)
 
-- [ ] **ENTITY-PARTIES-SCOPE1 (chantier immédiat, effort ~0,5 j, ouvert 2026-07-21) —
-  `account_party_role` échappe à l'ÉTAGE 2 d'isolation.** **Quoi** : la table porte
+- [x] **ENTITY-PARTIES-SCOPE1 — RÉSOLU le 2026-07-21** (migration `0024_account-party-role-scope.sql`,
+  suite `tests/isolation/parties-scope-isolation.test.ts`, plan `PLAN-entity-parties-scope.md`).
+  Policy `account_scope` RESTRICTIVE FOR ALL posée sur `account_party_role` (calque 0017,
+  prédicat direct sur `bank_account_id`), 10 cas d'isolation + mutation-check 5 points.
+  ⚠️ **Requalification à ne PAS rouvrir** : le constat conservé ci-dessous décrivait une
+  fuite ; il n'y en avait AUCUNE d'active — les 4 chemins de lecture recensés étaient tous
+  bornés, et l'absence de policy était une décision TRACÉE (`0017` bloc COEXISTENCE,
+  `schema.ts:936-937`), pas un oubli. Ce qui manquait était la défense COMPLÉMENTAIRE en
+  RLS derrière la convention `ENTITY-READ-JOIN1`. Le reliquat `parties` part en P2
+  ci-dessous (décision D2 du plan). Constat d'origine conservé pour l'audit trail :
+
+- [ ] ~~**ENTITY-PARTIES-SCOPE1 (chantier immédiat, effort ~0,5 j, ouvert 2026-07-21) —
+  `account_party_role` échappe à l'ÉTAGE 2 d'isolation.**~~ **Quoi** : la table porte
   `bank_account_id` (`0013_parties-account-party-role.sql:34-41`) mais UNIQUEMENT la policy
   `tenant_isolation` (`0013:71`). Ni `entity_scope`, ni `account_scope` — `0017` a couvert
   `transactions_cache` (+ partitions), `balance_history`, `transaction_categorizations` et
@@ -24,6 +35,39 @@ jour)** : voir le decision log du plan
   l'atteint aujourd'hui sans jointure, (2) poser la policy manquante, (3) cas d'isolation
   dédié. Découvert en instruisant NUDGE-VISION-ENTITE1 ; lot séparé arbitré par Etienne le
   2026-07-21.
+
+- [ ] **ENTITY-PARTIES-P2 (P2, effort ~0,25 j, ouvert 2026-07-21) — `parties` n'a pas de
+  policy d'étage 2.** **Quoi** : `parties` porte `tenant_isolation` (`0013:70`) mais aucune
+  policy de périmètre, alors que `schema.ts:1001-1002` annonçait qu'elle serait couverte par
+  le lot L4 (`0016` ne l'a posée que sur `bank_accounts`) — c'est un écart plan↔livré, pas
+  une décision. Deux lectures l'atteignent **sans aucune jointure** à `bank_accounts` :
+  `entites.ts:605-624` (`listerPropositionsPartyEntite` étape 1) et `user-scopes.ts:224-233`.
+  **Pourquoi P2 et pas un correctif immédiat** (décision D2 du plan, chaîne prouvée maillon
+  par maillon) : les deux chemins sont ADMIN-only **strict** — `peutAdministrer` est
+  `role === "ADMIN"` (`permissions.ts:19-21`), `exigerAdmin` throw hors ADMIN
+  (`entites.ts:390-391`) — et un ADMIN ne peut pas devenir scopé : gardes
+  `AdminNonScopableError` sur les deux axes (`entites.ts:1021-1024`, `user-scopes.ts:212-216`)
+  ET **aucun chemin d'UPDATE de rôle n'existe dans l'application** (le seul write sur
+  `workspace_members` est un INSERT `onConflictDoNothing`, `provisioning.ts:132-140`), donc le
+  contournement classique « membre scopé **puis promu** ADMIN » n'est pas atteignable.
+  Aucune fuite active, donc — le risque est théorique **aujourd'hui**.
+  **Mode de défaillance le jour où ça bascule** : `entites.ts:612` surface les noms de TOUS
+  les titulaires du groupe à un membre borné à une BU — donnée nominative, sans erreur ni
+  test rouge. **Déclencheur de résolution (nommé, pas « un jour »)** : la **première surface
+  titulaire ouverte à un rôle non-ADMIN** — ou tout relâchement d'une des deux gardes
+  `AdminNonScopableError`. **À faire ce jour-là** : policy `account_scope` sur `parties` par
+  `EXISTS` vers `account_party_role` (chaîne à 2 niveaux — attention au point dur « party
+  sans aucun compte », invisible sous un EXISTS nu), **et INVERSER le cas 9** de
+  `tests/isolation/parties-scope-isolation.test.ts`, qui est aujourd'hui la contre-preuve
+  volontaire que `parties` reste visible hors périmètre.
+  **Résidu assumé, tracé** : un ADMIN scopé **hérité** peut exister en base (`page.tsx:97` le
+  documente — lignes antérieures à l'arbitrage 2026-07-13 ou insertion SQL directe). Pour lui,
+  `entites.ts:612` montre tout le groupe. Ce n'est **pas** une fuite (un ADMIN a le droit de
+  tout voir) mais une incohérence d'affichage.
+  ⚠️ **Ne PAS traiter `user_scopes` « par symétrie »** : elle porte `bank_account_id`
+  (`schema.ts:1032`) sans policy d'étage 2, et c'est **correct** — c'est la table de DROITS
+  qui définit le périmètre ; la scoper par lui-même serait une auto-référence circulaire.
+  Y poser une policy serait un défaut, pas un correctif (plan §2.3).
 
 ### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
 
