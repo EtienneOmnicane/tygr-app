@@ -121,6 +121,29 @@ contrat de Server Action touché, aucune requête ajoutée.
   conséquence de sécurité (la vérité reste serveur) mais c'est exactement la frustration
   que ce chantier supprime. **Déclencheur** : bloquant pour SYNC-LOADER-ETAPES1 ; à
   corriger avant tout loader qui réutilise la machine.
+  > ⚠️ **RE-LOCALISÉE 2026-07-21 (audit trail, règle 6).** Cette entrée désignait
+  > `machine-mfa.ts` comme lieu du défaut : **c'est faux pour le gel observé aujourd'hui**.
+  > `machine-mfa.ts` n'est monté par AUCUN composant (cf. CODE-MORT-MFA1) — un statut
+  > non mappé y est donc sans effet runtime. Le gel réel est sur le **chemin ACTIF** :
+  > `attendreFinSync` (`orchestration.ts:594`, appelée en `:817` et `:827`), qui ne
+  > connaît que `COMPLETED` (`:618`) et `FAILED` (`:635`) comme terminaux et poursuit le
+  > polling jusqu'au plafond sur tout autre statut. Le lot `fix/sync-machine-interrupted`
+  > a été réorienté en conséquence. La correction devra viser `attendreFinSync` ; le
+  > mapping de `machine-mfa.ts` ne devient dû qu'avec SYNC-LOADER-ETAPES1.
+  >
+  > ⚠️ **RÉSERVE SUR LA PRÉMISSE — à vérifier au RUNTIME avant d'implémenter.** L'entrée
+  > affirme qu'`INTERRUPTED` est « émis par le backend ». Deux faits la contredisent :
+  > (a) **0 occurrence** de `INTERRUPTED` dans tout `src/` ; (b) la vérification runtime
+  > de la **PR #202 (2026-07-13)** avait conclu que ce statut **n'existe nulle part** —
+  > ni dans `docs/documentation_api.md` (§ Sync Engine), ni dans `omni-fi-core` (Django),
+  > ni au runtime — le statut réellement observé étant `RETRIEVING`, et le gel réel venant
+  > d'un job **LONG** (scrape > plafond de polling), pas d'un job « interrompu ». Cette
+  > entrée-ci (2026-07-20) réaffirme donc une prémisse déjà réfutée 7 jours plus tôt.
+  > Ce n'est pas une réfutation définitive — l'enum amont **DÉRIVE** (`SCRAPING` côté
+  > Django vs `RETRIEVING` côté API) et le checkout `omni-fi-core` local est périmé — mais
+  > **la prémisse doit être re-prouvée au runtime avant la première ligne de code**, sous
+  > peine d'ajouter du mapping pour une valeur inexistante (exactement le piège de #202).
+  > Non tranché ici : arbitrage Etienne requis.
 
 ### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
 
@@ -2770,22 +2793,26 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   de `PublicToken` + `ClientUserId`, ce dernier résolu côté serveur depuis le
   workspace). Tant que ce n'est pas fait, le flux de connexion casse à la
   finalisation, même si le widget aboutit.
-- [ ] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » conservé mais jamais monté**
-  — Effort S (déclencheur : prochain chantier touchant `src/components/widget/`).
-  Constat annexe relevé à la vérification du 2026-07-21, **non corrigé ici** (règle 1 :
-  ne pas mélanger vérification et implémentation). Le drop-in gère la MFA en interne,
-  donc toute la pile MFA custom est orpheline au runtime : `useOmniFiWidget`
-  (`use-omnifi-widget.ts`) n'est monté par AUCUN composant — seulement ré-exporté par
-  le barrel `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/
-  `submitMfaAction`/`resendMfaAction` (`widget-runtime.ts`) ne sont importées que par
-  ce hook ; `finaliserConnexion` (orchestration, chemin widget custom) n'est appelée
-  par aucune action. Déjà acté en 2026-06-15 (« CONSERVÉE + testée, réutilisable hors
-  dropin ; un seul chemin runtime : le dropin ») — donc **conservation DÉLIBÉRÉE**, pas
-  un oubli. Risque réel mais faible : surface de Server Actions authentifiées non
-  exercée par le produit (elle reste gardée par `exigerSession*`), et coût de
-  maintenance/confusion — c'est CE code qui fait apparaître des schémas
-  `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste ci-dessus. Décision à
-  prendre : supprimer, ou documenter en tête de fichier « chemin non monté ».
+- [x] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » non monté : CONSERVATION
+  TRANCHÉE, action = DOCUMENTER** — ✅ documenté 2026-07-21 (commentaire en tête de
+  `machine-mfa.ts`). **Ce n'est PAS du code mort à supprimer** : arbitrage Etienne
+  2026-07-21 — la pile (`machine-mfa.ts` / `useOmniFiWidget` / `widget-runtime.ts`) est
+  le **substrat prévu de `SYNC-LOADER-ETAPES1`** (TODOS `:26-34`, qui pose noir sur
+  blanc « le client poll par connexion et **dérive le palier via `machine-mfa.ts`** »).
+  La conserver est donc un investissement, pas un oubli — cohérent avec l'arbitrage
+  initial de 2026-06-15 (« CONSERVÉE + testée, réutilisable hors dropin ; un seul chemin
+  runtime : le dropin »). **Déclencheur de SUPPRESSION** (le seul) : abandon de
+  `SYNC-LOADER-ETAPES1` — tant que ce chantier vit, on garde.
+  Constat factuel qui reste vrai (relevé à la vérification du 2026-07-21) : `useOmniFiWidget`
+  n'est monté par AUCUN composant — seulement ré-exporté par le barrel
+  `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/`submitMfaAction`/
+  `resendMfaAction` (`widget-runtime.ts`) ne sont importées que par ce hook ;
+  `finaliserConnexion` (orchestration) n'est appelée par aucune action. Reste à surveiller
+  (non bloquant) : ces Server Actions sont une surface authentifiée non exercée par le
+  produit (elles restent gardées par `exigerSession*`). C'est aussi CE code qui fait
+  apparaître des schémas `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste
+  ci-dessus — d'où le commentaire d'en-tête, pour que le prochain lecteur ne rejoue pas
+  l'enquête.
 
 ### Dette acceptée à la PR auth-foundation (2026-06-12)
 
