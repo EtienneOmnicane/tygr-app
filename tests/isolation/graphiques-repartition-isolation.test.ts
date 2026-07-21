@@ -56,6 +56,9 @@ const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
 const JUIN = { from: "2026-06-01", to: "2026-06-30" } as const;
 // Fenêtre PRÉCÉDENTE de juin (L4) : mai, baseline de `montantPrecedent`.
 const MAI = { from: "2026-05-01", to: "2026-05-31" } as const;
+// Fenêtre DÉDIÉE au Lot 0 (traduction FR) — isolée pour ne perturber aucune assertion
+// existante : fusion many-to-one, insensibilité à la casse, repli hors catalogue.
+const JUILLET = { from: "2026-07-01", to: "2026-07-31" } as const;
 
 beforeAll(async () => {
   const dir = path.join(process.cwd(), "drizzle", "migrations");
@@ -274,6 +277,109 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     expect(
       rep.devises[0].parts.some((p) => p.categorie === "Loyer"),
     ).toBe(false);
+  });
+
+  // ── Lot 0 — traduction FR dans le GROUP BY (D-d) ────────────────────────────────
+  // Ces cas prouvent que la traduction est un GROUPEMENT, pas un relabel d'affichage :
+  // s'ils passaient avec une traduction faite au rendu, la fusion serait impossible sans
+  // additionner des montants côté JS (interdit, règle 8).
+
+  it("LOT 0 — aucun libellé OBIE anglais ne subsiste dans la sortie (juin, 2 sens)", async () => {
+    const [sorties, entrees] = await withWorkspace(sessionA, async (tx) => [
+      await repartitionParCategorie(tx, { sens: "outflow", ...JUIN }),
+      await repartitionParCategorie(tx, { sens: "inflow", ...JUIN }),
+    ]);
+    const libelles = [...sorties.devises, ...entrees.devises].flatMap((d) =>
+      d.parts.map((p) => p.categorie),
+    );
+    // Les clés OBIE brutes présentes en fixture ne doivent JAMAIS ressortir telles quelles.
+    for (const cleObie of ["rent", "utilities", "income", "other", "bank charges"]) {
+      expect(libelles).not.toContain(cleObie);
+    }
+    // …et les libellés FR attendus sont bien là (assertion positive : sans elle, un
+    // repli global en « Non catégorisé » passerait le test ci-dessus).
+    expect(libelles).toEqual(
+      expect.arrayContaining(["Loyer", "Charges", "Frais bancaires", "Revenus"]),
+    );
+  });
+
+  it("LOT 0 — FUSION many-to-one : income + revenue + 'Income' → UN seul secteur « Revenus », sommé EN SQL", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "inflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // LE cœur du Lot 0 : trois clés OBIE distinctes (dont une de casse différente)
+    // n'exposent qu'UN poste. Deux secteurs homonymes seraient le défaut à éviter.
+    expect(mur?.parts).toHaveLength(1);
+    const revenus = mur?.parts[0];
+    expect(revenus?.categorie).toBe("Revenus");
+    // 600 + 400 + 100 : la somme est faite par le sum() SQL, jamais côté JS.
+    expect(revenus?.montant).toBe("1100.00");
+    expect(revenus?.nbTransactions).toBe(3);
+    expect(revenus?.estNonCategorise).toBe(false);
+    // Seule catégorie de la devise → part = 1 (et non trois parts d'un tiers chacune).
+    expect(Number(revenus?.part)).toBeCloseTo(1, 6);
+
+    // Contre-preuve de la fusion : sans elle, on aurait 3 parts de 600/400/100.
+    expect(mur?.parts.map((p) => p.montant)).not.toContain("600.00");
+  });
+
+  it("LOT 0 — repli « Non catégorisé » : clé HORS catalogue + NULL collapsent en un poste", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "outflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    expect(mur?.parts.map((p) => p.categorie)).toEqual(["Loyer", "Non catégorisé"]);
+    // 'crypto-mining' (hors catalogue, 300) + NULL (200) → un seul poste de 500.
+    const nonCat = mur?.parts.find((p) => p.estNonCategorise);
+    expect(nonCat?.montant).toBe("500.00");
+    expect(nonCat?.nbTransactions).toBe(2);
+    // La clé hors catalogue ne fuit pas en anglais dans l'UI FR.
+    expect(mur?.parts.map((p) => p.categorie)).not.toContain("crypto-mining");
+  });
+
+  it("LOT 0 — non-régression : le total central de la devise reste la somme des parts", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "outflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // Total de devise (window SQL) = 700 (Loyer) + 500 (Non catégorisé).
+    expect(mur?.total).toBe("1200.00");
+    expect(mur?.nbTransactions).toBe(3);
+    expect(mur?.montantMoyen).toBe("400.00"); // 1200 / 3, calculé EN SQL
+
+    // Le total central ne doit pas dériver de la fusion : il vaut exactement la somme
+    // des parts affichées (contrôle en centimes entiers, jamais en float — règle 8).
+    const sommeCentimes = (mur?.parts ?? []).reduce(
+      (s, p) => s + Math.round(Number(p.montant) * 100),
+      0,
+    );
+    expect(sommeCentimes).toBe(Math.round(Number(mur?.total) * 100));
+    // Et les parts d'une devise somment toujours à 1.
+    const sommeParts = (mur?.parts ?? []).reduce((s, p) => s + Number(p.part), 0);
+    expect(sommeParts).toBeCloseTo(1, 6);
+  });
+
+  it("LOT 0 — la fusion vaut AUSSI pour la fenêtre précédente (clés de merge L4 alignées)", async () => {
+    // Juillet comparé à juin : « Revenus » existait en juin (income 1000) et fusionne
+    // en juillet (income+revenue+Income = 1100). Si les deux requêtes ne partageaient pas
+    // la MÊME clé de groupe, `montantPrecedent` retomberait à « 0.00 » (faux « nouveau »).
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, {
+        sens: "inflow",
+        ...JUILLET,
+        fromPrecedent: JUIN.from,
+        toPrecedent: JUIN.to,
+      }),
+    );
+    const revenus = rep.devises
+      .find((d) => d.currency === "MUR")
+      ?.parts.find((p) => p.categorie === "Revenus");
+    expect(revenus?.montant).toBe("1100.00");
+    expect(revenus?.montantPrecedent).toBe("1000.00");
   });
 
   it("borne haute INCLUSIVE : une transaction le jour `to` est comptée", async () => {
