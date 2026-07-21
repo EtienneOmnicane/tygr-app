@@ -277,8 +277,17 @@ export const DEMO_DASHBOARD_UN_MOIS: DonneesDashboard = {
 /**
  * État PRÉVISIONNEL « SANS RÉALISÉ » — le cas critique du plan (§5.2, défaut n°1) :
  * workspace neuf, comptes connectés, AUCUNE transaction synchronisée, mais des échéances
- * DÉJÀ saisies. Attendu : les barres de prévision s'affichent SEULES — surtout pas
- * « Aucun mouvement sur la période », qui ferait disparaître une donnée pourtant saisie.
+ * DÉJÀ saisies.
+ *
+ * Attendu DEPUIS FLUX-PREV-AXE1 (option E) — l'attente a changé avec la structure, lire
+ * attentivement avant de déclarer une régression :
+ *  - le GRAPHE affiche « Aucun mouvement sur la période ». C'est CORRECT et voulu : il ne
+ *    rend que le réalisé, et il n'y a effectivement aucune transaction. Ce n'est plus le
+ *    faux constat d'avant (où la donnée saisie disparaissait), puisque…
+ *  - …l'ENCART « Échéances à venir » porte les échéances, à son échelle propre.
+ * Une donnée saisie reste donc visible — dans la carte qui correspond à sa nature. Ne
+ * SURTOUT PAS « réparer » en rebranchant la prévision sur l'axe du réalisé : c'est le
+ * défaut que ce lot supprime.
  *
  * C'est exactement le parcours de démo : on saisit une échéance, la trésorerie
  * prévisionnelle doit bouger même sans historique bancaire.
@@ -336,11 +345,17 @@ export const DEMO_DASHBOARD_PREVISION_SANS_REALISE: DonneesDashboard = {
  * portaient un rapport ~1:6 (barres de 17 à 72 px, parfaitement visibles).
  *
  * Ici : réalisé 5 200 000 MUR contre des échéances de 10 000 MUR, soit le rapport RÉEL
- * observé en production (~1:520). À l'échelle qui en découle, la barre projetée rend
- * **0,23 px** — sous-pixel, invisible. C'est le cas que tout correctif doit régler et que
- * `tests/unit/dashboard-demo-couverture-echelle.test.ts` garde en permanence.
+ * observé en production (~1:520). Sur l'axe PARTAGÉ d'alors, la barre projetée rendait
+ * **0,23 px** — sous-pixel, invisible.
  *
- * Ne PAS « adoucir » ces montants pour faire joli : cette fixture est censée être moche.
+ * ⚠️ Ce qu'elle démontre DEPUIS FLUX-PREV-AXE1 (option E) : ce rapport n'écrase plus rien,
+ * puisqu'il n'y a plus d'axe partagé. Dans l'encart, à son échelle propre, sa plus petite
+ * barre vaut 4 000/25 000 = **16 %** — parfaitement lisible. Elle est devenue le témoin que
+ * sortir la prévision de l'axe SUFFIT sur ce cas ; ce n'est donc plus elle que la garde de
+ * couverture retient comme cas extrême, ce rôle revenant à
+ * `DEMO_DASHBOARD_PREVISION_CONTRASTEE` (écart INTERNE à la prévision).
+ *
+ * Ne PAS « adoucir » ces montants : elle vaut par son rapport au réalisé.
  */
 export const DEMO_DASHBOARD_PREVISION_FAIBLE: DonneesDashboard = {
   ...DEMO_DASHBOARD,

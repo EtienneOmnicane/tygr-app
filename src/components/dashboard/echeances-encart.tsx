@@ -19,13 +19,21 @@
  *
  * ## Pourquoi le MONTANT ÉCRIT est le canal principal, et la barre l'appui
  * L'échelle propre ne suffit pas : l'écart d'ordre de grandeur se REPRODUIT à l'intérieur
- * de la prévision (Rs 10 000 à côté de Rs 3 150 000 = 1:315 — cas couvert par
+ * de la prévision (Rs 2 500 à côté de Rs 3 150 000 = 1:1260 — cas couvert par
  * `DEMO_DASHBOARD_PREVISION_CONTRASTEE`). Une barre reste donc parfois sous-pixel. C'est
  * pourquoi chaque ligne PORTE SON MONTANT EXACT, formaté : la valeur passe par un canal
- * qui ne dépend d'aucune échelle. La barre ne sert qu'à la comparaison relative, et quand
- * elle devient irreprésentable elle se réduit à un TICK de présence (`EPAISSEUR_TICK_PX`,
- * réutilisé de `flux-etiquettes.ts`) — jamais à un plancher proportionnel, qui ferait
- * rendre la même largeur à des valeurs d'un facteur 13 (écarté, plan §4.3).
+ * qui ne dépend d'aucune échelle.
+ *
+ * ⚠️ La barre porte un PLANCHER de largeur (`EPAISSEUR_TICK_PX`, réutilisé de
+ * `flux-etiquettes.ts`) : en dessous, une ligne paraîtrait vide alors qu'elle porte une
+ * valeur. Il faut le dire franchement — c'est bien un plancher, donc sur la piste de
+ * production (~915 px) toute valeur en deçà d'environ 1/457e du plafond rend la MÊME
+ * largeur de 2 px. Le plan §4.3 écarte le plancher POUR LE GRAPHE, et pour une raison qui
+ * ne s'applique pas ici : là-bas rien d'autre ne portait la valeur, donc des montants d'un
+ * facteur 13 à hauteur égale faisaient AFFIRMER du faux au graphe. Ici le montant exact est
+ * écrit sur la même ligne, systématiquement : la barre n'est plus le porteur de la valeur,
+ * seulement un appui de comparaison entre lignes lisibles. Le plancher ne peut donc pas
+ * faire lire une fausse grandeur — il empêche seulement une ligne de paraître muette.
  *
  * Corollaire : le format COMPACT (`formatMontantCompact`) n'est PAS employé ici. Il est
  * approximatif par construction et réservé aux contextes à largeur contrainte (étiquette
@@ -89,6 +97,13 @@ export function EcheancesEncart({
   //  - tout à zéro, aucune autre devise → il n'y a réellement aucune échéance ;
   //  - tout à zéro PARCE QUE les échéances sont dans une autre devise → dire « aucune
   //    échéance » serait un FAUX constat : la donnée existe, elle n'est pas convertie.
+  // ⚠️ Couplage à connaître : `aucuneValeur` vient de `maxPrevision` (numérique), tandis que
+  // le rendu de chaque rangée s'appuie sur `estZero` (analyse de la CHAÎNE, tronquée à
+  // 2 décimales). Les deux ne s'accordent que parce que `projeterEcheancesSurGrille` émet
+  // toujours 2 décimales via `depuisCentimes`. Un producteur futur qui émettrait "0.004"
+  // les ferait diverger : la carte se monterait (max ≠ 0) mais toutes ses rangées
+  // disparaîtraient, affichant « Aucune échéance » sur un mois qui en porte une. Non
+  // atteignable par le pipeline actuel ; à revoir si une source FX/arrondi apparaît.
   const aucuneValeur = max === 0;
   const autresDevises = mois.some((m) => m.autresDevises);
 
@@ -110,7 +125,7 @@ export function EcheancesEncart({
             renvoi permanent au détail. */}
         <Link
           href="/echeances"
-          className="rounded-[2px] text-xs font-medium text-primary underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+          className="rounded-control text-xs font-medium text-primary underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
         >
           Voir les échéances
         </Link>
@@ -230,10 +245,11 @@ function LigneMois({
  * information (§3.5, accessibilité) — un daltonien, comme un lecteur d'écran, doit lire le
  * sens sans la teinte. Le vert/rouge reste légitime parce qu'il décrit la DONNÉE (§3.1).
  *
- * La barre est en pourcentage (aucune mesure du conteneur), avec une largeur MINIMALE d'un
- * tick quand la valeur est trop faible pour être représentée : un marqueur de présence, pas
- * une proportion. Le montant exact à droite est la source de vérité de la ligne —
- * `tabular-nums` et `whitespace-nowrap`, un chiffre ne se tronque jamais (règle 8).
+ * La barre est en pourcentage (aucune mesure du conteneur), plancher `EPAISSEUR_TICK_PX`
+ * pour qu'une valeur non nulle laisse toujours une trace (cf. l'avertissement en tête de
+ * fichier : c'est un plancher, assumé comme tel). Le montant exact à droite est la source
+ * de vérité de la ligne — `tabular-nums` et `whitespace-nowrap`, un chiffre ne se tronque
+ * jamais (règle 8).
  */
 function RangeeSens({
   sens,

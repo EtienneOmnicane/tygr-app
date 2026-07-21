@@ -205,6 +205,22 @@ distinction est le cœur du sujet et ne doit pas se perdre.
       *Réversibilité* : `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes` restent dans
       `flux-projection.ts`, débranchés du rendu mais testés — cf. FLUX-PREV-BASELINE1.
 
+- [ ] **ENCART-ECHEANCES-VIDE1 (P2 produit, 2026-07-21) — l'encart « Échéances à venir »
+      monte même quand le workspace n'a AUCUNE échéance.** Relevé en cross-review de
+      FLUX-PREV-AXE1. `previsionActive` (`(dashboard)/page.tsx`) ne teste QUE « la fenêtre
+      atteint le mois courant » (D4) ; l'existence d'une occurrence n'entre pas dans la
+      condition, et `projeterEcheancesSurGrille` remplit toujours la grille de zéros. Un
+      workspace neuf porte donc en permanence une carte « Aucune échéance sur ces mois » +
+      sa mention de couverture.
+      *Deux lectures défendables, d'où l'arbitrage* : (a) c'est du BRUIT sur un dashboard
+      neuf → ne monter l'encart que si une occurrence existe ; (b) c'est une INFORMATION
+      (« rien n'est prévu » ≠ « la fonction n'existe pas ») → statu quo, et c'est cohérent
+      avec §5.4 du plan qui refuse les zones muettes.
+      *Non tranché par l'agent* : changer un comportement produit visible sans arbitrage
+      sortirait du périmètre du lot. Le code dit désormais la vérité (docstrings corrigées).
+      *Effort* : ~30 min si (a). *Déclencheur* : arbitrage d'Etienne, ou premier retour
+      d'un utilisateur sans échéances.
+
 - [ ] **FLUX-PREV-BASELINE1 (P2) — homogénéiser la série prévisionnelle (option F du plan §4.2).**
       Le VRAI fix : la prévision cesse d'être « les échéances saisies » pour devenir une
       projection du flux attendu (baseline dérivée des mois réalisés / récurrents détectés,
@@ -220,9 +236,13 @@ distinction est le cœur du sujet et ne doit pas se perdre.
       crédible et plus dangereux.
       *Point de reprise (FLUX-PREV-AXE1, 2026-07-21)* : la machinerie d'axe partagé est
       conservée débranchée — `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes`
-      (`flux-projection.ts`) et les helpers d'étiquette (`flux-etiquettes.ts`), tous encore
-      couverts par leurs tests. Ce chantier les rebranche ; il ne repart pas de zéro. Il
-      réactive aussi FLUX-PREV-LABEL-DENSE1, clos par disparition de sa cause.
+      (`flux-projection.ts`) et les helpers d'étiquette encore TESTÉS de
+      `flux-etiquettes.ts` (`estIllisible`, `etiquetteVerticale`, `largeurEtiquette`,
+      `SEUIL_LISIBILITE_PX`, `RAPPORT_BARRE_INVISIBLE`, `MARGE_ETIQUETTE_PX`). Ce chantier
+      les rebranche ; il ne repart pas de zéro. `ECART_ETIQUETTE_PX` a en revanche été
+      SUPPRIMÉ : sans consommateur NI test, il aurait dérivé en silence — le geler ne se
+      justifiait que pour ce qui reste couvert. Il se réécrit en une ligne (git le garde).
+      Ce chantier réactive aussi FLUX-PREV-LABEL-DENSE1, clos par disparition de sa cause.
 
 - [x] **FLUX-PREV-LABEL-DENSE1 (P2 cosmétique) — CADUC le 2026-07-21, résolu de fait par
       FLUX-PREV-AXE1.** Le défaut était : un mois projeté pouvait afficher « Rs 10 k » sans son

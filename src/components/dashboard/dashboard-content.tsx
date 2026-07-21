@@ -74,12 +74,18 @@ export interface DonneesDashboard {
   /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
   grilleMensuelle: string[];
   /**
-   * ÉCHÉANCES projetées (C1), occurrences récurrentes comprises. `null` = aucune prévision
-   * à montrer (fenêtre qui n'atteint pas le mois courant, D4, ou workspace sans aucune
-   * échéance) ⇒ l'encart ne monte pas.
+   * ÉCHÉANCES projetées (C1), occurrences récurrentes comprises. `null` ⇒ l'encart ne monte
+   * pas.
    *
-   * ⚠️ Depuis FLUX-PREV-AXE1 elle alimente l'ENCART dédié (`echeances-encart.tsx`), plus
-   * le graphe de flux : deux sources, deux échelles, deux cartes. Jamais additionnée au
+   * ⚠️ `null` dit UNIQUEMENT « la fenêtre n'atteint pas le mois courant » (D4) — c'est la
+   * seule condition testée par la page (`previsionActive = mois === moisCourant`,
+   * `(dashboard)/page.tsx`). Un workspace SANS AUCUNE échéance reçoit donc une structure
+   * pleine de zéros, pas `null` : l'encart monte et affiche « Aucune échéance sur ces
+   * mois ». Ne pas lire ce champ comme « il existe des échéances » (dette
+   * ENCART-ECHEANCES-VIDE1, TODOS.md).
+   *
+   * Depuis FLUX-PREV-AXE1 elle alimente l'ENCART dédié (`echeances-encart.tsx`), plus le
+   * graphe de flux : deux sources, deux échelles, deux cartes. Jamais additionnée au
    * réalisé — mesure exhaustive contre sous-ensemble déclaré (§3.5).
    */
   prevision: PrevisionFlux | null;
@@ -248,10 +254,11 @@ export function DashboardContent({
         />
 
         {/* 3bis. ÉCHÉANCES À VENIR — encart SECONDAIRE à échelle propre (option E du plan
-            §4.1). Monté uniquement si la page a résolu une prévision : `null` (fenêtre qui
-            n'atteint pas le mois courant, D4, ou workspace sans échéance) ⇒ AUCUN encart.
-            Une prévision vide n'est pas une prévision nulle (§5.3) — on ne monte pas une
-            carte vide pour tenir la place. L'ancre reste le graphe ci-dessus (§6.1). */}
+            §4.1). L'ancre reste le graphe ci-dessus (§6.1).
+            ⚠️ `prevision === null` ne couvre QUE la fenêtre passée (D4). Un workspace sans
+            aucune échéance monte donc bel et bien cet encart, à l'état vide (« Aucune
+            échéance sur ces mois ») — arbitrage produit EN ATTENTE, cf. la docstring de
+            `prevision` ci-dessus et ENCART-ECHEANCES-VIDE1 dans TODOS.md. */}
         {prevision && <EcheancesEncart prevision={prevision} devise={devise} />}
 
         {/* 4. SYNTHÈSE DU MOIS — bandeau horizontal sous le graphe (remplace l'ancienne
