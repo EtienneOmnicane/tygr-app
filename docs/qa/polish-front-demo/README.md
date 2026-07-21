@@ -22,6 +22,32 @@ trois écrans, le coupable est une largeur qui ne se voit pas sur une capture.
 passage à la ligne (`break-words`) qui affiche le nom entier ; les 60 px gagnés ne
 font qu'économiser des retours à la ligne.
 
+### 1 bis. Les deux autres libellés du même popover
+
+Le premier passage n'avait traité que la ligne de compte. Deux autres libellés du
+sélecteur tronquaient pour la même raison, et sont corrigés à l'identique
+(`break-words` + case et compteur recalés sur la première ligne).
+
+`AVANT-4-groupe-titulaire-{1440,480}.png` → `APRES-4-…` (en-tête de groupe)
+`AVANT-5-entite-480.png` → `APRES-5-…` (onglet « Par entité »)
+
+| Élément | Largeur | Boîte | Texte | Coupé |
+|---|---|---|---|---|
+| en-tête titulaire | 1440 px | 226,4 px | 258 px | oui → non |
+| en-tête titulaire | 480 px | 166,4 px | 258 px | oui → non |
+| ligne d'entité | 1440 px | 239,7 px | 240 px | non (limite) |
+| ligne d'entité | 480 px | 179,7 px | 187 px | oui → non |
+
+**Ces deux mesures se prennent sous 640 px**, pas seulement en desktop. Le popover
+y reste à 300 px (garde `sm:`, cf. Responsive) : la ligne d'entité, qui tient de
+justesse à 1440 px, y déborde franchement. Mesurer uniquement en 1440 px aurait
+manqué le cas entité.
+
+Le déclencheur fermé (`perimetre-switcher.tsx:374`) garde volontairement son
+`truncate` : c'est un résumé dans un header à largeur fixe (`w-[220px]`), où le repli
+sur deux lignes ferait grandir la barre — ce que le design system proscrit
+(condenser, jamais empiler).
+
 ## 2. Total par devise — `FILTRE-TOTAL-DEVISE-TRONQUE1`
 
 `AVANT-2-total-devise.png` → `APRES-2-total-devise.png`
