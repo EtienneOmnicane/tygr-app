@@ -25,11 +25,16 @@ import type {
 
 export const metadata = { title: "Démo — Sélecteur de périmètre" };
 
-// Titulaires (D6/S1/S3) : « Sucre SA » porte 2 comptes ; « Account Holder »
+// Titulaires (D6/S1/S3) : le titulaire nommé porte 2 comptes ; « Account Holder »
 // (placeholder générique Omni-FI) porte 1 compte et doit être RELÉGUÉ après les
 // nommés ; le compte USD reste SANS titulaire → l'accordéon « Par compte »
-// montre 3 volets dans l'ordre : Sucre SA → Account Holder → Non regroupé.
+// montre 3 volets dans l'ordre : nommé → Account Holder → Non regroupé.
 // Sémantique de sélection inchangée (case de groupe = confort tri-état).
+//
+// Le titulaire nommé porte une RAISON SOCIALE complète (et non plus « Sucre SA ») :
+// c'est ce que remonte réellement une banque. Avec un nom court, l'en-tête de groupe
+// tenait dans sa largeur et sa troncature était INCAPTURABLE au Visual QA.
+// « Account Holder » reste court : les deux cas doivent cohabiter.
 const COMPTES: CompteConnecte[] = [
   {
     bankAccountId: "11111111-1111-4111-8111-111111111111",
@@ -39,7 +44,7 @@ const COMPTES: CompteConnecte[] = [
     currentBalance: "1250000.00",
     lastSyncedAt: new Date(),
     holderId: "demo-party-sucre",
-    holderName: "Sucre SA",
+    holderName: "Omnicane Sugar Milling Company Ltd",
   },
   {
     bankAccountId: "22222222-2222-4222-8222-222222222222",
@@ -64,7 +69,7 @@ const COMPTES: CompteConnecte[] = [
     currentBalance: "540000.00",
     lastSyncedAt: new Date(),
     holderId: "demo-party-sucre",
-    holderName: "Sucre SA",
+    holderName: "Omnicane Sugar Milling Company Ltd",
   },
   {
     bankAccountId: "44444444-4444-4444-8444-444444444444",
@@ -79,13 +84,17 @@ const COMPTES: CompteConnecte[] = [
   },
 ];
 
-// Entités mock pour l'onglet « Par entité » (L8b-2). « Sucre » groupe les deux
-// comptes MUR ; « Énergie » le compte USD — pour juger le picker d'entités et le
-// libellé re-dérivé (C5) sur fond réel.
+// Entités mock pour l'onglet « Par entité » (L8b-2). La 1re groupe les deux comptes
+// MUR ; « Énergie » le compte USD — pour juger le picker d'entités et le libellé
+// re-dérivé (C5) sur fond réel.
+//
+// La 1re porte un nom LONG (même raison que les comptes et les titulaires) : une BU
+// d'un groupe sucrier s'appelle rarement d'un seul mot, et un nom court rendait la
+// troncature de cette ligne incapturable. « Énergie » reste court.
 const ENTITES: EntiteVisible[] = [
   {
     entityId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-    name: "Sucre",
+    name: "Sucre & Coproduits Omnicane",
     nbComptes: 2,
     bankAccountIds: [COMPTES[0].bankAccountId, COMPTES[2].bankAccountId],
   },
