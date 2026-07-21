@@ -1,7 +1,8 @@
 # PLAN — GRAPHIQUES-CATEG-UTILISATEUR1 : le donut sur la catégorie effective
 
 **Date** : 2026-07-21 · **Phase** : CONCEPTION STRICTE (aucune ligne de code applicatif) ·
-**Branche** : `plan/graphiques-categ-utilisateur` · **Statut** : à arbitrer (§9)
+**Branche** : `plan/graphiques-categ-utilisateur` ·
+**Statut** : ✅ **ARBITRÉ** (Etienne, 2026-07-21 — §9) — périmètre verrouillé (§9bis), prêt à implémenter
 
 ---
 
@@ -289,7 +290,7 @@ ORDER BY currency, (origine = 'AUCUNE') ASC, sum(amount) DESC, cat_label;
 | **D-b** | Reste non ventilé | **`UNION ALL` : splits + reste imputé à l'amont** (D2=c littéral) | Sommer les splits seuls → donut faux (§0.4). Exclure les PARTIELS → biais silencieux pire | inclus lot 1 |
 | **D-c** | Cascade de sources | **Binaire `splits > primary_category`** + `order by (source='MANUAL') desc` en départage défensif | `CASE` à 3 niveaux : code mort par construction (§0.3) | ≈ 0 |
 | **D-d** | Traduction FR | **GROUP BY sur le libellé TRADUIT**, via une expression SQL `CASE` **générée** depuis `CORRESPONDANCE_FR` (source unique préservée) ; repli d'une clé non cartographiée = **le libellé OBIE lui-même** | Traduire au rendu seulement : `categorieFr` est **non injective** (§5.1) → secteurs homonymes **garantis**. Recopier les 28 paires en SQL à la main : duplication de source de vérité (règle 9) | lot 0 |
-| **D-e** | Niveau de hiérarchie | **Feuille telle que saisie** (le nom du split), pas de remontée à la Nature | Remonter à la Nature écrase « Loyer » sous « Charges d'exploitation » — perte exacte de ce qu'Etienne cherche à voir. Un axe Nature/Sous-nature commutable = incrément séparé (**Q3**) | ≈ 0 |
+| **D-e** | Niveau de hiérarchie | **Feuille telle que saisie** (le nom du split). Fragment **paramétré `{niveau}` dès le lot 1**, figé à `"feuille"` à l'appel, **non exposé à l'UI** (Q3 tranché) | Remonter à la Nature écrase « Loyer » sous « Charges d'exploitation » — perte exacte de ce qu'Etienne cherche à voir. Sélecteur commutable = hors périmètre (§9bis) | ≈ 0 |
 | **D-f** | `nbTransactions` | **Compte les transactions DISTINCTES contribuant à la part** ; `montantMoyen` de devise reste `total / nb transactions distinctes de la devise` | Compter les lignes de split gonflerait le nb et fausserait la moyenne | inclus lot 1 |
 | **D-g** | Rétroactivité | **Le donut lit l'état PERSISTÉ des splits. Aucun calcul de règle à la lecture.** | Évaluer les règles au SELECT : coûteux (ILIKE sur N règles × M transactions), non déterministe vs `/transactions`, et divergerait de l'audit `categorization_audit` | ≈ 0, mais exige **Q2** |
 
@@ -335,9 +336,12 @@ C'est **cohérent avec tout le reste de l'app** (`/transactions` affiche la mêm
 persistée) et c'est le bon choix. Mais c'est **invisible pour l'utilisateur** : il crée
 « Loyer », revient sur `/graphiques`, ne voit rien changer, et conclut que la
 fonctionnalité est cassée — exactement le ticket qui a produit ce brief.
-→ **Q2** : quel signal UI ? (recommandation : mention discrète sous le donut +
-lien « Ré-analyser », sans compteur — un compteur exigerait une requête de
-détection de désynchronisation, hors périmètre).
+
+**→ Tranché Q2 = (b), spécification du lot 3** : mention discrète sous le donut + lien
+« Ré-analyser », **sans compteur**. Un compteur supposerait de détecter la
+désynchronisation (évaluer les règles non appliquées = une requête de plus, variante (c)
+explicitement exclue du périmètre v1). Le comportement silencieux (a) est écarté : c'est
+le défaut qui a produit ce ticket.
 
 ---
 
@@ -367,7 +371,7 @@ lignes (même raisonnement que `transactions.ts:264-268`).
 
 | # | Invariant | Pourquoi |
 |---|---|---|
-| **I1** | `Σ parts(devise) = Σ abs(amount)` des transactions du sens/période/devise | Le cœur du défaut C. **Fixture obligatoire avec un PARTIEL** (500 ventilés sur 1 200) — sans elle le test passe au vert sans rien prouver |
+| **I1** | `Σ parts(devise) = Σ abs(amount)(devise) = **KPI Sorties(devise)**` sur le sens/période | Le cœur du défaut C, **verrouillé par Q5** : la comparaison au KPI dashboard fait partie du test, pas seulement l'auto-cohérence du donut. **Fixture obligatoire avec un PARTIEL** (500 ventilés sur 1 200) — sans elle le test passe au vert sans rien prouver |
 | **I2** | Aucune addition cross-devise après `UNION ALL` | La branche `reste` réintroduit le risque |
 | **I3** | `count(DISTINCT txn)` ≠ `count(lignes)` sur une transaction à 3 splits | D-f |
 | **I4** | WS_B ne voit jamais un split de WS_A ; membre scopé ne voit pas hors périmètre | Étage 1 + étage 2, sous `set role tygr_app` |
@@ -397,10 +401,11 @@ rendrait I1 et I6 vrais par accident.
 | **0** | **Traduction FR du donut** (défaut B). `CASE` SQL généré depuis `CORRESPONDANCE_FR` (D-d/§5.1), GROUP BY sur le libellé FR, repli non destructif. Tests I7/I8 + 3 tests unitaires des modules purs (`palette`/`pourcent`/`variation` n'en ont aucun aujourd'hui) | PR autonome, aucun changement de schéma | ~60k | **0,5–1 j** |
 | **1** | **Axe effectif + reste non ventilé** (défauts A + C). Fragment partagé `axeCategorieEffective()` (D-a), `UNION ALL`, DTO `origine`/`categorieId`, requête L4 alignée sur la même clé | PR applicative, revue croisée obligatoire | ~180k | **2,5 j** |
 | **2** | **Tests d'isolation & correction** : I1→I6, fixtures adverses, mutation-check sur la clé de groupe et sur `is_removed` de la branche splits | Extension de `graphiques-repartition-isolation.test.ts` | ~90k | **1 j** |
-| **3** | **UI** : `origine` visible (pastille/infobulle « catégorie bancaire » vs « votre catégorie »), signal de rétroactivité D-g/Q2, Visual QA Gate 4 (4 états × 2 sens) | PR UI | ~70k | **1 j** |
-| **4** *(cond.)* | Palette **stable par catégorie** — aujourd'hui par rang (`palette-categories.ts:21-26`), « Loyer » change de couleur d'un mois à l'autre. Devient franchement gênant quand l'axe est stable et comparé dans le temps | Conditionné à **Q4** | ~50k | 0,5 j |
+| **3** | **UI** : `origine` visible (pastille/infobulle « catégorie bancaire » vs « votre catégorie »), mention + lien « Ré-analyser » **sans compteur** (D-g/Q2 = b), Visual QA Gate 4 (4 états × 2 sens) | PR UI | ~70k | **1 j** |
+| ~~4~~ | ~~Palette stable par catégorie~~ — **DIFFÉRÉ** (Q4, priorité basse post-démo). Couleur par rang conservée. Ne s'ouvre que si la condition §9.1 est remplie (deux donuts simultanés à l'écran) | — | — | — |
 
-**Total lots 0-3 : ~5 j humain, ~380k CC.** Le lot 0 est décorrélé et livrable dès demain.
+**Total lots 0-3 : ~5 j humain, ~380k CC.** Le lot 0 est décorrélé et **livrable en
+premier** (Q1 tranché), en PR séparée.
 
 **Ordre non négociable** : 0 → 1 → 2 → 3. Le lot 1 ne se merge pas sans le lot 2 (règle 9 :
 la correction des montants ne se met pas en dette).
@@ -413,44 +418,90 @@ la correction des montants ne se met pas en dette).
 |---|---|---|
 | Matrice catégorie × mois | `PLAN-categorysummary-axe-categorie.md`, chantier distinct | Après lot 1 — **doit** consommer `axeCategorieEffective()` (D-a) |
 | Virements internes (D3) | Tranché « annoter en v1 » (`DECISION-…:6-10`) | Nature dédiée + règles, chantier séparé |
-| Axe Nature/Sous-nature commutable | D-e fige la feuille | **Q3** |
+| Axe Nature/Sous-nature commutable | D-e fige la feuille ; Q3 tranché (pas de v1) | Retour d'usage — le paramètre `{niveau}` existe déjà, seule l'UI manque |
 | Contrainte DB interdisant MANUAL+RULE coexistants | Aujourd'hui conventionnel (§0.3) | Si un 3ᵉ appelant d'`ajouterSplit` apparaît → entrée TODOS |
 | Unicité `(transaction_id, category_id)` | Absente en base, gardée seulement par `remplacerSplits` (`categorisation.ts:354-357`) | Idem — deux splits même catégorie = deux parts homonymes dans le donut |
 | `OBIE-CATALOG1` (catalogue FR figé, 28 entrées) | Dette tracée TODOS | Si l'amont émet de nouvelles catégories |
 
 ---
 
-## 9. Questions ouvertes — arbitrage Etienne
+## 9. Arbitrage rendu (Etienne, 2026-07-21) — TRANCHÉ
 
-**Q1 — Lot 0 en PR séparée, tout de suite ?**
-La traduction FR du donut est indépendante de l'axe et corrige un écart de cohérence
-visible immédiatement. Recommandation : **oui**, elle ne bloque rien.
+Les cinq questions sont **closes**. Elles ne se rouvrent qu'en citant la décision et le
+fait nouveau qui la remet en cause (règle 10).
 
-**Q2 — Signal de rétroactivité (D-g).**
-Une règle créée n'affecte le donut qu'après « Ré-analyser ». Que montre-t-on ?
-(a) rien — comportement silencieux, on assume ; (b) *recommandé* mention + lien
-« Ré-analyser » sous le donut ; (c) détection active de désynchronisation (coûteuse, une
-requête de plus, hors périmètre v1).
+| # | Sujet | **Décision** |
+|---|---|---|
+| **Q1** | Lot 0 (traduction FR) | **PR séparée, livrée en premier.** Ne bloque rien, ne dépend pas de l'axe |
+| **Q2** | Signal de rétroactivité | **(b) mention + lien « Ré-analyser » sous le donut.** (a) silencieux **exclu** ; (c) détection active **hors périmètre v1** |
+| **Q3** | Niveau hiérarchique | **Pas de sélecteur en v1.** Le fragment `axeCategorieEffective()` est **paramétré `niveau` dès le lot 1** ; l'UI n'expose rien |
+| **Q4** | Palette stable | **Différée** (priorité basse, post-démo). Couleur par rang conservée. Condition de remontée : §9.1 |
+| **Q5** | Invariant D-b | **Confirmé.** Reste imputé à la **catégorie bancaire** — jamais « Non catégorisé », **jamais abandonné**. La surprise de lecture se traite par un tooltip **plus tard**, pas par la math |
 
-**Q3 — Niveau hiérarchique (D-e).**
-Le donut groupe sur la **feuille** (« Loyer »). Un workspace avec 40 sous-natures obtient
-40 parts dont 32 en gris (au-delà de `cat-8`, `palette-categories.ts:23`).
-Faut-il dès v1 un sélecteur Nature ⇄ Sous-nature, ou attend-on le retour d'usage ?
-Recommandation : **attendre** — mais le fragment `axeCategorieEffective()` sera paramétré
-`niveau` dès le lot 1 (coût marginal ≈ 0, cohérent avec
-`PLAN-categorysummary-…` qui prévoit déjà `{niveau}`).
+**Décisions structurantes actées — ne pas rouvrir** : **D-a** (fragment SQL unique partagé
+entre ce donut et la matrice catégorie × mois — pas deux implémentations de « catégorie
+effective »), **D-c** (`order by source='MANUAL' desc` posé **par prudence, sans en
+dépendre** — la garantie reste conventionnelle, cf. §0.3), et **D1=A / D2=c / D3=annoter**
+tels que tranchés le 2026-07-17.
 
-**Q4 — Palette stable (lot 4).**
-Aujourd'hui la couleur suit le **rang** : « Loyer » est `cat-1` en juin, `cat-3` en
-juillet. Sur un axe qu'on compare dans le temps, c'est un vrai frein à la lecture.
-Faut-il ouvrir le lot 4 ? (une clé stable — hash de `categorieId` — est simple ; le
-risque est la collision de teintes, à mesurer).
+### 9.1 Q4 — condition de remontée : évaluée, **non remplie**
 
-**Q5 — Confirmation de l'invariant D-b.**
-Le « reste » d'une transaction partiellement ventilée est imputé à **sa catégorie
-bancaire**, pas à « Non catégorisé ». Une sortie de 1 000 Rs (« Housing » amont) ventilée
-300 Rs sur « Loyer » produit donc : `Loyer 300` + `Logement 700`. Sémantiquement correct
-mais surprenant au premier regard — confirmation demandée avant le lot 1.
+La réserve d'Etienne était : *remonter la palette stable si une comparaison mois-à-mois du
+donut entre dans le périmètre v1*. Fait vérifié : **une comparaison période-à-période est
+déjà en v1** — `bornesPeriodePrecedente` est appelée **inconditionnellement**
+(`actions.ts:111` et `:139`), et la variation est rendue par `BadgeVariation`
+(`legende-categories.tsx:44-89`).
+
+**La condition n'est pourtant pas remplie**, et voici pourquoi : cette comparaison se lit
+sur **une ligne de légende qui porte déjà le nom de la catégorie** (libellé + montant + %
++ badge, `legende-categories.tsx:122-153`). La couleur n'est pas le canal de la
+comparaison — le nom l'est. La palette instable ne gêne que si l'on met **deux donuts côte
+à côte**, ce qui n'existe pas ici : il n'y a qu'un seul rendu, la période précédente n'est
+qu'un nombre dans un badge.
+
+→ **Q4 reste différée.** À rouvrir si un écran affichant **deux donuts simultanés** (ou une
+petite série de donuts par mois) entre au périmètre — là, la couleur redevient le canal
+d'identification et la palette par rang devient un défaut de lecture, pas un détail.
+
+### 9.2 Répercussions sur les décisions du §5
+
+- **D-e** est confirmée (feuille), **et complétée** : `axeCategorieEffective({ niveau })` est
+  paramétré dès le lot 1, valeur figée `"feuille"` à l'appel. Le paramètre existe, l'UI ne
+  l'expose pas. Aligne le fragment sur `PLAN-categorysummary-…` qui prévoit déjà `{niveau}`.
+- **D-g** passe de « recommandation » à **spécification du lot 3** : mention + lien
+  « Ré-analyser », **sans compteur de désynchronisation** (ce serait la variante (c),
+  exclue).
+- **D-b** est verrouillée par Q5 : l'invariant I1 devient **`Σ parts(devise) = Σ flux(devise)
+  = KPI Sorties(devise)`** — la comparaison au KPI dashboard entre dans le test, elle n'est
+  plus seulement une remarque de §0.4.
+
+---
+
+## 9bis. Périmètre verrouillé (lots 0 → 3)
+
+**Dans le périmètre** — livré par les lots 0-3, rien de moins :
+
+- traduction FR du donut, fusion des synonymes **en SQL** (lot 0) ;
+- axe `splits TYGR > primary_category`, niveau feuille, `origine` + `categorieId` au DTO
+  (lot 1) ;
+- reste non ventilé imputé à la catégorie bancaire, `> 0` strict (lot 1) ;
+- fragment partagé `axeCategorieEffective({ niveau })` (lot 1, D-a) ;
+- invariants **I1 → I8** testés sous `tygr_app`, fixtures adverses (lot 2) ;
+- `origine` visible + mention/lien « Ré-analyser », Visual QA Gate 4 (lot 3).
+
+**Hors périmètre** — tout ajout ci-dessous est une **expansion de scope** (règle 7) et
+devient une entrée TODOS, jamais un « pendant qu'on y est » :
+
+- sélecteur Nature ⇄ Sous-nature dans l'UI (Q3) ;
+- palette stable par catégorie (Q4 / lot 4, différé) ;
+- tooltip explicatif du reste imputé (Q5 — « plus tard », pas v1) ;
+- détection active de désynchronisation des règles (Q2 variante c) ;
+- matrice catégorie × mois (chantier distinct, **doit** consommer le fragment D-a) ;
+- virements internes (D3 = annoter, tranché) ;
+- contrainte DB interdisant MANUAL+RULE coexistants, unicité
+  `(transaction_id, category_id)` (§8, déclencheurs posés).
+
+**Le lot 4 ne s'ouvre pas** sans la condition §9.1 remplie.
 
 ---
 
@@ -470,4 +521,6 @@ mais surprenant au premier regard — confirmation demandée avant le lot 1.
    est **le seul écran de l'app à afficher l'anglais OBIE**. Lot 0, ≤1 j — mais la
    traduction doit se faire **dans le GROUP BY**, pas au rendu : `categorieFr` est
    many-to-one et produirait des secteurs homonymes (§5.1).
-7. **5 questions** attendent un arbitrage avant le lot 1 (§9).
+7. **Les 5 questions sont tranchées** (Etienne, 2026-07-21, §9) et le périmètre des lots
+   0→3 est **verrouillé** (§9bis). Le plan est prêt à implémenter : lot 0 en premier, en
+   PR séparée ; le lot 1 ne se merge pas sans le lot 2.
