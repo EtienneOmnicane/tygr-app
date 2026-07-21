@@ -33,6 +33,10 @@ import { and, eq, gte, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { bankAccounts, transactionsCache } from "@/server/db/schema";
+import {
+  caseCategorieFr,
+  estLibelleNonCategorise,
+} from "@/server/insights/categorie-fr-sql";
 import type { WorkspaceTx } from "@/server/db/tenancy";
 // Bornes définies à la frontière (src/lib, source unique) — le repository les RÉUTILISE
 // (dépendance server → lib autorisée). Cf. insights-schema.ts.
@@ -282,9 +286,13 @@ export async function vendorsParConcentration(
  *     devise (0..1, `nullif` anti-DIV/0). `montantPrecedent` = somme de la MÊME catégorie
  *     sur la fenêtre précédente (L4, « 0.00 » si absente).
  *
- * Catégorie = `primary_category` Omni-FI ; NULL/''/sentinelles Omni-FI (`UNCLASSIFIED`,
- * `Uncategorized`, insensibles casse+espaces) collapsés en un seul poste
- * « Non catégorisé » (`estNonCategorise=true`), TOUJOURS trié en dernier (rendu neutre).
+ * Catégorie = `primary_category` Omni-FI **TRADUITE EN FRANÇAIS DANS LE GROUP BY**
+ * (Lot 0, `caseCategorieFr`) : le donut n'affiche jamais d'anglais OBIE. La traduction
+ * étant MANY-TO-ONE (`income` + `revenue` → « Revenus »), elle DOIT rester dans la clé de
+ * groupe — sinon deux secteurs homonymes, refusionnables seulement par une addition JS
+ * (interdite, règle 8). NULL/''/sentinelles Omni-FI (`UNCLASSIFIED`, `Uncategorized`) et
+ * clés non cartographiées collapsent en un seul poste « Non catégorisé »
+ * (`estNonCategorise=true`), TOUJOURS trié en dernier (rendu neutre).
  * Tri : devises par code croissant ; au sein d'une devise, catégorisées d'abord (montant
  * décroissant), « Non catégorisé » repoussé en fin.
  *
@@ -349,25 +357,66 @@ export async function repartitionParCategorie(
       ? sql`${transactionsCache.creditDebit} = 'Credit'`
       : sql`${transactionsCache.creditDebit} = 'Debit'`;
 
-  // Détection du NON-catégorisé : NULL, chaîne vide/espaces, OU sentinelle Omni-FI
-  // (« UNCLASSIFIED » / « Uncategorized », insensible à la casse et aux espaces). Sur la
-  // vraie donnée, `primary_category` porte la sentinelle littérale brute — sans ce repli
-  // elle fuirait en anglais dans l'UI FR et monopoliserait le donut (retour Etienne
-  // 2026-07-08). Les VRAIES catégories (Title Case Omni-FI) ne sont pas touchées.
-  const estNonCat = sql`(
-    ${transactionsCache.primaryCategory} is null
-    or btrim(${transactionsCache.primaryCategory}) = ''
-    or lower(btrim(${transactionsCache.primaryCategory})) in ('unclassified', 'uncategorized')
-  )`;
-  // Clé de regroupement : catégorie NORMALISÉE (non-catégorisé → NULL) — collapse tous
-  // les non-catégorisés (NULL/''/sentinelles) en un poste unique. La casse des vraies
-  // catégories est PRÉSERVÉE (« Utilities » reste « Utilities »). Réutilisée en SELECT
-  // (label + drapeau) et en GROUP BY / ORDER BY (fonctions de cette même clé).
-  const cleCategorie = sql`case when ${estNonCat} then null else ${transactionsCache.primaryCategory} end`;
-  // Label d'affichage : catégorie Omni-FI, repli « Non catégorisé » (constante FR figée).
-  // Défini UNE fois — réutilisé par la requête courante ET la requête précédente (L4),
-  // pour que les clés de merge (devise, label) coïncident exactement.
-  const labelCategorie = sql<string>`coalesce(${cleCategorie}, 'Non catégorisé')`;
+  // Clé de regroupement ET label d'affichage : le LIBELLÉ FRANÇAIS (Lot 0, D-d du plan).
+  //
+  // Le donut groupait sur `primary_category` brute et affichait donc l'anglais OBIE
+  // (« Utilities », « Housing ») — seul écran de l'app à le faire, alors que le
+  // dictionnaire FR existe et sert partout ailleurs (`categorieFr`, cf. /transactions et
+  // le dashboard). La traduction entre ICI, dans le GROUP BY, et NON au rendu :
+  // `CORRESPONDANCE_FR` est MANY-TO-ONE (`income` + `revenue` → « Revenus »), donc
+  // grouper sur la clé OBIE puis traduire à l'affichage produirait deux secteurs
+  // homonymes, refusionnables seulement par une addition JS de montants (interdite,
+  // règle 8). En groupant sur le libellé FR, la fusion se fait dans le `sum()`.
+  //
+  // Le CASE est GÉNÉRÉ depuis `CORRESPONDANCE_FR` (source unique, cf. `caseCategorieFr`).
+  // Il ABSORBE l'ancien prédicat `estNonCat` : NULL, chaîne vide et sentinelles Omni-FI
+  // (« UNCLASSIFIED »/« Uncategorized ») ne sont pas au dictionnaire → branche `else` →
+  // « Non catégorisé ». Comportement identique à l'existant (retour Etienne 2026-07-08 :
+  // aucune sentinelle anglaise ne doit fuir dans l'UI), sans second prédicat à maintenir.
+  //
+  // ⚠️ Écart ASSUMÉ avec l'invariant I8 du plan (qui prévoyait de conserver distincte une
+  // clé OBIE hors catalogue) : le brief d'implémentation tranche pour le repli
+  // « Non catégorisé », aligné sur `categorieFr` et sur le reste de l'app — sans quoi de
+  // l'anglais non cartographié resterait à l'écran, précisément le défaut corrigé ici.
+  // Conséquence à connaître (dette OBIE-CATALOG1, TODOS) : le catalogue est figé à la
+  // main et l'amont émet librement — une catégorie amont NOUVELLE grossira le poste
+  // « Non catégorisé » au lieu d'apparaître, silencieusement.
+  //
+  // ⚠️ POURQUOI UNE SOUS-REQUÊTE et pas le CASE inline (piège 42803, mesuré) : Drizzle
+  // réémet une expression `sql` À CHAQUE emplacement où elle apparaît, en RENUMÉROTANT
+  // ses paramètres liés. Le même CASE sortait donc `$1..$37` dans le SELECT et
+  // `$79..$115` dans le GROUP BY — deux textes différents pour Postgres, qui refusait la
+  // requête : « column primary_category must appear in the GROUP BY clause » (42803).
+  // Ce n'est PAS l'usage de `sql.raw` qui déclenche le piège (l'hypothèse du plan), mais
+  // la répétition d'une expression PARAMÉTRÉE entre SELECT / GROUP BY / ORDER BY.
+  // La sous-requête calcule le libellé UNE fois ; l'agrégat externe ne manipule plus
+  // qu'un identifiant de colonne (`t.label_fr`), donc plus rien à faire coïncider.
+  //
+  // La jointure `bank_accounts` (ENTITY-READ-JOIN1) reste À L'INTÉRIEUR : le périmètre
+  // entité est hérité là où les lignes sont lues, et les policies RLS s'appliquent aux
+  // tables de la sous-requête exactement comme avant — aucun nouveau chemin de lecture.
+  const sousRequeteCourante = tx
+    .select({
+      labelFr: caseCategorieFr(transactionsCache.primaryCategory).as("label_fr"),
+      currency: transactionsCache.currency,
+      amount: transactionsCache.amount,
+    })
+    .from(transactionsCache)
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        filtreSens,
+        gte(transactionsCache.transactionDate, from),
+        // Borne haute INCLUSIVE sur `to` : < to + 1 jour (calcul SQL).
+        lt(transactionsCache.transactionDate, sql`(${to}::date + interval '1 day')`),
+      ),
+    )
+    .as("t");
+
+  // Drapeau/tri « Non catégorisé » : dérivé de la MÊME constante que la branche `else`
+  // du CASE (cf. `estLibelleNonCategorise`), appliqué à la colonne déjà calculée.
+  const estNonCategoriseSql = estLibelleNonCategorise(sousRequeteCourante.labelFr);
 
   // ── L4 : période précédente (2e requête SÉPARÉE, jamais un FILTER sur la requête
   // principale) ────────────────────────────────────────────────────────────────────
@@ -377,11 +426,14 @@ export async function repartitionParCategorie(
   // addition de montant côté JS (règle 8). Catégorie absente avant → « 0.00 » (défaut).
   let montantsPrecedents: Map<string, string> | null = null;
   if (fromPrecedent !== undefined && toPrecedent !== undefined) {
-    const lignesPrec = await tx
+    // Même forme que la requête courante (sous-requête + agrégat externe) : le libellé FR
+    // est produit par le MÊME `caseCategorieFr`, donc les clés de merge `devise|label`
+    // coïncident exactement — condition de la variation L4.
+    const sousRequetePrec = tx
       .select({
-        categorie: labelCategorie,
+        labelFr: caseCategorieFr(transactionsCache.primaryCategory).as("label_fr"),
         currency: transactionsCache.currency,
-        montant: sql<string>`sum(${transactionsCache.amount})::numeric(15,2)::text`,
+        amount: transactionsCache.amount,
       })
       .from(transactionsCache)
       // ENTITY-READ-JOIN1 : même jointure que la requête courante (héritage scope entité).
@@ -397,59 +449,60 @@ export async function repartitionParCategorie(
           ),
         ),
       )
-      .groupBy(cleCategorie, transactionsCache.currency);
+      .as("tp");
+
+    const lignesPrec = await tx
+      .select({
+        categorie: sousRequetePrec.labelFr,
+        currency: sousRequetePrec.currency,
+        montant: sql<string>`sum(${sousRequetePrec.amount})::numeric(15,2)::text`,
+      })
+      .from(sousRequetePrec)
+      // Fusion many-to-one EN SQL : deux clés OBIE synonymes tombent dans le même `sum()`.
+      .groupBy(sousRequetePrec.labelFr, sousRequetePrec.currency);
     montantsPrecedents = new Map(
       lignesPrec.map((r) => [`${r.currency}|${r.categorie}`, r.montant]),
     );
   }
 
+  // Agrégat externe : ne manipule plus que les colonnes de la sous-requête (`t.label_fr`,
+  // `t.currency`, `t.amount`). Le filtrage, la jointure de périmètre et la traduction ont
+  // déjà eu lieu à l'intérieur — les windows et le GROUP BY sont inchangés par ailleurs.
   const lignes = await tx
     .select({
-      // Label domaine : catégorie Omni-FI, repli "Non catégorisé".
-      categorie: labelCategorie,
-      estNonCategorise: sql<boolean>`(${cleCategorie} is null)`,
-      currency: transactionsCache.currency,
-      montant: sql<string>`sum(${transactionsCache.amount})::numeric(15,2)::text`,
+      // Label domaine : catégorie Omni-FI TRADUITE en FR, repli "Non catégorisé".
+      categorie: sousRequeteCourante.labelFr,
+      estNonCategorise: estNonCategoriseSql,
+      currency: sousRequeteCourante.currency,
+      montant: sql<string>`sum(${sousRequeteCourante.amount})::numeric(15,2)::text`,
       // part = montant catégorie / total devise ; nullif anti-DIV/0 (total nul → "0").
       part: sql<string>`coalesce(
-        (sum(${transactionsCache.amount})
-          / nullif(sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency}), 0)
+        (sum(${sousRequeteCourante.amount})
+          / nullif(sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency}), 0)
         )::text, '0')`,
       nbTransactions: sql<number>`count(*)::int`,
       // Total & nb de LA devise via window — récupérés tels quels côté JS (aucune
       // addition JS de montants, règle 8). ::numeric(15,2) fige l'échelle (2 décimales).
-      totalDevise: sql<string>`(sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency}))::numeric(15,2)::text`,
-      nbTransactionsDevise: sql<number>`(sum(count(*)) over (partition by ${transactionsCache.currency}))::int`,
+      totalDevise: sql<string>`(sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency}))::numeric(15,2)::text`,
+      nbTransactionsDevise: sql<number>`(sum(count(*)) over (partition by ${sousRequeteCourante.currency}))::int`,
       // L2 — montant moyen par opération de LA devise : total / nb (EN SQL, règle 8).
       // nullif anti-DIV/0 (nb nul impossible ici mais défensif) ; coalesce fige "0.00".
       montantMoyenDevise: sql<string>`coalesce(
-        (sum(sum(${transactionsCache.amount})) over (partition by ${transactionsCache.currency})
-          / nullif(sum(count(*)) over (partition by ${transactionsCache.currency}), 0)
+        (sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency})
+          / nullif(sum(count(*)) over (partition by ${sousRequeteCourante.currency}), 0)
         )::numeric(15,2), 0)::numeric(15,2)::text`,
     })
-    .from(transactionsCache)
-    // ENTITY-READ-JOIN1 : héritage du scope entité par jointure sur bank_accounts.
-    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
-    .where(
-      and(
-        eq(transactionsCache.isRemoved, false),
-        filtreSens,
-        gte(transactionsCache.transactionDate, from),
-        // Borne haute INCLUSIVE sur `to` : < to + 1 jour (calcul SQL).
-        lt(
-          transactionsCache.transactionDate,
-          sql`(${to}::date + interval '1 day')`,
-        ),
-      ),
-    )
-    .groupBy(cleCategorie, transactionsCache.currency)
+    .from(sousRequeteCourante)
+    // Groupement sur le LIBELLÉ FR : deux clés OBIE synonymes (`income`/`revenue`)
+    // fusionnent ici, dans le `sum()`, et ressortent en UN seul secteur.
+    .groupBy(sousRequeteCourante.labelFr, sousRequeteCourante.currency)
     // Devise croissante (regroupement JS contigu), puis « Non catégorisé » en fin
-    // (is null trié après is not null), puis montant décroissant, puis label (stable).
+    // (false trié avant true), puis montant décroissant, puis label (stable).
     .orderBy(
-      transactionsCache.currency,
-      sql`(${cleCategorie} is null) asc`,
-      sql`sum(${transactionsCache.amount}) desc`,
-      labelCategorie,
+      sousRequeteCourante.currency,
+      sql`${estNonCategoriseSql} asc`,
+      sql`sum(${sousRequeteCourante.amount}) desc`,
+      sousRequeteCourante.labelFr,
     );
 
   // Regroupement PAR DEVISE : les lignes sont déjà triées par currency (contiguës) — on

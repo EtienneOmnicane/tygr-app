@@ -38,8 +38,18 @@ export const CATEGORIE_FR_PAR_DEFAUT = "Non catégorisé";
  * donc la casse renvoyée par l'API n'a pas d'importance. On inclut quelques
  * SOUS-catégories fréquentes (« Bank Charges ») par robustesse, au cas où un appelant
  * passerait une sous-catégorie : la résolution reste correcte sans élargir le contrat.
+ *
+ * ⚠️ **MANY-TO-ONE, et c'est structurant** : plusieurs clés OBIE retombent volontairement
+ * sur le MÊME libellé FR (`income`/`revenue` → « Revenus » ; `banking & finance`/`bank
+ * charges` → « Frais bancaires »). Tout AGRÉGAT par catégorie doit donc grouper sur le
+ * libellé FR, jamais sur la clé OBIE : grouper sur la clé puis traduire à l'affichage
+ * produirait deux postes homonymes, refusionnables seulement par une addition côté JS
+ * (interdite, CLAUDE.md règle 8). Voir `caseCategorieFr`
+ * (`src/server/insights/categorie-fr-sql.ts`), qui GÉNÈRE le `CASE` SQL depuis cette
+ * table — d'où l'export : ce module reste la source unique, ajouter une entrée ici met à
+ * jour `/transactions`, le dashboard ET le donut `/graphiques` d'un seul geste.
  */
-const CORRESPONDANCE_FR: Record<string, string> = {
+export const CORRESPONDANCE_FR: Record<string, string> = {
   // Catégories OBIE observées en runtime (sonde 2026-06-23). `income` et `revenue`
   // fusionnés sous « Revenus » (deux clés OBIE → même libellé FR, arbitrage validé).
   income: "Revenus",
