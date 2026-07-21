@@ -33,10 +33,17 @@ import {
 /**
  * CTA unique d'un état vide. Lien d'action (`href`) OU bouton (`onClick`) —
  * jamais les deux : un état vide ne porte qu'UN appel à l'action (§2.3 / §4.4).
+ * L'union est EXCLUSIVE (`never` croisé) : fournir les deux ne compile pas.
+ *
+ * `glyphe` (défaut « + ») : le préfixe était codé en dur, ce qui convient à une
+ * CRÉATION (« + Connecter une banque ») mais ment sur un CTA de CONSULTATION —
+ * « + Voir les banques connectées » annonce un ajout qui n'aura pas lieu. Optionnel
+ * et rétrocompatible : tous les appelants existants gardent le « + ».
  */
-export type EmptyStateCta =
-  | { label: string; href: string }
-  | { label: string; onClick: () => void };
+export type EmptyStateCta = { label: string; glyphe?: string } & (
+  | { href: string; onClick?: never }
+  | { onClick: () => void; href?: never }
+);
 
 const CLASSE_CTA =
   "mt-6 inline-flex items-center gap-1.5 rounded-control px-3 py-2 text-sm " +
@@ -79,14 +86,14 @@ export function EmptyState({
       <p className="mt-2 max-w-md text-sm text-text-muted">{message}</p>
 
       {cta &&
-        ("href" in cta ? (
+        (cta.href !== undefined ? (
           <Link href={cta.href} className={CLASSE_CTA}>
-            <span aria-hidden>+</span>
+            <span aria-hidden>{cta.glyphe ?? "+"}</span>
             {cta.label}
           </Link>
         ) : (
           <button type="button" onClick={cta.onClick} className={CLASSE_CTA}>
-            <span aria-hidden>+</span>
+            <span aria-hidden>{cta.glyphe ?? "+"}</span>
             {cta.label}
           </button>
         ))}

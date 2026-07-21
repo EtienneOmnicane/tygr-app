@@ -22,6 +22,7 @@ import {
   DEMO_DASHBOARD_PREVISION_SANS_REALISE,
   DEMO_DASHBOARD_PREVISION_ZERO,
   DEMO_DASHBOARD_UN_MOIS,
+  DEMO_DASHBOARD_HORS_PERIMETRE,
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
 } from "@/lib/dashboard-demo-fixtures";
@@ -42,7 +43,8 @@ type EtatDemo =
   | "multi-devise"
   | "un-mois"
   | "partiel"
-  | "vide";
+  | "vide"
+  | "hors-perimetre";
 type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
@@ -64,6 +66,7 @@ const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "un-mois", label: "1 mois peuplé (fix courbe)" },
   { id: "partiel", label: "Partiel (post-onboarding)" },
   { id: "vide", label: "Vide" },
+  { id: "hors-perimetre", label: "Hors périmètre" },
 ];
 
 /**
@@ -107,6 +110,10 @@ const FIXTURE_PAR_ETAT: Record<EtatDemo, DonneesDashboard> = {
   "un-mois": DEMO_DASHBOARD_UN_MOIS,
   partiel: DEMO_DASHBOARD_PARTIEL,
   vide: DEMO_DASHBOARD_VIDE,
+  // Mêmes données VIDES que ci-dessus : seul le DROIT du lecteur change. Monté ici,
+  // dans le vrai DashboardContent, pour capturer l'écran COMPOSÉ (shell + état) et non
+  // le composant nu — c'est cet écran-là que la Gate 4 doit comparer à « vide ».
+  "hors-perimetre": DEMO_DASHBOARD_HORS_PERIMETRE,
 };
 
 const ONGLETS_FRAICHEUR: Array<{ id: FraicheurDemo; label: string; heures: number }> = [

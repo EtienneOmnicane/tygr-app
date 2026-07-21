@@ -17,6 +17,7 @@ import { useState } from "react";
 import {
   DashboardEmptyState,
   DashboardErrorState,
+  DashboardHorsPerimetreState,
   DashboardLoadingState,
 } from "@/components/dashboard/states";
 import type { Fraicheur } from "@/lib/format-date";
@@ -25,11 +26,18 @@ import { NudgePremiereSynchro } from "@/components/sync/nudge-premiere-synchro";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
 import { IconeSynchro } from "@/components/ui/icons/icone-synchro";
 
-type EtatDemo = "loading" | "empty" | "error" | "sync" | "cluster";
+type EtatDemo =
+  | "loading"
+  | "empty"
+  | "hors-perimetre"
+  | "error"
+  | "sync"
+  | "cluster";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "loading", label: "Chargement" },
   { id: "empty", label: "Vide" },
+  { id: "hors-perimetre", label: "Hors périmètre" },
   { id: "error", label: "Erreur" },
   { id: "sync", label: "Compte rendu de synchro" },
   { id: "cluster", label: "Cluster header" },
@@ -96,9 +104,17 @@ export default function DashboardStatesDemoPage() {
         <DemoSidePanel />
         <main className="min-w-0 flex-1">
           {etat === "loading" && <DashboardLoadingState />}
+          {/* Les DEUX variantes de l'empty. La première est celle que le dashboard monte
+              réellement (`<DashboardEmptyState />` nu, dashboard-content) : c'est ELLE que
+              la Gate 4 doit comparer au nouvel état « hors périmètre » — les deux écrans
+              ont des données identiques et doivent dire le contraire l'un de l'autre. */}
           {etat === "empty" && (
-            <DashboardEmptyState accountLabel="Compte courant — BCP" />
+            <div className="flex flex-col gap-6">
+              <DashboardEmptyState />
+              <DashboardEmptyState accountLabel="Compte courant — BCP" />
+            </div>
           )}
+          {etat === "hors-perimetre" && <DashboardHorsPerimetreState />}
           {etat === "error" && (
             <DashboardErrorState detail="OMNIFI_SYNC_TIMEOUT · connexion expirée après 30 s" />
           )}

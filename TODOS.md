@@ -5,6 +5,26 @@ Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, mê
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
 
+### ⛔ NON-DETTE — à corriger, pas à consigner (règle 9 : l'isolation ne se met pas en dette)
+
+- [ ] **ENTITY-PARTIES-SCOPE1 (chantier immédiat, effort ~0,5 j, ouvert 2026-07-21) —
+  `account_party_role` échappe à l'ÉTAGE 2 d'isolation.** **Quoi** : la table porte
+  `bank_account_id` (`0013_parties-account-party-role.sql:34-41`) mais UNIQUEMENT la policy
+  `tenant_isolation` (`0013:71`). Ni `entity_scope`, ni `account_scope` — `0017` a couvert
+  `transactions_cache` (+ partitions), `balance_history`, `transaction_categorizations` et
+  `categorization_audit`, mais PAS celle-ci. Vérifié par grep exhaustif sur
+  `drizzle/migrations/*.sql`. **Mode de défaillance** : une lecture de cette table qui ne
+  joint pas `bank_accounts` expose à un membre borné les identifiants de comptes hors de son
+  périmètre, et les titulaires qui leur sont rattachés — fuite INTRA-GROUPE (l'étage 1 tient,
+  ce n'est pas cross-client). C'est exactement le risque que la règle ENTITY-READ-JOIN1
+  cherche à contenir côté repository, ici sans filet structurel derrière.
+  **Pourquoi ce n'est PAS une entrée de dette** : CLAUDE.md règle 9 — « dette touchant
+  l'isolation tenant : INTERDITE, ça se corrige ». Consigné ici seulement pour ne pas perdre
+  le fil entre deux lots. **À faire** : (1) établir si un chemin de lecture applicatif
+  l'atteint aujourd'hui sans jointure, (2) poser la policy manquante, (3) cas d'isolation
+  dédié. Découvert en instruisant NUDGE-VISION-ENTITE1 ; lot séparé arbitré par Etienne le
+  2026-07-21.
+
 ### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
 
 Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
@@ -63,22 +83,39 @@ contrat de Server Action touché, aucune requête ajoutée.
   **Déclencheur** : le premier signalement support d'une connexion « qui a sauté », ou le
   chantier de typage des erreurs d'action.
 
-- [ ] **NUDGE-VISION-ENTITE1 (P1, effort ~1 j, 2026-07-20) — l'invite post-connexion est
-  ÉTOUFFÉE exactement dans le cas qu'elle doit couvrir** (cross-review 7/10). **Quoi** :
-  `DashboardContent` retourne l'empty state global quand `comptes.length === 0`, 73 lignes
-  AVANT le point de montage du nudge — celui-ci ne monte donc jamais dans cet état.
-  **Pourquoi ça mord** : le dashboard lit sous `entity_scope` (`exigerSessionWorkspace`
-  porte le `viewFilter`), et l'ingestion crée les comptes avec `entity_id = NULL`
-  (invariant assumé : elle n'assigne jamais d'entité). Un membre en Vision Entité qui
-  connecte une banque ne voit donc AUCUN compte → l'écran lui affiche « Aucune banque
-  n'est encore connectée à cet espace » juste après qu'il en a connecté une, et l'invite
-  écrite pour cet atterrissage ne se déclenche pas. **La contradiction de l'empty state
-  est ANTÉRIEURE au lot** ; ce qui est nouveau, c'est que le correctif ne la couvre pas.
-  **Priorité P1** : c'est un parcours utilisateur qui se contredit lui-même, pas un
-  fignolage. **Déclencheur** : le premier workspace multi-entités avec un membre scopé
-  (Omnicane) — ou plus tôt si la démo se fait sous Vision Entité. **Piste** : traiter
-  « comptes invisibles sous le périmètre » comme un état DISTINCT de « aucun compte », ce
-  que le modèle actuel ne distingue pas.
+- [x] **NUDGE-VISION-ENTITE1 (P1, 2026-07-20 → LIVRÉ 2026-07-21) — l'empty state global
+  MENTAIT à un membre au périmètre borné.** Livré : `PLAN-nudge-vision-entite.md` +
+  branche `fix/nudge-vision-entite`. État `"hors-perimetre"` distinct, adossé à
+  `compterConnexionsTenant` (COUNT sur `bank_connections` — seule table du chemin à ne
+  porter que `tenant_isolation`, donc bornée workspace par la RLS, sans lire
+  `bank_accounts` ni contourner l'étage 2) et gardé par `lecteurBorne`
+  (`ctx.entityScope`/`ctx.accountScope`). Preuve :
+  `tests/isolation/dashboard-hors-perimetre-isolation.test.ts`.
+  ⚠️ **Le ticket d'origine visait le mauvais scénario** — à savoir : la prémisse
+  « un membre scopé connecte une banque et voit un dashboard vide » est FAUSSE. Vérifié :
+  `persisterConnexionEtComptes` écrit connexion ET comptes dans UNE transaction
+  (`orchestration.ts:334-395`) ; le `WITH CHECK` d'`entity_scope` rejette l'INSERT
+  `entity_id = NULL`, la transaction ROLLBACK, et `orchestration.ts:1496` re-lève l'erreur,
+  qui est AFFICHÉE. Ce membre n'atteint donc jamais l'écran vide. Le défaut réel, permanent
+  celui-là : un membre borné arrive sur un tenant dont les comptes ne lui sont pas
+  assignés. Le volet « faire monter le nudge » a été RETIRÉ (code sans déclencheur, et une
+  invite à synchroniser ne peut pas rendre visibles des comptes non assignés). Périmètre
+  arbitré par Etienne le 2026-07-21.
+
+- [ ] **ENTITY-CONNEXION-REFUS-NOMME1 (P1, effort ~0,5 j, 2026-07-21) — un membre borné
+  qui connecte une banque reçoit une erreur RLS brute, pas un refus intelligible.**
+  **Quoi** : le parcours de connexion d'un membre en Vision Entité (ou borné par compte)
+  échoue par rejet `WITH CHECK` de la policy `entity_scope` — l'INSERT `entity_id = NULL`
+  d'`upsertCompte` n'appartient à aucun scope. **Le fail-closed est VOULU** (CLAUDE.md :
+  « un membre borné ne crée pas de comptes non-assignés ») ; ce qui ne l'est pas, c'est le
+  message : l'utilisateur reçoit une erreur d'origine base au lieu d'un refus nommé
+  (règle 3 : « chaque erreur a un nom »). Aucune garde applicative de périmètre n'existe en
+  amont — `orchestration.ts:487` ne teste que `peutModifier`. **Pourquoi ça mord** : le
+  membre ne comprend pas que le geste ne lui appartient pas, et rien ne l'oriente vers un
+  administrateur. **Piste** : garde applicative explicite avant l'appel amont (échec AVANT
+  de solliciter Omni-FI), code d'erreur dédié + message UI. **Déclencheur** : le premier
+  membre scopé qui tente une connexion — Omnicane. Découvert en instruisant
+  NUDGE-VISION-ENTITE1.
 
 - [ ] **SYNC-NOM-BANQUE-HOMONYMES1 (P2, effort ~0,5 j, 2026-07-20) — deux connexions vers
   la même banque redeviennent indiscernables** (cross-review 7/10). **Quoi** :

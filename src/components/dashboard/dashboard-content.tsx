@@ -18,8 +18,10 @@
  *   5. Features conservées hors maquette (Top contreparties, Évolution mensuelle,
  *      Transactions récentes), empilées pleine largeur dessous.
  *
- * Logique d'états (décisions revue, INCHANGÉE) :
+ * Logique d'états (décisions revue) :
  *   - AUCUN compte connecté            → empty GLOBAL (DashboardEmptyState).
+ *   - AUCUN compte VISIBLE, mais le tenant a une connexion et le lecteur est borné
+ *                                      → hors périmètre (DashboardHorsPerimetreState).
  *   - Comptes présents, données vides  → PARTIEL par section : le graphe de flux
  *     affiche son propre vide, la table le sien ; les KPI/solde restent visibles.
  *     (Pas d'empty global qui masquerait le solde.)
@@ -42,7 +44,10 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import { choisirEtatDashboard } from "@/lib/etat-dashboard";
 import { formaterFraicheurRelative } from "@/lib/format-date";
 import { DashboardShell } from "@/components/shell/dashboard-shell";
-import { DashboardEmptyState } from "@/components/dashboard/states";
+import {
+  DashboardEmptyState,
+  DashboardHorsPerimetreState,
+} from "@/components/dashboard/states";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { SoldesDevisesRow } from "@/components/dashboard/soldes-devises-row";
 import { BalanceFreshnessPill } from "@/components/dashboard/balance-freshness-pill";
@@ -90,6 +95,22 @@ export interface DonneesDashboard {
    */
   prevision: PrevisionFlux | null;
   transactionsRecentes: TransactionRecente[];
+  /**
+   * Le TENANT porte-t-il au moins une connexion bancaire ? (NUDGE-VISION-ENTITE1)
+   * Booléen DÉRIVÉ serveur d'un COUNT sur `bank_connections` — jamais un compte, jamais
+   * un identifiant : l'UI n'a pas à savoir combien ni lesquelles. Sert uniquement à ne
+   * plus confondre « cet espace n'a aucune banque » avec « ses comptes ne me sont pas
+   * accessibles ».
+   */
+  aDesConnexionsTenant: boolean;
+  /**
+   * Le périmètre du LECTEUR est-il borné (Vision Entité ou droit par compte) ?
+   * Résolu serveur depuis `ctx.entityScope`/`ctx.accountScope`, JAMAIS un paramètre
+   * client. Indispensable en plus du drapeau ci-dessus : une connexion peut exister
+   * avec zéro compte pour des raisons étrangères au périmètre, et l'état
+   * « hors périmètre » mentirait alors à un lecteur non borné (cf. `etat-dashboard.ts`).
+   */
+  lecteurBorne: boolean;
 }
 
 export function DashboardContent({
@@ -143,22 +164,50 @@ export function DashboardContent({
   // néanmoins un discriminant vivant de l'état d'onboarding, lu par `choisirEtatDashboard`
   // (partiel vs complet) via l'objet `donnees` complet ci-dessous.
 
-  // EMPTY GLOBAL : aucun compte → rien à montrer, CTA de connexion.
-  // (état "vide" ; "partiel"/"complet" montent le shell ci-dessous — chaque zone
-  // gère son propre vide. Logique testée : choisirEtatDashboard.)
-  if (choisirEtatDashboard(donnees) === "vide") {
-    return (
-      <DashboardShell>
-        {/* Le jeton se consomme MÊME ICI, où l'invite ne monte pas. Sans ça il
-            survivait dans l'URL, et `periode-switcher` le RECOPIE à chaque changement
-            de période (il ne retire que du/au/periode) : le drapeau se propageait donc
-            indéfiniment et pouvait réarmer l'invite bien plus tard, une fois les comptes
-            devenus visibles. Un jeton d'arrivée se consomme à l'arrivée — pas seulement
-            quand on a quelque chose à en faire. */}
-        {connexionEtablie && <ConsommerDrapeauConnexion />}
-        <DashboardEmptyState />
-      </DashboardShell>
-    );
+  // ÉTATS SANS COMPTE VISIBLE — "vide" et "hors-perimetre" partagent `comptes = []`
+  // mais racontent deux histoires opposées : l'un dit « rien n'est connecté », l'autre
+  // « c'est connecté, mais pas pour vous ». Les confondre faisait NIER à un membre scopé
+  // une banque que /banques lui montre (NUDGE-VISION-ENTITE1). Logique testée :
+  // choisirEtatDashboard. "partiel"/"complet" montent le shell ci-dessous — chaque zone
+  // gère alors son propre vide.
+  //
+  // `switch` exhaustif et non chaîne de `if` : la garde `never` du défaut fait ÉCHOUER LE
+  // TYPECHECK si un état futur n'est pas traité. Avec un `if`, un état non couvert
+  // laisserait monter le dashboard complet sur `comptes = []` — en-tête « 0 compte
+  // connecté », aucune pastille de fraîcheur, cartes vides : un écran dégradé SILENCIEUX,
+  // sans erreur pour le signaler.
+  const etat = choisirEtatDashboard(donnees);
+  switch (etat) {
+    case "vide":
+    case "hors-perimetre":
+      return (
+        <DashboardShell>
+          {/* Le jeton se consomme MÊME ICI, où l'invite ne monte pas. Sans ça il
+              survivait dans l'URL, et `periode-switcher` le RECOPIE à chaque changement
+              de période (il ne retire que du/au/periode) : le drapeau se propageait donc
+              indéfiniment et pouvait réarmer l'invite bien plus tard, une fois les comptes
+              devenus visibles. Un jeton d'arrivée se consomme à l'arrivée — pas seulement
+              quand on a quelque chose à en faire. */}
+          {connexionEtablie && <ConsommerDrapeauConnexion />}
+          {/* Pas de nudge « lancez une première synchronisation » ici, y compris sous
+              `connexionEtablie` : une synchro ne peut pas rendre visibles des comptes
+              hors périmètre (ils resteraient non assignés). L'invite pointerait un geste
+              voué à l'échec — la contradiction serait déplacée, pas supprimée. Le geste
+              utile appartient à un administrateur, c'est ce que dit l'état. */}
+          {etat === "hors-perimetre" ? (
+            <DashboardHorsPerimetreState />
+          ) : (
+            <DashboardEmptyState />
+          )}
+        </DashboardShell>
+      );
+    case "partiel":
+    case "complet":
+      break;
+    default: {
+      const jamais: never = etat;
+      throw new Error(`État dashboard non traité : ${String(jamais)}`);
+    }
   }
 
   // Sinon : comptes connectés → dashboard PLEINE LARGEUR (grille maquette). Chaque

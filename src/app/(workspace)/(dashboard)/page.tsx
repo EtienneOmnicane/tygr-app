@@ -25,6 +25,8 @@ import { redirect } from "next/navigation";
 
 import {
   cashflowParDevise,
+  compterConnexionsTenant,
+  estLecteurBorne,
   grilleMois,
   grilleMoisSuivants,
   listerComptes,
@@ -179,6 +181,7 @@ export default async function PageDashboard({
       transactions,
       occurrences,
       ligneWs,
+      nbConnexionsTenant,
     ] = await Promise.all([
       listerComptes(tx),
       // Solde Total = soldes COURANTS par devise (indépendant de balance_history,
@@ -220,6 +223,12 @@ export default async function PageDashboard({
       tx.execute(
         sql`select base_currency from workspaces where id = current_setting('app.current_workspace_id')::uuid limit 1`,
       ),
+      // NUDGE-VISION-ENTITE1 — le tenant a-t-il au moins une connexion ? COUNT sur
+      // `bank_connections`, table qui ne porte QUE `tenant_isolation` : borné au
+      // workspace par la RLS, sans lire `bank_accounts`, donc sans contourner l'étage 2.
+      // Dans CE Promise.all, sous le MÊME `tx` que le reste de l'écran — un second
+      // withWorkspace rejouerait l'auto-amputation L8b-1 (cf. note des occurrences).
+      compterConnexionsTenant(tx),
     ]);
 
     const rows = ligneWs as unknown as Array<{ base_currency: string }>;
@@ -261,6 +270,14 @@ export default async function PageDashboard({
             }
           : null,
         transactionsRecentes: transactions,
+        // Deux BOOLÉENS dérivés (jamais le compte brut, jamais un identifiant) : ils ne
+        // servent qu'à distinguer « aucune banque » de « aucun compte accessible ».
+        aDesConnexionsTenant: nbConnexionsTenant > 0,
+        // Le lecteur est-il réellement borné ? Résolu depuis le CONTEXTE serveur
+        // (member_entity_scopes / user_scopes via withWorkspace), jamais d'un paramètre
+        // client. La formule vit dans `tenancy.ts` (source unique, partagée avec la preuve
+        // d'isolation) : recopiée ici, elle pourrait dériver sans faire rougir son test.
+        lecteurBorne: estLecteurBorne(ctx),
       },
     };
   });

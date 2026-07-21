@@ -163,6 +163,31 @@ export interface WorkspaceContext {
 }
 
 /**
+ * Le périmètre du LECTEUR est-il borné, sur l'un ou l'autre axe de l'étage 2 ?
+ * (NUDGE-VISION-ENTITE1)
+ *
+ * Sert à l'UI pour décider si « aucun compte visible » mérite d'être EXPLIQUÉ par le
+ * périmètre : à un lecteur non borné, dire « un administrateur peut vous donner accès »
+ * serait un mensonge — son écran vide a une autre cause (aucune banque, ou une connexion
+ * qui n'a rattaché aucun compte).
+ *
+ * ⚠️ FONCTION PARTAGÉE, PAS À RECOPIER. Elle vit ici, au contact des types de scope,
+ * parce qu'une COPIE de la formule dans un appelant et une autre dans son test rendrait
+ * le test tautologique : il validerait sa propre copie pendant que le code de production
+ * dériverait sans rien faire rougir (constat de cross-review). Un seul point de vérité,
+ * appelé par la page ET par la preuve d'isolation.
+ *
+ * NB : `ENTITES` implique toujours `COMPTES` (les entités sont traduites en comptes par
+ * `withWorkspace`), donc la seconde clause est celle qui porte réellement le cas d'un
+ * membre borné UNIQUEMENT par `user_scopes` — d'où le test dédié.
+ */
+export function estLecteurBorne(ctx: WorkspaceContext): boolean {
+  return (
+    ctx.entityScope.mode === "ENTITES" || ctx.accountScope.mode === "COMPTES"
+  );
+}
+
+/**
  * `withWorkspace(session, fn)` déjà lié à une session — passé aux orchestrateurs
  * (ingestion, widget) pour qu'ils restent purs de la DB concrète. Le `tx` est
  * typé sur AnyPgDatabase (compatible avec les repositories génériques `<TDb>`).
