@@ -4,6 +4,16 @@
  * métier testable ; le hook `useOmniFiWidget` ne fait que l'alimenter avec les
  * réponses de polling et déclencher les effets (submit/resend/poll).
  *
+ * ⚠️ NON MONTÉ AUJOURD'HUI — ce n'est PAS du code mort. Le widget drop-in
+ * (`@omni-fi/react-link`) gère la MFA en interne, donc ce module et son hook ne
+ * sont sur aucun chemin runtime : ils sont CONSERVÉS comme substrat de
+ * `SYNC-LOADER-ETAPES1` (TODOS.md), dont le loader à étapes dérivera le palier
+ * d'avancement d'ici. Ne pas supprimer sans abandonner ce chantier (CODE-MORT-MFA1).
+ * Corollaire : un statut de job non mappé ici est SANS effet runtime. Le chemin
+ * actif est `attendreFinSync` (`orchestration.ts:594`), qui absorbe déjà tout statut
+ * INCONNU en `INCOMPLET` (`:538-543`) plutôt que de figer — d'où la suspension de
+ * SYNC-MACHINE-INTERRUPTED1 (prémisse réfutée, cf. TODOS.md).
+ *
  * Contrat (CLAUDE.md « Machine à états MFA », docs § Sync Engine) :
  * - Cycle job : PENDING→STARTED→LOGGING_IN→[OTP_REQUESTED↔OTP_WAITING]→
  *   RETRIEVING→PARSING→ENRICHING→COMPLETED | FAILED.

@@ -29,8 +29,12 @@ contrat de Server Action touché, aucune requête ajoutée.
   `{connectionId, jobId}` **dès le 201** au lieu d'attendre `attendreFinSync`, puis que
   le client poll par connexion et dérive le palier via `machine-mfa.ts`. **Pourquoi
   différé** : ça change le contrat de l'action et touche le cœur de l'ingestion — hors
-  d'un lot démo-safe à J-2. **Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
-  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».
+  d'un lot démo-safe à J-2. ~~**Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
+  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».~~
+  **LEVÉ 2026-07-21** : `SYNC-MACHINE-INTERRUPTED1` est SUSPENDUE (prémisse réfutée,
+  cf. ci-dessous) et ne bloque plus ce chantier. Ce qui reste vrai et à traiter DANS ce
+  lot : le loader devra dériver son palier d'une union de statuts **OUVERTE**, avec un
+  repli explicite pour l'inconnu (le serveur, lui, le rend déjà `INCOMPLET`).
   **Déclencheur** : post-démo, après l'anomalie cooldown.
 
 - [ ] **WIDGET-REJET-TRANSPORT1 (P2, effort ~1 j, 2026-07-20) — un rejet réseau sort de
@@ -114,13 +118,43 @@ contrat de Server Action touché, aucune requête ajoutée.
   **Déclencheur** : première finalisation partielle observée en usage réel, ou ton
   arbitrage produit.
 
-- [ ] **SYNC-MACHINE-INTERRUPTED1 (P1, effort ~0,5 j, 2026-07-20) — `INTERRUPTED` non
-  mappé dans `machine-mfa.ts`.** Statut émis par le backend mais ABSENT de l'enum
-  OpenAPI : il retombe sur le repli « statut inconnu → initialisation », donc
-  `pollingActif` reste vrai et le polling tourne jusqu'au plafond `MAX_POLLS`. Sans
-  conséquence de sécurité (la vérité reste serveur) mais c'est exactement la frustration
-  que ce chantier supprime. **Déclencheur** : bloquant pour SYNC-LOADER-ETAPES1 ; à
-  corriger avant tout loader qui réutilise la machine.
+- [ ] **SYNC-MACHINE-INTERRUPTED1 — 🚫 SUSPENDUE (prémisse RÉFUTÉE, 2026-07-21).**
+  ~~P1, effort ~0,5 j, 2026-07-20~~ → **dé-priorisée : ni P1, ni bloquant démo, ni
+  bloquant `SYNC-LOADER-ETAPES1`.** **Action = NE RIEN CODER** : aucun mapping
+  d'`INTERRUPTED` ne doit être écrit sans **re-preuve runtime** préalable (statut
+  observé sur un job réel). Arbitrage Etienne 2026-07-21.
+  **Prémisse d'origine** (conservée pour l'audit trail) : « `INTERRUPTED` non mappé dans
+  `machine-mfa.ts` — statut émis par le backend mais absent de l'enum OpenAPI ; il retombe
+  sur le repli “statut inconnu → initialisation”, `pollingActif` reste vrai, le polling
+  tourne jusqu'au plafond `MAX_POLLS` → le loader fige sur “Initialisation…”. »
+  **Pourquoi elle est réfutée — quatre preuves convergentes :**
+  1. **Le chemin actif absorbe DÉJÀ tout statut inconnu.** `orchestration.ts:538-543` :
+     « un statut INCONNU n'est donc ni terminal ni MFA → il est poll jusqu'au plafond,
+     puis **rendu INCOMPLET** (jamais assimilé à un succès, jamais à un échec dur) ».
+     Même SI `INTERRUPTED` existait, il ne figerait rien : il sortirait en `INCOMPLET`
+     (`:640-644`), état honnête qui ingère la lecture partielle. Le mode de défaillance
+     décrit (« gel sur Initialisation… ») **ne peut pas se produire sur le chemin actif**.
+  2. **Le lieu désigné est hors runtime.** `machine-mfa.ts` n'est monté par AUCUN
+     composant (cf. CODE-MORT-MFA1) : le repli « inconnu → initialisation » qu'accuse
+     l'entrée n'est exécuté par personne aujourd'hui.
+  3. **Constat prod contradictoire.** `orchestration.ts:640-644` documente le vrai
+     incident du **2026-07-13** : un scrape resté en **`RETRIEVING` > 6 min** (3× le
+     plafond), 67 transactions lisibles pendant qu'il courait. Le gel réel vient d'un job
+     **LONG**, pas d'un job « interrompu ».
+  4. **Le statut est introuvable.** **0 occurrence** d'`INTERRUPTED` dans tout `src/` ; et
+     la vérification runtime de la **PR #202 (2026-07-13)** l'avait déjà cherché sans le
+     trouver — ni dans `docs/documentation_api.md` (§ Sync Engine), ni dans `omni-fi-core`
+     (Django), ni au runtime. L'entrée (2026-07-20) réaffirmait donc une prémisse réfutée
+     une semaine plus tôt.
+  **Seule nuance conservée** : on ne prouve pas une inexistence *future*. L'enum amont
+  **DÉRIVE** (`SCRAPING` côté Django vs `RETRIEVING` côté API, `orchestration.ts:538-539`)
+  et le checkout `omni-fi-core` local est périmé. Mais l'union est **OUVERTE** et le repli
+  `INCOMPLET` est gracieux : si `INTERRUPTED` apparaissait un jour, le produit dégraderait
+  proprement — il n'y a **rien à faire par anticipation**.
+  **Réouverture** (le seul déclencheur) : observation d'un `INTERRUPTED` réel dans un log
+  de job (`evt: "omnifi_sync_incomplet"`, champ `dernierStatut`). À ce moment-là seulement,
+  re-qualifier et chiffrer. Le mapping de `machine-mfa.ts` reste, lui, rattaché à
+  `SYNC-LOADER-ETAPES1` — et ne le bloque pas.
 
 ### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
 
@@ -2770,22 +2804,26 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   de `PublicToken` + `ClientUserId`, ce dernier résolu côté serveur depuis le
   workspace). Tant que ce n'est pas fait, le flux de connexion casse à la
   finalisation, même si le widget aboutit.
-- [ ] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » conservé mais jamais monté**
-  — Effort S (déclencheur : prochain chantier touchant `src/components/widget/`).
-  Constat annexe relevé à la vérification du 2026-07-21, **non corrigé ici** (règle 1 :
-  ne pas mélanger vérification et implémentation). Le drop-in gère la MFA en interne,
-  donc toute la pile MFA custom est orpheline au runtime : `useOmniFiWidget`
-  (`use-omnifi-widget.ts`) n'est monté par AUCUN composant — seulement ré-exporté par
-  le barrel `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/
-  `submitMfaAction`/`resendMfaAction` (`widget-runtime.ts`) ne sont importées que par
-  ce hook ; `finaliserConnexion` (orchestration, chemin widget custom) n'est appelée
-  par aucune action. Déjà acté en 2026-06-15 (« CONSERVÉE + testée, réutilisable hors
-  dropin ; un seul chemin runtime : le dropin ») — donc **conservation DÉLIBÉRÉE**, pas
-  un oubli. Risque réel mais faible : surface de Server Actions authentifiées non
-  exercée par le produit (elle reste gardée par `exigerSession*`), et coût de
-  maintenance/confusion — c'est CE code qui fait apparaître des schémas
-  `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste ci-dessus. Décision à
-  prendre : supprimer, ou documenter en tête de fichier « chemin non monté ».
+- [x] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » non monté : CONSERVATION
+  TRANCHÉE, action = DOCUMENTER** — ✅ documenté 2026-07-21 (commentaire en tête de
+  `machine-mfa.ts`). **Ce n'est PAS du code mort à supprimer** : arbitrage Etienne
+  2026-07-21 — la pile (`machine-mfa.ts` / `useOmniFiWidget` / `widget-runtime.ts`) est
+  le **substrat prévu de `SYNC-LOADER-ETAPES1`** (TODOS `:26-34`, qui pose noir sur
+  blanc « le client poll par connexion et **dérive le palier via `machine-mfa.ts`** »).
+  La conserver est donc un investissement, pas un oubli — cohérent avec l'arbitrage
+  initial de 2026-06-15 (« CONSERVÉE + testée, réutilisable hors dropin ; un seul chemin
+  runtime : le dropin »). **Déclencheur de SUPPRESSION** (le seul) : abandon de
+  `SYNC-LOADER-ETAPES1` — tant que ce chantier vit, on garde.
+  Constat factuel qui reste vrai (relevé à la vérification du 2026-07-21) : `useOmniFiWidget`
+  n'est monté par AUCUN composant — seulement ré-exporté par le barrel
+  `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/`submitMfaAction`/
+  `resendMfaAction` (`widget-runtime.ts`) ne sont importées que par ce hook ;
+  `finaliserConnexion` (orchestration) n'est appelée par aucune action. Reste à surveiller
+  (non bloquant) : ces Server Actions sont une surface authentifiée non exercée par le
+  produit (elles restent gardées par `exigerSession*`). C'est aussi CE code qui fait
+  apparaître des schémas `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste
+  ci-dessus — d'où le commentaire d'en-tête, pour que le prochain lecteur ne rejoue pas
+  l'enquête.
 
 ### Dette acceptée à la PR auth-foundation (2026-06-12)
 
