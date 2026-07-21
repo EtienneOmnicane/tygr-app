@@ -6,14 +6,24 @@
  * de COUVERTURE (% catégorisé) EXPOSE le fait qu'un workspace peu catégorisé produit un
  * donut pauvre, plutôt que de le cacher. Cinq indicateurs :
  *   - Moyenne / opération : `devise.montantMoyen` (total/nb, calculé EN SQL — règle 8).
- *   - Catégories : nombre de VRAIES catégories (hors « Non catégorisé »), COMPTÉ en JS
- *     sur `parts` (compter des éléments ≠ additionner des montants → autorisé).
+ *   - Parts : nombre de PARTS catégorisées (hors « Non catégorisé »), COMPTÉ en JS sur
+ *     `parts` (compter des éléments ≠ additionner des montants → autorisé).
  *   - Catégorisé : couverture = 1 − part non-catégorisée (ratio d'AFFICHAGE, cul-de-sac
  *     float — jamais réinjecté dans un montant).
- *   - Poste dominant (L3) : 1re part catégorisée (parts déjà triées montant décroissant,
- *     « Non catégorisé » repoussé en fin) + sa part.
- *   - Concentration top 3 (L3) : part cumulée des 3 premières catégories (somme de
- *     FRACTIONS, ratio d'affichage — pas une addition de montants).
+ *   - Plus grosse part (L3) : 1re part catégorisée (parts déjà triées montant
+ *     décroissant, « Non catégorisé » repoussé en fin) + sa part.
+ *   - Concentration top 3 (L3) : part cumulée des 3 premières PARTS (somme de FRACTIONS,
+ *     ratio d'affichage — pas une addition de montants).
+ *
+ * ⚠️ POURQUOI « PART » ET NON « POSTE »/« CATÉGORIE » (2026-07-21). Depuis l'axe de
+ * catégorie EFFECTIVE, une même catégorie peut légitimement produire DEUX parts : la
+ * fraction ventilée par l'utilisateur (origine TYGR) et son reliquat resté sur la
+ * catégorie bancaire (origine AMONT). « Poste dominant » annonçait donc la plus grosse
+ * PART en la faisant passer pour la plus grosse CATÉGORIE — sur un jeu réel, « Fournisseurs
+ * 29 % » là où « Loyer » pesait 46 % en cumulant ses deux parts. Les libellés disent
+ * maintenant exactement ce qui est calculé, et ce que le donut montre (le plus gros
+ * SECTEUR est bien celui-là). Le cumul par catégorie exigerait d'additionner des montants
+ * — INTERDIT côté JS (règle 8) : il se ferait en SQL. Dette `STATS-CUMUL-CATEGORIE1`.
  *
  * Présentationnel pur (CLAUDE.md) : aucun fetch, aucun état, tokens sémantiques
  * uniquement (aucune couleur en dur, pas de vert/rouge — ce ne sont pas des montants
@@ -58,7 +68,7 @@ export function StatsDevise({ devise }: { devise: RepartitionDevise }) {
   // Couverture = 1 − part non-catégorisée (ratio d'affichage). Bornée [0,1] par sûreté.
   const couverture = Math.max(0, Math.min(1, 1 - fractionSure(nonCat?.part ?? "0")));
 
-  // Poste dominant + concentration top 3 (uniquement s'il existe au moins 1 catégorie).
+  // Plus grosse part + concentration top 3 (s'il existe au moins une part catégorisée).
   const dominant = categorisees[0];
   const top3 = categorisees
     .slice(0, 3)
@@ -72,12 +82,12 @@ export function StatsDevise({ devise }: { devise: RepartitionDevise }) {
         </span>
       </Stat>
 
-      <Stat label="Catégories">{categorisees.length}</Stat>
+      <Stat label="Parts">{categorisees.length}</Stat>
 
       <Stat label="Catégorisé">{pourcentPart(String(couverture))}</Stat>
 
       {dominant ? (
-        <Stat label="Poste dominant">
+        <Stat label="Plus grosse part">
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span className="min-w-0 max-w-[10rem] truncate" title={dominant.categorie}>
               {dominant.categorie}

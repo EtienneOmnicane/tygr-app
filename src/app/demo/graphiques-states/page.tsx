@@ -43,7 +43,13 @@ const MUR_SORTIES: RepartitionDevise = {
   montantMoyen: "21028.04",
   nbTransactions: 214,
   parts: [
-    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000001", montant: "1200000.00", montantPrecedent: "1200000.00", part: "0.266667", nbTransactions: 12 },
+    // ⚠️ PAIRE HOMONYME VOLONTAIRE — c'est LE cas que le Lot 3 doit rendre lisible :
+    // 800 000 ventilés par l'utilisateur sur SA catégorie « Loyer & locaux », et
+    // 400 000 de reliquat non ventilé restés sur la catégorie BANCAIRE du même nom.
+    // Deux lignes homonymes, dont une seule porte le badge « banque ». Sans cette paire,
+    // la capture Gate 4 validerait un écran qui ne contient jamais le cas litigieux.
+    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000001", montant: "800000.00", montantPrecedent: "1200000.00", part: "0.177778", nbTransactions: 12 },
+    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "400000.00", montantPrecedent: "0.00", part: "0.088889", nbTransactions: 4 },
     { categorie: "Salaires", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000002", montant: "980000.00", montantPrecedent: "875000.00", part: "0.217778", nbTransactions: 46 },
     { categorie: "Fournisseurs", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000003", montant: "720000.00", montantPrecedent: "800000.00", part: "0.16", nbTransactions: 58 },
     { categorie: "Énergie", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "430000.00", montantPrecedent: "0.00", part: "0.095556", nbTransactions: 9 },

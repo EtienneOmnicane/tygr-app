@@ -2476,6 +2476,91 @@ suffisant) :
   (`categorie.name` via `CategorisationStatusBadge`), saisie par l'utilisateur et DÉJÀ en français
   (cf. `types-transactions.ts` : « indépendant de primaryCategory »). La traduire eût été incorrect.
   DR-F1 ne concernait donc que la catégorie OBIE auto, affichée uniquement sur le dashboard.
+- [ ] **SPLIT-PERIME1 (P1, effort M, intégrité des données) — une ventilation SURVIT à un
+  re-sync qui RÉDUIT le montant de sa transaction** — ouvert 2026-07-21 (revue croisée du
+  chantier GRAPHIQUES-CATEG-UTILISATEUR1). **Quoi** : l'invariant `Σ splits ≤ |montant|`
+  n'est validé QU'À L'ÉCRITURE du split (`categorisation.ts`, sous `FOR UPDATE`). L'upsert
+  d'ingestion écrase `amount` (`ingestion.ts:207-224`, `set: { amount: … }`) et laisse
+  délibérément `transaction_categorizations` intacte → une transaction ventilée à 100 %
+  dont l'amont corrige le montant à la BAISSE (pré-autorisation carte réglée plus bas,
+  correction amont) devient SUR-VENTILÉE. Aucun bug d'écriture nécessaire : le chemin est
+  ouvert en fonctionnement normal. **Pourquoi ce n'est pas bloquant** : le donut est
+  désormais fail-safe (`axeCategorieEffective`, garde `ventileValide`) — il IGNORE une
+  ventilation périmée et impute la transaction à sa catégorie bancaire, donc l'exhaustivité
+  `Σ parts = KPI Sorties` tient (prouvé, `graphiques-repartition-isolation.test.ts`,
+  mutation-check M7/M8). **Ce qui reste faux** : la DONNÉE. `/transactions` affiche toujours
+  la transaction comme « COMPLET » alors qu'elle est sur-ventilée, et l'utilisateur ne voit
+  nulle part que sa ventilation ne vaut plus rien. **Correctif attendu** : à l'ingestion,
+  quand `amount` baisse sous `Σ splits`, réduire ou invalider les splits AVEC trace
+  `categorization_audit` (append-only : on écrit un événement correctif, on ne réécrit pas).
+  Décision à prendre : réduire au prorata, ou invalider et laisser l'utilisateur reventiler.
+  **Déclencheur** : premier signalement utilisateur d'une ventilation « disparue » du donut,
+  OU avant le premier gros import d'historique. **Ne PAS traiter côté lecture** — chaque
+  écran qui lit les splits devrait alors reproduire la garde.
+
+- [ ] **STATS-CUMUL-CATEGORIE1 (P2, effort S, lisibilité) — le bandeau de stats raisonne en
+  PARTS, pas en catégories cumulées** — ouvert 2026-07-21 (revue croisée, même chantier).
+  **Quoi** : depuis l'axe de catégorie effective, une catégorie peut produire DEUX parts (la
+  fraction ventilée par l'utilisateur + son reliquat bancaire homonyme). « Poste dominant »
+  annonçait donc la plus grosse PART en la faisant passer pour la plus grosse CATÉGORIE — sur
+  un jeu réel, « Fournisseurs 29 % » là où « Loyer » pesait 46 % en cumulant ses deux parts.
+  **Traité pour l'instant par l'HONNÊTETÉ du libellé** (arbitrage Etienne 2026-07-21) :
+  « Plus grosse part », « Parts » — l'écran dit exactement ce qu'il calcule, et ce que le
+  donut montre (le plus gros SECTEUR est bien celui-là). **Reste à faire** : exposer le vrai
+  cumul par catégorie. Le calcul ne peut PAS se faire côté JS (ce serait additionner des
+  montants — règle 8) : il faut un agrégat SQL supplémentaire sur le libellé, dans
+  `axeCategorieEffective`. **Déclencheur** : retour utilisateur sur l'écart entre le KPI et
+  la lecture du donut, ou ouverture du chantier « matrice catégorie × mois » (qui consommera
+  le même fragment et posera la même question).
+
+- [ ] **GRAPH-TX-ZERO1 (P2, effort XS, cardinalité) — une transaction à 0,00 sans ventilation
+  disparaît du COMPTE d'opérations du donut** — ouvert 2026-07-21 (revue croisée, même
+  chantier). **Quoi** : la branche « reste » filtre `> 0` STRICT (invariant I6, qui interdit
+  les parts fantômes à 0,00). Une transaction de montant nul et non ventilée ne produit donc
+  AUCUNE ligne d'axe : elle sort de `nbTransactions` et du dénominateur de `montantMoyen`.
+  **Portée exacte** : les MONTANTS restent justes (0,00 n'ajoute rien) — seule la cardinalité
+  est touchée : « 12 opérations » devient « 11 », et la moyenne par opération monte
+  légèrement. Le donut peut donc afficher un nombre d'opérations inférieur à `/transactions`
+  sur la même période. **Ce n'est PAS une dette de montant** (règle 9) : rien de faux n'est
+  affiché sur un montant. **Correctif attendu** : compter les transactions par un chemin
+  distinct des parts affichées — les faire entrer par la branche « reste » recréerait
+  exactement la part fantôme que I6 interdit. **Déclencheur** : présence avérée de
+  transactions à 0,00 en base (aucune constatée à ce jour), ou écart signalé entre le compte
+  d'opérations du donut et celui de `/transactions`.
+
+- [ ] **AXE-CEINTURE-JOIN1 (P2, effort S, défense en profondeur) — la ceinture
+  ENTITY-READ-JOIN1 n'est verrouillée par AUCUN test sur l'axe** — ouvert 2026-07-21 (revue
+  croisée, même chantier). **Quoi** : mutation-check M9 — retirer les DEUX
+  `innerJoin(bankAccounts)` de `axeCategorieEffective` laisse toute la suite VERTE. **Ce
+  n'est pas une faiblesse de fixture** : depuis 0017, la policy `account_scope` borne déjà
+  ces tables filles, donc la ceinture est REDONDANTE — et une défense redondante ne peut, par
+  construction, pas se prouver par le comportement (tant que la bretelle tient, la retirer ne
+  change aucun résultat). L'isolation elle-même EST prouvée (test « I4 étage 2 », sous
+  `viewFilter`). **Risque réel** : un refactor qui retirerait la jointure ne casserait rien
+  aujourd'hui, mais rouvrirait le trou le jour où un chemin échappe à la policy — et
+  CLAUDE.md exige la convention aussi pour la CORRECTION des agrégats. **Correctif possible** :
+  garde structurelle en CI (liste blanche des lectures de tables filles, sur le modèle de la
+  garde de périmètre toolbar — un scan générique produirait des faux positifs). **Déclencheur** :
+  troisième repository lisant une table fille de `bank_accounts`, ou premier oubli de jointure
+  constaté en revue.
+
+- [ ] **AXE-PERF-SPLITS1 (P2, effort S, performance) — l'axe effectif est exécuté 3 fois par
+  affichage, sans index de date sur les splits** — ouvert 2026-07-21 (même chantier).
+  **Quoi** : `repartitionParCategorie` instancie `axeCategorieEffective` TROIS fois (parts,
+  cardinalité par devise, fenêtre précédente L4), et chaque instance porte un `UNION ALL`
+  qui scanne `transactions_cache` deux fois — soit ~6 scans par affichage contre 2 avant ce
+  chantier. La cardinalité par devise est en requête séparée parce que `count(distinct …)`
+  est INTERDIT en fonction fenêtre par Postgres (et que le raccourci
+  `sum(count(distinct …)) over (…)` compterait deux fois une transaction partielle).
+  S'ajoute que `transaction_categorizations` n'a AUCUN index dont la tête permette de filtrer
+  par `transaction_date` (`(workspace_id, transaction_id, transaction_date)` et
+  `(workspace_id, category_id)`) : la table dérivée `ventile` filtre donc par date APRÈS le
+  filtre workspace de la RLS. **Sans impact mesuré à ce jour** (volumes de démarrage, fenêtres
+  d'un mois). **Correctifs possibles** : `GROUPING SETS`/`ROLLUP` pour fusionner parts et
+  totaux en une passe ; index `(workspace_id, transaction_date)` sur les splits.
+  **Déclencheur** : premier workspace dépassant ~50 000 transactions, OU une fenêtre « 12
+  mois » ressentie comme lente sur /graphiques.
+
 - [ ] **OBIE-CATALOG1 (P2, medium, robustesse données) — catalogue OBIE→FR FIGÉ, désynchronisé
   de l'amont réel** — Effort S, ouvert 2026-06-23 (sonde runtime, branche `fix/categories-fr-catalogue-obie`).
   DR-F1 avait peuplé `CORRESPONDANCE_FR` (`src/lib/categories-fr.ts`) depuis le **seed de démo**

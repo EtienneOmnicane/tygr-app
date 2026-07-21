@@ -888,6 +888,16 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     // par la policy `account_scope` (migration 0017, EXISTS récursif). Si ce chemin
     // cédait, le « reste » d'une transaction serait calculé avec des splits hors
     // périmètre : un montant FAUX, silencieux, sans filet. Ce cas l'épingle.
+    //
+    // ⚠️ CE QUE CE TEST NE PROUVE PAS, et pourquoi c'est structurel : mutation-check du
+    // 2026-07-21 — retirer les DEUX `innerJoin(bankAccounts)` de l'axe laisse ce test
+    // VERT. Ce n'est pas une faiblesse de la fixture : la ceinture ENTITY-READ-JOIN1 est
+    // REDONDANTE avec la policy `account_scope` depuis 0017, et une défense redondante
+    // ne peut par construction pas se prouver par le COMPORTEMENT (tant que la bretelle
+    // tient, la retirer ne change aucun résultat). Ce test prouve donc la BRETELLE (la
+    // policy). La ceinture reste exigée par CLAUDE.md — elle porte aussi la correction
+    // des agrégats — mais son maintien relève de la revue de code, pas de cette suite.
+    // Cf. dette AXE-CEINTURE-JOIN1 (TODOS) pour une garde structurelle éventuelle.
     const sessionUsdSeul = {
       userId: ALICE,
       activeWorkspaceId: WS_A,
