@@ -24,7 +24,7 @@
  * Présentationnel pur : aucun fetch, aucun état interne. `onSurvol` optionnel/inerte.
  */
 import { formatMontant } from "@/lib/format-montant";
-import type { PartCategorie } from "@/server/insights/types";
+import type { OrigineCategorie, PartCategorie } from "@/server/insights/types";
 
 import { couleurCategorie } from "./palette-categories";
 import { pourcentPart } from "./pourcent-part";
@@ -88,6 +88,40 @@ function BadgeVariation({
   );
 }
 
+/**
+ * Libellé humain de l'espace de noms d'une part (D2=c). Sert d'infobulle sur CHAQUE
+ * ligne : la même catégorie peut légitimement apparaître deux fois (« Loyer » créé par
+ * l'utilisateur et « Loyer » venu de la banque), et rien à l'écran ne le dirait sans ça.
+ */
+const ORIGINE_INFOBULLE: Record<OrigineCategorie, string> = {
+  TYGR: "Votre catégorie (règle ou ventilation manuelle)",
+  AMONT: "Catégorie bancaire — part non ventilée de vos opérations",
+  AUCUNE: "Opérations que la banque n’a pas étiquetées",
+};
+
+/**
+ * Marque d'origine, affichée UNIQUEMENT sur les parts venues de la banque. Asymétrie
+ * VOLONTAIRE : après ce chantier, la catégorie attendue par défaut est celle de
+ * l'utilisateur — baliser les deux doublerait le bruit d'une légende qui porte déjà
+ * couleur, libellé, montant, pourcentage et variation. Ce qui mérite d'être signalé,
+ * c'est ce que l'utilisateur n'a PAS classé lui-même.
+ *
+ * Tokens sémantiques uniquement (jamais de couleur en dur) ; `text-text-muted` plutôt
+ * que `text-text-faint` — sur le fond teinté `surface-inset`, faint tombe sous le seuil
+ * de contraste AA (un fond teinté rabote le contraste de ce qu'il porte).
+ */
+function MarqueOrigine({ origine }: { origine: OrigineCategorie }) {
+  if (origine !== "AMONT") return null;
+  return (
+    <span
+      className="shrink-0 rounded-control bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-text-muted"
+      title={ORIGINE_INFOBULLE.AMONT}
+    >
+      banque
+    </span>
+  );
+}
+
 export function LegendeCategories({
   parts,
   devise,
@@ -125,16 +159,21 @@ export function LegendeCategories({
               style={{ backgroundColor: couleur }}
             />
 
-            {/* Libellé : SEUL élément autorisé à tronquer (règle formatage). */}
+            {/* Libellé : SEUL élément autorisé à tronquer (règle formatage).
+                L'infobulle nomme aussi l'ORIGINE — sans quoi deux parts homonymes
+                d'espaces de noms différents seraient indiscernables. */}
             <span
               className={cn(
                 "min-w-0 flex-1 truncate text-sm",
                 p.estNonCategorise ? "italic text-text-muted" : "text-text",
               )}
-              title={p.categorie}
+              title={`${p.categorie} — ${ORIGINE_INFOBULLE[p.origine]}`}
             >
               {p.categorie}
             </span>
+
+            {/* Origine : marque discrète sur les parts venues de la banque. */}
+            <MarqueOrigine origine={p.origine} />
 
             {/* Montant : jamais tronqué (tabular-nums + nowrap, colonne dimensionnée). */}
             <span className="shrink-0 whitespace-nowrap text-sm font-medium tabular-nums text-text">

@@ -9,6 +9,7 @@ export { GraphiquesFeature } from "./graphiques-feature";
 export { RepartitionDeviseCard } from "./repartition-devise-card";
 export { DonutCategories } from "./donut-categories";
 export { LegendeCategories } from "./legende-categories";
+export { MentionReanalyse } from "./mention-reanalyse";
 export { pourcentPart } from "./pourcent-part";
 export {
   couleurCategorie,
