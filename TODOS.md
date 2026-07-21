@@ -29,8 +29,12 @@ contrat de Server Action touché, aucune requête ajoutée.
   `{connectionId, jobId}` **dès le 201** au lieu d'attendre `attendreFinSync`, puis que
   le client poll par connexion et dérive le palier via `machine-mfa.ts`. **Pourquoi
   différé** : ça change le contrat de l'action et touche le cœur de l'ingestion — hors
-  d'un lot démo-safe à J-2. **Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
-  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».
+  d'un lot démo-safe à J-2. ~~**Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
+  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».~~
+  **LEVÉ 2026-07-21** : `SYNC-MACHINE-INTERRUPTED1` est SUSPENDUE (prémisse réfutée,
+  cf. ci-dessous) et ne bloque plus ce chantier. Ce qui reste vrai et à traiter DANS ce
+  lot : le loader devra dériver son palier d'une union de statuts **OUVERTE**, avec un
+  repli explicite pour l'inconnu (le serveur, lui, le rend déjà `INCOMPLET`).
   **Déclencheur** : post-démo, après l'anomalie cooldown.
 
 - [ ] **WIDGET-REJET-TRANSPORT1 (P2, effort ~1 j, 2026-07-20) — un rejet réseau sort de
@@ -114,36 +118,43 @@ contrat de Server Action touché, aucune requête ajoutée.
   **Déclencheur** : première finalisation partielle observée en usage réel, ou ton
   arbitrage produit.
 
-- [ ] **SYNC-MACHINE-INTERRUPTED1 (P1, effort ~0,5 j, 2026-07-20) — `INTERRUPTED` non
-  mappé dans `machine-mfa.ts`.** Statut émis par le backend mais ABSENT de l'enum
-  OpenAPI : il retombe sur le repli « statut inconnu → initialisation », donc
-  `pollingActif` reste vrai et le polling tourne jusqu'au plafond `MAX_POLLS`. Sans
-  conséquence de sécurité (la vérité reste serveur) mais c'est exactement la frustration
-  que ce chantier supprime. **Déclencheur** : bloquant pour SYNC-LOADER-ETAPES1 ; à
-  corriger avant tout loader qui réutilise la machine.
-  > ⚠️ **RE-LOCALISÉE 2026-07-21 (audit trail, règle 6).** Cette entrée désignait
-  > `machine-mfa.ts` comme lieu du défaut : **c'est faux pour le gel observé aujourd'hui**.
-  > `machine-mfa.ts` n'est monté par AUCUN composant (cf. CODE-MORT-MFA1) — un statut
-  > non mappé y est donc sans effet runtime. Le gel réel est sur le **chemin ACTIF** :
-  > `attendreFinSync` (`orchestration.ts:594`, appelée en `:817` et `:827`), qui ne
-  > connaît que `COMPLETED` (`:618`) et `FAILED` (`:635`) comme terminaux et poursuit le
-  > polling jusqu'au plafond sur tout autre statut. Le lot `fix/sync-machine-interrupted`
-  > a été réorienté en conséquence. La correction devra viser `attendreFinSync` ; le
-  > mapping de `machine-mfa.ts` ne devient dû qu'avec SYNC-LOADER-ETAPES1.
-  >
-  > ⚠️ **RÉSERVE SUR LA PRÉMISSE — à vérifier au RUNTIME avant d'implémenter.** L'entrée
-  > affirme qu'`INTERRUPTED` est « émis par le backend ». Deux faits la contredisent :
-  > (a) **0 occurrence** de `INTERRUPTED` dans tout `src/` ; (b) la vérification runtime
-  > de la **PR #202 (2026-07-13)** avait conclu que ce statut **n'existe nulle part** —
-  > ni dans `docs/documentation_api.md` (§ Sync Engine), ni dans `omni-fi-core` (Django),
-  > ni au runtime — le statut réellement observé étant `RETRIEVING`, et le gel réel venant
-  > d'un job **LONG** (scrape > plafond de polling), pas d'un job « interrompu ». Cette
-  > entrée-ci (2026-07-20) réaffirme donc une prémisse déjà réfutée 7 jours plus tôt.
-  > Ce n'est pas une réfutation définitive — l'enum amont **DÉRIVE** (`SCRAPING` côté
-  > Django vs `RETRIEVING` côté API) et le checkout `omni-fi-core` local est périmé — mais
-  > **la prémisse doit être re-prouvée au runtime avant la première ligne de code**, sous
-  > peine d'ajouter du mapping pour une valeur inexistante (exactement le piège de #202).
-  > Non tranché ici : arbitrage Etienne requis.
+- [ ] **SYNC-MACHINE-INTERRUPTED1 — 🚫 SUSPENDUE (prémisse RÉFUTÉE, 2026-07-21).**
+  ~~P1, effort ~0,5 j, 2026-07-20~~ → **dé-priorisée : ni P1, ni bloquant démo, ni
+  bloquant `SYNC-LOADER-ETAPES1`.** **Action = NE RIEN CODER** : aucun mapping
+  d'`INTERRUPTED` ne doit être écrit sans **re-preuve runtime** préalable (statut
+  observé sur un job réel). Arbitrage Etienne 2026-07-21.
+  **Prémisse d'origine** (conservée pour l'audit trail) : « `INTERRUPTED` non mappé dans
+  `machine-mfa.ts` — statut émis par le backend mais absent de l'enum OpenAPI ; il retombe
+  sur le repli “statut inconnu → initialisation”, `pollingActif` reste vrai, le polling
+  tourne jusqu'au plafond `MAX_POLLS` → le loader fige sur “Initialisation…”. »
+  **Pourquoi elle est réfutée — quatre preuves convergentes :**
+  1. **Le chemin actif absorbe DÉJÀ tout statut inconnu.** `orchestration.ts:538-543` :
+     « un statut INCONNU n'est donc ni terminal ni MFA → il est poll jusqu'au plafond,
+     puis **rendu INCOMPLET** (jamais assimilé à un succès, jamais à un échec dur) ».
+     Même SI `INTERRUPTED` existait, il ne figerait rien : il sortirait en `INCOMPLET`
+     (`:640-644`), état honnête qui ingère la lecture partielle. Le mode de défaillance
+     décrit (« gel sur Initialisation… ») **ne peut pas se produire sur le chemin actif**.
+  2. **Le lieu désigné est hors runtime.** `machine-mfa.ts` n'est monté par AUCUN
+     composant (cf. CODE-MORT-MFA1) : le repli « inconnu → initialisation » qu'accuse
+     l'entrée n'est exécuté par personne aujourd'hui.
+  3. **Constat prod contradictoire.** `orchestration.ts:640-644` documente le vrai
+     incident du **2026-07-13** : un scrape resté en **`RETRIEVING` > 6 min** (3× le
+     plafond), 67 transactions lisibles pendant qu'il courait. Le gel réel vient d'un job
+     **LONG**, pas d'un job « interrompu ».
+  4. **Le statut est introuvable.** **0 occurrence** d'`INTERRUPTED` dans tout `src/` ; et
+     la vérification runtime de la **PR #202 (2026-07-13)** l'avait déjà cherché sans le
+     trouver — ni dans `docs/documentation_api.md` (§ Sync Engine), ni dans `omni-fi-core`
+     (Django), ni au runtime. L'entrée (2026-07-20) réaffirmait donc une prémisse réfutée
+     une semaine plus tôt.
+  **Seule nuance conservée** : on ne prouve pas une inexistence *future*. L'enum amont
+  **DÉRIVE** (`SCRAPING` côté Django vs `RETRIEVING` côté API, `orchestration.ts:538-539`)
+  et le checkout `omni-fi-core` local est périmé. Mais l'union est **OUVERTE** et le repli
+  `INCOMPLET` est gracieux : si `INTERRUPTED` apparaissait un jour, le produit dégraderait
+  proprement — il n'y a **rien à faire par anticipation**.
+  **Réouverture** (le seul déclencheur) : observation d'un `INTERRUPTED` réel dans un log
+  de job (`evt: "omnifi_sync_incomplet"`, champ `dernierStatut`). À ce moment-là seulement,
+  re-qualifier et chiffrer. Le mapping de `machine-mfa.ts` reste, lui, rattaché à
+  `SYNC-LOADER-ETAPES1` — et ne le bloque pas.
 
 ### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
 
