@@ -29,10 +29,20 @@
  * en amont par les schémas zod de `insights/validation.ts`, et re-bornées défensivement
  * ici (défense en profondeur : un appelant interne ne doit pas pouvoir contourner).
  */
-import { and, eq, gte, lt, sql } from "drizzle-orm";
-import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import { and, eq, gt, gte, lt, sql } from "drizzle-orm";
+import {
+  alias as aliasTable,
+  unionAll,
+  type PgDatabase,
+  type PgQueryResultHKT,
+} from "drizzle-orm/pg-core";
 
-import { bankAccounts, transactionsCache } from "@/server/db/schema";
+import {
+  bankAccounts,
+  categories,
+  transactionCategorizations,
+  transactionsCache,
+} from "@/server/db/schema";
 import {
   caseCategorieFr,
   estLibelleNonCategorise,
@@ -47,6 +57,7 @@ import type {
   DirectionVendors,
   GranulariteCashflow,
   LigneVendor,
+  OrigineCategorie,
   PartCategorie,
   PointCashflow,
   RepartitionCategories,
@@ -272,39 +283,363 @@ export async function vendorsParConcentration(
 }
 
 /**
+ * Niveau de la hiérarchie TYGR (`categories.parent_id`) porté par l'axe (décision D-e).
+ * `feuille` = la catégorie telle que saisie sur le split ; `nature` = sa racine
+ * (« Loyer » remonte sous « Charges d'exploitation »).
+ *
+ * ⚠️ Le paramètre existe DÈS MAINTENANT et n'est PAS exposé à l'UI (Q3 tranché : pas de
+ * sélecteur en v1) — il est là pour que la matrice catégorie × mois consomme le MÊME
+ * fragment sans le forker (D-a). Les deux valeurs sont testées : un paramètre non prouvé
+ * serait du code mort qui casserait au premier usage réel.
+ */
+export type NiveauAxeCategorie = "feuille" | "nature";
+
+/**
+ * ═══ AXE « CATÉGORIE EFFECTIVE » — définition SQL UNIQUE et PARTAGÉE (décision D-a) ═══
+ *
+ * Renvoie une SOUS-REQUÊTE (aliasée `axe`) où **une ligne = une part de flux imputée à
+ * une catégorie**, prête à être agrégée par n'importe quel appelant : le donut groupe
+ * par (devise, catégorie), la future matrice groupera par (catégorie, mois). Il ne doit
+ * JAMAIS exister deux définitions de « catégorie effective » — deux écrans se
+ * contrediraient sur la même donnée, le pire défaut possible sur un outil de trésorerie.
+ *
+ * ── Pourquoi un UNION ALL à deux branches (décision D-b, Q5) ─────────────────────────
+ * `transaction_categorizations` est une table de SPLITS AVEC MONTANTS et son invariant
+ * est une INÉGALITÉ : `Σ splits ≤ |montant transaction|` (schema.ts:598-602). L'état
+ * PARTIEL est donc LÉGAL (une sortie de 1 200 ventilée à 500 laisse 700 non imputés).
+ * Sommer les seuls splits afficherait 500 pour une période où 1 200 sont réellement
+ * sortis — un donut dont les parts ne somment pas au flux réel est un défaut de
+ * CORRECTION, pas d'ergonomie (il divergerait du KPI « Sorties » du dashboard, sur le
+ * même écran, sans aucun message). D'où :
+ *
+ *   branche 1 « splits » — chaque split par sa catégorie TYGR        → origine TYGR
+ *   branche 2 « reste »  — `|montant| − Σ splits`, imputé EXPLICITEMENT à la catégorie
+ *                          bancaire (`caseCategorieFr(primary_category)`)
+ *                                                        → origine AMONT (ou AUCUNE)
+ *
+ * Le reliquat n'est JAMAIS abandonné, et JAMAIS versé d'office à « Non catégorisé » : il
+ * garde l'étiquette de la banque (Q5). L'exhaustivité `Σ parts(devise) = Σ |montant|
+ * (devise) = KPI Sorties(devise)` devient un invariant TESTÉ (I1), pas un espoir.
+ *
+ * ── Cascade binaire, pas ternaire (décision D-c) ─────────────────────────────────────
+ * « manuel > règle > banque » décrit une priorité qui n'existe pas À LA LECTURE : le
+ * modèle garantit à l'ÉCRITURE qu'une transaction ne porte jamais MANUAL et RULE
+ * simultanément (le moteur de règles skippe sous verrou toute transaction déjà ventilée,
+ * `regles-categorisation.ts:514-524` ; l'édition manuelle purge puis réinsère,
+ * `categorisation.ts:379-414`). La cascade réelle est donc `splits > primary_category`
+ * — un CASE à trois niveaux serait du code mort. La garantie restant CONVENTIONNELLE
+ * (`ajouterSplit` accepte `source` en paramètre libre), le tri de départage
+ * `(source='MANUAL') desc` est posé PAR PRUDENCE, sans que le résultat en dépende.
+ *
+ * ── Isolation (§6 du plan) — ne RIEN retirer ici ─────────────────────────────────────
+ * La branche splits est DOUBLEMENT bornée, délibérément :
+ *   1. sa propre policy RLS `account_scope` (migration 0017), un prédicat EXISTS vers
+ *      `transactions_cache` qui hérite récursivement du scope entité ET du view_filter ;
+ *   2. le `innerJoin(bankAccounts)` exigé par ENTITY-READ-JOIN1.
+ * Ne PAS supprimer la jointure sous prétexte que la policy existe : elle porte aussi la
+ * CORRECTION de l'agrégat (une transaction hors périmètre ne doit pas peser dans le
+ * total), pas seulement l'isolation. `categories` n'a que `tenant_isolation`, sans risque
+ * ici : la jointure est en cardinalité 1:1 garantie (`category_id` NOT NULL + FK
+ * composite `(category_id, workspace_id)` sur une PK unique) — elle ne peut ni filtrer ni
+ * dupliquer de lignes.
+ *
+ * ── Tombstones (invariant I5) ────────────────────────────────────────────────────────
+ * Les splits ne sont PAS supprimés quand leur transaction est tombstonée (append-only,
+ * aucune cascade) : un split SURVIT à son tombstone. `is_removed = false` est donc posé
+ * sur les DEUX branches — un oubli sur une seule ferait RÉAPPARAÎTRE une transaction
+ * effacée par sa ventilation, et serait invisible au lint, au typecheck et au build.
+ *
+ * @param params.sens   `inflow` (Credit) / `outflow` (Debit) — littéral figé, jamais interpolé.
+ * @param params.from   borne basse INCLUSIVE (date comptable Maurice « YYYY-MM-DD »).
+ * @param params.to     borne haute INCLUSIVE (rendue `< to + 1 jour` en SQL).
+ * @param params.niveau cf. {@link NiveauAxeCategorie} — défaut `feuille`.
+ * @param alias         alias SQL de la sous-requête (unique par requête).
+ */
+export function axeCategorieEffective(
+  tx: Tx,
+  params: {
+    sens: SensFlux;
+    from: string;
+    to: string;
+    niveau?: NiveauAxeCategorie;
+  },
+  alias = "axe",
+) {
+  const { sens, from, to } = params;
+  const niveau: NiveauAxeCategorie = params.niveau ?? "feuille";
+
+  // Filtre de sens : littéral FIGÉ (jamais l'entrée brute interpolée dans le SQL).
+  const filtreSens =
+    sens === "inflow"
+      ? eq(transactionsCache.creditDebit, "Credit")
+      : eq(transactionsCache.creditDebit, "Debit");
+
+  // Bornes de la fenêtre, communes aux deux branches (paramètres LIÉS ; borne haute
+  // inclusive rendue `< to + 1 jour` en SQL, convention de tout ce repository).
+  const dansLaFenetre = [
+    gte(transactionsCache.transactionDate, from),
+    lt(transactionsCache.transactionDate, sql`(${to}::date + interval '1 day')`),
+  ];
+
+  // Parent de la catégorie du split (hiérarchie à 2 niveaux `categories.parent_id`).
+  // LEFT JOIN systématique et SÛR : la FK est COMPOSITE `(parent_id, workspace_id) →
+  // categories(id, workspace_id)` sur une PK unique — au plus une ligne, donc il ne peut
+  // ni filtrer ni dupliquer, quel que soit le `niveau` demandé.
+  const parent = aliasTable(categories, "cat_parent");
+
+  // Au niveau `nature`, une catégorie RACINE (parent_id NULL) est sa propre nature —
+  // d'où le coalesce, qui évite de perdre les splits posés directement sur une racine.
+  const cleCategorie =
+    niveau === "nature"
+      ? sql`coalesce(${parent.id}, ${categories.id})`
+      : sql`${categories.id}`;
+  const libelleCategorie =
+    niveau === "nature"
+      ? sql`coalesce(${parent.name}, ${categories.name})`
+      : sql`${categories.name}`;
+
+  // ── Montant déjà ventilé, PAR TRANSACTION (consommé par les DEUX branches) ───────
+  // Table dérivée BORNÉE PAR LA PÉRIODE : sans le `where`, on scannerait tous les splits
+  // du workspace pour une fenêtre de 12 mois. Le bornage est SÛR (et non destructif) car
+  // la FK composite impose `split.transaction_date = transaction.transaction_date` — un
+  // split d'une transaction de la fenêtre est forcément dans la fenêtre.
+  const ventile = tx
+    .select({
+      transactionId: transactionCategorizations.transactionId,
+      transactionDate: transactionCategorizations.transactionDate,
+      montantVentile: sql<string>`sum(${transactionCategorizations.amount})`.as(
+        "montant_ventile",
+      ),
+    })
+    .from(transactionCategorizations)
+    .where(
+      and(
+        gte(transactionCategorizations.transactionDate, from),
+        lt(
+          transactionCategorizations.transactionDate,
+          sql`(${to}::date + interval '1 day')`,
+        ),
+      ),
+    )
+    .groupBy(
+      transactionCategorizations.transactionId,
+      transactionCategorizations.transactionDate,
+    )
+    .as("ventile");
+
+  // ── Garde « ventilation PÉRIMÉE » : Σ splits > |montant| ─────────────────────────
+  //
+  // L'invariant `Σ splits ≤ |montant|` n'est validé QU'À L'ÉCRITURE du split
+  // (`categorisation.ts`, sous `FOR UPDATE`) — RIEN ne le re-valide quand le montant
+  // RÉTRÉCIT ensuite. Or l'upsert de re-sync écrase `amount` (`ingestion.ts:207-224`,
+  // `set: { amount: … }`) et laisse délibérément les splits intacts : une
+  // pré-autorisation carte réglée plus bas, ou une correction amont, suffit à faire
+  // passer une transaction ventilée à 100 % en état SUR-VENTILÉ. Aucun bug d'écriture
+  // n'est nécessaire — le chemin est ouvert en fonctionnement normal.
+  //
+  // Sans cette garde, le donut MENTIRAIT : la branche splits émettrait la totalité des
+  // splits (1 200) pendant que le reliquat `|montant| − Σ splits` deviendrait NÉGATIF
+  // (−300) et serait avalé par le `> 0` de la branche reste. Mesuré sur la fixture de
+  // septembre : total 1 800 contre un KPI « Sorties » de 1 500 sur le MÊME écran, sans
+  // aucun message, et des pourcentages faux en cascade. C'est l'invariant I1 qui casse.
+  //
+  // ⚠️ Un `greatest(reliquat, 0)` NE RÉPARE RIEN : il borne le reliquat mais laisse la
+  // branche splits sur-émettre. Il donnerait l'illusion d'un correctif en passant la CI.
+  //
+  // Traitement retenu (arbitrage Etienne, 2026-07-21) : une ventilation qui décrit un
+  // montant qui n'existe plus n'est plus une information — elle est IGNORÉE, et la
+  // transaction est imputée entièrement à sa catégorie bancaire, comme si elle n'avait
+  // jamais été ventilée. Exact au centime, sans proportion ni arrondi à répartir. La
+  // ventilation reste INTACTE en base (aucune écriture ici) ; l'anomalie se VOIT à
+  // l'écran — la part bascule en « catégorie bancaire » — au lieu d'être masquée.
+  // La réparation à la SOURCE (réduire/invalider les splits quand un re-sync fait
+  // baisser le montant) est un chantier d'ÉCRITURE distinct : dette SPLIT-PERIME1.
+  const ventileValide = sql`(case
+    when coalesce(${ventile.montantVentile}, 0) > abs(${transactionsCache.amount})
+    then null
+    else coalesce(${ventile.montantVentile}, 0)
+  end)`;
+
+
+  // ── Branche 1 : la part VENTILÉE (splits TYGR) ──────────────────────────────────
+  const brancheSplits = tx
+    .select({
+      currency: sql<string>`${transactionsCache.currency}`.as("currency"),
+      origine: sql<OrigineCategorie>`'TYGR'::text`.as("origine"),
+      categorieId: sql<string | null>`${cleCategorie}`.as("categorie_id"),
+      categorie: sql<string>`${libelleCategorie}`.as("categorie"),
+      montant: sql<string>`${transactionCategorizations.amount}`.as("montant"),
+      txnId: sql<string>`${transactionsCache.id}`.as("txn_id"),
+      transactionDate: sql<string>`${transactionsCache.transactionDate}`.as(
+        "transaction_date",
+      ),
+    })
+    .from(transactionsCache)
+    // ENTITY-READ-JOIN1 — ceinture, EN PLUS de la policy account_scope (cf. en-tête).
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    // Jointure sur la PK COMPOSITE de la table partitionnée : (id, transaction_date).
+    .innerJoin(
+      transactionCategorizations,
+      and(
+        eq(transactionCategorizations.transactionId, transactionsCache.id),
+        eq(
+          transactionCategorizations.transactionDate,
+          transactionsCache.transactionDate,
+        ),
+      )!,
+    )
+    // FK composite scopée workspace : la catégorie appartient FORCÉMENT au même tenant.
+    .innerJoin(
+      categories,
+      and(
+        eq(categories.id, transactionCategorizations.categoryId),
+        eq(categories.workspaceId, transactionCategorizations.workspaceId),
+      )!,
+    )
+    .leftJoin(
+      parent,
+      and(
+        eq(parent.id, categories.parentId),
+        eq(parent.workspaceId, categories.workspaceId),
+      )!,
+    )
+    // Même table dérivée que la branche « reste » : c'est elle qui porte la garde de
+    // péremption. Jointure SÛRE (1 ligne au plus : la dérivée est groupée sur la PK).
+    .leftJoin(
+      ventile,
+      and(
+        eq(ventile.transactionId, transactionsCache.id),
+        eq(ventile.transactionDate, transactionsCache.transactionDate),
+      )!,
+    )
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        filtreSens,
+        ...dansLaFenetre,
+        // Ventilation PÉRIMÉE → aucun split n'est émis pour cette transaction ; la
+        // branche « reste » l'imputera intégralement à sa catégorie bancaire. Les deux
+        // branches lisent la MÊME expression : elles ne peuvent pas diverger (l'une
+        // émettant les splits pendant que l'autre émet le montant plein).
+        sql`${ventileValide} is not null`,
+      ),
+    )
+    // D-c : départage défensif MANUAL > RULE. Le résultat n'en dépend PAS (les deux
+    // sources ne coexistent jamais sur une transaction) — c'est une ceinture à coût nul
+    // contre un futur appelant d'`ajouterSplit` qui les mélangerait.
+    .orderBy(sql`(${transactionCategorizations.source} = 'MANUAL') desc`);
+
+  // Sous-requête intermédiaire : matérialise le libellé FR **une seule fois**. Réémettre
+  // `caseCategorieFr` (37 paramètres liés) à deux endroits du même SELECT le ferait
+  // renuméroter par Drizzle — le piège 42803 mesuré au Lot 0. Ici le CASE est calculé
+  // dans `r`, et la couche au-dessus ne manipule plus qu'un identifiant de colonne.
+  const resteBrut = tx
+    .select({
+      currency: sql<string>`${transactionsCache.currency}`.as("currency"),
+      labelFr: caseCategorieFr(transactionsCache.primaryCategory).as("label_fr"),
+      // `|montant| − Σ splits` : le reliquat NON imputé de cette transaction. `abs` est
+      // défensif (l'ingestion stocke des montants positifs, le sens vit sur
+      // `credit_debit`) — il garantit que le reliquat reste une magnitude positive même
+      // si un jour un montant signé entrait en base.
+      montant:
+        sql<string>`(abs(${transactionsCache.amount}) - coalesce(${ventileValide}, 0))`.as(
+          "montant",
+        ),
+      txnId: sql<string>`${transactionsCache.id}`.as("txn_id"),
+      transactionDate: sql<string>`${transactionsCache.transactionDate}`.as(
+        "transaction_date",
+      ),
+    })
+    .from(transactionsCache)
+    // ENTITY-READ-JOIN1 — identique à la branche 1 (aucune des deux ne s'en dispense).
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .leftJoin(
+      ventile,
+      and(
+        eq(ventile.transactionId, transactionsCache.id),
+        eq(ventile.transactionDate, transactionsCache.transactionDate),
+      )!,
+    )
+    .where(and(eq(transactionsCache.isRemoved, false), filtreSens, ...dansLaFenetre))
+    .as("r");
+
+  const brancheReste = tx
+    .select({
+      currency: sql<string>`${resteBrut.currency}`.as("currency"),
+      // AUCUNE (poste « Non catégorisé ») ⟺ la banque n'étiquette pas cette transaction.
+      // Le prédicat dérive de la MÊME constante que la branche `else` du CASE FR, pour
+      // que le drapeau et le tri ne puissent pas diverger du libellé.
+      origine: sql<OrigineCategorie>`(case when ${estLibelleNonCategorise(resteBrut.labelFr)} then 'AUCUNE' else 'AMONT' end)::text`.as(
+        "origine",
+      ),
+      // Pas d'id TYGR pour une catégorie bancaire — le type doit rester uuid pour que
+      // l'UNION ALL apparie la colonne de la branche 1.
+      categorieId: sql<string | null>`null::uuid`.as("categorie_id"),
+      categorie: sql<string>`${resteBrut.labelFr}`.as("categorie"),
+      montant: sql<string>`${resteBrut.montant}`.as("montant"),
+      txnId: sql<string>`${resteBrut.txnId}`.as("txn_id"),
+      transactionDate: sql<string>`${resteBrut.transactionDate}`.as("transaction_date"),
+    })
+    .from(resteBrut)
+    // Invariant I6 : `> 0` STRICT. Une transaction intégralement ventilée (COMPLET) ne
+    // produit AUCUNE ligne de reste — sinon le donut porterait des parts fantômes à 0,00.
+    .where(gt(resteBrut.montant, sql`0`));
+
+  // ⚠️ L'ORDRE des colonnes doit être IDENTIQUE dans les deux branches : un UNION ALL
+  // apparie PAR POSITION, pas par nom. Inverser `origine` et `categorie` (deux `text`)
+  // produirait un SQL parfaitement valide et des résultats FAUX — d'où le test qui
+  // asserte l'origine de chaque branche séparément.
+  return unionAll(brancheSplits, brancheReste).as(alias);
+}
+
+/**
  * Répartition par catégorie (camembert), par devise, sur la fenêtre [from, to] (bornes
  * INCLUSIVES, dates comptables Maurice "YYYY-MM-DD"). `sens` fige le côté agrégé :
  * `inflow` (Credit) ou `outflow` (Debit, défaut métier « analyse des dépenses »). PAS de
  * `both` (≠ vendors) : un donut mélangeant crédits et débits n'a pas de sens (types.ts).
  *
- * Une entrée `RepartitionDevise` par devise (JAMAIS d'addition cross-devise, règle 8) :
- *   - `total` / `nbTransactions` / `montantMoyen` (total/nb, L2) de la devise viennent de
- *     windows `over (partition by currency)` — pas d'addition JS (le JS ne fait QUE
- *     regrouper des chaînes déjà SQL).
- *   - `parts[]` = une catégorie chacune ; `montant` = `sum(amount)` (magnitude positive,
- *     le signe est porté par `credit_debit`, filtré). `part` = montant / total de SA
- *     devise (0..1, `nullif` anti-DIV/0). `montantPrecedent` = somme de la MÊME catégorie
- *     sur la fenêtre précédente (L4, « 0.00 » si absente).
+ * L'axe de groupement est la **catégorie EFFECTIVE** ({@link axeCategorieEffective},
+ * décisions D-a/D-b/D-c) : la ventilation de l'utilisateur (splits TYGR — règles ET
+ * saisie manuelle) prime sur l'étiquette de la banque, et le reliquat NON ventilé d'une
+ * transaction PARTIELLE reste imputé à la catégorie bancaire. Le donut montre donc enfin
+ * les catégories que l'utilisateur a créées, SANS jamais perdre un franc de flux :
+ * `Σ parts(devise) = Σ |montant|(devise) = KPI « Sorties »(devise)` (invariant I1).
  *
- * Catégorie = `primary_category` Omni-FI **TRADUITE EN FRANÇAIS DANS LE GROUP BY**
- * (Lot 0, `caseCategorieFr`) : le donut n'affiche jamais d'anglais OBIE. La traduction
- * étant MANY-TO-ONE (`income` + `revenue` → « Revenus »), elle DOIT rester dans la clé de
- * groupe — sinon deux secteurs homonymes, refusionnables seulement par une addition JS
- * (interdite, règle 8). NULL/''/sentinelles Omni-FI (`UNCLASSIFIED`, `Uncategorized`) et
- * clés non cartographiées collapsent en un seul poste « Non catégorisé »
- * (`estNonCategorise=true`), TOUJOURS trié en dernier (rendu neutre).
+ * Une entrée `RepartitionDevise` par devise (JAMAIS d'addition cross-devise, règle 8) :
+ *   - `total` de la devise vient d'une window `over (partition by currency)` ;
+ *     `nbTransactions`/`montantMoyen` d'une 2e requête (cf. plus bas, `count(distinct)`).
+ *     Aucune addition JS (le JS ne fait QUE regrouper des chaînes déjà SQL).
+ *   - `parts[]` = une (origine, catégorie) chacune ; `montant` = `sum(montant)` de l'axe
+ *     (magnitude positive). `part` = montant / total de SA devise (0..1, `nullif`
+ *     anti-DIV/0). `montantPrecedent` = somme de la MÊME clé sur la fenêtre précédente
+ *     (L4, « 0.00 » si absente).
+ *
+ * Les libellés bancaires sont TRADUITS EN FRANÇAIS DANS LA CLÉ DE GROUPE (Lot 0,
+ * `caseCategorieFr`, appliqué dans l'axe) : le donut n'affiche jamais d'anglais OBIE. La
+ * traduction étant MANY-TO-ONE (`income` + `revenue` → « Revenus »), elle DOIT rester
+ * dans la clé — sinon deux secteurs homonymes, refusionnables seulement par une addition
+ * JS (interdite, règle 8). NULL/''/sentinelles Omni-FI et clés hors catalogue collapsent
+ * en un poste « Non catégorisé » (`origine="AUCUNE"`, `estNonCategorise=true`).
+ *
+ * ⚠️ La clé de groupe est `(devise, origine, categorieId, libellé)`, JAMAIS le libellé
+ * seul : une catégorie TYGR « Loyer » et une catégorie bancaire « Loyer » sont deux
+ * espaces de noms distincts et doivent rester deux parts. `categorieId` y entre en plus
+ * du libellé pour départager deux catégories TYGR homonymes de branches différentes.
+ *
  * Tri : devises par code croissant ; au sein d'une devise, catégorisées d'abord (montant
  * décroissant), « Non catégorisé » repoussé en fin.
  *
- * L4 (variation) : si `fromPrecedent`/`toPrecedent` sont fournis, une 2e requête SÉPARÉE
+ * L4 (variation) : si `fromPrecedent`/`toPrecedent` sont fournis, une requête SÉPARÉE
  * (jamais un FILTER sur la principale — la requête du donut reste inchangée) agrège la
- * fenêtre précédente ; le merge par clé (devise, catégorie) est une simple recopie de
- * chaîne SQL côté JS (aucune addition de montant, règle 8).
+ * fenêtre précédente SUR LE MÊME AXE ; le merge par clé est une simple recopie de chaîne
+ * SQL côté JS (aucune addition de montant, règle 8). L'axe identique est la CONDITION de
+ * la variation : deux clés de groupe différentes feraient retomber tout `montantPrecedent`
+ * à « 0.00 » (faux « nouveau » sur chaque part).
  *
- * Sécurité : `sens` pilote un `filter (where …)` à littéral FIGÉ (jamais l'entrée
- * interpolée) ; dates en paramètres liés + re-validées ici (défense en profondeur).
- * ENTITY-READ-JOIN1 : jointure `bank_accounts` obligatoire (héritage scope entité) — sur
- * les DEUX requêtes (courante + précédente).
+ * Sécurité : `sens` pilote des littéraux FIGÉS (jamais l'entrée interpolée) ; dates en
+ * paramètres liés + re-validées ici (défense en profondeur). ENTITY-READ-JOIN1 : jointure
+ * `bank_accounts` obligatoire sur CHAQUE branche de CHAQUE requête (héritage scope
+ * entité) — portée par l'axe partagé.
  */
 export async function repartitionParCategorie(
   tx: Tx,
@@ -350,160 +685,120 @@ export async function repartitionParCategorie(
     }
   }
 
-  // Filtre de sens : littéral FIGÉ (Credit pour inflow, Debit pour outflow) — jamais
-  // l'entrée brute interpolée dans le SQL.
-  const filtreSens =
-    sens === "inflow"
-      ? sql`${transactionsCache.creditDebit} = 'Credit'`
-      : sql`${transactionsCache.creditDebit} = 'Debit'`;
+  // Q3 tranché : le niveau hiérarchique est FIGÉ à la feuille et n'est PAS exposé à
+  // l'UI en v1 (« Loyer » ne doit pas être écrasé sous « Charges d'exploitation » —
+  // c'est précisément la granularité que l'utilisateur cherche à voir). Le paramètre
+  // existe sur l'axe pour la matrice catégorie × mois, pas pour ce donut.
+  const niveau: NiveauAxeCategorie = "feuille";
 
-  // Clé de regroupement ET label d'affichage : le LIBELLÉ FRANÇAIS (Lot 0, D-d du plan).
-  //
-  // Le donut groupait sur `primary_category` brute et affichait donc l'anglais OBIE
-  // (« Utilities », « Housing ») — seul écran de l'app à le faire, alors que le
-  // dictionnaire FR existe et sert partout ailleurs (`categorieFr`, cf. /transactions et
-  // le dashboard). La traduction entre ICI, dans le GROUP BY, et NON au rendu :
-  // `CORRESPONDANCE_FR` est MANY-TO-ONE (`income` + `revenue` → « Revenus »), donc
-  // grouper sur la clé OBIE puis traduire à l'affichage produirait deux secteurs
-  // homonymes, refusionnables seulement par une addition JS de montants (interdite,
-  // règle 8). En groupant sur le libellé FR, la fusion se fait dans le `sum()`.
-  //
-  // Le CASE est GÉNÉRÉ depuis `CORRESPONDANCE_FR` (source unique, cf. `caseCategorieFr`).
-  // Il ABSORBE l'ancien prédicat `estNonCat` : NULL, chaîne vide et sentinelles Omni-FI
-  // (« UNCLASSIFIED »/« Uncategorized ») ne sont pas au dictionnaire → branche `else` →
-  // « Non catégorisé ». Comportement identique à l'existant (retour Etienne 2026-07-08 :
-  // aucune sentinelle anglaise ne doit fuir dans l'UI), sans second prédicat à maintenir.
-  //
-  // ⚠️ Écart ASSUMÉ avec l'invariant I8 du plan (qui prévoyait de conserver distincte une
-  // clé OBIE hors catalogue) : le brief d'implémentation tranche pour le repli
-  // « Non catégorisé », aligné sur `categorieFr` et sur le reste de l'app — sans quoi de
-  // l'anglais non cartographié resterait à l'écran, précisément le défaut corrigé ici.
-  // Conséquence à connaître (dette OBIE-CATALOG1, TODOS) : le catalogue est figé à la
-  // main et l'amont émet librement — une catégorie amont NOUVELLE grossira le poste
-  // « Non catégorisé » au lieu d'apparaître, silencieusement.
-  //
-  // ⚠️ POURQUOI UNE SOUS-REQUÊTE et pas le CASE inline (piège 42803, mesuré) : Drizzle
-  // réémet une expression `sql` À CHAQUE emplacement où elle apparaît, en RENUMÉROTANT
-  // ses paramètres liés. Le même CASE sortait donc `$1..$37` dans le SELECT et
-  // `$79..$115` dans le GROUP BY — deux textes différents pour Postgres, qui refusait la
-  // requête : « column primary_category must appear in the GROUP BY clause » (42803).
-  // Ce n'est PAS l'usage de `sql.raw` qui déclenche le piège (l'hypothèse du plan), mais
-  // la répétition d'une expression PARAMÉTRÉE entre SELECT / GROUP BY / ORDER BY.
-  // La sous-requête calcule le libellé UNE fois ; l'agrégat externe ne manipule plus
-  // qu'un identifiant de colonne (`t.label_fr`), donc plus rien à faire coïncider.
-  //
-  // La jointure `bank_accounts` (ENTITY-READ-JOIN1) reste À L'INTÉRIEUR : le périmètre
-  // entité est hérité là où les lignes sont lues, et les policies RLS s'appliquent aux
-  // tables de la sous-requête exactement comme avant — aucun nouveau chemin de lecture.
-  const sousRequeteCourante = tx
-    .select({
-      labelFr: caseCategorieFr(transactionsCache.primaryCategory).as("label_fr"),
-      currency: transactionsCache.currency,
-      amount: transactionsCache.amount,
-    })
-    .from(transactionsCache)
-    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
-    .where(
-      and(
-        eq(transactionsCache.isRemoved, false),
-        filtreSens,
-        gte(transactionsCache.transactionDate, from),
-        // Borne haute INCLUSIVE sur `to` : < to + 1 jour (calcul SQL).
-        lt(transactionsCache.transactionDate, sql`(${to}::date + interval '1 day')`),
-      ),
-    )
-    .as("t");
+  // Clé de merge L4 / d'identité d'une part : (devise, origine, catégorie). On préfère
+  // `categorieId` au libellé quand il existe — deux catégories TYGR homonymes de
+  // branches différentes restent alors distinctes, exactement comme dans le GROUP BY.
+  const cleMerge = (r: {
+    currency: string;
+    origine: OrigineCategorie;
+    categorieId: string | null;
+    categorie: string;
+  }) => `${r.currency}|${r.origine}|${r.categorieId ?? r.categorie}`;
 
-  // Drapeau/tri « Non catégorisé » : dérivé de la MÊME constante que la branche `else`
-  // du CASE (cf. `estLibelleNonCategorise`), appliqué à la colonne déjà calculée.
-  const estNonCategoriseSql = estLibelleNonCategorise(sousRequeteCourante.labelFr);
+  // ── Axe partagé : la catégorie EFFECTIVE (splits TYGR > catégorie bancaire) ──────
+  // Toute la logique de cascade, de reste non ventilé, de traduction FR et d'isolation
+  // vit dans `axeCategorieEffective` — ce donut n'est plus qu'un AGRÉGAT par-dessus.
+  // Une instance d'axe par requête (alias SQL distincts) : les trois requêtes ci-dessous
+  // sont indépendantes, mais partagent EXACTEMENT la même définition d'axe.
+  const axe = axeCategorieEffective(tx, { sens, from, to, niveau }, "axe");
 
-  // ── L4 : période précédente (2e requête SÉPARÉE, jamais un FILTER sur la requête
-  // principale) ────────────────────────────────────────────────────────────────────
+  // ── L4 : période précédente (requête SÉPARÉE, jamais un FILTER sur la principale) ──
   // La requête courante (qui pilote tout le donut) reste INCHANGÉE : la « variation » ne
-  // peut donc pas casser les montants du camembert. On agrège ici (devise, catégorie,
-  // somme) sur la fenêtre précédente et on recopie la CHAÎNE SQL dans une Map — aucune
-  // addition de montant côté JS (règle 8). Catégorie absente avant → « 0.00 » (défaut).
+  // peut donc pas casser les montants du camembert. On agrège ici (devise, origine,
+  // catégorie, somme) sur la fenêtre précédente et on recopie la CHAÎNE SQL dans une Map
+  // — aucune addition de montant côté JS (règle 8). Clé absente avant → « 0.00 ».
   let montantsPrecedents: Map<string, string> | null = null;
   if (fromPrecedent !== undefined && toPrecedent !== undefined) {
-    // Même forme que la requête courante (sous-requête + agrégat externe) : le libellé FR
-    // est produit par le MÊME `caseCategorieFr`, donc les clés de merge `devise|label`
-    // coïncident exactement — condition de la variation L4.
-    const sousRequetePrec = tx
-      .select({
-        labelFr: caseCategorieFr(transactionsCache.primaryCategory).as("label_fr"),
-        currency: transactionsCache.currency,
-        amount: transactionsCache.amount,
-      })
-      .from(transactionsCache)
-      // ENTITY-READ-JOIN1 : même jointure que la requête courante (héritage scope entité).
-      .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
-      .where(
-        and(
-          eq(transactionsCache.isRemoved, false),
-          filtreSens,
-          gte(transactionsCache.transactionDate, fromPrecedent),
-          lt(
-            transactionsCache.transactionDate,
-            sql`(${toPrecedent}::date + interval '1 day')`,
-          ),
-        ),
-      )
-      .as("tp");
+    // MÊME axe, MÊME niveau : c'est la condition de la variation. Un axe qui divergerait
+    // (ne serait-ce que par le niveau hiérarchique) ferait retomber tous les
+    // `montantPrecedent` à « 0.00 », affichant un faux « nouveau » sur chaque part.
+    const axePrec = axeCategorieEffective(
+      tx,
+      { sens, from: fromPrecedent, to: toPrecedent, niveau },
+      "axe_prec",
+    );
 
     const lignesPrec = await tx
       .select({
-        categorie: sousRequetePrec.labelFr,
-        currency: sousRequetePrec.currency,
-        montant: sql<string>`sum(${sousRequetePrec.amount})::numeric(15,2)::text`,
+        currency: axePrec.currency,
+        origine: axePrec.origine,
+        categorieId: axePrec.categorieId,
+        categorie: axePrec.categorie,
+        montant: sql<string>`sum(${axePrec.montant})::numeric(15,2)::text`,
       })
-      .from(sousRequetePrec)
-      // Fusion many-to-one EN SQL : deux clés OBIE synonymes tombent dans le même `sum()`.
-      .groupBy(sousRequetePrec.labelFr, sousRequetePrec.currency);
+      .from(axePrec)
+      .groupBy(
+        axePrec.currency,
+        axePrec.origine,
+        axePrec.categorieId,
+        axePrec.categorie,
+      );
     montantsPrecedents = new Map(
-      lignesPrec.map((r) => [`${r.currency}|${r.categorie}`, r.montant]),
+      lignesPrec.map((r) => [cleMerge(r), r.montant]),
     );
   }
 
-  // Agrégat externe : ne manipule plus que les colonnes de la sous-requête (`t.label_fr`,
-  // `t.currency`, `t.amount`). Le filtrage, la jointure de périmètre et la traduction ont
-  // déjà eu lieu à l'intérieur — les windows et le GROUP BY sont inchangés par ailleurs.
+  // ── Les parts du donut : un agrégat par (devise, origine, catégorie) ──────────────
   const lignes = await tx
     .select({
-      // Label domaine : catégorie Omni-FI TRADUITE en FR, repli "Non catégorisé".
-      categorie: sousRequeteCourante.labelFr,
-      estNonCategorise: estNonCategoriseSql,
-      currency: sousRequeteCourante.currency,
-      montant: sql<string>`sum(${sousRequeteCourante.amount})::numeric(15,2)::text`,
-      // part = montant catégorie / total devise ; nullif anti-DIV/0 (total nul → "0").
+      categorie: axe.categorie,
+      origine: axe.origine,
+      categorieId: axe.categorieId,
+      currency: axe.currency,
+      montant: sql<string>`sum(${axe.montant})::numeric(15,2)::text`,
+      // part = montant de la part / total devise ; nullif anti-DIV/0 (total nul → "0").
       part: sql<string>`coalesce(
-        (sum(${sousRequeteCourante.amount})
-          / nullif(sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency}), 0)
+        (sum(${axe.montant})
+          / nullif(sum(sum(${axe.montant})) over (partition by ${axe.currency}), 0)
         )::text, '0')`,
-      nbTransactions: sql<number>`count(*)::int`,
-      // Total & nb de LA devise via window — récupérés tels quels côté JS (aucune
-      // addition JS de montants, règle 8). ::numeric(15,2) fige l'échelle (2 décimales).
-      totalDevise: sql<string>`(sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency}))::numeric(15,2)::text`,
-      nbTransactionsDevise: sql<number>`(sum(count(*)) over (partition by ${sousRequeteCourante.currency}))::int`,
-      // L2 — montant moyen par opération de LA devise : total / nb (EN SQL, règle 8).
-      // nullif anti-DIV/0 (nb nul impossible ici mais défensif) ; coalesce fige "0.00".
-      montantMoyenDevise: sql<string>`coalesce(
-        (sum(sum(${sousRequeteCourante.amount})) over (partition by ${sousRequeteCourante.currency})
-          / nullif(sum(count(*)) over (partition by ${sousRequeteCourante.currency}), 0)
-        )::numeric(15,2), 0)::numeric(15,2)::text`,
+      // D-f : transactions DISTINCTES, pas les lignes agrégées. Une transaction ventilée
+      // sur 3 catégories compte 1 dans chacune, jamais 3 — sinon le nombre d'opérations
+      // enflerait avec le niveau de détail de la ventilation.
+      nbTransactions: sql<number>`count(distinct ${axe.txnId})::int`,
+      // Total de LA devise via window — récupéré tel quel côté JS (aucune addition JS de
+      // montants, règle 8). ::numeric(15,2) fige l'échelle (2 décimales).
+      totalDevise: sql<string>`(sum(sum(${axe.montant})) over (partition by ${axe.currency}))::numeric(15,2)::text`,
     })
-    .from(sousRequeteCourante)
-    // Groupement sur le LIBELLÉ FR : deux clés OBIE synonymes (`income`/`revenue`)
-    // fusionnent ici, dans le `sum()`, et ressortent en UN seul secteur.
-    .groupBy(sousRequeteCourante.labelFr, sousRequeteCourante.currency)
+    .from(axe)
+    // Clé de groupe COMPLÈTE (cf. `cleMerge`) : l'origine en fait partie — une catégorie
+    // TYGR « Loyer » et une catégorie bancaire « Loyer » restent DEUX parts distinctes.
+    .groupBy(axe.currency, axe.origine, axe.categorieId, axe.categorie)
     // Devise croissante (regroupement JS contigu), puis « Non catégorisé » en fin
     // (false trié avant true), puis montant décroissant, puis label (stable).
     .orderBy(
-      sousRequeteCourante.currency,
-      sql`${estNonCategoriseSql} asc`,
-      sql`sum(${sousRequeteCourante.amount}) desc`,
-      sousRequeteCourante.labelFr,
+      axe.currency,
+      sql`(${axe.origine} = 'AUCUNE') asc`,
+      sql`sum(${axe.montant}) desc`,
+      axe.categorie,
     );
+
+  // ── Cardinalité et moyenne PAR DEVISE (requête séparée — et pourquoi) ─────────────
+  // `count(distinct …)` est INTERDIT en fonction fenêtre par Postgres, et le raccourci
+  // `sum(count(distinct …)) over (partition by …)` serait FAUX : une transaction PARTIELLE
+  // apparaît dans deux groupes (sa ventilation TYGR + son reliquat bancaire) et serait
+  // comptée deux fois, gonflant `nbTransactions` et écrasant `montantMoyen`. On agrège
+  // donc la devise à part, où le `distinct` porte sur l'ENSEMBLE de ses lignes.
+  const axeTotaux = axeCategorieEffective(tx, { sens, from, to, niveau }, "axe_tot");
+  const totaux = await tx
+    .select({
+      currency: axeTotaux.currency,
+      nbTransactions: sql<number>`count(distinct ${axeTotaux.txnId})::int`,
+      // L2 — montant moyen par opération de LA devise : flux / nb transactions distinctes
+      // (EN SQL, règle 8). nullif anti-DIV/0 ; coalesce fige l'échelle à « 0.00 ».
+      montantMoyen: sql<string>`coalesce(
+        (sum(${axeTotaux.montant})
+          / nullif(count(distinct ${axeTotaux.txnId}), 0)
+        )::numeric(15,2), 0)::numeric(15,2)::text`,
+    })
+    .from(axeTotaux)
+    .groupBy(axeTotaux.currency);
+  const totauxParDevise = new Map(totaux.map((t) => [t.currency, t]));
 
   // Regroupement PAR DEVISE : les lignes sont déjà triées par currency (contiguës) — on
   // ne fait qu'assembler des chaînes SQL, jamais additionner un montant côté JS.
@@ -511,26 +806,32 @@ export async function repartitionParCategorie(
   let courante: RepartitionDevise | undefined;
   for (const r of lignes) {
     if (!courante || courante.currency !== r.currency) {
+      const total = totauxParDevise.get(r.currency);
       courante = {
         currency: r.currency,
         total: r.totalDevise,
-        nbTransactions: r.nbTransactionsDevise,
-        montantMoyen: r.montantMoyenDevise,
+        // Défensif : les deux requêtes portent le MÊME filtre, donc la devise est
+        // toujours présente des deux côtés — on ne fabrique pas de donnée si elle manque.
+        nbTransactions: total?.nbTransactions ?? 0,
+        montantMoyen: total?.montantMoyen ?? "0.00",
         parts: [],
       };
       devises.push(courante);
     }
     const part: PartCategorie = {
       categorie: r.categorie,
-      estNonCategorise: r.estNonCategorise,
+      // Le drapeau et le tri dérivent de la MÊME source (`origine`) : ils ne peuvent
+      // pas diverger. AUCUNE ⟺ la banque n'étiquette pas, et rien n'a été ventilé.
+      estNonCategorise: r.origine === "AUCUNE",
       montant: r.montant,
       part: r.part,
       nbTransactions: r.nbTransactions,
-      // L4 — recopie de la CHAÎNE agrégée de la fenêtre précédente (merge par clé
-      // devise|catégorie) ; « 0.00 » si la catégorie n'existait pas avant (ou pas de
+      origine: r.origine,
+      categorieId: r.categorieId,
+      // L4 — recopie de la CHAÎNE agrégée de la fenêtre précédente (merge par la MÊME
+      // clé que le GROUP BY) ; « 0.00 » si la clé n'existait pas avant (ou pas de
       // fenêtre précédente demandée).
-      montantPrecedent:
-        montantsPrecedents?.get(`${r.currency}|${r.categorie}`) ?? "0.00",
+      montantPrecedent: montantsPrecedents?.get(cleMerge(r)) ?? "0.00",
     };
     courante.parts.push(part);
   }

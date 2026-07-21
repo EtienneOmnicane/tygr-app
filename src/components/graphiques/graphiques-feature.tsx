@@ -29,6 +29,7 @@ import type { RepartitionCategories, SensFlux } from "@/server/insights/types";
 
 import { EmptyState } from "@/components/ui/states";
 
+import { MentionReanalyse } from "./mention-reanalyse";
 import { RepartitionDeviseCard } from "./repartition-devise-card";
 import type { ActionsGraphiques, SelectionGraphique } from "./types-graphiques";
 
@@ -221,6 +222,10 @@ export function GraphiquesFeature({
           {data.devises.map((devise) => (
             <RepartitionDeviseCard key={devise.currency} devise={devise} />
           ))}
+
+          {/* Rétroactivité des règles (D-g) : mention UNIQUE sous les donuts, pas une
+              par devise — c'est une propriété du moteur de règles, pas de la devise. */}
+          <MentionReanalyse />
         </div>
       )}
     </div>

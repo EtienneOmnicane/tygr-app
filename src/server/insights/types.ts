@@ -82,19 +82,50 @@ export interface ConcentrationVendors {
 export type SensFlux = "inflow" | "outflow";
 
 /**
+ * ESPACE DE NOMS d'une part du camembert — d'où vient la catégorie affichée (D2=c,
+ * `DECISION-categorysummary-amont-vs-interne.md`) :
+ *
+ *  - `TYGR`  : ventilation de l'utilisateur (split `transaction_categorizations`,
+ *              source MANUAL ou RULE) → « votre catégorie ». `categorieId` renseigné.
+ *  - `AMONT` : reliquat NON ventilé imputé à la catégorie bancaire Omni-FI
+ *              (`primary_category` traduite) → « catégorie bancaire ».
+ *  - `AUCUNE`: reliquat non ventilé d'une transaction que la banque n'étiquette pas
+ *              (NULL/''/sentinelle/hors catalogue) → poste « Non catégorisé ».
+ *
+ * CE N'EST PAS COSMÉTIQUE : « Loyer » créé par l'utilisateur et un « Loyer » venu de
+ * la banque sont DEUX clés distinctes. L'origine entre donc dans la clé de groupe ET
+ * dans la clé de merge L4 — sans elle, deux espaces de noms fusionneraient
+ * silencieusement dans un même secteur.
+ */
+export type OrigineCategorie = "TYGR" | "AMONT" | "AUCUNE";
+
+/**
  * Une part de camembert = une catégorie, DANS UNE devise. `montant` = somme des
  * montants (magnitude positive, le sens est fixé par le filtre) en CHAÎNE décimale
  * (agrégat SQL, règle 8). `part` = fraction du total de SA devise (0..1, chaîne).
- * `categorie` = `primary_category` Omni-FI ; si absente (NULL/'' ou sentinelle
- * `UNCLASSIFIED`/`Uncategorized`), libellé « Non catégorisé » et `estNonCategorise=true`
- * (rendu neutre, trié en dernier).
+ *
+ * `categorie` est la catégorie EFFECTIVE (cascade `splits > primary_category`, cf.
+ * `axeCategorieEffective`) : le nom de la catégorie TYGR pour la fraction ventilée, le
+ * libellé bancaire FR pour le reliquat. `estNonCategorise=true` (⟺ `origine="AUCUNE"`)
+ * marque le poste « Non catégorisé » — rendu neutre, trié en dernier.
  */
 export interface PartCategorie {
   categorie: string;
   estNonCategorise: boolean;
   montant: string; // sum(amount) — chaîne décimale
   part: string; // fraction 0..1 du total de la devise — chaîne décimale
+  /**
+   * Nombre de transactions DISTINCTES contribuant à cette part (D-f) — PAS le nombre
+   * de lignes agrégées : une transaction ventilée sur 3 catégories compte 1 dans
+   * chacune, jamais 3. Les cardinalités des parts d'une devise ne s'additionnent donc
+   * pas au `nbTransactions` de la devise (une transaction PARTIELLE contribue à la
+   * fois à sa part TYGR et au reliquat bancaire).
+   */
   nbTransactions: number;
+  /** Espace de noms de la clé — cf. {@link OrigineCategorie}. */
+  origine: OrigineCategorie;
+  /** `categories.id` si `origine="TYGR"`, sinon NULL (la banque n'a pas d'id TYGR). */
+  categorieId: string | null;
   /**
    * Somme de la MÊME catégorie sur la fenêtre PRÉCÉDENTE (L4), CHAÎNE décimale (agrégat
    * SQL). « 0.00 » si la catégorie n'existait pas avant, ou si aucune fenêtre précédente
@@ -111,6 +142,11 @@ export interface PartCategorie {
 export interface RepartitionDevise {
   currency: string;
   total: string; // total mono-devise (chaîne décimale)
+  /**
+   * Transactions DISTINCTES de la devise (D-f) — jamais la somme des `nbTransactions`
+   * des parts : une transaction PARTIELLE apparaît dans deux parts (sa ventilation et
+   * son reliquat) et ne doit être comptée qu'une fois ici.
+   */
   nbTransactions: number;
   /** Montant moyen par opération de la devise (total/nb, EN SQL, L2) — chaîne décimale. */
   montantMoyen: string;
