@@ -1,7 +1,13 @@
 # PLAN — ENTITY-PARTIES-SCOPE1 : périmètre étage 2 des tables de liaison party
 
 **Date** : 2026-07-21 · **Phase** : CONCEPTION SEULEMENT (règle 1) · **Branche** : `feat/entity-parties-scope`
-**Base** : `origin/main` @ `cacb9fe` · **Statut** : plan posé, **3 décisions EN ATTENTE d'arbitrage humain**
+**Base** : `origin/main` @ `cacb9fe` · **Statut** : **3 décisions TRANCHÉES le 2026-07-21** (§3)
+
+> **Arbitrage rendu** — D3 : L9 est *optionnel et différé*, conditionné à L7 vert → ne
+> contraint pas la forme. D1 : `account_scope` calquée sur 0017, forme directe. D2 : les deux
+> lectures directes de `parties` sont **ADMIN-only strict, prouvé** → **P2**, pas un correctif
+> règle 9 bloquant. Le lot se livre donc en **une seule migration sur `account_party_role`**,
+> `parties` traitée en P2 rattaché.
 
 > Aucune migration, aucun code applicatif dans ce lot. L'implémentation est une phase
 > séparée, sur ce plan approuvé.
@@ -240,35 +246,64 @@ Option B **en plus**, si et seulement si elle est gratuite — pas à la place.
 
 ---
 
-## 3. Décisions EN ATTENTE — à trancher par Etienne avant implémentation
+## 3. Décisions TRANCHÉES (2026-07-21)
 
-### D1 — Quelle policy sur `account_party_role` ?
-- **(a) `account_scope` transitive, forme directe** *(ma recommandation)* — couvre les 3 axes
-  (entité, party, compte) + `view_filter`, prédicat indexé.
-- (b) `entity_scope` transitive calquée sur 0009 — ce que demande le ticket ; couvre l'axe
-  entité seul, rate `view_filter` et `user_scopes` type COMPTE.
-- (c) Les deux (symétrie avec `bank_accounts`) — coût double, bénéfice nul tant que L9 n'a pas
-  retiré `entity_scope` ; **ajoute une intersection** (dette ENTITY×ACCOUNT-DOUBLE-AXIS déjà
-  ouverte, cf. 0016 bloc COEXISTENCE).
+### D3 — L9 ne contraint pas la forme ✅ *(tranchée en premier : elle conditionnait les autres)*
 
-### D2 — Étend-on le lot à `parties` ?
-`parties` est le vecteur du **vrai** risque (§1.3 : deux `.from(parties)` nus, données
-nominatives). Mais son prédicat est une chaîne EXISTS à 2 niveaux, plus coûteuse à prouver.
-- **(a) Oui, dans le même lot** *(ma recommandation)* — la classe se traite en une fois ;
-  c'est ce que le ticket demande (« le plan traite la CLASSE du défaut »).
-- (b) Non, lot séparé — livre plus vite, mais laisse le chemin le plus exposé ouvert.
+**L9 n'est pas planifié.** `PLAN-architecture-multi-tenant-omnicane.md:589` le qualifie
+d'« **(Optionnel, différé)** retirer `entity_scope`/`member_entity_scopes` si absorbés dans
+`account_scope`/`user_scopes` », avec pour **prérequis L7 vert** (`:587` — suite d'isolation
+IDOR + preuve runtime Vision restreinte, bloquante CI). Il est optionnel *et* conditionnel, et
+`:656` le reconditionne à « `account_scope` prouvé en prod ».
 
-⚠️ **Si (a) : point dur à valider en implémentation.** Une party dont **aucun** compte n'est
-dans le périmètre deviendrait invisible à un membre scopé. C'est le comportement voulu — mais
-il faut vérifier que `listerPropositionsPartyEntite` (ADMIN, Vision Globale) n'en dépend pas,
-et décider du sort des parties **sans aucun compte** (`account_party_role` vide) : elles
-disparaîtraient sous EXISTS nu. Le court-circuit « Vision Globale OR EXISTS » de 0017 les
-protège pour l'ADMIN ; **à prouver par test, pas à supposer.**
+**Conséquence** : poser `account_scope` sur `account_party_role` n'est pas une policy jetable —
+elle survit à L9 par construction (L9 retire `entity_scope`, pas `account_scope`). C'est même
+l'inverse : ce lot **alimente** la preuve que L9 attend. Aucune contrainte de forme.
+**Confiance 9/10.**
 
-### D3 — Ordre vs le lot L9 (retrait d'`entity_scope`)
-Le bloc COEXISTENCE de 0016 prévoit un lot L9 qui retire `entity_scope` de `bank_accounts` une
-fois `account_scope` prouvée en prod. Si L9 est proche, D1(b) et D1(c) sont à écarter d'office
-(on poserait une policy destinée à être retirée). **Question à Etienne : L9 est-il planifié ?**
+### D1 — `account_scope` calquée sur 0017, forme directe ✅
+
+Retenue : §2.1 forme (i), prédicat direct sur `bank_account_id`. Écartées : `entity_scope`
+calquée sur 0009 (rate `view_filter` + `user_scopes` type COMPTE), et le doublon des deux
+policies (coût double, et il **ajoute une intersection** — dette ENTITY×ACCOUNT-DOUBLE-AXIS
+déjà ouverte, cf. 0016 bloc COEXISTENCE).
+
+### D2 — `parties` est ADMIN-only strict → **P2**, hors de ce lot ✅
+
+Question posée : *un membre scopé non-ADMIN peut-il atteindre `entites.ts:605` et
+`user-scopes.ts:218` ?* **Réponse : NON. Chaîne prouvée, maillon par maillon :**
+
+1. `entites.ts:612` est derrière **deux** gardes indépendantes : `page.tsx:74`
+   `peutAdministrer(ctx.role)` et `entites.ts:600` `exigerAdmin(ctx)`.
+2. Les deux sont **ADMIN strict**, pas « ADMIN ou MANAGER » : `src/lib/permissions.ts:19-21`
+   (`role === "ADMIN"`) et `entites.ts:390-391` (`ctx.role !== "ADMIN"` → throw). *C'était le
+   point de rupture à écarter : la garde §12 anti-scope ne vise QUE les ADMIN — si
+   `peutAdministrer` avait accepté MANAGER, un MANAGER scopé serait passé et ç'aurait été une
+   fuite intra-groupe avérée. Il ne l'accepte pas.*
+3. `user-scopes.ts:226` est derrière `user-scopes.ts:182` `exigerAdmin(ctx)` — même garde.
+4. **Un ADMIN ne peut pas devenir scopé** : garde §12 sur les deux axes
+   (`entites.ts:1021-1024`, `user-scopes.ts:212-216`), et surtout **il n'existe aucun chemin
+   d'UPDATE de rôle dans l'application** — le seul write sur `workspaceMembers` est un INSERT
+   (`provisioning.ts:132-140`, `onConflictDoNothing`). Le scénario classique « membre scopé
+   **puis promu** ADMIN », qui contournerait une garde posée à l'octroi de scope, **n'est pas
+   atteignable**. La création atomique ADMIN + scopes est refusée et rollback
+   (`provisioning.ts:166`, `creerMembreAvecScopes`).
+
+**Résidu assumé, et pourquoi il ne requalifie pas** : un **ADMIN scopé hérité** peut exister en
+base — le code le documente lui-même (`page.tsx:97` : « états HÉRITÉS … posée avant la règle,
+ou par une insertion directe »). Pour lui, `entites.ts:612` surface les parties de tout le
+groupe. Ce n'est **pas une fuite** : c'est un ADMIN, il a le droit de tout voir ; son périmètre
+est un accident de données, pas une frontière de confidentialité. L'effet est une
+**incohérence d'affichage**, pas une divulgation. **Confiance 9/10.**
+
+> **Verdict D2 : P2 tranquille**, pas un correctif règle 9 bloquant. `parties` sort de ce lot.
+> À rattacher au chantier qui ouvrira une surface titulaire **non-ADMIN** — c'est le
+> déclencheur de résolution, pas une date. Entrée TODOS.md exigée à l'implémentation
+> (règle 9 : un P2 se raccroche à un chantier nommé, jamais « un jour »).
+
+**Ce que cela change au lot** : une seule table (`account_party_role`), prédicat direct, pas de
+chaîne EXISTS à 2 niveaux — donc le point dur « party sans aucun compte » (invisibilité sous
+EXISTS nu) **disparaît du périmètre**. Le lot est nettement plus simple à prouver.
 
 ---
 
@@ -297,8 +332,12 @@ Fichier : `tests/isolation/parties-scope-isolation.test.ts` (nouveau — ne pas 
 | 6 | Sentinelle UUID-nul (`accountScope` = ∅) | **0 ligne**, jamais « tout » | à prouver |
 | 7 | `view_filter` = `compteE` alors que le DROIT = `compteS` | 0 ligne (intersection vide) | à prouver |
 | 8 | `listerComptes` sous scope Sucrière | `compteE` **et** son titulaire absents | déjà vert (`dashboard-titulaire-isolation.test.ts:157`) — **régression guard** |
-| 9 | *(si D2=a)* SELECT DIRECT `parties` sous scope Sucrière | `partyE` invisible | **visible → ROUGE** ✅ |
-| 10 | *(si D2=a)* party **sans aucun compte**, Vision Globale ADMIN | reste visible (court-circuit) | à prouver — cf. point dur D2 |
+| 9 | **Contre-preuve D2** : SELECT DIRECT `parties` sous scope Sucrière | `partyE` **reste visible** | vert — **documente que `parties` est HORS de ce lot** |
+| 10 | **Garde d'ordre** (§5) : membre scopé **par PARTY** (ni compte, ni entité) voit ses comptes | 2 comptes | vert — rougit si l'ordre du résolveur est inversé |
+
+> Le cas 9 est une **contre-preuve volontaire**, pas un oubli : il fige noir sur blanc que
+> `parties` n'est pas couverte (décision D2 = P2). Sans lui, un lecteur du test suivant croira
+> que la classe entière est fermée. Il devra être **inversé** le jour où le P2 est traité.
 
 **Vérification par MUTATION — non négociable, c'est ce qui distingue une preuve d'un décor.**
 Une suite qui passe ne prouve rien tant qu'on n'a pas vu chaque assertion **échouer** pour la
@@ -348,6 +387,7 @@ posé »). La lecture voit l'état tenant brut. **Confiance 9/10.**
 **Contre-mesure exigée dans le lot d'implémentation** : un **test de non-régression d'ordre**
 — un membre scopé **par PARTY** (pas par compte, pas par entité) voit bien ses comptes après la
 migration. Ce test échoue si l'ordre est inversé un jour ; le commentaire, lui, n'échoue jamais.
+C'est le **cas 10** de la suite §4 : il est la seule défense mécanique de cet invariant.
 
 ---
 
@@ -355,15 +395,25 @@ migration. Ce test échoue si l'ordre est inversé un jour ; le commentaire, lui
 
 - Ne touche ni `tygr_app.sql` ni la liste blanche DELETE (append-only intact).
 - Ne pose **aucune** policy sur `user_scopes` (§2.3 — ce serait un défaut).
-- Ne retire pas `entity_scope` de `bank_accounts` (c'est L9, hors périmètre).
+- Ne pose **aucune** policy sur `parties` (décision D2 = P2 ; contre-preuve cas 9).
+- Ne retire pas `entity_scope` de `bank_accounts` (c'est L9, optionnel et différé — D3).
 - Ne modifie **aucun** repository : si la policy est correcte, les 4 chemins existants
   continuent de fonctionner à l'identique (ils sont déjà plus restrictifs qu'elle).
 - N'ouvre pas la règle ESLint de l'Option B (à arbitrer séparément, sans valeur de défense).
 
 ---
 
-## 7. Prochaine étape
+## 7. Prochaine étape — périmètre figé, prêt à implémenter
 
-**Arbitrage D1/D2/D3 par Etienne.** Aucune ligne de SQL avant. Une fois tranché :
-migration `0024_parties-scope.sql` + `tests/isolation/parties-scope-isolation.test.ts` +
-mutation-check §4 consigné dans la PR, en **phase implémentation séparée**.
+Décisions rendues (§3). Le lot d'implémentation, en **phase séparée** :
+
+1. `drizzle/migrations/0024_account-party-role-scope.sql` — policy `account_scope`
+   RESTRICTIVE FOR ALL, forme directe (§2.1 forme i), **inscrite au `meta/_journal.json`**
+   (piège du faux vert 0009/0014, §4).
+2. `tests/isolation/parties-scope-isolation.test.ts` — 10 cas (§4), fixture à cardinalités
+   **2/3** distinctes.
+3. **Mutation-check §4 en 5 points, consigné dans la PR** — sans lui la suite est un décor.
+4. Entrée **TODOS.md P2** pour `parties`, avec son déclencheur nommé : *première surface
+   titulaire ouverte à un rôle non-ADMIN*.
+5. Mise à jour du bloc CLAUDE.md « Entités multi-tenant » : `ENTITY-READ-JOIN1` devient une
+   ceinture (défense complémentaire) et non plus l'unique défense sur `account_party_role`.
