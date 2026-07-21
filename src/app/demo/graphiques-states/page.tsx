@@ -43,17 +43,17 @@ const MUR_SORTIES: RepartitionDevise = {
   montantMoyen: "21028.04",
   nbTransactions: 214,
   parts: [
-    { categorie: "Loyer & locaux", estNonCategorise: false, montant: "1200000.00", montantPrecedent: "1200000.00", part: "0.266667", nbTransactions: 12 },
-    { categorie: "Salaires", estNonCategorise: false, montant: "980000.00", montantPrecedent: "875000.00", part: "0.217778", nbTransactions: 46 },
-    { categorie: "Fournisseurs", estNonCategorise: false, montant: "720000.00", montantPrecedent: "800000.00", part: "0.16", nbTransactions: 58 },
-    { categorie: "Énergie", estNonCategorise: false, montant: "430000.00", montantPrecedent: "0.00", part: "0.095556", nbTransactions: 9 },
-    { categorie: "Matériel", estNonCategorise: false, montant: "360000.00", montantPrecedent: "300000.00", part: "0.08", nbTransactions: 21 },
-    { categorie: "Transport & logistique", estNonCategorise: false, montant: "250000.00", montantPrecedent: "275000.00", part: "0.055556", nbTransactions: 30 },
-    { categorie: "Assurances", estNonCategorise: false, montant: "180000.00", montantPrecedent: "180000.00", part: "0.04", nbTransactions: 6 },
-    { categorie: "Taxes & impôts", estNonCategorise: false, montant: "140000.00", montantPrecedent: "100000.00", part: "0.031111", nbTransactions: 4 },
-    { categorie: "Frais bancaires", estNonCategorise: false, montant: "90000.00", montantPrecedent: "120000.00", part: "0.02", nbTransactions: 18 },
-    { categorie: "Marketing", estNonCategorise: false, montant: "60000.00", montantPrecedent: "0.00", part: "0.013333", nbTransactions: 8 },
-    { categorie: "Non catégorisé", estNonCategorise: true, montant: "90000.00", montantPrecedent: "150000.00", part: "0.02", nbTransactions: 2 },
+    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000001", montant: "1200000.00", montantPrecedent: "1200000.00", part: "0.266667", nbTransactions: 12 },
+    { categorie: "Salaires", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000002", montant: "980000.00", montantPrecedent: "875000.00", part: "0.217778", nbTransactions: 46 },
+    { categorie: "Fournisseurs", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000003", montant: "720000.00", montantPrecedent: "800000.00", part: "0.16", nbTransactions: 58 },
+    { categorie: "Énergie", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "430000.00", montantPrecedent: "0.00", part: "0.095556", nbTransactions: 9 },
+    { categorie: "Matériel", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000004", montant: "360000.00", montantPrecedent: "300000.00", part: "0.08", nbTransactions: 21 },
+    { categorie: "Transport & logistique", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "250000.00", montantPrecedent: "275000.00", part: "0.055556", nbTransactions: 30 },
+    { categorie: "Assurances", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000005", montant: "180000.00", montantPrecedent: "180000.00", part: "0.04", nbTransactions: 6 },
+    { categorie: "Taxes & impôts", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "140000.00", montantPrecedent: "100000.00", part: "0.031111", nbTransactions: 4 },
+    { categorie: "Frais bancaires", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "90000.00", montantPrecedent: "120000.00", part: "0.02", nbTransactions: 18 },
+    { categorie: "Marketing", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000006", montant: "60000.00", montantPrecedent: "0.00", part: "0.013333", nbTransactions: 8 },
+    { categorie: "Non catégorisé", estNonCategorise: true, origine: "AUCUNE", categorieId: null, montant: "90000.00", montantPrecedent: "150000.00", part: "0.02", nbTransactions: 2 },
   ],
 };
 
@@ -65,10 +65,10 @@ const USD_SORTIES: RepartitionDevise = {
   montantMoyen: "3121.95",
   nbTransactions: 41,
   parts: [
-    { categorie: "Fournisseurs étrangers", estNonCategorise: false, montant: "72000.00", montantPrecedent: "60000.00", part: "0.5625", nbTransactions: 15 },
-    { categorie: "Logiciels & SaaS", estNonCategorise: false, montant: "34000.00", montantPrecedent: "34000.00", part: "0.265625", nbTransactions: 19 },
-    { categorie: "Déplacements", estNonCategorise: false, montant: "15000.00", montantPrecedent: "0.00", part: "0.117188", nbTransactions: 5 },
-    { categorie: "Non catégorisé", estNonCategorise: true, montant: "7000.00", montantPrecedent: "9000.00", part: "0.054688", nbTransactions: 2 },
+    { categorie: "Fournisseurs étrangers", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000007", montant: "72000.00", montantPrecedent: "60000.00", part: "0.5625", nbTransactions: 15 },
+    { categorie: "Logiciels & SaaS", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "34000.00", montantPrecedent: "34000.00", part: "0.265625", nbTransactions: 19 },
+    { categorie: "Déplacements", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "15000.00", montantPrecedent: "0.00", part: "0.117188", nbTransactions: 5 },
+    { categorie: "Non catégorisé", estNonCategorise: true, origine: "AUCUNE", categorieId: null, montant: "7000.00", montantPrecedent: "9000.00", part: "0.054688", nbTransactions: 2 },
   ],
 };
 
@@ -79,7 +79,7 @@ const EUR_SORTIES: RepartitionDevise = {
   montantMoyen: "8166.67",
   nbTransactions: 3,
   parts: [
-    { categorie: "Conseil & audit", estNonCategorise: false, montant: "24500.00", montantPrecedent: "21000.00", part: "1", nbTransactions: 3 },
+    { categorie: "Conseil & audit", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000008", montant: "24500.00", montantPrecedent: "21000.00", part: "1", nbTransactions: 3 },
   ],
 };
 
@@ -90,11 +90,11 @@ const MUR_ENTREES: RepartitionDevise = {
   montantMoyen: "58181.82",
   nbTransactions: 88,
   parts: [
-    { categorie: "Ventes clients", estNonCategorise: false, montant: "3900000.00", montantPrecedent: "3500000.00", part: "0.761719", nbTransactions: 52 },
-    { categorie: "Subventions", estNonCategorise: false, montant: "820000.00", montantPrecedent: "0.00", part: "0.160156", nbTransactions: 4 },
-    { categorie: "Produits financiers", estNonCategorise: false, montant: "360000.00", montantPrecedent: "400000.00", part: "0.070313", nbTransactions: 9 },
-    { categorie: "Remboursements", estNonCategorise: false, montant: "22000.00", montantPrecedent: "22000.00", part: "0.004297", nbTransactions: 21 },
-    { categorie: "Non catégorisé", estNonCategorise: true, montant: "18000.00", montantPrecedent: "30000.00", part: "0.003516", nbTransactions: 2 },
+    { categorie: "Ventes clients", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000009", montant: "3900000.00", montantPrecedent: "3500000.00", part: "0.761719", nbTransactions: 52 },
+    { categorie: "Subventions", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "820000.00", montantPrecedent: "0.00", part: "0.160156", nbTransactions: 4 },
+    { categorie: "Produits financiers", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "360000.00", montantPrecedent: "400000.00", part: "0.070313", nbTransactions: 9 },
+    { categorie: "Remboursements", estNonCategorise: false, origine: "TYGR", categorieId: "c0000000-0000-4000-8000-000000000010", montant: "22000.00", montantPrecedent: "22000.00", part: "0.004297", nbTransactions: 21 },
+    { categorie: "Non catégorisé", estNonCategorise: true, origine: "AUCUNE", categorieId: null, montant: "18000.00", montantPrecedent: "30000.00", part: "0.003516", nbTransactions: 2 },
   ],
 };
 
