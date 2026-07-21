@@ -35,6 +35,33 @@
  * clauses d'un OR et n'en testait AUCUNE ; on ne refait pas l'erreur.
  * Les assertions portent en outre sur des IDENTIFIANTS, pas sur des comptes
  * nus, partout où c'est possible.
+ *
+ * ── MUTATION-CHECK EXÉCUTÉ le 2026-07-21 (plan §4, 5 points) ────────────────
+ * Une suite qui passe ne prouve RIEN tant qu'on n'a pas vu chaque assertion
+ * échouer pour la BONNE raison. Les 5 mutations ont été appliquées à la policy
+ * de 0024, la suite relancée à chaque fois, puis la policy restaurée :
+ *
+ *   1. Clause `account_scope` RETIRÉE (view_filter seule)
+ *      → ROUGE : 1, 3, 4, 6 (+ 5 et 10 par cascade). Cas 7 VERTS. ✔ attendu
+ *   2. Clause `view_filter` RETIRÉE (account_scope seule)
+ *      → ROUGE : les 2 cas 7, et EUX SEULS. 1/3/4/6 verts. ✔ attendu
+ *      C'est ce point qui prouve que les deux clauses sont testées SÉPARÉMENT
+ *      et non corrélées par la fixture.
+ *   3. `AS PERMISSIVE` au lieu de `AS RESTRICTIVE`
+ *      → ROUGE : garde structurelle, 1, 3, 4, 6, 7, 10 — ET le cas 2/WS_B.
+ *      ⚠️ Constat qui dépasse la prédiction du plan : une PERMISSIVE ne se
+ *      contente pas de « ne rien filtrer », elle s'OR'e avec `tenant_isolation`
+ *      et casse AUSSI l'étage 1 (un membre de WS_B voit WS_A) — la mutation la
+ *      plus coûteuse du lot, et la moins visible à la relecture.
+ *   4. Confusion de TABLE : policy déplacée sur `bank_accounts` (avec sa vraie
+ *      colonne `id`, pour que le SQL reste exécutable)
+ *      → ROUGE : garde structurelle, 1, 3, 4, 6, 7, 10. ✔ la suite mesure bien
+ *      `account_party_role` — c'est ici que les cardinalités distinctes servent.
+ *   5. `FOR SELECT` au lieu de `FOR ALL` (WITH CHECK retiré)
+ *      → ROUGE : garde structurelle, cas 4 (+ 5 par cascade). ✔ attendu ;
+ *      c'est le faux vert historique de 0009 que ce point ferme.
+ *
+ * Aucune mutation n'est passée inaperçue.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
