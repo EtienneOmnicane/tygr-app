@@ -35,6 +35,12 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { masquerCompte } from "@/lib/masquage";
 import { peutModifier } from "@/lib/permissions";
 import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
+// Prédicat PARTAGÉ « le périmètre du membre est-il borné ? » — importé, JAMAIS recopié
+// (sa docstring l'exige : une copie ici et une autre dans le test rendrait le test
+// tautologique). Même prédicat pour la lecture et pour cette écriture : les deux axes
+// qu'il couvre refusent l'INSERT d'un compte neuf (cf. ConnexionHorsPerimetreError).
+import { estLecteurBorne } from "@/server/db/tenancy";
+import { codePg, PG_PRIVILEGE_INSUFFISANT } from "@/server/db/erreurs-pg";
 // Classes (valeurs) des gardes fail-closed : on les RÉ-LÈVE depuis le fail-soft
 // par connexion (cf. plus bas) — un signal de sécurité ne doit JAMAIS être avalé.
 import {
@@ -90,6 +96,42 @@ export class ReparationContexteInvalideError extends Error {
 }
 
 /**
+ * L'acteur porte un PÉRIMÈTRE en base (Vision Entité via `member_entity_scopes`, et/ou
+ * maille compte via `user_scopes`) — il ne peut donc PAS rattacher de banque au workspace.
+ *
+ * POURQUOI c'est un refus et non une panne. Connecter une banque CRÉE des comptes neufs,
+ * et un compte neuf naît `entity_id = NULL` (l'ingestion n'assigne jamais d'entité —
+ * CLAUDE.md « Entités multi-tenant »). Les deux policies RESTRICTIVE de `bank_accounts`
+ * refusent cet INSERT dès qu'un périmètre est posé, chacune par sa propre clause :
+ *   • `entity_scope` (0014, WITH CHECK) exige `entity_id IS NOT NULL AND entity_id = ANY(scope)`
+ *     → un INSERT `entity_id = NULL` la viole frontalement ;
+ *   • `account_scope` (0016, WITH CHECK) exige `id = ANY(scope)` → l'id d'un compte NEUF
+ *     (gen_random_uuid()) n'est jamais dans le droit, résolu AVANT l'insert.
+ * Le fail-closed est VOULU : « un membre borné ne crée pas de comptes non-assignés ».
+ *
+ * Ce que cette erreur ajoute : un NOM. Sans elle, le refus remontait en erreur de base
+ * brute (SQLSTATE 42501) noyée dans le message générique « La connexion bancaire a
+ * échoué. Réessayez. » — un membre borné réessayait indéfiniment un geste qui ne lui
+ * appartient pas, sans jamais être orienté vers un administrateur (exit-criterion
+ * règle 3 : « chaque erreur a un nom » ; ENTITY-CONNEXION-REFUS-NOMME1).
+ *
+ * ⚠️ La sécurité NE REPOSE PAS sur cette garde : l'autorité reste la RLS (fail-closed,
+ * indépendante du chemin d'appel). La garde applicative ne fait qu'échouer PLUS TÔT —
+ * avant de solliciter Omni-FI pour un LinkToken qui ne servira jamais — et NOMMER le
+ * refus. La supprimer dégraderait le message, jamais l'isolation.
+ *
+ * Message UI non-énumérant (registre S2) : il ne nomme aucune entité, aucun compte,
+ * aucune banque — il n'est donc pas un oracle d'existence.
+ */
+export class ConnexionHorsPerimetreError extends Error {
+  readonly code = "ENTITY_CONNECTION_OUT_OF_SCOPE";
+  constructor() {
+    super("Périmètre insuffisant pour rattacher une banque");
+    this.name = "ConnexionHorsPerimetreError";
+  }
+}
+
+/**
  * Désalignement détecté entre l'exchange (PublicToken→ConnectionId, frontière
  * tenant via ClientUserId) et les comptes rapportés par le job (SessionToken/
  * jobId, NON liés au tenant). Constat cross-review 1.1 : on REFUSE de persister
@@ -138,6 +180,13 @@ export interface ResultatDemarrage {
 /**
  * Crée le LinkToken pour le workspace courant. Le ClientUserId vient du workspace
  * (frontière tenant), jamais du paramètre. Gating MANAGER/ADMIN.
+ *
+ * DEUX gardes distinctes, à ne pas confondre (elles répondent à des questions
+ * différentes et aucune ne subsume l'autre) :
+ *  - `peutModifier(ctx.role)` — le RÔLE autorise-t-il le geste ? (VIEWER = non)
+ *  - `estLecteurBorne(ctx)` — le PÉRIMÈTRE le permet-il ? (membre borné = non)
+ * Un MANAGER borné passe la première et échoue la seconde ; un ADMIN non borné passe
+ * les deux. La RLS ne connaît pas le rôle, et le rôle ne connaît pas le périmètre.
  */
 export async function demarrerConnexion(
   client: OmniFiClient,
@@ -146,6 +195,12 @@ export async function demarrerConnexion(
 ): Promise<ResultatDemarrage> {
   const clientUserId = await executer(async (tx, ctx) => {
     if (!peutModifier(ctx.role)) throw new ConnexionNonAutoriseeError();
+    // Refus de périmètre AVANT tout appel amont : la RLS refuserait de toute façon
+    // l'INSERT des comptes en fin de parcours (cf. ConnexionHorsPerimetreError), mais
+    // l'utilisateur aurait alors traversé tout le widget — saisi ses identifiants
+    // bancaires et son OTP — pour échouer à la dernière étape. On échoue au premier
+    // geste, sans fabriquer de LinkToken ni solliciter Omni-FI.
+    if (estLecteurBorne(ctx)) throw new ConnexionHorsPerimetreError();
     return clientUserIdDuWorkspace(tx, ctx.workspaceId);
   });
 
@@ -300,6 +355,28 @@ async function ingererPartiesDesComptes(
  * `link-exchange` (octroi explicite de l'utilisateur dans le widget) — voir la garde
  * dans `persisterConnexionEtComptes`. Absent ⇒ aucun consentement n'est écrit.
  */
+/**
+ * CEINTURE du refus de périmètre : traduit le SQLSTATE 42501 (WITH CHECK d'une policy
+ * RESTRICTIVE violé) en `ConnexionHorsPerimetreError`, sur le chemin d'ÉCRITURE réel.
+ *
+ * Pourquoi elle existe EN PLUS de la garde de `demarrerConnexion` : les Server Actions
+ * de finalisation sont atteignables SANS être passé par le démarrage (une action est un
+ * POST — rien n'oblige à enchaîner les étapes dans l'ordre). Sans cette ceinture, ces
+ * chemins-là conserveraient le catch-all générique que ce lot existe pour supprimer.
+ *
+ * Ne capture QUE 42501, et RE-LÈVE tout le reste à l'identique : une panne réseau, une
+ * violation d'unicité ou un garde-fou tenant ne doivent JAMAIS être maquillés en refus
+ * de périmètre — ce serait exactement le catch-all silencieux qu'interdit la règle 3.
+ */
+async function nommerRefusDePerimetre<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (e) {
+    if (codePg(e) === PG_PRIVILEGE_INSUFFISANT) throw new ConnexionHorsPerimetreError();
+    throw e;
+  }
+}
+
 export interface PersistanceOptions {
   consentement?: {
     /** Scopes demandés au widget, si connus. Libellés d'API, jamais de la donnée. */
@@ -333,7 +410,8 @@ export async function persisterConnexionEtComptes(
   // 1. Connexion + comptes dans UNE transaction. On collecte les paires
   //    (compte Omni-FI, bankAccountId local) des comptes RÉELLEMENT rattachés
   //    pour pouvoir lier leurs parties juste après (sans relecture).
-  const rattaches = await executer(async (tx, ctx) => {
+  const rattaches = await nommerRefusDePerimetre(() =>
+    executer(async (tx, ctx) => {
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: echange.ConnectionId,
       institutionId: echange.InstitutionId,
@@ -389,10 +467,11 @@ export async function persisterConnexionEtComptes(
         currentBalance: soldeCourant(c.Balances),
         isSelected: true,
       });
-      paires.push({ compte: c, bankAccountId });
-    }
-    return paires;
-  });
+        paires.push({ compte: c, bankAccountId });
+      }
+      return paires;
+    }),
+  );
 
   // 2. Parties (L3) : transaction SÉPARÉE, après le COMMIT des comptes ci-dessus.
   //    Best-effort fail-soft — protège la couche bancaire déjà commitée (DÉCISION 2).
