@@ -69,12 +69,30 @@ function chaineOuNull(s: string | undefined | null): string | null {
 }
 
 /**
- * Étiquette OBIE traitée comme « pas de catégorie » : le serializer amont pose
- * "Uncategorized" par DÉFAUT quand la banque n'a rien classé (cf. OmniFiEnrichment).
- * On la traite comme une absence — JAMAIS comme une vraie catégorie. Liste fermée,
- * comparaison insensible à la casse/aux espaces.
+ * Étiquettes OBIE traitées comme « pas de catégorie » : l'amont en pose une par DÉFAUT
+ * quand la banque n'a rien classé (cf. OmniFiEnrichment). On les traite comme une
+ * absence — JAMAIS comme une vraie catégorie. Liste fermée, comparaison insensible à
+ * la casse/aux espaces (d'où les clés en minuscules ici).
+ *
+ * DEUX graphies, parce que l'amont a changé la sienne sans le dire :
+ *  - "uncategorized" — la valeur documentée, sur laquelle ce filtre a été bâti ;
+ *  - "unclassified"  — la valeur RÉELLEMENT émise aujourd'hui, en SCREAMING_SNAKE
+ *    ("UNCLASSIFIED"), constatée par inventaire en base le 2026-07-21.
+ *
+ * Ce que coûtait l'omission : "UNCLASSIFIED" passait le filtre comme une vraie
+ * catégorie → `is_auto_categorized = true` + `category_source = "OMNIFI"` sur ~93 %
+ * des transactions, alors que ~6,7 % seulement portent une classification réelle. La
+ * base affirmait donc « catégorisé par l'amont » à propos de transactions que l'amont
+ * déclarait justement NE PAS savoir classer.
+ *
+ * ⚠️ Liste fermée = elle ne se devine pas, elle s'INVENTORIE. Avant d'y toucher :
+ * `select distinct primary_category from transactions_cache` — la graphie du catalogue
+ * (`categories-fr.ts`) n'est PAS une source fiable sur ce que l'amont émet vraiment,
+ * leçon déjà payée sur les clés composées (`FOOD_AND_DRINK` vs `food & drink`).
+ * Inventaire au 2026-07-21 : UNCLASSIFIED, UTILITIES, BANKING_AND_FINANCE,
+ * INTER_ACCOUNT_TRANSFER — les trois dernières sont de VRAIES catégories, à conserver.
  */
-const CATEGORIES_OBIE_VIDES = new Set(["uncategorized"]);
+const CATEGORIES_OBIE_VIDES = new Set(["uncategorized", "unclassified"]);
 
 /**
  * Une catégorie OBIE est-elle EXPLOITABLE (≠ vide, ≠ "Uncategorized") ? Fonction
