@@ -2499,6 +2499,20 @@ suffisant) :
   la piste (b)/log devient un signal fiable de trou de catalogue. `primary_category` reste l'OBIE
   brut (anglais) pour les catégories exploitables ; le marqueur de provenance vit dans la nouvelle
   colonne `is_auto_categorized`/`category_source` (cf. migration 0011), distinct de ce mapping FR.
+  **MAJ 2026-07-21 (GRAPHIQUES-CATEG-UTILISATEUR1 Lot 0) — le déclencheur (b) s'est RÉALISÉ, et la
+  cause n'était pas celle qu'on attendait.** Inventaire exhaustif de la base locale ce jour :
+  l'amont n'émet PAS dans la graphie de la sonde du 2026-06-23. Les 4 valeurs réellement présentes
+  sont en **SCREAMING_SNAKE_CASE** : `UNCLASSIFIED`, `UTILITIES`, `BANKING_AND_FINANCE`,
+  `INTER_ACCOUNT_TRANSFER`. Les clés d'UN SEUL mot matchaient encore par `toLowerCase`
+  (`UTILITIES` → `utilities`), mais **toutes les clés COMPOSÉES échouaient** — le catalogue attend
+  `banking & finance`, l'amont envoie `BANKING_AND_FINANCE`. Ce n'était donc pas « une nouvelle
+  catégorie hors catalogue » mais **une graphie différente pour des catégories DÉJÀ cartographiées**
+  — un trou qu'aucun log sur le défaut de `categorieFr` n'aurait qualifié correctement (il aurait
+  signalé « catégorie inconnue » là où le mapping existait). **Correctif livré** : normalisation à
+  la lecture (`normaliserCleObie` : `_and_` → ` & `, `_` → ` `), qui fait matcher toutes les
+  entrées composées sans en dupliquer aucune, + `inter account transfer` → « Virements internes ».
+  **Fragilité résiduelle INCHANGÉE** (liste fermée) ; et la piste (b) reste pertinente, mais doit
+  logger la clé BRUTE, pas seulement le fait qu'on est retombé sur le défaut.
 - [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
   refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`

@@ -24,6 +24,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -35,6 +36,8 @@ import {
   repartitionParCategorie,
 } from "@/server/repositories/insights";
 import type { SensFlux } from "@/server/insights/types";
+import { caseCategorieFr } from "@/server/insights/categorie-fr-sql";
+import { categorieFr, CORRESPONDANCE_FR } from "@/lib/categories-fr";
 
 const client = new PGlite();
 const db = drizzle(client, { schema });
@@ -56,6 +59,9 @@ const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
 const JUIN = { from: "2026-06-01", to: "2026-06-30" } as const;
 // Fenêtre PRÉCÉDENTE de juin (L4) : mai, baseline de `montantPrecedent`.
 const MAI = { from: "2026-05-01", to: "2026-05-31" } as const;
+// Fenêtre DÉDIÉE au Lot 0 (traduction FR) — isolée pour ne perturber aucune assertion
+// existante : fusion many-to-one, insensibilité à la casse, repli hors catalogue.
+const JUILLET = { from: "2026-07-01", to: "2026-07-31" } as const;
 
 beforeAll(async () => {
   const dir = path.join(process.cwd(), "drizzle", "migrations");
@@ -81,32 +87,54 @@ beforeAll(async () => {
       ('${ACC_A}','${WS_A}','${CONN_A}','oa-a','Compte A','MUR','5000.00',true),
       ('${ACC_A_USD}','${WS_A}','${CONN_A}','oa-a-usd','Compte A USD','USD','800.00',true),
       ('${ACC_B}','${WS_B}','${CONN_B}','oa-b','Compte B','MUR','9999.00',true);
-    -- WS_A MUR SORTIES : Loyer 300 (05) + Loyer 200 (20) = 500 ; Énergie 150 (08) ;
-    --   NULL 150 (12) + '' 100 (15) = « Non catégorisé » 250 (repli + collapse) ;
-    --   tombstone Loyer 99 (08) EXCLU. Total sorties MUR = 900 (nb 5).
-    -- WS_A MUR ENTRÉES : Ventes 1000 (05), Subventions 250 (06). Total entrées MUR 1250.
-    -- WS_A USD SORTIES : Bank fees 200 (09) — une seule catégorie (anneau plein côté UI).
-    -- WS_B MUR SORTIES : SECRET B 7777 (05) — ne doit JAMAIS fuiter chez A.
-    -- WS_A MAI SORTIES (fenêtre PRÉCÉDENTE, L4) : Loyer 400 (10) ; trois SENTINELLES
-    --   Omni-FI collapsées en « Non catégorisé » 250 — 'UNCLASSIFIED' 150 (12),
-    --   'Uncategorized' 60 (15), '  unclassified  ' 40 (18) : prouve la détection
-    --   insensible casse+espaces. Total MAI MUR = 650 (nb 4). Pas d'Énergie en mai
-    --   (→ Énergie « nouveau » en juin). Sert de baseline montantPrecedent.
+    -- ⚠️ primary_category porte des clés OBIE **ANGLAISES** — c'est ce que l'amont
+    -- Omni-FI émet réellement (sonde runtime 2026-06-23, cf. src/lib/categories-fr.ts).
+    -- Depuis le Lot 0, le donut les TRADUIT dans son GROUP BY : les assertions portent
+    -- donc sur les libellés FR. Une fixture en français ne prouverait rien (elle sortirait
+    -- entièrement en « Non catégorisé », clés non cartographiées).
+    --
+    -- WS_A MUR SORTIES : rent 300 (05) + rent 200 (20) = « Loyer » 500 ;
+    --   utilities 150 (08) = « Charges » ; NULL 150 (12) + '' 100 (15) =
+    --   « Non catégorisé » 250 (repli + collapse) ; tombstone rent 99 (08) EXCLU.
+    --   Total sorties MUR = 900 (nb 5).
+    -- WS_A MUR ENTRÉES : income 1000 (05) = « Revenus », other 250 (06) = « Autres ».
+    --   Total entrées MUR 1250.
+    -- WS_A USD SORTIES : bank charges 200 (09) = « Frais bancaires » — une seule
+    --   catégorie (anneau plein côté UI).
+    -- WS_B MUR SORTIES : healthcare 7777 (05) = « Santé » — ne doit JAMAIS fuiter chez A.
+    -- WS_A MAI SORTIES (fenêtre PRÉCÉDENTE, L4) : rent 400 (10) = « Loyer » ; trois
+    --   SENTINELLES Omni-FI collapsées en « Non catégorisé » 250 — 'UNCLASSIFIED' 150
+    --   (12), 'Uncategorized' 60 (15), '  unclassified  ' 40 (18) : prouve le repli
+    --   insensible casse+espaces. Total MAI MUR = 650 (nb 4). Pas de « Charges » en mai
+    --   (→ « Charges » = « nouveau » en juin). Sert de baseline montantPrecedent.
+    --
+    -- JUILLET (Lot 0, fenêtre DÉDIÉE — n'interfère avec aucune assertion ci-dessus) :
+    -- WS_A MUR ENTRÉES : income 600 (03) + revenue 400 (04) + 'Income' 100 (05) →
+    --   trois clés OBIE distinctes, UN seul libellé « Revenus » 1100 (nb 3). Prouve la
+    --   fusion MANY-TO-ONE en SQL **et** l'insensibilité à la casse.
+    -- WS_A MUR SORTIES : rent 700 (03) = « Loyer » ; 'crypto-mining' 300 (04) (clé HORS
+    --   catalogue) + NULL 200 (05) → « Non catégorisé » 500 (nb 2). Total 1200 (nb 3).
     insert into transactions_cache (workspace_id, bank_account_id, omnifi_txn_id, transaction_date, booking_date_time, amount, currency, credit_debit, bank_label_raw, clean_label, primary_category, is_removed) values
-      ('${WS_A}','${ACC_A}','txa-in1','2026-06-05','2026-06-05T05:30:00Z','1000.00','MUR','Credit','VIR','Client A','Ventes',false),
-      ('${WS_A}','${ACC_A}','txa-in2','2026-06-06','2026-06-06T05:30:00Z','250.00','MUR','Credit','SUBV','État','Subventions',false),
-      ('${WS_A}','${ACC_A}','txa-o1','2026-06-05','2026-06-05T05:30:00Z','300.00','MUR','Debit','LOYER','Bailleur','Loyer',false),
-      ('${WS_A}','${ACC_A}','txa-o2','2026-06-20','2026-06-20T05:30:00Z','200.00','MUR','Debit','LOYER C','Bailleur','Loyer',false),
-      ('${WS_A}','${ACC_A}','txa-o3','2026-06-08','2026-06-08T05:30:00Z','150.00','MUR','Debit','CEB','CEB','Énergie',false),
+      ('${WS_A}','${ACC_A}','txa-in1','2026-06-05','2026-06-05T05:30:00Z','1000.00','MUR','Credit','VIR','Client A','income',false),
+      ('${WS_A}','${ACC_A}','txa-in2','2026-06-06','2026-06-06T05:30:00Z','250.00','MUR','Credit','SUBV','État','other',false),
+      ('${WS_A}','${ACC_A}','txa-o1','2026-06-05','2026-06-05T05:30:00Z','300.00','MUR','Debit','LOYER','Bailleur','rent',false),
+      ('${WS_A}','${ACC_A}','txa-o2','2026-06-20','2026-06-20T05:30:00Z','200.00','MUR','Debit','LOYER C','Bailleur','rent',false),
+      ('${WS_A}','${ACC_A}','txa-o3','2026-06-08','2026-06-08T05:30:00Z','150.00','MUR','Debit','CEB','CEB','utilities',false),
       ('${WS_A}','${ACC_A}','txa-o4','2026-06-12','2026-06-12T05:30:00Z','150.00','MUR','Debit','DIVERS',null,null,false),
       ('${WS_A}','${ACC_A}','txa-o5','2026-06-15','2026-06-15T05:30:00Z','100.00','MUR','Debit','DIVERS 2',null,'',false),
-      ('${WS_A}','${ACC_A}','txa-tomb','2026-06-08','2026-06-08T05:30:00Z','99.00','MUR','Debit','SUPPR','X','Loyer',true),
-      ('${WS_A}','${ACC_A_USD}','txa-usd1','2026-06-09','2026-06-09T05:30:00Z','200.00','USD','Debit','FEES','Bank fees','Bank fees',false),
-      ('${WS_A}','${ACC_A}','txa-mai1','2026-05-10','2026-05-10T05:30:00Z','400.00','MUR','Debit','LOYER MAI','Bailleur','Loyer',false),
+      ('${WS_A}','${ACC_A}','txa-tomb','2026-06-08','2026-06-08T05:30:00Z','99.00','MUR','Debit','SUPPR','X','rent',true),
+      ('${WS_A}','${ACC_A_USD}','txa-usd1','2026-06-09','2026-06-09T05:30:00Z','200.00','USD','Debit','FEES','Bank fees','bank charges',false),
+      ('${WS_A}','${ACC_A}','txa-mai1','2026-05-10','2026-05-10T05:30:00Z','400.00','MUR','Debit','LOYER MAI','Bailleur','rent',false),
       ('${WS_A}','${ACC_A}','txa-mai2','2026-05-12','2026-05-12T05:30:00Z','150.00','MUR','Debit','DIVERS MAI','X','UNCLASSIFIED',false),
       ('${WS_A}','${ACC_A}','txa-mai3','2026-05-15','2026-05-15T05:30:00Z','60.00','MUR','Debit','DIVERS MAI 2','Y','Uncategorized',false),
       ('${WS_A}','${ACC_A}','txa-mai4','2026-05-18','2026-05-18T05:30:00Z','40.00','MUR','Debit','DIVERS MAI 3','Z','  unclassified  ',false),
-      ('${WS_B}','${ACC_B}','txb1','2026-06-05','2026-06-05T05:30:00Z','7777.00','MUR','Debit','SECRET B','Secret B','SECRET B',false);
+      ('${WS_A}','${ACC_A}','txa-jui1','2026-07-03','2026-07-03T05:30:00Z','600.00','MUR','Credit','VTE 1','Client','income',false),
+      ('${WS_A}','${ACC_A}','txa-jui2','2026-07-04','2026-07-04T05:30:00Z','400.00','MUR','Credit','VTE 2','Client','revenue',false),
+      ('${WS_A}','${ACC_A}','txa-jui3','2026-07-05','2026-07-05T05:30:00Z','100.00','MUR','Credit','VTE 3','Client','Income',false),
+      ('${WS_A}','${ACC_A}','txa-jui4','2026-07-03','2026-07-03T05:30:00Z','700.00','MUR','Debit','LOYER JUI','Bailleur','rent',false),
+      ('${WS_A}','${ACC_A}','txa-jui5','2026-07-04','2026-07-04T05:30:00Z','300.00','MUR','Debit','CRYPTO','X','crypto-mining',false),
+      ('${WS_A}','${ACC_A}','txa-jui6','2026-07-05','2026-07-05T05:30:00Z','200.00','MUR','Debit','DIVERS JUI','Y',null,false),
+      ('${WS_B}','${ACC_B}','txb1','2026-06-05','2026-06-05T05:30:00Z','7777.00','MUR','Debit','SECRET B','Secret B','healthcare',false);
   `);
 
   const provisioning = readFileSync(
@@ -122,7 +150,7 @@ afterAll(async () => {
 });
 
 describe("repartitionParCategorie — agrégat par catégorie/devise + isolation", () => {
-  it("WS_A sorties : MUR (Loyer 500 / Énergie 150 / Non catégorisé 250) + USD (Bank fees 200), sans addition cross-devise", async () => {
+  it("WS_A sorties : MUR (Loyer 500 / Charges 150 / Non catégorisé 250) + USD (Frais bancaires 200), sans addition cross-devise", async () => {
     const rep = await withWorkspace(sessionA, (tx) =>
       repartitionParCategorie(tx, { sens: "outflow", ...JUIN }),
     );
@@ -133,15 +161,15 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
 
     const mur = rep.devises.find((d) => d.currency === "MUR");
     expect(mur?.total).toBe("900.00"); // 500 + 150 + 250, tombstone 99 exclu
-    expect(mur?.nbTransactions).toBe(5); // 2 Loyer + 1 Énergie + 2 non-cat
+    expect(mur?.nbTransactions).toBe(5); // 2 rent + 1 utilities + 2 non-cat
     // L2 — moyenne / opération de LA devise = total / nb (EN SQL) : 900 / 5 = 180.00.
     expect(mur?.montantMoyen).toBe("180.00");
 
     // Ordre : montant décroissant, « Non catégorisé » TOUJOURS en dernier (250 > 150
-    // mais repoussé après Énergie — preuve du tri estNonCategorise-last).
+    // mais repoussé après Charges — preuve du tri estNonCategorise-last).
     expect(mur?.parts.map((p) => p.categorie)).toEqual([
       "Loyer",
-      "Énergie",
+      "Charges",
       "Non catégorisé",
     ]);
 
@@ -165,7 +193,7 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     expect(usd?.total).toBe("200.00");
     expect(usd?.montantMoyen).toBe("200.00"); // 200 / 1 op
     expect(usd?.parts).toHaveLength(1);
-    expect(usd?.parts[0].categorie).toBe("Bank fees");
+    expect(usd?.parts[0].categorie).toBe("Frais bancaires");
     expect(Number(usd?.parts[0].part)).toBeCloseTo(1, 6); // seule catégorie USD
 
     // Sans fenêtre précédente demandée, `montantPrecedent` retombe sur « 0.00 ».
@@ -191,7 +219,7 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     ).toBe(false);
   });
 
-  it("L4 montantPrecedent : juin comparé à mai (Loyer 400, Énergie « nouveau », Non catégorisé 250)", async () => {
+  it("L4 montantPrecedent : juin comparé à mai (Loyer 400, Charges « nouveau », Non catégorisé 250)", async () => {
     const rep = await withWorkspace(sessionA, (tx) =>
       repartitionParCategorie(tx, {
         sens: "outflow",
@@ -207,8 +235,8 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     const parNom = new Map(mur?.parts.map((p) => [p.categorie, p]));
     // Loyer existait en mai (400) → montantPrecedent recopié tel quel.
     expect(parNom.get("Loyer")?.montantPrecedent).toBe("400.00");
-    // Énergie ABSENTE en mai → « 0.00 » (l'UI en fera un « nouveau »).
-    expect(parNom.get("Énergie")?.montantPrecedent).toBe("0.00");
+    // « Charges » ABSENTE en mai → « 0.00 » (l'UI en fera un « nouveau »).
+    expect(parNom.get("Charges")?.montantPrecedent).toBe("0.00");
     // Non catégorisé : 250 en mai (sentinelles) ↔ 250 en juin (NULL/'') — merge par label.
     expect(parNom.get("Non catégorisé")?.montantPrecedent).toBe("250.00");
 
@@ -229,29 +257,184 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     ).rejects.toBeInstanceOf(InsightsParamsInvalidesError);
   });
 
-  it("WS_A entrées : sépare les crédits (Ventes 1000, Subventions 250) — jamais de débit", async () => {
+  it("WS_A entrées : sépare les crédits (Revenus 1000, Autres 250) — jamais de débit", async () => {
     const rep = await withWorkspace(sessionA, (tx) =>
       repartitionParCategorie(tx, { sens: "inflow", ...JUIN }),
     );
     const mur = rep.devises.find((d) => d.currency === "MUR");
     expect(mur?.total).toBe("1250.00");
-    expect(mur?.parts.map((p) => p.categorie)).toEqual(["Ventes", "Subventions"]);
-    // Aucune catégorie de sortie (Loyer/Énergie) ne doit apparaître côté entrées.
+    expect(mur?.parts.map((p) => p.categorie)).toEqual(["Revenus", "Autres"]);
+    // Aucune catégorie de sortie (Loyer/Charges) ne doit apparaître côté entrées.
     expect(mur?.parts.some((p) => p.categorie === "Loyer")).toBe(false);
     // Pas de devise USD (aucun crédit USD dans la fenêtre).
     expect(rep.devises.some((d) => d.currency === "USD")).toBe(false);
   });
 
-  it("ISOLATION : WS_B ne voit que 'SECRET B' (7777), jamais les catégories de A", async () => {
+  it("ISOLATION : WS_B ne voit que « Santé » (7777), jamais les catégories de A", async () => {
     const rep = await withWorkspace(sessionB, (tx) =>
       repartitionParCategorie(tx, { sens: "outflow", ...JUIN }),
     );
     expect(rep.devises.map((d) => d.currency)).toEqual(["MUR"]);
-    expect(rep.devises[0].parts.map((p) => p.categorie)).toEqual(["SECRET B"]);
+    expect(rep.devises[0].parts.map((p) => p.categorie)).toEqual(["Santé"]);
     expect(rep.devises[0].total).toBe("7777.00");
     expect(
       rep.devises[0].parts.some((p) => p.categorie === "Loyer"),
     ).toBe(false);
+  });
+
+  // ── Lot 0 — traduction FR dans le GROUP BY (D-d) ────────────────────────────────
+  // Ces cas prouvent que la traduction est un GROUPEMENT, pas un relabel d'affichage :
+  // s'ils passaient avec une traduction faite au rendu, la fusion serait impossible sans
+  // additionner des montants côté JS (interdit, règle 8).
+
+  it("LOT 0 — aucun libellé OBIE anglais ne subsiste dans la sortie (juin, 2 sens)", async () => {
+    const [sorties, entrees] = await withWorkspace(sessionA, async (tx) => [
+      await repartitionParCategorie(tx, { sens: "outflow", ...JUIN }),
+      await repartitionParCategorie(tx, { sens: "inflow", ...JUIN }),
+    ]);
+    const libelles = [...sorties.devises, ...entrees.devises].flatMap((d) =>
+      d.parts.map((p) => p.categorie),
+    );
+    // Les clés OBIE brutes présentes en fixture ne doivent JAMAIS ressortir telles quelles.
+    for (const cleObie of ["rent", "utilities", "income", "other", "bank charges"]) {
+      expect(libelles).not.toContain(cleObie);
+    }
+    // …et les libellés FR attendus sont bien là (assertion positive : sans elle, un
+    // repli global en « Non catégorisé » passerait le test ci-dessus).
+    expect(libelles).toEqual(
+      expect.arrayContaining(["Loyer", "Charges", "Frais bancaires", "Revenus"]),
+    );
+  });
+
+  it("LOT 0 — FUSION many-to-one : income + revenue + 'Income' → UN seul secteur « Revenus », sommé EN SQL", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "inflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // LE cœur du Lot 0 : trois clés OBIE distinctes (dont une de casse différente)
+    // n'exposent qu'UN poste. Deux secteurs homonymes seraient le défaut à éviter.
+    expect(mur?.parts).toHaveLength(1);
+    const revenus = mur?.parts[0];
+    expect(revenus?.categorie).toBe("Revenus");
+    // 600 + 400 + 100 : la somme est faite par le sum() SQL, jamais côté JS.
+    expect(revenus?.montant).toBe("1100.00");
+    expect(revenus?.nbTransactions).toBe(3);
+    expect(revenus?.estNonCategorise).toBe(false);
+    // Seule catégorie de la devise → part = 1 (et non trois parts d'un tiers chacune).
+    expect(Number(revenus?.part)).toBeCloseTo(1, 6);
+
+    // Contre-preuve de la fusion : sans elle, on aurait 3 parts de 600/400/100.
+    expect(mur?.parts.map((p) => p.montant)).not.toContain("600.00");
+  });
+
+  it("LOT 0 — repli « Non catégorisé » : clé HORS catalogue + NULL collapsent en un poste", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "outflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    expect(mur?.parts.map((p) => p.categorie)).toEqual(["Loyer", "Non catégorisé"]);
+    // 'crypto-mining' (hors catalogue, 300) + NULL (200) → un seul poste de 500.
+    const nonCat = mur?.parts.find((p) => p.estNonCategorise);
+    expect(nonCat?.montant).toBe("500.00");
+    expect(nonCat?.nbTransactions).toBe(2);
+    // La clé hors catalogue ne fuit pas en anglais dans l'UI FR.
+    expect(mur?.parts.map((p) => p.categorie)).not.toContain("crypto-mining");
+  });
+
+  it("LOT 0 — non-régression : le total central de la devise reste la somme des parts", async () => {
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, { sens: "outflow", ...JUILLET }),
+    );
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // Total de devise (window SQL) = 700 (Loyer) + 500 (Non catégorisé).
+    expect(mur?.total).toBe("1200.00");
+    expect(mur?.nbTransactions).toBe(3);
+    expect(mur?.montantMoyen).toBe("400.00"); // 1200 / 3, calculé EN SQL
+
+    // Le total central ne doit pas dériver de la fusion : il vaut exactement la somme
+    // des parts affichées (contrôle en centimes entiers, jamais en float — règle 8).
+    const sommeCentimes = (mur?.parts ?? []).reduce(
+      (s, p) => s + Math.round(Number(p.montant) * 100),
+      0,
+    );
+    expect(sommeCentimes).toBe(Math.round(Number(mur?.total) * 100));
+    // Et les parts d'une devise somment toujours à 1.
+    const sommeParts = (mur?.parts ?? []).reduce((s, p) => s + Number(p.part), 0);
+    expect(sommeParts).toBeCloseTo(1, 6);
+  });
+
+  it("LOT 0 — la fusion vaut AUSSI pour la fenêtre précédente (clés de merge L4 alignées)", async () => {
+    // Juillet comparé à juin : « Revenus » existait en juin (income 1000) et fusionne
+    // en juillet (income+revenue+Income = 1100). Si les deux requêtes ne partageaient pas
+    // la MÊME clé de groupe, `montantPrecedent` retomberait à « 0.00 » (faux « nouveau »).
+    const rep = await withWorkspace(sessionA, (tx) =>
+      repartitionParCategorie(tx, {
+        sens: "inflow",
+        ...JUILLET,
+        fromPrecedent: JUIN.from,
+        toPrecedent: JUIN.to,
+      }),
+    );
+    const revenus = rep.devises
+      .find((d) => d.currency === "MUR")
+      ?.parts.find((p) => p.categorie === "Revenus");
+    expect(revenus?.montant).toBe("1100.00");
+    expect(revenus?.montantPrecedent).toBe("1000.00");
+  });
+
+  it("LOT 0 — le CASE SQL et categorieFr (TS) donnent le MÊME libellé, clé par clé", async () => {
+    // Deux implémentations de la même règle vivent côte à côte : `categorieFr` (rendu,
+    // /transactions + dashboard) et `caseCategorieFr` (agrégat, donut). Si elles
+    // divergent, la MÊME transaction s'affiche sous deux catégories selon l'écran — une
+    // incohérence invisible au lint, au typecheck et au build. Ce test les confronte.
+    const echantillons = [
+      // Toutes les clés du dictionnaire, dans leur graphie canonique…
+      ...Object.keys(CORRESPONDANCE_FR),
+      // …puis les graphies RÉELLEMENT observées en base le 2026-07-21 (l'amont émet en
+      // SCREAMING_SNAKE_CASE, le dictionnaire est en minuscules à espaces).
+      "UTILITIES",
+      "BANKING_AND_FINANCE",
+      "INTER_ACCOUNT_TRANSFER",
+      "UNCLASSIFIED",
+      // …et les cas limites : casse mixte, espaces parasites, hors catalogue, vide.
+      "Income",
+      "  rent  ",
+      "FOOD_AND_DRINK",
+      "crypto-mining",
+      "",
+    ];
+
+    for (const brut of echantillons) {
+      const [ligne] = await db
+        .select({ fr: caseCategorieFr(sql`${brut}::text`) })
+        .from(sql`(select 1) as _`);
+      expect(
+        ligne.fr,
+        `divergence TS/SQL sur la clé « ${brut} »`,
+      ).toBe(categorieFr(brut));
+    }
+  });
+
+  it("LOT 0 — SCREAMING_SNAKE_CASE de l'amont : BANKING_AND_FINANCE → « Frais bancaires »", async () => {
+    // Constat de QA sur donnée réelle (2026-07-21) : sans normalisation de la clé, les
+    // 180 transactions BANKING_AND_FINANCE de la base tombaient en « Non catégorisé » —
+    // une RÉGRESSION (le donut affichait au moins l'étiquette brute avant le Lot 0).
+    const cas = [
+      ["BANKING_AND_FINANCE", "Frais bancaires"],
+      ["INTER_ACCOUNT_TRANSFER", "Virements internes"],
+      ["UTILITIES", "Charges"],
+      ["UNCLASSIFIED", "Non catégorisé"],
+    ] as const;
+
+    for (const [brut, attendu] of cas) {
+      const [ligne] = await db
+        .select({ fr: caseCategorieFr(sql`${brut}::text`) })
+        .from(sql`(select 1) as _`);
+      expect(ligne.fr, `clé amont « ${brut} »`).toBe(attendu);
+    }
   });
 
   it("borne haute INCLUSIVE : une transaction le jour `to` est comptée", async () => {
@@ -348,6 +531,6 @@ describe("contre-preuve R1 : la RLS NE protège PAS sous le propriétaire", () =
     const toutesCategories = rep.devises.flatMap((d) =>
       d.parts.map((p) => p.categorie),
     );
-    expect(toutesCategories).not.toContain("SECRET B");
+    expect(toutesCategories).not.toContain("Santé");
   });
 });
