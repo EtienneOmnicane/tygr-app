@@ -308,9 +308,22 @@ export default function TransactionsDemoPage() {
         });
         return { ok: true as const, data: { lignes, curseurSuivant: null } };
       },
-      async sommeNette() {
-        // Fixture CONSTANTE (cf. SOMME_NETTE_DEMO) : aucun calcul sur les lignes.
-        return { ok: true as const, data: SOMME_NETTE_DEMO };
+      async sommeNette(args: { filtres?: FiltresTransactions }) {
+        // Les MONTANTS sont une constante (aucune somme côté client, cf.
+        // SOMME_NETTE_DEMO). Seule la CARDINALITÉ suit le filtre : un filtre qui ne
+        // ramène aucune ligne rend un tableau VIDE, comme le ferait l'agrégat serveur.
+        // Sans ça, le bandeau se superposait à l'état vide « aucune transaction ne
+        // correspond » — un écran que la prod ne produit jamais (`sommeNette.length > 0`
+        // y démonte le bloc) — et l'état vide filtré devenait, lui, incapturable.
+        const f = args.filtres ?? {};
+        const terme = f.recherche?.trim().toLowerCase();
+        const auMoinsUne = LIGNES.some((l) => {
+          if (f.statutCategorisation && l.statutCategorisation !== f.statutCategorisation)
+            return false;
+          if (terme && !(l.cleanLabel ?? "").toLowerCase().includes(terme)) return false;
+          return true;
+        });
+        return { ok: true as const, data: auMoinsUne ? SOMME_NETTE_DEMO : [] };
       },
       async chargerSplits(ref) {
         // Démonstration du garde-fou : la ligne « t5 » simule un échec serveur —

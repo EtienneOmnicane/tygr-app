@@ -18,7 +18,7 @@ trois écrans, le coupable est une largeur qui ne se voit pas sur une capture.
 | après | 245,6 px | 246 px (sur 2 lignes) | non |
 
 Élargir ne pouvait pas suffire : le design system plafonne les popovers à 360 px
-(UI_GUIDELINES §221), soit ~245 px utiles pour un nom qui en demande 323. C'est le
+(UI_GUIDELINES §2.2), soit ~245 px utiles pour un nom qui en demande 323. C'est le
 passage à la ligne (`break-words`) qui affiche le nom entier ; les 60 px gagnés ne
 font qu'économiser des retours à la ligne.
 
@@ -35,6 +35,14 @@ seulement filtre actif — taper dans la recherche).
 
 La table faisait déjà 942 px : `max-w-0` écrasait la colonne à 105 px et hachait le
 mot alors que la place était là.
+
+Ce qui est proscrit est le mot **haché**, pas le retour à la ligne. La cellule est
+donc laissée **élastique** (aucun `whitespace-nowrap`) : le repli tombe entre
+« Roupie » et « mauricienne », les deux mots restent entiers. Un premier jet rendait
+le libellé insécable — la colonne devenait alors incompressible et repoussait le NET
+hors de l'écran sous 640 px, ce qui inverse la règle du projet (un libellé cède,
+jamais un chiffre). Mesuré après correction : plus de défilement ni de Net masqué
+dès 480 px.
 
 ## 3. Centre du donut — `DONUT-CENTRE-DEBORDE1`
 
@@ -58,8 +66,23 @@ Contrôlé à 375 / 480 / 640 / 1024 / 1440 px. Un premier jet élargissait le p
 à 360 px à toutes les tailles : ancré à droite, il grandit vers la gauche et sortait
 du viewport sous 640 px (−44 px à 480 px). Corrigé par un garde `sm:`.
 
-La table du total défile dans son propre conteneur sur mobile (520 px de contenu
-dans 293 px de large) sans faire défiler la page.
+La table du total défile dans son propre conteneur sans jamais faire défiler la page.
+Ce défilement ne subsiste qu'à 375 px : trois colonnes de montants insécables plus une
+colonne de libellé ne tiennent pas dans 293 px, et raboter un chiffre est exclu. La
+zone est donc rendue atteignable au clavier (`role="region"` + `tabIndex=0`), sans
+quoi le Net serait inaccessible sans souris.
+
+## Revue contradictoire
+
+Le lot a été revu par un contexte indépendant avant push. Trois constats retenus et
+corrigés dans la branche :
+
+- le stub de démo renvoyait ses totaux **inconditionnellement** : le bandeau se
+  superposait à l'état vide « aucune transaction ne correspond », un écran que la prod
+  ne produit jamais. Seule la cardinalité suit désormais le filtre ;
+- la décision tracée dans `types-transactions.ts` nommait la démo comme ne fournissant
+  pas `sommeNette` : amendée plutôt que laissée en contradiction ;
+- la case à cocher flottait à mi-hauteur des options sur deux lignes (`items-center`).
 
 ## Réserves
 
@@ -69,6 +92,6 @@ dans 293 px de large) sans faire défiler la page.
 - `/demo/perimetre-states` défile horizontalement à 375 px. Le coupable est le faux
   header de la page de démo (`div.ml-auto`, 311 px), pas le sélecteur — préexistant,
   hors périmètre de ce lot.
-- Les popovers du design system demandent aussi 16 px de padding (§221) ; celui-ci
+- Les popovers du design system demandent aussi 16 px de padding (§2.2) ; celui-ci
   est à 8 px. Non touché : l'augmenter reprendrait 16 px de largeur au nom de compte,
   ce que ce lot cherche justement à gagner.

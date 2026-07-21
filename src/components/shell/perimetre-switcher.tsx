@@ -108,7 +108,10 @@ function optionCompte(
       aria-selected={coche}
       onClick={() => basculer(c.bankAccountId)}
       className={cn(
-        "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left",
+        // `items-start` : le libellé peut tenir sur deux lignes (cf. plus bas). Centrées,
+        // la case et le badge devise flotteraient à mi-hauteur du bloc au lieu d'être en
+        // regard de la PREMIÈRE ligne du nom.
+        "flex w-full items-start gap-2 rounded-control px-2 py-1.5 text-left",
         "text-sm transition-colors focus:outline-none focus-visible:ring-2",
         "focus-visible:ring-primary",
         coche ? "bg-primary-50" : "hover:bg-surface-inset",
@@ -117,7 +120,8 @@ function optionCompte(
       <span
         aria-hidden
         className={cn(
-          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
+          // `mt-0.5` : recale la case (16 px) sur la hauteur de ligne du texte (20 px).
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px]",
           coche
             ? "border-primary bg-primary text-text-onink"
             : "border-line",
@@ -129,13 +133,14 @@ function optionCompte(
           `truncate` : dans un popover de 300 px, un libellé réaliste (« State Bank of
           Mauritius · Compte épargne entreprise », 323 px) perdait plus de la moitié de
           ses caractères — or c'est précisément sur ce nom qu'on coche. Élargir ne suffit
-          pas : le design system plafonne les popovers à 360 px (UI_GUIDELINES §221), soit
+          pas : le design system plafonne les popovers à 360 px (UI_GUIDELINES §2.2), soit
           ~245 px utiles. Le repli lisible est donc le RETOUR À LA LIGNE, pas la coupe.
           `break-words` protège du cas pathologique (nom d'un seul tenant sans espace). */}
       <span className="min-w-0 flex-1 break-words text-text">
         {libelleCompte(c)}
       </span>
-      <span className="shrink-0 text-xs text-text-muted">{c.currency}</span>
+      {/* `mt-0.5` : même recalage que la case — le badge reste sur la 1re ligne du nom. */}
+      <span className="mt-0.5 shrink-0 text-xs text-text-muted">{c.currency}</span>
     </button>
   );
 }
@@ -372,7 +377,7 @@ export function PerimetreSwitcher({
 
       {ouvert && (
         <div
-          // 360 px = HAUT de la fourchette du design system (UI_GUIDELINES §221 :
+          // 360 px = HAUT de la fourchette du design system (UI_GUIDELINES §2.2 :
           // « popovers, largeur 320-360px ») ; les 300 px précédents étaient SOUS la
           // spec, ce qui privait les noms de comptes de ~60 px.
           //

@@ -107,7 +107,20 @@ export function TransactionsSommeNette({
           colonnes ET de ligne → association valeur↔en-tête gratuite pour le lecteur
           d'écran, et alignement des colonnes (donc des virgules) garanti par le moteur de
           rendu, sans largeur en dur. */}
-      <div className="mt-2 overflow-x-auto">
+      {/* Sous ~400 px, quatre colonnes dont trois de montants INSÉCABLES ne tiennent pas :
+          la table défile alors DANS ce conteneur (la page, elle, ne défile jamais). C'est
+          le moindre mal — l'alternative serait de raboter un chiffre.
+          `role=region` + `tabIndex=0` : une zone défilante doit être atteignable au
+          CLAVIER, sinon le Net devient inaccessible sans souris dès qu'elle défile.
+          `aria-label` PROPRE (et non un `aria-labelledby` vers le titre de la section) :
+          la section porte déjà ce titre, le réutiliser ferait annoncer deux fois le même
+          nom pour deux niveaux imbriqués. Inerte tant qu'il n'y a rien à faire défiler. */}
+      <div
+        role="region"
+        aria-label="Totaux par devise"
+        tabIndex={0}
+        className="mt-2 overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
         <table className="w-full text-xs">
           <thead>
             <tr className="text-[11px] uppercase tracking-wide text-text-faint">
@@ -128,16 +141,21 @@ export function TransactionsSommeNette({
           <tbody>
             {totaux.map((t) => (
               <tr key={t.devise}>
-                {/* `whitespace-nowrap` : le nom de devise est un MOT, il se lit entier ou
-                  pas du tout. Il portait `max-w-0 truncate` — un hack qui écrase la
-                  colonne au minimum possible pour forcer la troncature ; sur une table
-                  de 942 px il ne laissait que 105 px au libellé et coupait « Roupie
-                  mauricienne » en plein mot alors que la place était disponible. La
-                  colonne se dimensionne maintenant sur son contenu ; les trois colonnes
-                  de montants, elles, restent prioritaires (`nowrap` + `tabular-nums`). */}
+                {/* Cellule ÉLASTIQUE, et c'est voulu. Elle portait `max-w-0 truncate` —
+                  le hack qui écrase une cellule de table au minimum pour forcer la
+                  coupe : sur une table de 942 px il ne laissait que 105 px au libellé et
+                  hachait « Roupie mauricienne » EN PLEIN MOT alors que la place était là.
+                  Ce qui est proscrit, c'est le mot haché, pas le retour à la ligne : sans
+                  contrainte, le repli CSS tombe entre « Roupie » et « mauricienne » et les
+                  deux mots restent entiers.
+                  Surtout, ne PAS mettre `whitespace-nowrap` ici : mesuré, la colonne
+                  devenait alors incompressible et poussait le NET — le chiffre clé —
+                  hors de l'écran sous 640 px. Les seuls éléments rigides de la ligne
+                  doivent être les montants. Un libellé cède, jamais un chiffre
+                  (CLAUDE.md, formatage des données financières). */}
                 <th
                   scope="row"
-                  className="whitespace-nowrap py-0.5 pr-3 text-left font-normal text-text-muted"
+                  className="py-0.5 pr-3 text-left font-normal text-text-muted"
                 >
                   {nomDevise(t.devise)}
                   <span className="text-text-faint">

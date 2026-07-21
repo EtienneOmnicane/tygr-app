@@ -130,8 +130,12 @@ export function DonutCategories({
       </svg>
 
       {/* Centre : total mono-devise (chaîne SQL formatée) ou détail de la part survolée.
-          Overlay HTML (pas du <text> SVG) → tabular-nums + retour à la ligne propre pour
-          les gros montants. `pointer-events-none` : ne bloque pas le survol des secteurs. */}
+          Overlay HTML (pas du <text> SVG) → `tabular-nums` et mise en forme CSS normale.
+          Un montant ne se replie JAMAIS sur deux lignes : son séparateur de milliers est
+          une espace fine INSÉCABLE (U+202F, cf. `format-montant`), le `whitespace-nowrap`
+          ci-dessous ne fait qu'expliciter cette garantie. S'il ne tient pas, c'est la
+          géométrie qu'on corrige (rayons), pas le montant qu'on casse.
+          `pointer-events-none` : ne bloque pas le survol des secteurs. */}
       {/* Largeur en POURCENTAGE, pas en px : le SVG est fluide (`w-full`), donc un
           padding fixe (`px-8`) ne suit pas l'échelle — il laissait 156 px de texte pour
           un trou de 128 px. 58 % du côté reste inscrit dans le cercle intérieur (2×70/220

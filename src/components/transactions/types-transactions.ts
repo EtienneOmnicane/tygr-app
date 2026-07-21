@@ -232,10 +232,14 @@ export interface ActionsTransactions {
    * que `listerTransactions` — mais sans curseur : il totalise TOUT le jeu filtré, pas la
    * page affichée.
    *
-   * OPTIONNELLE À DESSEIN : les surfaces qui n'ont pas d'agrégat serveur (stub de la démo
-   * `app/demo/transactions`, tests) ne la fournissent pas — le conteneur n'affiche alors
-   * simplement AUCUN total. Dégradation silencieuse assumée : pas de chiffre vaut mieux
-   * qu'un faux chiffre (un stub client ne pourrait sommer que la page visible).
+   * OPTIONNELLE À DESSEIN : les surfaces qui n'ont pas d'agrégat serveur (tests) ne la
+   * fournissent pas — le conteneur n'affiche alors simplement AUCUN total. Dégradation
+   * silencieuse assumée : pas de chiffre vaut mieux qu'un faux chiffre.
+   *
+   * Ce qu'un stub ne doit JAMAIS faire, c'est SOMMER les lignes affichées : la pagination
+   * est en keyset, il ne totaliserait que la page visible. La démo `app/demo/transactions`
+   * la fournit donc en FIXTURE — montants constants, seule la cardinalité suit le filtre —
+   * pour que le bandeau soit capturable au Visual QA sans jamais calculer un montant.
    */
   sommeNette?(args: {
     filtres?: FiltresTransactions;
