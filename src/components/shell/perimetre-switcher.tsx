@@ -374,11 +374,17 @@ export function PerimetreSwitcher({
         <div
           // 360 px = HAUT de la fourchette du design system (UI_GUIDELINES §221 :
           // « popovers, largeur 320-360px ») ; les 300 px précédents étaient SOUS la
-          // spec, ce qui privait les noms de comptes de ~60 px. `max-w` : sur un écran
-          // étroit, le popover est ancré à droite — sans borne il déborderait hors du
-          // viewport au lieu de rétrécir.
-          className="absolute right-0 z-20 mt-2 w-[360px] max-w-[calc(100vw-1.5rem)]
-            rounded-control bg-surface-card p-2 text-text shadow-popover"
+          // spec, ce qui privait les noms de comptes de ~60 px.
+          //
+          // Mais l'élargissement est GARDÉ PAR `sm:` : le popover est ancré à droite du
+          // déclencheur, donc il grandit vers la GAUCHE. Mesuré sous 640 px, un popover
+          // de 360 px sort du viewport par la gauche (−44 px à 480 px de large) — un
+          // `max-w` n'y peut rien, il borne la largeur, pas le point d'ancrage. Sous le
+          // breakpoint on garde donc les 300 px d'origine. L'affichage du nom complet ne
+          // dépend pas de cette largeur : il vient du `break-words` de l'option, qui joue
+          // à toutes les tailles ; ces 60 px ne font qu'économiser des retours à la ligne.
+          className="absolute right-0 z-20 mt-2 w-[300px] rounded-control bg-surface-card
+            p-2 text-text shadow-popover sm:w-[360px]"
           role="dialog"
           aria-label="Choisir le périmètre d'affichage"
         >
