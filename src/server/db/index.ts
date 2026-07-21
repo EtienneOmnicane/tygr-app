@@ -146,6 +146,7 @@ export type {
 export {
   listerComptes,
   listerConnexionsBancaires,
+  compterConnexionsTenant,
   comptesParEntite,
   listerEntitesVisibles,
   soldeConsolideCourant,

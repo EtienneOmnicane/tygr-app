@@ -16,6 +16,18 @@ import type { DonneesDashboard } from "@/components/dashboard/dashboard-content"
 export const DEMO_MOIS = "2026-06";
 
 /**
+ * Signal de périmètre NEUTRE (NUDGE-VISION-ENTITE1) : lecteur non borné, tenant pourvu
+ * d'au moins une connexion. C'est le cas par défaut de toutes les fixtures qui exposent
+ * des comptes — pour elles ces deux drapeaux sont inertes (`comptes.length > 0`
+ * court-circuite la sélection d'état). Factorisé pour que l'état « hors périmètre »
+ * n'ait qu'UN endroit où être posé volontairement : sa propre fixture, ci-dessous.
+ */
+const PERIMETRE_NEUTRE = {
+  aDesConnexionsTenant: true,
+  lecteurBorne: false,
+} satisfies Pick<DonneesDashboard, "aDesConnexionsTenant" | "lecteurBorne">;
+
+/**
  * État SUCCÈS : dashboard complet. Multi-devise (MUR + USD) pour exercer la
  * synthèse ventilée et la pile de soldes ; flux mensuel AVEC un mois NÉGATIF
  * (mai) pour valider la ligne de zéro et l'aire en-dessous.
@@ -27,6 +39,7 @@ export const DEMO_MOIS = "2026-06";
  * USD 179 200). Le cas MONO-groupe (repli liste plate) vit sur l'état PARTIEL.
  */
 export const DEMO_DASHBOARD: DonneesDashboard = {
+  ...PERIMETRE_NEUTRE,
   comptes: [
     {
       bankAccountId: "demo-acc-mcb-4521",
@@ -220,6 +233,7 @@ export const DEMO_DASHBOARD: DonneesDashboard = {
  * historique (pas d'accordéon à un seul volet).
  */
 export const DEMO_DASHBOARD_PARTIEL: DonneesDashboard = {
+  ...PERIMETRE_NEUTRE,
   comptes: DEMO_DASHBOARD.comptes.map((c) => ({
     ...c,
     holderId: null,
@@ -248,6 +262,25 @@ export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
   grilleMensuelle: [],
   prevision: null,
   transactionsRecentes: [],
+  // Le tenant n'a AUCUNE connexion : c'est ce qui rend l'empty global honnête ici.
+  aDesConnexionsTenant: false,
+  lecteurBorne: false,
+};
+
+/**
+ * État HORS PÉRIMÈTRE (NUDGE-VISION-ENTITE1) : mêmes données VIDES que ci-dessus —
+ * c'est tout l'intérêt du cas. Ce qui change n'est pas la donnée mais le DROIT du
+ * lecteur : le tenant a une connexion, et ce membre est borné (Vision Entité ou droit
+ * par compte) sans qu'aucun compte lui soit rattaché.
+ *
+ * À comparer côte à côte avec `DEMO_DASHBOARD_VIDE` au Visual QA : deux écrans
+ * identiques en données, deux messages qui doivent être opposés. Afficher l'empty
+ * global ici revenait à NIER une banque que /banques montre dans la même session.
+ */
+export const DEMO_DASHBOARD_HORS_PERIMETRE: DonneesDashboard = {
+  ...DEMO_DASHBOARD_VIDE,
+  aDesConnexionsTenant: true,
+  lecteurBorne: true,
 };
 
 /**
@@ -259,6 +292,7 @@ export const DEMO_DASHBOARD_VIDE: DonneesDashboard = {
  * restent inchangées. `flux` porte 1 point (cohérent avec l'état « complet »).
  */
 export const DEMO_DASHBOARD_UN_MOIS: DonneesDashboard = {
+  ...PERIMETRE_NEUTRE,
   comptes: DEMO_DASHBOARD.comptes,
   soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
   flux: [
@@ -284,6 +318,7 @@ export const DEMO_DASHBOARD_UN_MOIS: DonneesDashboard = {
  * prévisionnelle doit bouger même sans historique bancaire.
  */
 export const DEMO_DASHBOARD_PREVISION_SANS_REALISE: DonneesDashboard = {
+  ...PERIMETRE_NEUTRE,
   comptes: DEMO_DASHBOARD.comptes,
   soldesParDevise: DEMO_DASHBOARD.soldesParDevise,
   flux: [],

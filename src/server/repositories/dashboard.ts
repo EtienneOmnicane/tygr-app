@@ -289,6 +289,38 @@ export async function listerConnexionsBancaires(
 }
 
 /**
+ * Le TENANT a-t-il au moins une connexion bancaire ? (NUDGE-VISION-ENTITE1)
+ *
+ * Sert à distinguer deux situations que `listerComptes` rend identiques (0 ligne) :
+ * « cet espace n'a aucune banque » et « cet espace en a une, mais aucun de ses comptes
+ * n'est dans mon périmètre ». Sans ce signal, le dashboard affiche l'empty state global
+ * à un membre scopé — donc lui NIE une connexion que /banques lui montre juste à côté.
+ *
+ * SÉCURITÉ — pourquoi ce COUNT est sûr, et pourquoi il porte sur CETTE table :
+ *  - `bank_connections` ne porte QUE `tenant_isolation` (PERMISSIVE, migration 0003) —
+ *    vérifié exhaustivement sur les migrations : ni `entity_scope`, ni `account_scope`,
+ *    ni clause `view_filter`. Le comptage est donc borné au workspace PAR LA RLS
+ *    elle-même, pas par un WHERE applicatif qu'un oubli pourrait perdre (règle 2) ;
+ *  - il ne joint PAS `bank_accounts` : aucun contournement de l'étage 2. C'est tout
+ *    l'intérêt — un COUNT de comptes « hors scope » exigerait de neutraliser le GUC
+ *    `app.current_entity_scope`, ce qui est INTERDIT ;
+ *  - il ne divulgue rien de neuf : `listerConnexionsBancaires` ci-dessus expose DÉJÀ
+ *    toutes les connexions du tenant à tout membre (nbComptes=0 sous périmètre), et
+ *    /banques n'a pas de garde de rôle. L'appelant n'en dérive qu'un BOOLÉEN — ni id,
+ *    ni nom, ni montant, ni entité.
+ *
+ * À appeler dans le `withWorkspace` DÉJÀ ouvert par la page : un second withWorkspace
+ * rejouerait le défaut d'auto-amputation L8b-1 (un chemin parallèle qui lit sous un
+ * périmètre différent du reste de l'écran).
+ */
+export async function compterConnexionsTenant(tx: Tx): Promise<number> {
+  const [ligne] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(bankConnections);
+  return ligne?.n ?? 0;
+}
+
+/**
  * Traduction « axe ENTITÉ → liste de bankAccountId » pour le sélecteur de périmètre
  * (L8b-2). Renvoie les comptes de l'entité `entityId` VISIBLES sous le droit du membre.
  *
