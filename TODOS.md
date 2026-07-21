@@ -2730,8 +2730,35 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
 
 ### Dette relevée au contrat widget natif (UI, 2026-06-15)
 
-- [ ] **🔴 `finaliserConnexionAction` désalignée du contrat Fern `publicToken` seul**
-  — Effort S (P0, déclencheur : avant la démo du widget natif). Décision 2026-06-15 :
+- [x] **🔴 `finaliserConnexionAction` désalignée du contrat Fern `publicToken` seul**
+  — ✅ **SUPERSEDED / RÉSOLU** (vérifié 2026-07-21). L'entrée décrit du code qui
+  **n'existe plus** : `finaliserConnexionAction` ET `finalisationSchema` sont ABSENTS
+  de tout `src/` et `tests/` (supprimés dès l'unification du câblage — cf. §
+  « Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU) » ci-dessus, qui
+  actait déjà la suppression ; cette entrée-ci en était le doublon jamais coché).
+  Le chemin de finalisation ACTIF n'exige que le(s) publicToken(s), bout en bout :
+  1. `banques/page.tsx:69` monte `<BankConnectWidget/>` ;
+  2. `bank-connect-widget.tsx:290` `onConnexions={finaliser}` ;
+  3. `omnifi-link-launcher.tsx:324-330` `onSuccess(payload)` →
+     `publicTokensDepuisPayload` (`:65-70`, n'extrait que `c?.publicToken`) ;
+  4. `bank-connect-widget.tsx:148-154` → `finaliserConnexionDropinAction(publicTokens)` ;
+  5. `banques/actions.ts:203-207` **`dropinSchema`** `.strict()` = `{ publicTokens:
+     string[1..20] }` — **aucun `sessionToken`, aucun `jobId`** ;
+  6. `orchestration.ts:1487-1489` → `finaliserConnexionDropin({ publicToken })`
+     (`FinaliserDropinParams`, `:467-470` : « ni sessionToken ni jobId ») ;
+  7. `orchestration.ts:486-489` **ClientUserId résolu SERVEUR** —
+     `clientUserIdDuWorkspace(tx, ctx.workspaceId)`, jamais un paramètre client ;
+  8. `orchestration.ts:492` → `client.echangerPublicToken(publicToken, clientUserId)`
+     → `client.ts:580-583` `POST /connections/link-exchange` body
+     `{ PublicToken, ClientUserId }`.
+  Aucun des 5 schémas zod de `banques/actions.ts` (`:143`, `:203`, `:461`, `:516`,
+  `:603`) n'exige `sessionToken`/`jobId` pour finaliser — `reparationSchema` (`:461`)
+  porte bien un `jobId`, mais c'est le flux **REPAIR** d'une connexion existante, pas
+  la finalisation d'un publicToken. Les `sessionTokenSchema`/`jobIdSchema`
+  (`widget-runtime.ts:49-50`) survivent sur le chemin **MFA custom MORT** (cf. constat
+  CODE-MORT-MFA1 ci-dessous). Prémisse « bloquant avant la démo du widget natif » :
+  CADUQUE. **CONTEXTE HISTORIQUE conservé ci-dessous :**
+  Décision 2026-06-15 :
   le widget natif Omni-FI (`@omnifi/react`, `onSuccess`) renvoie le **publicToken
   SEUL** (doc Fern `link-connect → PublicToken`). L'UID UI
   (`bank-connect-widget.tsx`) a été aligné : `onSuccess(publicToken: string)`
@@ -2743,6 +2770,22 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   de `PublicToken` + `ClientUserId`, ce dernier résolu côté serveur depuis le
   workspace). Tant que ce n'est pas fait, le flux de connexion casse à la
   finalisation, même si le widget aboutit.
+- [ ] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » conservé mais jamais monté**
+  — Effort S (déclencheur : prochain chantier touchant `src/components/widget/`).
+  Constat annexe relevé à la vérification du 2026-07-21, **non corrigé ici** (règle 1 :
+  ne pas mélanger vérification et implémentation). Le drop-in gère la MFA en interne,
+  donc toute la pile MFA custom est orpheline au runtime : `useOmniFiWidget`
+  (`use-omnifi-widget.ts`) n'est monté par AUCUN composant — seulement ré-exporté par
+  le barrel `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/
+  `submitMfaAction`/`resendMfaAction` (`widget-runtime.ts`) ne sont importées que par
+  ce hook ; `finaliserConnexion` (orchestration, chemin widget custom) n'est appelée
+  par aucune action. Déjà acté en 2026-06-15 (« CONSERVÉE + testée, réutilisable hors
+  dropin ; un seul chemin runtime : le dropin ») — donc **conservation DÉLIBÉRÉE**, pas
+  un oubli. Risque réel mais faible : surface de Server Actions authentifiées non
+  exercée par le produit (elle reste gardée par `exigerSession*`), et coût de
+  maintenance/confusion — c'est CE code qui fait apparaître des schémas
+  `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste ci-dessus. Décision à
+  prendre : supprimer, ou documenter en tête de fichier « chemin non monté ».
 
 ### Dette acceptée à la PR auth-foundation (2026-06-12)
 
