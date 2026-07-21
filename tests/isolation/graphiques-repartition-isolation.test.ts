@@ -74,6 +74,11 @@ const TX_TOMBSTONE = "a0000001-0000-4000-8000-000000000004";
 const TX_NUE = "a0000001-0000-4000-8000-000000000005";
 const TX_USD = "a0000001-0000-4000-8000-000000000006";
 const TX_B = "b0000001-0000-4000-8000-000000000001";
+// Fenêtre SEPTEMBRE — ventilation PÉRIMÉE + bornes de fenêtre (cf. seed dédié).
+const TX_SURVENT = "a0000001-0000-4000-8000-000000000007";
+const TX_SEPT_OK = "a0000001-0000-4000-8000-000000000008";
+const TX_SEPT_BORNE = "a0000001-0000-4000-8000-000000000009";
+const TX_SEPT_HORS = "a0000001-0000-4000-8000-00000000000a";
 
 const sessionA = { userId: ALICE, activeWorkspaceId: WS_A };
 const sessionB = { userId: BOB, activeWorkspaceId: WS_B };
@@ -87,6 +92,9 @@ const JUILLET = { from: "2026-07-01", to: "2026-07-31" } as const;
 // Fenêtre DÉDIÉE à l'axe effectif (Lots 1-2) — isolée pour ne perturber aucune
 // assertion ci-dessus (aucune fixture antérieure ne porte de split).
 const AOUT = { from: "2026-08-01", to: "2026-08-31" } as const;
+// Fenêtre DÉDIÉE à la ventilation PÉRIMÉE (Σ splits > |montant| après re-sync) et aux
+// BORNES de fenêtre — isolée pour ne pas déplacer les totaux d'août.
+const SEPTEMBRE = { from: "2026-09-01", to: "2026-09-30" } as const;
 
 beforeAll(async () => {
   const dir = path.join(process.cwd(), "drizzle", "migrations");
@@ -203,11 +211,24 @@ beforeAll(async () => {
     insert into transactions_cache (id, workspace_id, bank_account_id, omnifi_txn_id, transaction_date, booking_date_time, amount, currency, credit_debit, bank_label_raw, clean_label, primary_category, is_removed) values
       ('${TX_PARTIELLE}','${WS_A}','${ACC_A}','txa-ao1','2026-08-03','2026-08-03T05:30:00Z','1200.00','MUR','Debit','LOYER AOUT','Bailleur','rent',false),
       ('${TX_3SPLITS}','${WS_A}','${ACC_A}','txa-ao2','2026-08-05','2026-08-05T05:30:00Z','900.00','MUR','Debit','CEB AOUT','CEB','utilities',false),
-      ('${TX_COMPLETE}','${WS_A}','${ACC_A}','txa-ao3','2026-08-07','2026-08-07T05:30:00Z','400.00','MUR','Debit','FOURN AOUT','Fournisseur','utilities',false),
+      ('${TX_COMPLETE}','${WS_A}','${ACC_A}','txa-ao3','2026-08-07','2026-08-07T05:30:00Z','400.00','MUR','Debit','RESTO AOUT','Traiteur','food & drink',false),
       ('${TX_TOMBSTONE}','${WS_A}','${ACC_A}','txa-ao4','2026-08-09','2026-08-09T05:30:00Z','5000.00','MUR','Debit','SUPPR AOUT','X','rent',true),
       ('${TX_NUE}','${WS_A}','${ACC_A}','txa-ao5','2026-08-11','2026-08-11T05:30:00Z','100.00','MUR','Debit','DIVERS AOUT','Y',null,false),
       ('${TX_USD}','${WS_A}','${ACC_A_USD}','txa-ao6','2026-08-13','2026-08-13T05:30:00Z','300.00','USD','Debit','FEES AOUT','Bank fees','bank charges',false),
       ('${TX_B}','${WS_B}','${ACC_B}','txb-ao1','2026-08-03','2026-08-03T05:30:00Z','8888.00','MUR','Debit','SECRET B AOUT','Secret B','healthcare',false);
+    -- ══ SEPTEMBRE — ventilation PÉRIMÉE + bornes ═══════════════════════════════════
+    -- TX_SURVENT reproduit l'état d'APRÈS un re-sync qui RÉTRÉCIT le montant : la
+    -- transaction valait 1 200 et avait été ventilée intégralement ; l'amont la corrige
+    -- à 900 (ingestion.ts écrase amount et laisse les splits intacts) → Σ splits (1 200)
+    -- DÉPASSE |montant| (900). Sans garde, la branche splits émettrait 1 200 pendant que
+    -- le reliquat (−300) serait avalé par le filtre > 0 : total 1 200 pour un flux de 900.
+    -- TX_SEPT_BORNE tombe le jour to (INCLUS) et TX_SEPT_HORS le lendemain (EXCLU) :
+    -- le donut et le KPI dashboard doivent trancher IDENTIQUEMENT (bornes équivalentes).
+    insert into transactions_cache (id, workspace_id, bank_account_id, omnifi_txn_id, transaction_date, booking_date_time, amount, currency, credit_debit, bank_label_raw, clean_label, primary_category, is_removed) values
+      ('${TX_SURVENT}','${WS_A}','${ACC_A}','txa-se1','2026-09-03','2026-09-03T05:30:00Z','900.00','MUR','Debit','LOYER CORRIGE','Bailleur','rent',false),
+      ('${TX_SEPT_OK}','${WS_A}','${ACC_A}','txa-se2','2026-09-05','2026-09-05T05:30:00Z','500.00','MUR','Debit','CEB SEPT','CEB','utilities',false),
+      ('${TX_SEPT_BORNE}','${WS_A}','${ACC_A}','txa-se3','2026-09-30','2026-09-30T05:30:00Z','100.00','MUR','Debit','LOYER 30/09','Bailleur','rent',false),
+      ('${TX_SEPT_HORS}','${WS_A}','${ACC_A}','txa-se4','2026-10-01','2026-10-01T05:30:00Z','7000.00','MUR','Debit','HORS FENETRE','Bailleur','rent',false);
     insert into transaction_categorizations (workspace_id, transaction_id, transaction_date, category_id, amount, source, rule_id, created_by) values
       -- PARTIELLE : 500 sur 1 200 → 700 restent à imputer à la catégorie BANCAIRE.
       ('${WS_A}','${TX_PARTIELLE}','2026-08-03','${CAT_LOYER}','500.00','MANUAL',null,'${ALICE}'),
@@ -219,11 +240,15 @@ beforeAll(async () => {
       -- COMPLET (400 = 400) et posé par une RÈGLE, pas à la main.
       ('${WS_A}','${TX_COMPLETE}','2026-08-07','${CAT_FOURN}','400.00','RULE','${RULE_A}','${ALICE}'),
       -- Le split d'une transaction TOMBSTONÉE : il existe toujours en base.
-      ('${WS_A}','${TX_TOMBSTONE}','2026-08-09','${CAT_LOYER}','5000.00','MANUAL',null,'${ALICE}'),
+      ('${WS_A}','${TX_TOMBSTONE}','2026-08-09','${CAT_LOYER}','2000.00','MANUAL',null,'${ALICE}'),
       -- USD : « Fournisseurs » dans une SECONDE devise (I2).
       ('${WS_A}','${TX_USD}','2026-08-13','${CAT_FOURN}','100.00','MANUAL',null,'${ALICE}'),
       -- Tenant B (I4).
-      ('${WS_B}','${TX_B}','2026-08-03','${CAT_B}','8888.00','MANUAL',null,'${BOB}');
+      ('${WS_B}','${TX_B}','2026-08-03','${CAT_B}','8888.00','MANUAL',null,'${BOB}'),
+      -- PÉRIMÉ : 1 200 ventilés sur une transaction qui n'en vaut plus que 900.
+      ('${WS_A}','${TX_SURVENT}','2026-09-03','${CAT_LOYER}','1200.00','MANUAL',null,'${ALICE}'),
+      -- Voisine SAINE : prouve que la garde de péremption ne déborde pas sur les autres.
+      ('${WS_A}','${TX_SEPT_OK}','2026-09-05','${CAT_FOURN}','200.00','MANUAL',null,'${ALICE}');
   `);
 
   const provisioning = readFileSync(
@@ -783,6 +808,119 @@ describe("repartitionParCategorie — agrégat par catégorie/devise + isolation
     expect(parCle.get("Non catégorisé/AUCUNE")?.montantPrecedent).toBe("500.00");
     // La requête précédente ne contamine pas les montants courants.
     expect(mur?.total).toBe("2600.00");
+  });
+
+  it("VENTILATION PÉRIMÉE — Σ splits > |montant| : la ventilation est ignorée, le total reste EXACT", async () => {
+    // L'invariant `Σ splits ≤ |montant|` n'est validé QU'À L'ÉCRITURE du split ; l'upsert
+    // de re-sync (`ingestion.ts`) écrase `amount` et laisse les splits intacts. Une
+    // transaction ventilée à 100 % dont le montant RÉTRÉCIT devient donc sur-ventilée
+    // sans le moindre bug d'écriture. Sans garde, la branche splits émet 1 200 et le
+    // reliquat négatif (−300) disparaît via le `> 0` : le donut afficherait 1 200 pour un
+    // flux réel de 900, et divergerait du KPI « Sorties » sur le même écran.
+    const [rep, kpi] = await withWorkspace(sessionA, async (tx) => [
+      await repartitionParCategorie(tx, { sens: "outflow", ...SEPTEMBRE }),
+      await synthesePeriodeParDevise(tx, {
+        from: SEPTEMBRE.from,
+        to: SEPTEMBRE.to,
+      }),
+    ]);
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // Exhaustivité préservée : 900 (sur-ventilée) + 500 + 100 (jour `to`) = 1 500,
+    // ÉGAL au KPI dashboard — et non 1 800 (ce que donnerait la sur-émission des splits).
+    expect(mur?.total).toBe("1500.00");
+    expect(kpi.find((k) => k.currency === "MUR")?.sorties).toBe(mur?.total);
+
+    // La ventilation périmée est IGNORÉE : la transaction est imputée entièrement à sa
+    // catégorie bancaire. Aucune part TYGR « Loyer » ne doit exister en septembre.
+    expect(
+      mur?.parts.some((p) => p.categorie === "Loyer" && p.origine === "TYGR"),
+    ).toBe(false);
+    const loyerBanque = mur?.parts.find(
+      (p) => p.categorie === "Loyer" && p.origine === "AMONT",
+    );
+    expect(loyerBanque?.montant).toBe("1000.00"); // 900 (périmée) + 100 (borne)
+
+    // La garde ne DÉBORDE PAS sur les transactions saines : TX_SEPT_OK garde sa
+    // ventilation (200 TYGR) et son reliquat bancaire (300).
+    expect(
+      mur?.parts.find((p) => p.categorie === "Fournisseurs" && p.origine === "TYGR")
+        ?.montant,
+    ).toBe("200.00");
+    expect(
+      mur?.parts.find((p) => p.categorie === "Charges" && p.origine === "AMONT")
+        ?.montant,
+    ).toBe("300.00");
+
+    // Somme des parts = total (centimes entiers, jamais de float — règle 8).
+    const sommeCentimes = (mur?.parts ?? []).reduce(
+      (s, p) => s + Math.round(Number(p.montant) * 100),
+      0,
+    );
+    expect(sommeCentimes).toBe(150000);
+  });
+
+  it("BORNES — le donut et le KPI dashboard tranchent IDENTIQUEMENT au jour près", async () => {
+    // Les deux fonctions bornent différemment EN APPARENCE : `lte(to)` pour le KPI,
+    // `< to + 1 jour` pour le donut. C'est équivalent sur une colonne `date` — mais
+    // l'équivalence n'était épinglée par AUCUNE fixture (aucune transaction ne tombait
+    // le jour `to` ni le lendemain). Si une borne dérivait, ou si la colonne devenait
+    // `timestamptz`, I1 ne le verrait pas. Ces deux transactions ferment le trou.
+    const [rep, kpi] = await withWorkspace(sessionA, async (tx) => [
+      await repartitionParCategorie(tx, { sens: "outflow", ...SEPTEMBRE }),
+      await synthesePeriodeParDevise(tx, {
+        from: SEPTEMBRE.from,
+        to: SEPTEMBRE.to,
+      }),
+    ]);
+    const mur = rep.devises.find((d) => d.currency === "MUR");
+
+    // Le 30/09 (jour `to`) est INCLUS des deux côtés ; le 01/10 (7 000) est EXCLU des
+    // deux côtés — sinon l'un des deux afficherait 8 500.
+    expect(mur?.total).toBe("1500.00");
+    expect(kpi.find((k) => k.currency === "MUR")?.sorties).toBe("1500.00");
+    expect(mur?.nbTransactions).toBe(3); // et non 4
+  });
+
+  it("I4 étage 2 — PÉRIMÈTRE : un viewFilter borne les splits ET le reste", async () => {
+    // L'étage 1 (tenant) était seul couvert. Or la table dérivée `ventile` est la SEULE
+    // lecture de l'axe qui ne porte pas `innerJoin(bankAccounts)` — elle n'est bornée que
+    // par la policy `account_scope` (migration 0017, EXISTS récursif). Si ce chemin
+    // cédait, le « reste » d'une transaction serait calculé avec des splits hors
+    // périmètre : un montant FAUX, silencieux, sans filet. Ce cas l'épingle.
+    const sessionUsdSeul = {
+      userId: ALICE,
+      activeWorkspaceId: WS_A,
+      viewFilter: [ACC_A_USD],
+    };
+    const rep = await withWorkspace(sessionUsdSeul, (tx) =>
+      repartitionParCategorie(tx, { sens: "outflow", ...AOUT }),
+    );
+
+    // Seule la devise du compte au périmètre : le MUR (2 600, dont 1 500 ventilés)
+    // disparaît ENTIÈREMENT — parts TYGR comprises.
+    expect(rep.devises.map((d) => d.currency)).toEqual(["USD"]);
+    const usd = rep.devises[0];
+    expect(usd.total).toBe("300.00");
+
+    // Les DEUX branches restent justes sous périmètre réduit : la ventilation du compte
+    // visible (100) et son reliquat bancaire (200) — le reste n'est ni gonflé ni raboté.
+    expect(usd.parts.map((p) => `${p.categorie}/${p.origine}`).sort()).toEqual([
+      "Fournisseurs/TYGR",
+      "Frais bancaires/AMONT",
+    ]);
+    expect(
+      usd.parts.find((p) => p.origine === "TYGR")?.montant,
+    ).toBe("100.00");
+    expect(
+      usd.parts.find((p) => p.origine === "AMONT")?.montant,
+    ).toBe("200.00");
+
+    // Aucune catégorie propre au compte MUR ne fuit (Loyer, Salaires, Charges).
+    const libelles = usd.parts.map((p) => p.categorie);
+    for (const horsPerimetre of ["Loyer", "Salaires", "Charges"]) {
+      expect(libelles).not.toContain(horsPerimetre);
+    }
   });
 
   it("D-e — le fragment partagé remonte à la NATURE quand `niveau=\"nature\"`", async () => {

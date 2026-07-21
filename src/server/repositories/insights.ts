@@ -398,6 +398,69 @@ export function axeCategorieEffective(
       ? sql`coalesce(${parent.name}, ${categories.name})`
       : sql`${categories.name}`;
 
+  // ── Montant déjà ventilé, PAR TRANSACTION (consommé par les DEUX branches) ───────
+  // Table dérivée BORNÉE PAR LA PÉRIODE : sans le `where`, on scannerait tous les splits
+  // du workspace pour une fenêtre de 12 mois. Le bornage est SÛR (et non destructif) car
+  // la FK composite impose `split.transaction_date = transaction.transaction_date` — un
+  // split d'une transaction de la fenêtre est forcément dans la fenêtre.
+  const ventile = tx
+    .select({
+      transactionId: transactionCategorizations.transactionId,
+      transactionDate: transactionCategorizations.transactionDate,
+      montantVentile: sql<string>`sum(${transactionCategorizations.amount})`.as(
+        "montant_ventile",
+      ),
+    })
+    .from(transactionCategorizations)
+    .where(
+      and(
+        gte(transactionCategorizations.transactionDate, from),
+        lt(
+          transactionCategorizations.transactionDate,
+          sql`(${to}::date + interval '1 day')`,
+        ),
+      ),
+    )
+    .groupBy(
+      transactionCategorizations.transactionId,
+      transactionCategorizations.transactionDate,
+    )
+    .as("ventile");
+
+  // ── Garde « ventilation PÉRIMÉE » : Σ splits > |montant| ─────────────────────────
+  //
+  // L'invariant `Σ splits ≤ |montant|` n'est validé QU'À L'ÉCRITURE du split
+  // (`categorisation.ts`, sous `FOR UPDATE`) — RIEN ne le re-valide quand le montant
+  // RÉTRÉCIT ensuite. Or l'upsert de re-sync écrase `amount` (`ingestion.ts:207-224`,
+  // `set: { amount: … }`) et laisse délibérément les splits intacts : une
+  // pré-autorisation carte réglée plus bas, ou une correction amont, suffit à faire
+  // passer une transaction ventilée à 100 % en état SUR-VENTILÉ. Aucun bug d'écriture
+  // n'est nécessaire — le chemin est ouvert en fonctionnement normal.
+  //
+  // Sans cette garde, le donut MENTIRAIT : la branche splits émettrait la totalité des
+  // splits (1 200) pendant que le reliquat `|montant| − Σ splits` deviendrait NÉGATIF
+  // (−300) et serait avalé par le `> 0` de la branche reste. Mesuré sur la fixture de
+  // septembre : total 1 800 contre un KPI « Sorties » de 1 500 sur le MÊME écran, sans
+  // aucun message, et des pourcentages faux en cascade. C'est l'invariant I1 qui casse.
+  //
+  // ⚠️ Un `greatest(reliquat, 0)` NE RÉPARE RIEN : il borne le reliquat mais laisse la
+  // branche splits sur-émettre. Il donnerait l'illusion d'un correctif en passant la CI.
+  //
+  // Traitement retenu (arbitrage Etienne, 2026-07-21) : une ventilation qui décrit un
+  // montant qui n'existe plus n'est plus une information — elle est IGNORÉE, et la
+  // transaction est imputée entièrement à sa catégorie bancaire, comme si elle n'avait
+  // jamais été ventilée. Exact au centime, sans proportion ni arrondi à répartir. La
+  // ventilation reste INTACTE en base (aucune écriture ici) ; l'anomalie se VOIT à
+  // l'écran — la part bascule en « catégorie bancaire » — au lieu d'être masquée.
+  // La réparation à la SOURCE (réduire/invalider les splits quand un re-sync fait
+  // baisser le montant) est un chantier d'ÉCRITURE distinct : dette SPLIT-PERIME1.
+  const ventileValide = sql`(case
+    when coalesce(${ventile.montantVentile}, 0) > abs(${transactionsCache.amount})
+    then null
+    else coalesce(${ventile.montantVentile}, 0)
+  end)`;
+
+
   // ── Branche 1 : la part VENTILÉE (splits TYGR) ──────────────────────────────────
   const brancheSplits = tx
     .select({
@@ -440,40 +503,31 @@ export function axeCategorieEffective(
         eq(parent.workspaceId, categories.workspaceId),
       )!,
     )
-    .where(and(eq(transactionsCache.isRemoved, false), filtreSens, ...dansLaFenetre))
+    // Même table dérivée que la branche « reste » : c'est elle qui porte la garde de
+    // péremption. Jointure SÛRE (1 ligne au plus : la dérivée est groupée sur la PK).
+    .leftJoin(
+      ventile,
+      and(
+        eq(ventile.transactionId, transactionsCache.id),
+        eq(ventile.transactionDate, transactionsCache.transactionDate),
+      )!,
+    )
+    .where(
+      and(
+        eq(transactionsCache.isRemoved, false),
+        filtreSens,
+        ...dansLaFenetre,
+        // Ventilation PÉRIMÉE → aucun split n'est émis pour cette transaction ; la
+        // branche « reste » l'imputera intégralement à sa catégorie bancaire. Les deux
+        // branches lisent la MÊME expression : elles ne peuvent pas diverger (l'une
+        // émettant les splits pendant que l'autre émet le montant plein).
+        sql`${ventileValide} is not null`,
+      ),
+    )
     // D-c : départage défensif MANUAL > RULE. Le résultat n'en dépend PAS (les deux
     // sources ne coexistent jamais sur une transaction) — c'est une ceinture à coût nul
     // contre un futur appelant d'`ajouterSplit` qui les mélangerait.
     .orderBy(sql`(${transactionCategorizations.source} = 'MANUAL') desc`);
-
-  // ── Branche 2 : le RESTE non ventilé, imputé à la catégorie bancaire ────────────
-  // Table dérivée BORNÉE PAR LA PÉRIODE : sans le `where`, on scannerait tous les splits
-  // du workspace pour une fenêtre de 12 mois. Le bornage est SÛR (et non destructif) car
-  // la FK composite impose `split.transaction_date = transaction.transaction_date` — un
-  // split d'une transaction de la fenêtre est forcément dans la fenêtre.
-  const ventile = tx
-    .select({
-      transactionId: transactionCategorizations.transactionId,
-      transactionDate: transactionCategorizations.transactionDate,
-      montantVentile: sql<string>`sum(${transactionCategorizations.amount})`.as(
-        "montant_ventile",
-      ),
-    })
-    .from(transactionCategorizations)
-    .where(
-      and(
-        gte(transactionCategorizations.transactionDate, from),
-        lt(
-          transactionCategorizations.transactionDate,
-          sql`(${to}::date + interval '1 day')`,
-        ),
-      ),
-    )
-    .groupBy(
-      transactionCategorizations.transactionId,
-      transactionCategorizations.transactionDate,
-    )
-    .as("ventile");
 
   // Sous-requête intermédiaire : matérialise le libellé FR **une seule fois**. Réémettre
   // `caseCategorieFr` (37 paramètres liés) à deux endroits du même SELECT le ferait
@@ -488,7 +542,7 @@ export function axeCategorieEffective(
       // `credit_debit`) — il garantit que le reliquat reste une magnitude positive même
       // si un jour un montant signé entrait en base.
       montant:
-        sql<string>`(abs(${transactionsCache.amount}) - coalesce(${ventile.montantVentile}, 0))`.as(
+        sql<string>`(abs(${transactionsCache.amount}) - coalesce(${ventileValide}, 0))`.as(
           "montant",
         ),
       txnId: sql<string>`${transactionsCache.id}`.as("txn_id"),
