@@ -383,6 +383,67 @@ export const DEMO_DASHBOARD_PREVISION_FAIBLE: DonneesDashboard = {
 };
 
 /**
+ * État PRÉVISIONNEL « CONTRASTÉ » — le cas dur de l'ENCART (FLUX-PREV-AXE1, option E).
+ *
+ * ⚠️ Fixture d'INTÉGRITÉ DE TEST, comme `DEMO_DASHBOARD_PREVISION_FAIBLE`, mais contre un
+ * défaut DIFFÉRENT — et c'est tout l'objet de ce lot.
+ *
+ * Sortir la prévision de l'axe du réalisé supprime l'écrasement CONTRE LE RÉALISÉ (1:520).
+ * Il ne supprime pas l'écart d'ordre de grandeur INTERNE à la prévision : une échéance de
+ * Rs 10 000 posée à côté d'un règlement fournisseur de Rs 3 150 000 donne 1:315 — dans
+ * l'encart, à son échelle propre. Aucune fixture du corpus ne l'exposait (leur écart
+ * interne plafonnait à ~1:6), donc l'encart aurait été validé en Gate 4 sur des cas
+ * uniquement favorables : exactement l'angle mort que le lot 0 avait fermé pour le graphe.
+ *
+ * Attendu dans l'encart : la barre de Juillet est irreprésentable et se réduit à un TICK
+ * de présence, MAIS son montant reste écrit en toutes lettres — le montant est le canal
+ * principal, la barre n'est que l'appui comparatif. Aucune valeur ne doit disparaître.
+ *
+ * Ne PAS « équilibrer » ces montants pour faire joli : cette fixture est censée être rude.
+ */
+export const DEMO_DASHBOARD_PREVISION_CONTRASTEE: DonneesDashboard = {
+  ...DEMO_DASHBOARD,
+  prevision: {
+    moisCourant: {
+      // Le cas SOUS-PIXEL : une petite cotisation résiduelle, 1:1260 face au règlement de
+      // septembre → ~0,08 % de la piste, soit moins d'un pixel. C'est ELLE qui prouve que
+      // l'encart ne perd aucune valeur : sa barre se réduit au tick, son montant s'écrit.
+      libelleMois: "2026-06",
+      entrees: "0.00",
+      sorties: "2500.00",
+      variation: "-2500.00",
+      autresDevises: false,
+    },
+    moisFuturs: [
+      {
+        // Le cas LIMITE mais représentable : 1:315 → ~2,5 px. Il garde la borne haute, pour
+        // qu'« étiqueter tout, tout le temps » ne puisse pas passer la garde inaperçu.
+        libelleMois: "2026-07",
+        entrees: "0.00",
+        sorties: "10000.00",
+        variation: "-10000.00",
+        autresDevises: false,
+      },
+      {
+        libelleMois: "2026-08",
+        entrees: "120000.00",
+        sorties: "0.00",
+        variation: "120000.00",
+        autresDevises: false,
+      },
+      {
+        // Le gros règlement qui fixe l'échelle de l'encart.
+        libelleMois: "2026-09",
+        entrees: "0.00",
+        sorties: "3150000.00",
+        variation: "-3150000.00",
+        autresDevises: false,
+      },
+    ],
+  },
+};
+
+/**
  * État PRÉVISIONNEL « ZÉRO » (§5.4) : la zone prévisionnelle EXISTE (la fenêtre atteint le
  * mois courant, il y a des échéances dans le workspace) mais AUCUNE ne tombe sur ces mois —
  * toutes les colonnes sont à zéro, dans la devise de base ET ailleurs.

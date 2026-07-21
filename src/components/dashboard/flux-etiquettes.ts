@@ -105,6 +105,32 @@ export function estIllisible(hauteurPx: number, estValeurNulle: boolean): boolea
 }
 
 /**
+ * Largeur de RÉFÉRENCE (px) de la piste d'une barre dans l'encart « Échéances à venir ».
+ *
+ * L'encart ne mesure pas son conteneur (composant serveur pur, barres en `%`) : cette
+ * référence ne sert donc PAS au rendu, uniquement à la garde de couverture, pour traduire
+ * un pourcentage en pixels plausibles. Valeur observée au Visual QA sur carte pleine
+ * largeur (~1100 px), moins les paddings, la colonne de sens et celle du montant.
+ *
+ * ⚠️ L'augmenter DURCIT la garde (une piste plus large rend visible une barre plus petite,
+ * donc il faut une fixture plus extrême pour prouver le cas sous-pixel). Ne pas la baisser
+ * pour « faire passer » une fixture : ce serait exactement l'assouplissement de seuil que
+ * le lot 0 interdit.
+ */
+export const LARGEUR_PISTE_ENCART_REF_PX = 800;
+
+/**
+ * Part (%) en dessous de laquelle une barre de l'encart cesse d'être représentable et se
+ * réduit à son tick de présence — le pendant horizontal de `SEUIL_LISIBILITE_PX`.
+ *
+ * Dérivé, pas choisi : un tick fait `EPAISSEUR_TICK_PX` sur une piste de
+ * `LARGEUR_PISTE_ENCART_REF_PX`. En dessous, la barre ne porte plus l'information : c'est
+ * le MONTANT ÉCRIT à côté d'elle qui la porte (canal indépendant de l'échelle).
+ */
+export const SEUIL_BARRE_ENCART_POURCENT =
+  (EPAISSEUR_TICK_PX / LARGEUR_PISTE_ENCART_REF_PX) * 100;
+
+/**
  * Rapport `plafond / valeur` d'une barre — l'inverse de sa hauteur relative. Plus il est
  * grand, plus la barre est écrasée. `Infinity` pour une valeur nulle (aucune barre à
  * rendre), `0` pour un plafond non exploitable (rien à comparer).

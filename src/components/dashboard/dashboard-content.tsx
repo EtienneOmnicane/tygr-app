@@ -52,6 +52,7 @@ import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
 import { NudgePremiereSynchroConnecte } from "@/components/sync/nudge-premiere-synchro-connecte";
 import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
 import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
+import { EcheancesEncart } from "@/components/dashboard/echeances-encart";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
@@ -73,10 +74,13 @@ export interface DonneesDashboard {
   /** Mois attendus de la série (axe continu, du plus ancien au plus récent). */
   grilleMensuelle: string[];
   /**
-   * Zone PRÉVISIONNELLE (C1) — échéances projetées, occurrences récurrentes comprises.
-   * `null` = pas de zone prévision (fenêtre qui n'atteint pas le mois courant, D4, ou
-   * workspace sans aucune échéance) : l'axe reste alors exactement celui d'aujourd'hui.
-   * Jamais additionnée au réalisé : deux sources, deux séries, deux rendus (§3.5).
+   * ÉCHÉANCES projetées (C1), occurrences récurrentes comprises. `null` = aucune prévision
+   * à montrer (fenêtre qui n'atteint pas le mois courant, D4, ou workspace sans aucune
+   * échéance) ⇒ l'encart ne monte pas.
+   *
+   * ⚠️ Depuis FLUX-PREV-AXE1 elle alimente l'ENCART dédié (`echeances-encart.tsx`), plus
+   * le graphe de flux : deux sources, deux échelles, deux cartes. Jamais additionnée au
+   * réalisé — mesure exhaustive contre sous-ensemble déclaré (§3.5).
    */
   prevision: PrevisionFlux | null;
   transactionsRecentes: TransactionRecente[];
@@ -234,14 +238,21 @@ export function DashboardContent({
 
         {/* 3. FLUX DE TRÉSORERIE — ancre PLEINE LARGEUR (UI_GUIDELINES §6.1/§6.7 : une
             seule ancre par écran ; pas de KPI contextuel à droite → pleine largeur).
-            `FluxBarres` mesure son SVG (ResizeObserver) → s'élargit seul. Zéro fetch. */}
+            `FluxBarres` mesure son SVG (ResizeObserver) → s'élargit seul. Zéro fetch.
+            100 % RÉALISÉ : la prévision a quitté cet axe (FLUX-PREV-AXE1, cf. encart). */}
         <FluxTresorerieCard
           serieMensuelle={serieMensuelle}
           grilleMensuelle={grilleMensuelle}
-          prevision={prevision}
           devise={devise}
           libellePeriode={libellePeriode}
         />
+
+        {/* 3bis. ÉCHÉANCES À VENIR — encart SECONDAIRE à échelle propre (option E du plan
+            §4.1). Monté uniquement si la page a résolu une prévision : `null` (fenêtre qui
+            n'atteint pas le mois courant, D4, ou workspace sans échéance) ⇒ AUCUN encart.
+            Une prévision vide n'est pas une prévision nulle (§5.3) — on ne monte pas une
+            carte vide pour tenir la place. L'ancre reste le graphe ci-dessus (§6.1). */}
+        {prevision && <EcheancesEncart prevision={prevision} devise={devise} />}
 
         {/* 4. SYNTHÈSE DU MOIS — bandeau horizontal sous le graphe (remplace l'ancienne
             pile droite Synthèse + Comptes connectés, cette dernière retirée du dashboard).

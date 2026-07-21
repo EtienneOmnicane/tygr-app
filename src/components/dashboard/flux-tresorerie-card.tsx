@@ -11,6 +11,12 @@
  * uniquement parce que `FluxBarres` mesure son SVG (ResizeObserver). L'état « aucun
  * mouvement sur la période » est porté par `FluxBarres` lui-même.
  *
+ * ⚠️ 100 % RÉALISÉ depuis FLUX-PREV-AXE1 (option E du plan §4.1) : la carte ne reçoit plus
+ * de prévision. Les échéances vivent dans `echeances-encart.tsx`, monté SOUS elle par
+ * `dashboard-content.tsx`, à échelle propre — réalisé et échéances saisies ne sont pas
+ * commensurables, et le partage d'axe produisait un faux constat. Le sous-titre et la
+ * légende n'ont donc plus de variante « avec prévision ».
+ *
  * Couleurs (§3.1) : le vert/rouge n'apparaît que DANS le SVG des barres et dans la LÉGENDE
  * (qui décrit la donnée). Hauteur min 380px (§4.2) : la carte garde sa place même vide.
  */
@@ -18,12 +24,10 @@ import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { FluxBarres } from "@/components/dashboard/flux-bars";
-import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 
 export function FluxTresorerieCard({
   serieMensuelle,
   grilleMensuelle,
-  prevision,
   devise,
   libellePeriode,
 }: {
@@ -31,11 +35,6 @@ export function FluxTresorerieCard({
   serieMensuelle: SyntheseMensuelle[];
   /** Axe continu des mois attendus (comble les mois sans transaction). */
   grilleMensuelle: string[];
-  /**
-   * Zone prévisionnelle (échéances projetées) ou `null` — la page décide (D4). La carte ne
-   * la calcule pas : elle arrive dans le MÊME payload serveur que le réalisé.
-   */
-  prevision?: PrevisionFlux | null;
   /** Devise de base du workspace. */
   devise: string;
   /** Libellé de la fenêtre appliquée (source unique : la page) — relayé à `FluxBarres`. */
@@ -47,19 +46,16 @@ export function FluxTresorerieCard({
         <div>
           <h2 className="text-base font-semibold text-text">Flux de trésorerie</h2>
           <p className="mt-0.5 text-xs text-text-muted">
-            {prevision
-              ? "Entrées − sorties par mois · prévision issue des échéances"
-              : "Entrées − sorties par mois"}
+            Entrées − sorties par mois · réalisé
           </p>
         </div>
 
-        <Legende avecPrevision={Boolean(prevision)} />
+        <Legende />
       </div>
 
       <FluxBarres
         serie={serieMensuelle}
         grille={grilleMensuelle}
-        prevision={prevision}
         devise={devise}
         libellePeriode={libellePeriode}
       />
@@ -70,12 +66,8 @@ export function FluxTresorerieCard({
 /**
  * Légende des barres : Entrées (inflow) / Sorties (outflow). Ici le vert/rouge DÉCRIT la
  * donnée affichée (légitime, §3.1).
- *
- * La pastille « Prévision » n'apparaît que si une zone prévisionnelle est rendue — et elle
- * est NEUTRE (`surface-forecast` + bordure), jamais verte/rouge : le prévisionnel n'emprunte
- * pas les couleurs sémantiques du réalisé, sous peine de les confondre (§3.5).
  */
-function Legende({ avecPrevision }: { avecPrevision: boolean }) {
+function Legende() {
   return (
     <span className="flex items-center gap-3 text-xs text-text-muted">
       <span className="flex items-center gap-1.5">
@@ -86,15 +78,6 @@ function Legende({ avecPrevision }: { avecPrevision: boolean }) {
         <span aria-hidden className="h-2 w-2 rounded-full bg-outflow" />
         Sorties
       </span>
-      {avecPrevision && (
-        <span className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2 w-2 rounded-full border border-line bg-surface-forecast"
-          />
-          Prévision
-        </span>
-      )}
     </span>
   );
 }
