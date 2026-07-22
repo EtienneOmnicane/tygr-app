@@ -1,12 +1,9 @@
 # TODOS — TYGR
-
 Différés par la revue /autoplan du 2026-06-10 (plan v2.1 multi-tenant Workspace).
 Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, même
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
-
 ### ⛔ NON-DETTE — à corriger, pas à consigner (règle 9 : l'isolation ne se met pas en dette)
-
 - [x] **ENTITY-PARTIES-SCOPE1 — RÉSOLU le 2026-07-21** (migration `0024_account-party-role-scope.sql`,
   suite `tests/isolation/parties-scope-isolation.test.ts`, plan `PLAN-entity-parties-scope.md`).
   Policy `account_scope` RESTRICTIVE FOR ALL posée sur `account_party_role` (calque 0017,
@@ -17,7 +14,6 @@ jour)** : voir le decision log du plan
   `schema.ts:936-937`), pas un oubli. Ce qui manquait était la défense COMPLÉMENTAIRE en
   RLS derrière la convention `ENTITY-READ-JOIN1`. Le reliquat `parties` part en P2
   ci-dessous (décision D2 du plan). Constat d'origine conservé pour l'audit trail :
-
 - [ ] ~~**ENTITY-PARTIES-SCOPE1 (chantier immédiat, effort ~0,5 j, ouvert 2026-07-21) —
   `account_party_role` échappe à l'ÉTAGE 2 d'isolation.**~~ **Quoi** : la table porte
   `bank_account_id` (`0013_parties-account-party-role.sql:34-41`) mais UNIQUEMENT la policy
@@ -35,7 +31,6 @@ jour)** : voir le decision log du plan
   l'atteint aujourd'hui sans jointure, (2) poser la policy manquante, (3) cas d'isolation
   dédié. Découvert en instruisant NUDGE-VISION-ENTITE1 ; lot séparé arbitré par Etienne le
   2026-07-21.
-
 - [ ] **ENTITY-PARTIES-P2 (P2, effort ~0,25 j, ouvert 2026-07-21) — `parties` n'a pas de
   policy d'étage 2.** **Quoi** : `parties` porte `tenant_isolation` (`0013:70`) mais aucune
   policy de périmètre, alors que `schema.ts:1001-1002` annonçait qu'elle serait couverte par
@@ -68,13 +63,10 @@ jour)** : voir le decision log du plan
   (`schema.ts:1032`) sans policy d'étage 2, et c'est **correct** — c'est la table de DROITS
   qui définit le périmètre ; la scoper par lui-même serait une auto-référence circulaire.
   Y poser une policy serait un défaut, pas un correctif (plan §2.3).
-
 ### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
-
 Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
 post-connexion, banques nommées sur `/banques`, loader indéterminé honnête. Aucun
 contrat de Server Action touché, aucune requête ajoutée.
-
 - [ ] **SYNC-NOM-BANQUE-DASHBOARD1 (P2, effort ~0,5 j, 2026-07-20) — nommer aussi les
   banques dans les callouts du DASHBOARD.** Le lot ne nomme les banques que sur
   `/banques`, seul écran à disposer de la liste des connexions. `SyncSummary`
