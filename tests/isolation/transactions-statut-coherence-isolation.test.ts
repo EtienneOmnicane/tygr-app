@@ -51,6 +51,22 @@ const T_PART = "c0fe1000-0000-4000-8000-000000000002"; // |300|, 100      → PA
 const T_COMP = "c0fe1000-0000-4000-8000-000000000003"; // |200|, 200      → COMPLET
 const T_ZERO = "c0fe1000-0000-4000-8000-000000000004"; // |0|,   0 split  → cas limite
 
+// ── Vision Entité : workspace SÉPARÉ, pour ne pas perturber les assertions ci-dessus.
+// MGR est borné au seul ACC_IN via user_scopes ; withWorkspace le traduit en
+// app.current_account_scope. ACC_OUT porte une transaction AVEC split : elle ne doit ni
+// apparaître, ni contaminer l'agrégat de la transaction visible.
+const WS2 = "c0fe2000-0000-4000-8000-000000000001";
+const ADMIN2 = "c0fe2000-0000-4000-8000-000000000002";
+const MGR2 = "c0fe2000-0000-4000-8000-000000000003";
+const CONN2 = "c0fe2000-0000-4000-8000-000000000004";
+const ACC_IN = "c0fe2000-0000-4000-8000-000000000005";
+const ACC_OUT = "c0fe2000-0000-4000-8000-000000000006";
+const CAT2 = "c0fe2000-0000-4000-8000-000000000007";
+const TX_IN = "c0fe3000-0000-4000-8000-000000000001"; // |500|, split 500 → COMPLET
+const TX_OUT = "c0fe3000-0000-4000-8000-000000000002"; // |700|, split 700 → hors périmètre
+const sessionAdmin2 = { userId: ADMIN2, activeWorkspaceId: WS2 };
+const sessionMgr2 = { userId: MGR2, activeWorkspaceId: WS2 };
+
 const parse = (f: Record<string, unknown>) => {
   const r = listerTransactionsSchema.safeParse(f);
   if (!r.success) throw new Error("filtre de test invalide: " + r.error.message);
@@ -111,6 +127,32 @@ beforeAll(async () => {
       (workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by) values
       ('${WS}','${T_PART}','2026-04-03','${CAT}','100.00','MANUAL','${USER}'),
       ('${WS}','${T_COMP}','2026-04-02','${CAT}','200.00','MANUAL','${USER}');
+
+    -- ── Vision Entité (workspace séparé) ────────────────────────────────────────
+    insert into workspaces (id,name,kind,omnifi_client_user_id) values
+      ('${WS2}','BU Périmètre','INTERNAL_BU','eu-per');
+    insert into users (id,email,full_name) values
+      ('${ADMIN2}','adm2@g.mu','Adm2'), ('${MGR2}','mgr2@g.mu','Mgr2');
+    insert into workspace_members (user_id,workspace_id,role) values
+      ('${ADMIN2}','${WS2}','ADMIN'), ('${MGR2}','${WS2}','MANAGER');
+    insert into bank_connections (id,workspace_id,omnifi_connection_id,institution_id,institution_name,created_by) values
+      ('${CONN2}','${WS2}','c-per','mcb','Mauritius Commercial Bank','${ADMIN2}');
+    insert into bank_accounts (id,workspace_id,connection_id,omnifi_account_id,account_name,currency) values
+      ('${ACC_IN}','${WS2}','${CONN2}','a-in','Dans périmètre','MUR'),
+      ('${ACC_OUT}','${WS2}','${CONN2}','a-out','Hors périmètre','MUR');
+    -- MGR2 est BORNÉ au seul ACC_IN.
+    insert into user_scopes (workspace_id,user_id,bank_account_id) values
+      ('${WS2}','${MGR2}','${ACC_IN}');
+    insert into categories (id,workspace_id,name) values ('${CAT2}','${WS2}','Achats');
+    insert into transactions_cache
+      (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,bank_label_raw,clean_label,is_removed) values
+      ('${TX_IN}','${WS2}','${ACC_IN}','p1','2026-04-10','2026-04-10T08:00:00Z','500.00','MUR','Debit','rawIn','Dans périmètre',false),
+      ('${TX_OUT}','${WS2}','${ACC_OUT}','p2','2026-04-11','2026-04-11T08:00:00Z','700.00','MUR','Debit','rawOut','Hors périmètre',false);
+    -- Les DEUX portent un split : celui de TX_OUT ne doit jamais être compté.
+    insert into transaction_categorizations
+      (workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by) values
+      ('${WS2}','${TX_IN}','2026-04-10','${CAT2}','500.00','MANUAL','${ADMIN2}'),
+      ('${WS2}','${TX_OUT}','2026-04-11','${CAT2}','700.00','MANUAL','${ADMIN2}');
   `);
 
   await client.exec(
@@ -170,6 +212,64 @@ describe("cas limite — montant NUL sans split (amount = 0 est permis par le sc
 
   it("EST capturé par le filtre NON_CATEGORISE", async () => {
     expect(await idsFiltres("NON_CATEGORISE")).toContain(T_ZERO);
+  });
+});
+
+describe("Vision Entité — l'agrégat borné à la page reste soumis à account_scope", () => {
+  it("le membre borné ne voit QUE sa transaction (contre-preuve : l'ADMIN en voit 2)", async () => {
+    const admin = await withWorkspace(sessionAdmin2, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100 })),
+    );
+    const borne = await withWorkspace(sessionMgr2, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100 })),
+    );
+    expect(admin.lignes.map((l) => l.id).sort()).toEqual([TX_IN, TX_OUT].sort());
+    expect(borne.lignes.map((l) => l.id)).toEqual([TX_IN]);
+  });
+
+  it("l'agrégat de la ligne visible n'est ni CONTAMINÉ par le split hors périmètre, ni AMPUTÉ du sien", async () => {
+    const borne = await withWorkspace(sessionMgr2, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100 })),
+    );
+    const ligne = borne.lignes.find((l) => l.id === TX_IN);
+    expect(ligne).toBeDefined();
+    // Son PROPRE split est bien compté (pas de masquage par la policy account_scope
+    // sur transaction_categorizations) …
+    expect(ligne!.nbSplits).toBe(1);
+    expect(ligne!.montantVentile).toBe("500.00");
+    expect(ligne!.statut).toBe("COMPLET");
+    expect(ligne!.categorieDominanteNom).toBe("Achats");
+    // … et le split de 700 attaché à la transaction hors périmètre n'y a pas fuité.
+    expect(ligne!.montantVentile).not.toContain("700");
+  });
+
+  it("l'agrégat vu par le membre borné est IDENTIQUE à celui vu par l'ADMIN", async () => {
+    const [admin, borne] = await Promise.all([
+      withWorkspace(sessionAdmin2, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      ),
+      withWorkspace(sessionMgr2, (tx, ctx) =>
+        listerTransactions(tx, ctx, parse({ limite: 100 })),
+      ),
+    ]);
+    const vuAdmin = admin.lignes.find((l) => l.id === TX_IN)!;
+    const vuBorne = borne.lignes.find((l) => l.id === TX_IN)!;
+    // Le périmètre restreint le JEU DE LIGNES, jamais la valeur de l'agrégat d'une
+    // ligne qu'on a le droit de voir.
+    expect({
+      n: vuBorne.nbSplits,
+      m: vuBorne.montantVentile,
+      s: vuBorne.statut,
+    }).toEqual({ n: vuAdmin.nbSplits, m: vuAdmin.montantVentile, s: vuAdmin.statut });
+  });
+
+  it("le filtre de statut reste cohérent SOUS périmètre borné", async () => {
+    const complet = await withWorkspace(sessionMgr2, (tx, ctx) =>
+      listerTransactions(tx, ctx, parse({ limite: 100, statut: "COMPLET" })),
+    );
+    // TX_OUT est COMPLET elle aussi, mais hors périmètre : le prédicat corrélé ne doit
+    // pas la faire remonter par la bande.
+    expect(complet.lignes.map((l) => l.id)).toEqual([TX_IN]);
   });
 });
 

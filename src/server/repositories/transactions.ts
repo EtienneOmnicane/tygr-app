@@ -306,9 +306,12 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
     .limit(limite + 1)
     .as("page");
 
-  // Agrégat « aplati » : COALESCE pour les transactions sans aucun split (le LATERAL
-  // ne rend alors aucune ligne → NULL → 0). `statutExpr` et `predicatStatut` restent
-  // deux vues du MÊME agrégat (cf. `predicatStatut`).
+  // Agrégat « aplati ». Les COALESCE sont une CEINTURE, pas le mécanisme : le LATERAL
+  // rend TOUJOURS exactement une ligne (agrégat sans `group by`), y compris pour une
+  // transaction sans aucun split — `nb_splits` vaut alors 0, pas NULL. L'invariant qui
+  // compte est « exactement 1, jamais N » : cf. `aggregatVentilationLateral`, dont
+  // dépend `hasMore`. `statutExpr` et `predicatStatut` restent deux vues du MÊME
+  // agrégat (cf. `predicatStatut`).
   const nbSplitsExpr = sql<number>`coalesce(agg.nb_splits, 0)`;
   const montantVentileExpr = sql<string>`coalesce(agg.montant_ventile, 0)::text`;
   const statutExpr = sql<StatutVentilation>`
@@ -588,14 +591,31 @@ function conditionsFiltres(params: {
  * Agrégat de ventilation d'UNE ligne de page, en LATERAL corrélé (anti-N+1 SANS
  * agrégat global — cf. le POURQUOI détaillé dans `predicatStatut`).
  *
- * Corrélé sur la clé COMPOSITE `(transaction_id, transaction_date)` : la table est
- * partitionnée par date, qui fait donc partie de la clé — corréler sur le seul id
- * scannerait toutes les partitions.
+ * ⚠️ REND TOUJOURS EXACTEMENT UNE LIGNE — jamais 0, jamais N. Un agrégat SANS
+ * `GROUP BY` rend une ligne même sur une entrée vide (`count(*)`=0, `sum`=NULL). C'est
+ * l'invariant PORTEUR de la pagination : `hasMore = lignes.length > limite` et le calcul
+ * du curseur supposent que le LATERAL ne DUPLIQUE jamais une ligne de page. Ajouter un
+ * `group by` ici (p. ex. pour remonter le détail par catégorie) le ferait rendre N
+ * lignes : chaque ligne de page serait dupliquée, `hasMore` passerait à true sur une page
+ * non pleine, `slice(0, limite)` amputerait des lignes RÉELLES et le curseur serait
+ * calculé depuis un doublon → frontière de page qui répète des lignes. Le `LEFT JOIN` ne
+ * protège que du cas 0 ligne, pas de celui-là. (Les `coalesce` externes sont donc une
+ * ceinture : `agg.nb_splits` n'est en pratique jamais NULL.)
+ *
+ * Corrélé sur la clé COMPOSITE `(transaction_id, transaction_date)`. Attention à la
+ * raison : ce n'est PAS parce que cette table serait partitionnée — elle ne l'est pas
+ * (heap ; c'est `transactions_cache` qui est partitionnée par `transaction_date`). C'est
+ * pour épouser l'index `txn_categorizations_workspace_txn_idx (workspace_id,
+ * transaction_id, transaction_date)` et la FK composite `txn_categorizations_transaction_fk`.
+ * Corréler sur le seul `transaction_id` resterait CORRECT (la FK le rend déterminant)
+ * mais perdrait la 3ᵉ colonne de l'index.
  *
  * La RLS s'applique PLEINEMENT ici : `transaction_categorizations` porte
  * `tenant_isolation` (étage 1) ET `account_scope` RESTRICTIVE (étage 2, migration
  * 0017) — l'agrégat borné à la page ne peut donc pas voir un split hors workspace ni
- * hors périmètre, quelle que soit la forme de la requête.
+ * hors périmètre, quelle que soit la forme de la requête. C'est pourquoi ce LATERAL n'a
+ * pas besoin de joindre `bank_accounts` : sa policy porte son propre `EXISTS` vers
+ * `transactions_cache`, qui réapplique account_scope ET view_filter sous les mêmes GUC.
  *
  * Catégorie DOMINANTE (FB0709-TX-CATEGORIE-VISIBLE1) : jointure INTERNE sur
  * `categories` — sûre en cardinalité (category_id NOT NULL + FK composite
@@ -603,6 +623,16 @@ function conditionsFiltres(params: {
  * ne peut donc rien filtrer de plus que celle des splits). `array_agg(… order by
  * z.amount desc, …)` élit la part au plus gros montant ; départage déterministe par
  * nom puis category_id à montants égaux.
+ *
+ * ⚠️ N'AJOUTE JAMAIS ICI UN PRÉDICAT QUE `predicatStatut` NE PORTE PAS. Ce LATERAL joint
+ * `categories`, le filtre de statut NON : les deux ne s'accordent aujourd'hui que parce
+ * que cette jointure ne peut ni écarter ni dupliquer une ligne. Le piège concret :
+ * `categories.is_active` existe et n'est pas consommé — y ajouter `and cat.is_active`
+ * paraîtrait anodin et ferait diverger le filtre de la colonne affichée (un split sur
+ * catégorie archivée passerait COMPLET au filtre, NON_CATEGORISE à l'écran). Idem si
+ * `categories` recevait un jour une policy de périmètre. Toute condition ajoutée ici doit
+ * être répercutée dans `predicatStatut` — et couverte par
+ * `tests/isolation/transactions-statut-coherence-isolation.test.ts`.
  *
  * Renvoyée par une FONCTION (et non exposée en const de module) pour ne jamais partager
  * une instance de fragment SQL entre deux requêtes.
