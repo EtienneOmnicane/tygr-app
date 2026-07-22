@@ -9,11 +9,16 @@
  * ⚠️ Ce module NOMME un refus, il ne DÉCIDE de rien : l'autorité reste la RLS. Ne
  * jamais s'en servir pour reconstituer une décision d'accès côté applicatif.
  *
- * DEUX copies privées de cette fonction préexistent — `repositories/echeances.ts` et
- * `repositories/entites.ts`. Elles n'ont PAS été migrées ici sciemment : cinq branches
- * en vol touchent ces deux fichiers (2026-07-21), et un déplacement mécanique y aurait
- * créé des conflits gratuits sur une PR de sécurité. Convergence consignée en TODOS
- * (PG-CODE-CONVERGENCE1) ; tout NOUVEL appelant importe d'ici, jamais une 3e copie.
+ * TROIS copies privées de cette fonction préexistent — `repositories/echeances.ts:231`,
+ * `repositories/categorisation.ts:501` et `repositories/entites.ts:317`, identiques
+ * octet pour octet. Elles n'ont PAS été migrées ici sciemment : plusieurs branches en
+ * vol touchent ces fichiers (2026-07-21), et un déplacement mécanique y aurait créé des
+ * conflits gratuits sur une PR de sécurité. Convergence consignée en TODOS
+ * (PG-CODE-CONVERGENCE1) ; tout NOUVEL appelant importe d'ici, jamais une copie de plus.
+ *
+ * (L'inventaire disait « DEUX copies » : il en manquait une — `categorisation.ts`. Une
+ * justification de report qui sous-estime sa propre dette la rend intestable ; corrigé
+ * en cross-review 2026-07-22.)
  */
 
 /**

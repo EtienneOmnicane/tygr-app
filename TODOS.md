@@ -1660,6 +1660,37 @@ validé 4 mutations sur 5 (clause `accountScope` retirée → tests 1 et 3 rouge
 amont neutralisée → 2 et 3 ; ceinture devenue catch-all → 8 ; ceinture supprimée → 6 et
 7). La cinquième n'a rien fait rougir — c'est le constat ci-dessous.
 
+- [ ] **CONNEXION-SYNC-REESSAI1 (P1, effort ~0,25 j) — sur le chemin SYNCHRO, un membre
+  borné lit encore « Réessayez dans un instant », l'invitation que ce lot existe pour
+  supprimer.** `ConnexionHorsPerimetreError` n'est PAS dans la liste de re-throw du
+  fail-soft de `synchroniserConnexionsDepuisOmnifi`
+  (`src/server/widget/orchestration.ts`, bloc de re-throw sélectif) : l'erreur est avalée
+  en `echecs`, et `banques/actions.ts` rend `MESSAGE_SYNC_TOUT_ECHOUE`. Aggravant vérifié
+  en cross-review : un membre borné prend un 42501 à CHAQUE synchro, même sur un compte
+  DÉJÀ dans son périmètre — `upsertCompte` (`INSERT … ON CONFLICT DO UPDATE`) propose une
+  ligne à `entity_id` NULL et un `id` neuf, qui violent les deux WITH CHECK quelle que
+  soit la ligne existante. La boucle de réessai est donc PERMANENTE pour eux, pas
+  ponctuelle. Sur le chemin RÉPARATION l'erreur remonte bien, mais le libellé
+  (« connecter une banque ») est faux pour qui répare un OTP sur une banque déjà
+  connectée. **Pourquoi ce n'est pas corrigé dans ce lot** : ajouter la classe au
+  re-throw change le comportement de la synchro (fail-soft partiel → échec global) et
+  mérite un arbitrage explicite — hors périmètre d'une PR qui NOMME un refus (règle 7).
+  **Déclencheur** : arbitrage d'Etienne, OU première remontée utilisateur d'un membre
+  borné sur la synchro. Constat de cross-review 2026-07-22, confiance 7/10.
+
+- [ ] **PG-CODE-CONVERGENCE1 (P2, effort ~0,5 j) — quatre copies de `codePg` cohabitent.**
+  Le module canonique `src/server/db/erreurs-pg.ts` a été créé par le lot
+  ENTITY-CONNEXION-REFUS-NOMME1 sans migrer les copies privées préexistantes —
+  `repositories/echeances.ts:231`, `repositories/categorisation.ts:501`,
+  `repositories/entites.ts:317`, identiques octet pour octet. Report ASSUMÉ à l'époque
+  (plusieurs branches en vol sur ces fichiers, conflits gratuits sur une PR de sécurité),
+  mais la dette n'avait **jamais été consignée** alors que la docstring l'affirmait — et
+  son inventaire annonçait DEUX copies au lieu de trois (défaut relevé en cross-review
+  2026-07-22, règle 9 : un TODO sans entrée TODOS.md est un défaut de revue).
+  **Déclencheur** : prochaine retouche de l'un de ces trois repositories, ou dès que les
+  branches en vol sont mergées — importer depuis `@/server/db/erreurs-pg` et supprimer la
+  copie locale. Tout NOUVEL appelant importe déjà du module canonique.
+
 - [ ] **CONNEXION-CLAUSE-ENTITE1 (P2, effort ~0 en statu quo) — la clause
   `ctx.entityScope.mode === "ENTITES"` de `estLecteurBorne` (`src/server/db/tenancy.ts`)
   n'est protégée par AUCUN test.** Mutation vérifiée le 2026-07-22 : la retirer laisse
