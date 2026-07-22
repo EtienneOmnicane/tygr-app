@@ -213,6 +213,22 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.categorySource).toBeNull();
   });
 
+  // La valeur RÉELLEMENT émise par l'amont aujourd'hui (inventaire base 2026-07-21),
+  // en SCREAMING_SNAKE — graphie différente de la "Uncategorized" documentée. Non
+  // neutralisée, elle posait isAutoCategorized=true + categorySource="OMNIFI" sur ~93 %
+  // des transactions : la base prétendait « classé par l'amont » là où l'amont disait
+  // précisément l'inverse. On teste la casse OBSERVÉE, pas celle de la fixture.
+  it("PrimaryCategory \"UNCLASSIFIED\" (valeur réelle amont) → nullifiée + aucune provenance auto", () => {
+    const l = versLignePersistee(
+      txOBIE({ Enrichment: { PrimaryCategory: "UNCLASSIFIED" } }),
+    );
+    expect(l.primaryCategory).toBeNull();
+    expect(l.isAutoCategorized).toBe(false);
+    // Cohérence exigée par le CHECK transactions_cache_auto_source_coherence :
+    // is_auto_categorized=false ⇒ category_source IS NULL.
+    expect(l.categorySource).toBeNull();
+  });
+
   it("PrimaryCategory valide → marqueur OMNIFI même si CleanMerchantName absent", () => {
     const l = versLignePersistee(
       txOBIE({ Enrichment: { PrimaryCategory: "Income" } }),
@@ -265,6 +281,25 @@ describe("categorieAutoValide", () => {
     expect(categorieAutoValide("Uncategorized")).toBe(false);
     expect(categorieAutoValide("uncategorized")).toBe(false);
     expect(categorieAutoValide("  UNCATEGORIZED ")).toBe(false);
+  });
+
+  // La graphie que l'amont émet VRAIMENT (SCREAMING_SNAKE, inventaire base 2026-07-21).
+  // C'est le cas qui manquait : la liste fermée ne connaissait que "uncategorized".
+  it("Unclassified (toutes casses, dont la SCREAMING_SNAKE observée) → false", () => {
+    expect(categorieAutoValide("UNCLASSIFIED")).toBe(false);
+    expect(categorieAutoValide("unclassified")).toBe(false);
+    expect(categorieAutoValide("Unclassified")).toBe(false);
+    expect(categorieAutoValide("  UNCLASSIFIED ")).toBe(false);
+  });
+
+  // CONTRE-PREUVE — sans elle, un filtre trop large (ex. tout préfixe "unc"/"uncl", ou
+  // une neutralisation du SCREAMING_SNAKE en bloc) passerait les tests ci-dessus tout en
+  // détruisant les catégories réelles. Ce sont les trois AUTRES valeurs de l'inventaire
+  // du 2026-07-21 : elles doivent rester exploitables.
+  it("les vraies catégories amont en SCREAMING_SNAKE restent exploitables", () => {
+    expect(categorieAutoValide("UTILITIES")).toBe(true);
+    expect(categorieAutoValide("BANKING_AND_FINANCE")).toBe(true);
+    expect(categorieAutoValide("INTER_ACCOUNT_TRANSFER")).toBe(true);
   });
 });
 
