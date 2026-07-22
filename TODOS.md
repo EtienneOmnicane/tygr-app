@@ -1,9 +1,861 @@
 # TODOS — TYGR
-
 Différés par la revue /autoplan du 2026-06-10 (plan v2.1 multi-tenant Workspace).
 Décisions D2 (ré-priorisation UI, 2026-06-11) puis **D3 (annulation de D2, même
 jour)** : voir le decision log du plan
 (`~/.gstack/projects/tygr-app/clawdy-unknown-design-20260610-120713.md`).
+### ⛔ NON-DETTE — à corriger, pas à consigner (règle 9 : l'isolation ne se met pas en dette)
+- [x] **ENTITY-PARTIES-SCOPE1 — RÉSOLU le 2026-07-21** (migration `0024_account-party-role-scope.sql`,
+  suite `tests/isolation/parties-scope-isolation.test.ts`, plan `PLAN-entity-parties-scope.md`).
+  Policy `account_scope` RESTRICTIVE FOR ALL posée sur `account_party_role` (calque 0017,
+  prédicat direct sur `bank_account_id`), 10 cas d'isolation + mutation-check 5 points.
+  ⚠️ **Requalification à ne PAS rouvrir** : le constat conservé ci-dessous décrivait une
+  fuite ; il n'y en avait AUCUNE d'active — les 4 chemins de lecture recensés étaient tous
+  bornés, et l'absence de policy était une décision TRACÉE (`0017` bloc COEXISTENCE,
+  `schema.ts:936-937`), pas un oubli. Ce qui manquait était la défense COMPLÉMENTAIRE en
+  RLS derrière la convention `ENTITY-READ-JOIN1`. Le reliquat `parties` part en P2
+  ci-dessous (décision D2 du plan). Constat d'origine conservé pour l'audit trail :
+- [ ] ~~**ENTITY-PARTIES-SCOPE1 (chantier immédiat, effort ~0,5 j, ouvert 2026-07-21) —
+  `account_party_role` échappe à l'ÉTAGE 2 d'isolation.**~~ **Quoi** : la table porte
+  `bank_account_id` (`0013_parties-account-party-role.sql:34-41`) mais UNIQUEMENT la policy
+  `tenant_isolation` (`0013:71`). Ni `entity_scope`, ni `account_scope` — `0017` a couvert
+  `transactions_cache` (+ partitions), `balance_history`, `transaction_categorizations` et
+  `categorization_audit`, mais PAS celle-ci. Vérifié par grep exhaustif sur
+  `drizzle/migrations/*.sql`. **Mode de défaillance** : une lecture de cette table qui ne
+  joint pas `bank_accounts` expose à un membre borné les identifiants de comptes hors de son
+  périmètre, et les titulaires qui leur sont rattachés — fuite INTRA-GROUPE (l'étage 1 tient,
+  ce n'est pas cross-client). C'est exactement le risque que la règle ENTITY-READ-JOIN1
+  cherche à contenir côté repository, ici sans filet structurel derrière.
+  **Pourquoi ce n'est PAS une entrée de dette** : CLAUDE.md règle 9 — « dette touchant
+  l'isolation tenant : INTERDITE, ça se corrige ». Consigné ici seulement pour ne pas perdre
+  le fil entre deux lots. **À faire** : (1) établir si un chemin de lecture applicatif
+  l'atteint aujourd'hui sans jointure, (2) poser la policy manquante, (3) cas d'isolation
+  dédié. Découvert en instruisant NUDGE-VISION-ENTITE1 ; lot séparé arbitré par Etienne le
+  2026-07-21.
+- [ ] **ENTITY-PARTIES-P2 (P2, effort ~0,25 j, ouvert 2026-07-21) — `parties` n'a pas de
+  policy d'étage 2.** **Quoi** : `parties` porte `tenant_isolation` (`0013:70`) mais aucune
+  policy de périmètre, alors que `schema.ts:1001-1002` annonçait qu'elle serait couverte par
+  le lot L4 (`0016` ne l'a posée que sur `bank_accounts`) — c'est un écart plan↔livré, pas
+  une décision. Deux lectures l'atteignent **sans aucune jointure** à `bank_accounts` :
+  `entites.ts:605-624` (`listerPropositionsPartyEntite` étape 1) et `user-scopes.ts:224-233`.
+  **Pourquoi P2 et pas un correctif immédiat** (décision D2 du plan, chaîne prouvée maillon
+  par maillon) : les deux chemins sont ADMIN-only **strict** — `peutAdministrer` est
+  `role === "ADMIN"` (`permissions.ts:19-21`), `exigerAdmin` throw hors ADMIN
+  (`entites.ts:390-391`) — et un ADMIN ne peut pas devenir scopé : gardes
+  `AdminNonScopableError` sur les deux axes (`entites.ts:1021-1024`, `user-scopes.ts:212-216`)
+  ET **aucun chemin d'UPDATE de rôle n'existe dans l'application** (le seul write sur
+  `workspace_members` est un INSERT `onConflictDoNothing`, `provisioning.ts:132-140`), donc le
+  contournement classique « membre scopé **puis promu** ADMIN » n'est pas atteignable.
+  Aucune fuite active, donc — le risque est théorique **aujourd'hui**.
+  **Mode de défaillance le jour où ça bascule** : `entites.ts:612` surface les noms de TOUS
+  les titulaires du groupe à un membre borné à une BU — donnée nominative, sans erreur ni
+  test rouge. **Déclencheur de résolution (nommé, pas « un jour »)** : la **première surface
+  titulaire ouverte à un rôle non-ADMIN** — ou tout relâchement d'une des deux gardes
+  `AdminNonScopableError`. **À faire ce jour-là** : policy `account_scope` sur `parties` par
+  `EXISTS` vers `account_party_role` (chaîne à 2 niveaux — attention au point dur « party
+  sans aucun compte », invisible sous un EXISTS nu), **et INVERSER le cas 9** de
+  `tests/isolation/parties-scope-isolation.test.ts`, qui est aujourd'hui la contre-preuve
+  volontaire que `parties` reste visible hors périmètre.
+  **Résidu assumé, tracé** : un ADMIN scopé **hérité** peut exister en base (`page.tsx:97` le
+  documente — lignes antérieures à l'arbitrage 2026-07-13 ou insertion SQL directe). Pour lui,
+  `entites.ts:612` montre tout le groupe. Ce n'est **pas** une fuite (un ADMIN a le droit de
+  tout voir) mais une incohérence d'affichage.
+  ⚠️ **Ne PAS traiter `user_scopes` « par symétrie »** : elle porte `bank_account_id`
+  (`schema.ts:1032`) sans policy d'étage 2, et c'est **correct** — c'est la table de DROITS
+  qui définit le périmètre ; la scoper par lui-même serait une auto-référence circulaire.
+  Y poser une policy serait un défaut, pas un correctif (plan §2.3).
+### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
+Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
+post-connexion, banques nommées sur `/banques`, loader indéterminé honnête. Aucun
+contrat de Server Action touché, aucune requête ajoutée.
+- [ ] **SYNC-NOM-BANQUE-DASHBOARD1 (P2, effort ~0,5 j, 2026-07-20) — nommer aussi les
+  banques dans les callouts du DASHBOARD.** Le lot ne nomme les banques que sur
+  `/banques`, seul écran à disposer de la liste des connexions. `SyncSummary`
+  (dashboard) reste donc sur « L'accès d'une ou plusieurs banques doit être rétabli. »
+  **Pourquoi ce n'est pas fait ici** : `CompteConnecte` (données du dashboard) ne porte
+  PAS de `connectionId` — seulement `institutionName` par COMPTE. Il n'existe donc
+  aucune clé pour rapprocher `aReconnecter[].connectionId` d'un nom sur cet écran, et
+  fabriquer la jointure demanderait soit d'ajouter la connexion au DTO des comptes, soit
+  une seconde lecture. **Déclencheur** : le lot SYNC-GRANULARITE-BANQUE1 (cartes par
+  connexion), qui apportera cette donnée au dashboard de toute façon. Atténuation
+  actuelle : le callout pointe vers `/banques`, où les noms SONT affichés.
+
+- [ ] **SYNC-LOADER-ETAPES1 (P2, effort ~2–3 j, 2026-07-20) — loader à ÉTAPES réelles
+  (Option A du plan).** Le loader livré est indéterminé : il dit « ça travaille », pas
+  « où on en est ». Un vrai stepper suppose que `synchroniserConnexionsAction` rende les
+  `{connectionId, jobId}` **dès le 201** au lieu d'attendre `attendreFinSync`, puis que
+  le client poll par connexion et dérive le palier via `machine-mfa.ts`. **Pourquoi
+  différé** : ça change le contrat de l'action et touche le cœur de l'ingestion — hors
+  d'un lot démo-safe à J-2. ~~**Bloquant préalable** : `SYNC-MACHINE-INTERRUPTED1`
+  (ci-dessous) — sans lui, un job interrompu figerait le loader sur « Initialisation… ».~~
+  **LEVÉ 2026-07-21** : `SYNC-MACHINE-INTERRUPTED1` est SUSPENDUE (prémisse réfutée,
+  cf. ci-dessous) et ne bloque plus ce chantier. Ce qui reste vrai et à traiter DANS ce
+  lot : le loader devra dériver son palier d'une union de statuts **OUVERTE**, avec un
+  repli explicite pour l'inconnu (le serveur, lui, le rend déjà `INCOMPLET`).
+  **Déclencheur** : post-démo, après l'anomalie cooldown.
+
+- [ ] **WIDGET-REJET-TRANSPORT1 (P2, effort ~1 j, 2026-07-20) — un rejet réseau sort de
+  l'écran au lieu d'être traité sur place.**
+
+  ⚠️ **Cette entrée a été RÉÉCRITE le 2026-07-20** : sa première version décrivait un
+  mode de défaillance FAUX (« widget fermé, aucun message », et une asymétrie entre les
+  blocs qui ont un `try/finally` et les autres). Vérification en cross-review, dans la
+  source de React 19 : un rejet dans `useTransition` est re-levé PENDANT LE RENDU
+  (`trackUsedThenable`), donc il atteint bien une frontière d'erreur — et les QUATRE blocs
+  `startFinalisation` se comportent identiquement (le `finally` ne rattrape rien, il
+  relâche seulement un verrou). Une dette instruite sur une prémisse fausse est pire
+  qu'aucune dette : elle envoie le prochain lot corriger un problème inexistant.
+
+  **Le vrai défaut** : sur un rejet de TRANSPORT (Wi-Fi coupé, 500 sur l'endpoint de
+  Server Action), l'utilisateur quitte l'écran de connexion pour la frontière d'erreur et
+  perd son contexte local (`reparation`, `aReconnecter`, message de synchro en cours) —
+  là où un message inline suffirait. Depuis l'ajout de `(workspace)/error.tsx` il garde
+  au moins le chrome de l'application, ce qui fait tomber la gravité de P1 à **P2**.
+  **Pourquoi pas un simple `catch`** : essayé, puis retiré délibérément — une session
+  expirée lève `NonAuthentifieError` avant le try de l'action et se déguiserait en
+  « Réessayez dans un instant », conseil qui ne peut pas aboutir. Le correctif propre
+  demande de DISCRIMINER transport et authentification, ce que le client ne sait pas faire
+  (Next masque les erreurs de Server Action en production). **Piste** : faire porter la
+  distinction par la couche action (retour typé plutôt qu'exception pour l'auth).
+  **Déclencheur** : le premier signalement support d'une connexion « qui a sauté », ou le
+  chantier de typage des erreurs d'action.
+
+- [x] **NUDGE-VISION-ENTITE1 (P1, 2026-07-20 → LIVRÉ 2026-07-21) — l'empty state global
+  MENTAIT à un membre au périmètre borné.** Livré : `PLAN-nudge-vision-entite.md` +
+  branche `fix/nudge-vision-entite`. État `"hors-perimetre"` distinct, adossé à
+  `compterConnexionsTenant` (COUNT sur `bank_connections` — seule table du chemin à ne
+  porter que `tenant_isolation`, donc bornée workspace par la RLS, sans lire
+  `bank_accounts` ni contourner l'étage 2) et gardé par `lecteurBorne`
+  (`ctx.entityScope`/`ctx.accountScope`). Preuve :
+  `tests/isolation/dashboard-hors-perimetre-isolation.test.ts`.
+  ⚠️ **Le ticket d'origine visait le mauvais scénario** — à savoir : la prémisse
+  « un membre scopé connecte une banque et voit un dashboard vide » est FAUSSE. Vérifié :
+  `persisterConnexionEtComptes` écrit connexion ET comptes dans UNE transaction
+  (`orchestration.ts:334-395`) ; le `WITH CHECK` d'`entity_scope` rejette l'INSERT
+  `entity_id = NULL`, la transaction ROLLBACK, et `orchestration.ts:1496` re-lève l'erreur,
+  qui est AFFICHÉE. Ce membre n'atteint donc jamais l'écran vide. Le défaut réel, permanent
+  celui-là : un membre borné arrive sur un tenant dont les comptes ne lui sont pas
+  assignés. Le volet « faire monter le nudge » a été RETIRÉ (code sans déclencheur, et une
+  invite à synchroniser ne peut pas rendre visibles des comptes non assignés). Périmètre
+  arbitré par Etienne le 2026-07-21.
+
+- [ ] **ENTITY-CONNEXION-REFUS-NOMME1 (P1, effort ~0,5 j, 2026-07-21) — un membre borné
+  qui connecte une banque reçoit une erreur RLS brute, pas un refus intelligible.**
+  **Quoi** : le parcours de connexion d'un membre en Vision Entité (ou borné par compte)
+  échoue par rejet `WITH CHECK` de la policy `entity_scope` — l'INSERT `entity_id = NULL`
+  d'`upsertCompte` n'appartient à aucun scope. **Le fail-closed est VOULU** (CLAUDE.md :
+  « un membre borné ne crée pas de comptes non-assignés ») ; ce qui ne l'est pas, c'est le
+  message : l'utilisateur reçoit une erreur d'origine base au lieu d'un refus nommé
+  (règle 3 : « chaque erreur a un nom »). Aucune garde applicative de périmètre n'existe en
+  amont — `orchestration.ts:487` ne teste que `peutModifier`. **Pourquoi ça mord** : le
+  membre ne comprend pas que le geste ne lui appartient pas, et rien ne l'oriente vers un
+  administrateur. **Piste** : garde applicative explicite avant l'appel amont (échec AVANT
+  de solliciter Omni-FI), code d'erreur dédié + message UI. **Déclencheur** : le premier
+  membre scopé qui tente une connexion — Omnicane. Découvert en instruisant
+  NUDGE-VISION-ENTITE1.
+
+- [ ] **SYNC-NOM-BANQUE-HOMONYMES1 (P2, effort ~0,5 j, 2026-07-20) — deux connexions vers
+  la même banque redeviennent indiscernables** (cross-review 7/10). **Quoi** :
+  `institution_name` n'est pas unique. Deux connexions vers la même institution
+  (utilisateur ayant reconnecté au lieu de réparer, ou deux credentials MCB) produisent
+  « MCB Juice et MCB Juice — accès à rétablir », et dans la liste de réparation deux
+  boutons portant le même libellé et le même `aria-label`. **Pourquoi** : c'est très
+  exactement le défaut que le lot « nom de banque » existe pour corriger (« empilés sans
+  libellé, ils étaient indiscernables ») — il réapparaît dès qu'il y a homonymie. Ni
+  `nommerToutes` ni les 11 tests ne couvrent le cas doublon. **Pourquoi différé** : le
+  repli demande un ARBITRAGE PRODUIT (retomber sur l'anonyme ? désambiguïser par la date
+  de connexion ? par les 4 derniers caractères de l'identifiant ?) — aucun choix n'est
+  évident et aucun n'est neutre pour la démo. **Déclencheur** : premier workspace réel
+  portant deux connexions vers la même institution.
+
+- [ ] **UI-TRUNCATE-MINW01 (P2, effort ~0,25 j, 2026-07-20) — `truncate` inopérant sur le
+  nom de banque** (cross-review 6/10, à confirmer au Visual QA). **Quoi** : le `<li>` de
+  la liste de réparation est `flex flex-wrap items-center` ; `min-width` d'un flex item
+  vaut `auto`, donc le `<span class="truncate">` ne peut pas rétrécir sous son contenu et
+  l'ellipse ne mord pas. Un `institution_name` long (la colonne va jusqu'à `varchar(140)`)
+  pousse le bouton au lieu de s'ellipser. **Pourquoi P2** : `flex-wrap` fait d'abord
+  passer le bouton à la ligne, donc le débordement n'apparaît qu'au-delà de la largeur du
+  conteneur — dégradation cosmétique, jamais une perte d'information (et un LIBELLÉ peut
+  tronquer, contrairement à un montant). **Fix connu** : `min-w-0` sur le span.
+  **Déclencheur** : ta passe Visual QA, ou le premier nom d'institution > ~40 caractères.
+
+- [ ] **NUDGE-SUCCES-PARTIEL1 (P2, effort ~0,25 j, 2026-07-20) — l'atterrissage le plus
+  déroutant est le seul sans invite** (cross-review 6/10). **Quoi** : sur une finalisation
+  PARTIELLE, il n'y a pas de redirection (décision WIDGET-RD1 : ne jamais masquer un
+  échec) ; l'utilisateur suit « Voir mon tableau de bord », qui pointe volontairement sur
+  `ROUTE_DASHBOARD` NU — il arrive donc sur un dashboard sans aucune invite à
+  synchroniser. **Pourquoi le lien est nu** : il est PARTAGÉ avec le chemin « synchro
+  manuelle », où l'invite serait fausse (l'utilisateur vient de faire ce qu'elle demande).
+  **Pourquoi différé** : c'est un ARBITRAGE, pas un défaut — le parent sait quelle action
+  a produit `succes`, une seconde prop discriminerait, mais il faut décider si un
+  atterrissage partiel mérite l'invite alors qu'une partie des banques a échoué.
+  **Déclencheur** : première finalisation partielle observée en usage réel, ou ton
+  arbitrage produit.
+
+- [ ] **SYNC-MACHINE-INTERRUPTED1 — 🚫 SUSPENDUE (prémisse RÉFUTÉE, 2026-07-21).**
+  ~~P1, effort ~0,5 j, 2026-07-20~~ → **dé-priorisée : ni P1, ni bloquant démo, ni
+  bloquant `SYNC-LOADER-ETAPES1`.** **Action = NE RIEN CODER** : aucun mapping
+  d'`INTERRUPTED` ne doit être écrit sans **re-preuve runtime** préalable (statut
+  observé sur un job réel). Arbitrage Etienne 2026-07-21.
+  **Prémisse d'origine** (conservée pour l'audit trail) : « `INTERRUPTED` non mappé dans
+  `machine-mfa.ts` — statut émis par le backend mais absent de l'enum OpenAPI ; il retombe
+  sur le repli “statut inconnu → initialisation”, `pollingActif` reste vrai, le polling
+  tourne jusqu'au plafond `MAX_POLLS` → le loader fige sur “Initialisation…”. »
+  **Pourquoi elle est réfutée — quatre preuves convergentes :**
+  1. **Le chemin actif absorbe DÉJÀ tout statut inconnu.** `orchestration.ts:538-543` :
+     « un statut INCONNU n'est donc ni terminal ni MFA → il est poll jusqu'au plafond,
+     puis **rendu INCOMPLET** (jamais assimilé à un succès, jamais à un échec dur) ».
+     Même SI `INTERRUPTED` existait, il ne figerait rien : il sortirait en `INCOMPLET`
+     (`:640-644`), état honnête qui ingère la lecture partielle. Le mode de défaillance
+     décrit (« gel sur Initialisation… ») **ne peut pas se produire sur le chemin actif**.
+  2. **Le lieu désigné est hors runtime.** `machine-mfa.ts` n'est monté par AUCUN
+     composant (cf. CODE-MORT-MFA1) : le repli « inconnu → initialisation » qu'accuse
+     l'entrée n'est exécuté par personne aujourd'hui.
+  3. **Constat prod contradictoire.** `orchestration.ts:640-644` documente le vrai
+     incident du **2026-07-13** : un scrape resté en **`RETRIEVING` > 6 min** (3× le
+     plafond), 67 transactions lisibles pendant qu'il courait. Le gel réel vient d'un job
+     **LONG**, pas d'un job « interrompu ».
+  4. **Le statut est introuvable.** **0 occurrence** d'`INTERRUPTED` dans tout `src/` ; et
+     la vérification runtime de la **PR #202 (2026-07-13)** l'avait déjà cherché sans le
+     trouver — ni dans `docs/documentation_api.md` (§ Sync Engine), ni dans `omni-fi-core`
+     (Django), ni au runtime. L'entrée (2026-07-20) réaffirmait donc une prémisse réfutée
+     une semaine plus tôt.
+  **Seule nuance conservée** : on ne prouve pas une inexistence *future*. L'enum amont
+  **DÉRIVE** (`SCRAPING` côté Django vs `RETRIEVING` côté API, `orchestration.ts:538-539`)
+  et le checkout `omni-fi-core` local est périmé. Mais l'union est **OUVERTE** et le repli
+  `INCOMPLET` est gracieux : si `INTERRUPTED` apparaissait un jour, le produit dégraderait
+  proprement — il n'y a **rien à faire par anticipation**.
+  **Réouverture** (le seul déclencheur) : observation d'un `INTERRUPTED` réel dans un log
+  de job (`evt: "omnifi_sync_incomplet"`, champ `dernierStatut`). À ce moment-là seulement,
+  re-qualifier et chiffrer. Le mapping de `machine-mfa.ts` reste, lui, rattaché à
+  `SYNC-LOADER-ETAPES1` — et ne le bloque pas.
+
+### Prévisionnel C0 — occurrences récurrentes (2026-07-17, PR `feat/previsionnel-c0-recurrence`)
+
+Lot C0 livré : le champ `recurrence` était **stocké mais jamais lu** — la synthèse
+30/60/90 j comptait chaque échéance UNE fois, à sa date stockée, et **sous-estimait
+donc tout engagement récurrent** (une mensuelle de 10 000 affichait 10 000 à plat au
+lieu de 10 000 / 20 000 / 30 000). Corrigé par un moteur pur d'expansion
+(`src/lib/echeances-recurrence.ts`), sémantique **D1 « gabarit + tête »** (décision
+Etienne du 2026-07-17, cf. `PLAN-conception-previsionnel-C.md`).
+
+- [ ] **ECH-OCCURRENCES1 (P1, effort ~2–3 j, 2026-07-17) — matérialiser les occurrences
+  d'échéance récurrente** (table `echeance_occurrences` : une ligne par échéance × date,
+  `statut`/`montant_regle` **par occurrence**, FK composite scopée workspace + RLS 2
+  étages + liste blanche DELETE). **Pourquoi** : le modèle actuel porte `statut` et
+  `montant_regle` sur **la ligne** (le gabarit), donc une occurrence ne peut pas être
+  pointée individuellement. Trois conséquences, toutes de la même cause :
+  1. **Aucun geste pour pointer un paiement** sans toucher la série. D1 « gabarit +
+     tête » contourne le trou (une tête terminale n'éteint plus les dérivées), il ne le
+     comble pas.
+  2. **Une série ne se clôt pas par un statut** — le seul geste de clôture est la
+     SUPPRESSION de la ligne (le modèle n'a pas de `recurrence_fin`). À dire
+     explicitement dans l'UI tant que cette dette vit.
+  3. **Une occurrence dérivée passée est INVISIBLE de la synthèse** (`deriveesDepuis`,
+     décision Etienne 2026-07-17) : n'ayant aucun statut, rien ne dit si elle a été
+     réglée — on ne la compte donc pas. Un arriéré réel sur une récurrente est ainsi
+     **sous-évalué** au-delà de sa tête. C'est le choix DÉLIBÉRÉ face à l'alternative
+     (tout compter → sur-estimation croissante et non bornée sur un montant affiché,
+     interdite par la règle 9). Seules des occurrences matérialisées permettront de
+     compter un arriéré **prouvé** plutôt que supposé.
+  **Déclencheur** : le premier utilisateur qui pointe le paiement d'une occurrence
+  récurrente, ou le premier besoin d'un arriéré exact sur une série. **Ne PAS** rouvrir
+  en même temps que le lot UI (C1) : celui-ci consomme le moteur, pas le modèle.
+
+### Prévisionnel C1 — zone prévisionnelle du dashboard (2026-07-17, PR `feat/previsionnel-c1-dashboard`)
+
+Lot C1 livré : les barres de flux ne montraient que le **réalisé** — une échéance saisie
+ne faisait bouger aucune trésorerie prévisionnelle. L'axe se prolonge désormais de 3 mois
+vers l'avant, alimentés par les occurrences du moteur C0 (lecture dans le `Promise.all`
+existant de la page, sous le même `tx` — jamais un second `withWorkspace`).
+
+Décisions tranchées par Etienne le 2026-07-17 (les 3 étaient ouvertes, cf.
+`PLAN-conception-previsionnel-C.md` §7) : **D2 = barre empilée** sur le mois courant
+(réalisé à date + échéances restantes) · **D3 = 3 mois fixes** (aligné sur les horizons
+30/60/90) · **D4 = pas de zone prévision** si la fenêtre n'atteint pas le mois courant.
+
+Choix DÉLIBÉRÉ à connaître (pas une dette séparée — c'est la face dashboard de
+`ECH-OCCURRENCES1` ci-dessus) : **une tête EN RETARD n'est pas projetée sur les barres**
+(borne basse = aujourd'hui). La verser dans un mois PASSÉ la mélangerait au réalisé d'une
+colonne rendue à 100 % d'opacité — un montant jamais mouvementé qui se lirait comme
+encaissé. L'arriéré reste porté par l'onglet Échéances, qui le compte (« une dette
+exigible hier reste due »). Divergence VOLONTAIRE entre les deux écrans, prouvée par le
+test d'isolation 26.
+
+Hors périmètre, inchangé : **courbe de position** de trésorerie (solde de départ +
+variations cumulées) — elle exige un solde de départ fiable, or `balance_history` est vide
+en Staging (la courbe du dashboard a déjà dû être recâblée sur le flux net pour cette
+raison). À rouvrir quand les soldes historiques existeront (cf. plan §5.1).
+
+Bug de schéma corrigé au passage (migration `0023`, **pas une dette** — il est fixé) :
+`recurrence` était `varchar(12)` alors que `'trimestrielle'` fait **13** caractères. La
+valeur était donc impossible à stocker (Postgres `22001`) **alors que le formulaire la
+proposait** et que zod l'acceptait ; le `22001` n'étant mappé nulle part, toute création
+d'échéance trimestrielle finissait en **500 brute**. La branche `'trimestrielle'` du
+CHECK était morte depuis `0019`. Élargi à `varchar(20)`, prouvé par le test 25.
+
+### Lisibilité du prévisionnel sur l'axe du réalisé (2026-07-20, PR `feat/flux-previsionnel-lisibilite-lots012`, plan `PLAN-flux-previsionnel-lisibilite.md`)
+
+Lots 0-2 livrés (fixtures + garde Gate 4, mention de couverture, zone muette, étiquettes de
+valeur). Ils rendent la prévision LISIBLE ; ils ne rendent pas la comparaison HONNÊTE — cette
+distinction est le cœur du sujet et ne doit pas se perdre.
+
+- [x] **FLUX-PREV-AXE1 (P2) — sortir la prévision de l'axe du réalisé (option E du plan §4.1).**
+      **LIVRÉ le 2026-07-21** (direction retenue par Etienne le 2026-07-20).
+      *Livré* : le graphe « Flux de trésorerie » est 100 % réalisé ; les échéances vivent dans
+      `echeances-encart.tsx`, carte SECONDAIRE à échelle propre sous l'ancre, avec renvoi vers
+      `/echeances`. Le montant ÉCRIT y est le canal principal, la barre l'appui comparatif —
+      parce que l'écart d'ordre de grandeur se REPRODUIT à l'intérieur de la prévision
+      (1:1260 mesuré) : sous le tick, la barre ne dit plus rien, le montant si.
+      *Garde* : la couverture Gate 4 est re-ciblée sur l'écart INTERNE à la prévision
+      (l'écrasement contre le réalisé n'existe plus) + fixture
+      `DEMO_DASHBOARD_PREVISION_CONTRASTEE`, sans laquelle le corpus plafonnait à ~1:6.
+      *Réversibilité* : `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes` restent dans
+      `flux-projection.ts`, débranchés du rendu mais testés — cf. FLUX-PREV-BASELINE1.
+
+- [ ] **ENCART-ECHEANCES-VIDE1 (P2 produit, 2026-07-21) — l'encart « Échéances à venir »
+      monte même quand le workspace n'a AUCUNE échéance.** Relevé en cross-review de
+      FLUX-PREV-AXE1. `previsionActive` (`(dashboard)/page.tsx`) ne teste QUE « la fenêtre
+      atteint le mois courant » (D4) ; l'existence d'une occurrence n'entre pas dans la
+      condition, et `projeterEcheancesSurGrille` remplit toujours la grille de zéros. Un
+      workspace neuf porte donc en permanence une carte « Aucune échéance sur ces mois » +
+      sa mention de couverture.
+      *Deux lectures défendables, d'où l'arbitrage* : (a) c'est du BRUIT sur un dashboard
+      neuf → ne monter l'encart que si une occurrence existe ; (b) c'est une INFORMATION
+      (« rien n'est prévu » ≠ « la fonction n'existe pas ») → statu quo, et c'est cohérent
+      avec §5.4 du plan qui refuse les zones muettes.
+      *Non tranché par l'agent* : changer un comportement produit visible sans arbitrage
+      sortirait du périmètre du lot. Le code dit désormais la vérité (docstrings corrigées).
+      *Effort* : ~30 min si (a). *Déclencheur* : arbitrage d'Etienne, ou premier retour
+      d'un utilisateur sans échéances.
+
+- [ ] **FLUX-PREV-BASELINE1 (P2) — homogénéiser la série prévisionnelle (option F du plan §4.2).**
+      Le VRAI fix : la prévision cesse d'être « les échéances saisies » pour devenir une
+      projection du flux attendu (baseline dérivée des mois réalisés / récurrents détectés,
+      + échéances en supplément identifié). La série redevient commensurable et l'axe partagé
+      redevient légitime.
+      *NON lancé délibérément* (décision Etienne 2026-07-20) : c'est la question de **méthode
+      de projection** laissée ouverte dans `PLAN-cadrage-scenario-previsionnel-fygr.md` §5, et
+      elle se tranche DANS ce cadrage, comme chantier nommé — pas en réaction à un défaut
+      d'affichage.
+      *Effort* : 2-3 j agent + décision produit. *Déclencheur* : **reprise du cadrage
+      prévisionnel FYGR**. *Risque à porter au cadrage* : une baseline est une hypothèse ; non
+      annotée, elle remplace un faux constat visuel par un faux constat chiffré, donc plus
+      crédible et plus dangereux.
+      *Point de reprise (FLUX-PREV-AXE1, 2026-07-21)* : la machinerie d'axe partagé est
+      conservée débranchée — `ColonneFlux`/`composerColonnes`/`maxFenetreColonnes`
+      (`flux-projection.ts`) et les helpers d'étiquette encore TESTÉS de
+      `flux-etiquettes.ts` (`estIllisible`, `etiquetteVerticale`, `largeurEtiquette`,
+      `SEUIL_LISIBILITE_PX`, `RAPPORT_BARRE_INVISIBLE`, `MARGE_ETIQUETTE_PX`). Ce chantier
+      les rebranche ; il ne repart pas de zéro. `ECART_ETIQUETTE_PX` a en revanche été
+      SUPPRIMÉ : sans consommateur NI test, il aurait dérivé en silence — le geler ne se
+      justifiait que pour ce qui reste couvert. Il se réécrit en une ligne (git le garde).
+      Ce chantier réactive aussi FLUX-PREV-LABEL-DENSE1, clos par disparition de sa cause.
+
+- [x] **FLUX-PREV-LABEL-DENSE1 (P2 cosmétique) — CADUC le 2026-07-21, résolu de fait par
+      FLUX-PREV-AXE1.** Le défaut était : un mois projeté pouvait afficher « Rs 10 k » sans son
+      libellé de mois sur une fenêtre dense, l'étiquette de valeur devenant orpheline. Il n'y a
+      plus ni colonne projetée ni étiquette de valeur dans le graphe — la prévision a quitté
+      l'axe. Rien à corriger : la cause a disparu avec la structure qui la portait.
+      ⚠️ Reviendrait avec FLUX-PREV-BASELINE1 (option F) si une série prévisionnelle
+      retournait sur l'axe partagé.
+
+- [ ] **FLUX-PREV-CONTRASTE1 (P2 accessibilité, PRÉ-EXISTANT) — `text-faint` sous AA.**
+      Mesuré au Visual QA : `text-faint` (#8a8f9f) donne **3,23:1 sur blanc** et **2,70:1 sur
+      `surface-forecast`**, sous le minimum AA de 4,5:1 pour du texte de 11 px. Les étiquettes de
+      valeur ont été passées en `inflow-700`/`outflow-700` (6,75:1 / 6,18:1), mais les **libellés
+      de mois**, les **notes sous le graphe** et les autres usages de `text-faint` restent
+      concernés — au-delà de ce composant. *Effort* : ~2 h (arbitrage token + balayage des usages).
+      *Déclencheur* : prochain passage d'accessibilité, ou audit régulateur (audience BOM).
+
+### QA runtime du 2026-07-15 — constats différés (rapport `.gstack/qa-reports/`)
+
+Passe /qa complète sur main@747c4f3 (build local, vraie donnée, compte jetable).
+Deux bugs corrigés dans la PR associée (recherche aveugle aux `clean_label` NULL ;
+suppression d'échéance sans confirmation). Un seul constat différé — il ne touche
+ni l'isolation, ni l'append-only, ni l'exactitude des montants :
+
+- [ ] **QA-REGLES-PICKER-INDENT1 (P2, effort ~0,1 j, 2026-07-15) — le préfixe
+  d'indentation hiérarchique fuit dans le label fermé du picker** : sur `/regles`,
+  choisir la sous-catégorie « Fournitures » affiche « — Fournitures » (tiret
+  d'indentation du dropdown) dans le bouton fermé du formulaire « Nouvelle règle ».
+  Le label fermé doit rendre le NOM seul ; l'indentation n'a de sens que dans la
+  liste déroulée. **Déclencheur** : prochain lot UI sur `/regles` ou sur le Select
+  maison (`components/ui/select`).
+
+Deux constats levés PENDANT la passe ont été requalifiés à la lecture des décisions
+existantes, et ne sont PAS consignés (trace d'audit, règle 6) : l'anglais de
+`/admin/*` est le pilote **Q-LANG** voulu (décision 2026-07-13 — ne pas « corriger »
+la langue de ces écrans) ; l'incohérence préfixe/suffixe GBP/ZAR (cartes vs synthèse)
+est déjà consignée par le design review du 2026-07-15 (`DESIGN-DEVISE-CONVENTION1`,
+arbitrage Etienne attendu).
+
+Statut des dettes déjà consignées re-vérifiées au passage : `QA-UX-VENTIL-RESTE1`
+toujours reproductible à l'identique (2e ligne orpheline, Valider grisé — l'invariant
+bloque, pas de corruption) ; `QA-LISTES-MANQUANTES1` et `QA-NAV-PLACEHOLDERS1` sont
+RÉSOLUS en pratique (/banques liste la connexion, /admin/membres liste les membres,
+/graphiques et /echeances sont de vraies pages) — à cocher par leur auteur si confirmé.
+### Différés /design-review du 2026-07-15 (rapport : `~/.gstack/projects/tygr-app/designs/design-audit-20260715/`)
+
+Baseline Design Score B− (AI Slop A) ; 10 findings fixés en
+`fix/design-review-20260715`, les suivants DIFFÉRÉS. Aucun ne touche
+l'isolation/append-only/montants-exacts (sinon corrigé, pas consigné).
+
+- [ ] **DESIGN-PERIMETRE-LARGEUR1 (P2, effort ~0,25 j, 2026-07-16) — popover
+  « Vue / Rechercher un compte » trop étroit, titres tronqués.** Le sélecteur de
+  périmètre de la barre de vue (`src/components/shell/perimetre-switcher.tsx`, popover
+  ouvert depuis « Vue · N comptes ») a une largeur fixe qui coupe les noms d'entités/
+  titulaires (« AIRPORT HOTEL LTD - 1… », « OMNICANE AGRICULTU… »). Élargir le popover
+  (ou passer à une largeur fluide plafonnée + `title`/tooltip au survol) pour lire les
+  libellés en entier. Purement présentationnel, aucun changement serveur (la sélection
+  postée reste une liste de `bankAccountId`). Lié à UI-PERIMETRE-ACCORDEON1 (même
+  composant). **Déclencheur** : ce retour terrain (clawdy 2026-07-16) — à traiter à la
+  prochaine passe sur la barre de vue.
+- [ ] **DESIGN-MOBILE1 (P2, effort ~2-3 j, 2026-07-15) — mobile <768 non conçu.**
+  La sidebar (232px, sans variante responsive) ne collapse pas ; à 375px le
+  contenu s'écrase (graphe illisible, chiffres masqués). Spec §1.1 « <768 =
+  lecture seule, KPIs en rangée scrollable, bottom-nav 4 entrées » NON
+  implémentée. Captures : `screenshots/dashboard-mobile.png`,
+  `transactions-mobile.png`. **Déclencheur** : décision produit « mobile
+  lecture seule » ou premier usage mobile réel rapporté.
+- [ ] **DESIGN-BREAKPOINTS1 (P2, effort ~0,5 j, 2026-07-15) — seuils sm/lg vs
+  norme 768/1280.** Le code bascule à 640/1024 (64× `sm:`, 10× `lg:`), la norme
+  §1.1 dit 768/1280. Soit ACTER les seuils réels dans UI_GUIDELINES, soit
+  migrer (`md:`/`xl:`). Lié : DESIGN-MOBILE1. **Déclencheur** : mise à jour
+  UI_GUIDELINES (DESIGN-DOCS-PERIMEES1) — trancher AVANT tout sweep.
+- [ ] **DESIGN-FOCUS-SWEEP1 (P2, effort ~0,5 j, 2026-07-15) — focus non
+  uniforme.** 44× `focus:ring` (s'allume au clic souris) vs 252×
+  `focus-visible:ring`, mélangés jusque dans `category-picker.tsx` ; 3 rendus
+  d'anneau (offset-2 / sans offset / `ring-primary/30`). Cible §2.3 : ring 2px
+  primary offset 2px, `focus-visible` partout. Mécanique mais 15+ fichiers.
+  **Déclencheur** : prochain chantier a11y OU prochaine /design-review.
+- [ ] **DESIGN-HAUTEURS-CONTROLES1 (P2, effort ~0,25 j, 2026-07-15) — h-9 (19×)
+  vs h-10 (46×, spec §2.3) vs toolbar h-12 (`barre-vue.tsx:99`).** Unifier à
+  h-10 écran par écran (risque de layout calibré). **Déclencheur** : prochaine
+  passe admin/forms.
+- [ ] **DESIGN-CAT-COULEURS1 (P2, effort ~0,5 j, 2026-07-15) — deux référentiels
+  de couleur catégorie ASSUMÉS mais divergents.** Badge = identité (hash,
+  stable, tokens `--color-cat-badge-*`) ; donut = RANG de montant (tokens
+  `--color-chart-cat-*`). Une même catégorie change de couleur selon la
+  surface. Converger = décision produit (le donut par identité perdrait la
+  lecture de classement ; le badge par rang perdrait la stabilité).
+  **Déclencheur** : décision design/PO explicite — ne pas « fixer » en douce.
+- [ ] **DESIGN-DEVISE-CONVENTION1 (P2, effort ~0,25 j, 2026-07-15) — CONFLIT de
+  règles documentées sur les devises sans symbole.** CLAUDE.md §8 (figé
+  2026-06-22) : repli code ISO en SUFFIXE (« 28 061,11 GBP » — synthèse,
+  graphiques) ; `indicateurDevise` (UI-SOLDE-MULTIDEVISE-POLISH1) : indicateur
+  TOUJOURS en préfixe pour aligner les virgules de la pile multi-devise
+  (« GBP 349,20 » — cartes de solde). Même devise, deux écritures sur le même
+  écran. Trancher (l'alignement décimal plaide pour le préfixe généralisé),
+  harmoniser, corriger la règle perdante. **Déclencheur** : arbitrage Etienne.
+- [ ] **DESIGN-ITALIQUE-BRUT1 (P2, effort ~0,25 j, 2026-07-15) — l'italique
+  « libellé brut non enrichi » est un signal NON documenté.** Transactions et
+  légendes graphiques rendent les libellés bruts en italique, les enrichis en
+  romain — sémantique réelle, invisible pour l'utilisateur (deux « Merchant
+  Settlement|… » stylés différemment sans explication). Documenter (légende/
+  tooltip) OU uniformiser. **Déclencheur** : décision produit.
+- [ ] **DESIGN-ENTETE-VARIANTES1 (P2, effort ~0,25 j, 2026-07-15) — 3 variantes
+  de zone d'en-tête depuis #214.** Toolbar complète (dashboard/transactions/
+  échéances) / CTA seul (banques) / bandeau « ESPACE » (règles + admin). Unifier
+  ou acter la matrice page→en-tête. **Déclencheur** : consolidation toolbar
+  (PLAN-toolbar-config).
+- [ ] **DESIGN-DOCS-PERIMEES1 (P2, effort ~0,5 j, 2026-07-15) — docs design
+  périmées vs code.** UI_GUIDELINES §1.1/§1.2 décrivent le header ink + side-panel
+  KPI 300px (remplacés par AppSidebar verticale, refonte Dodo) ; §2.1 dit encore
+  « Instrument Sans + Geist » (code = Red Hat Display unifiée, conforme §0) ;
+  DESIGN.md racine résume d'ANCIENNES valeurs (`ink #0F1E3D` vs `#0C1633`) ;
+  segmented actif rendu `primary` (spec §2.3 : pill `ink`) — à acter ; H1 de page
+  26px sans rôle dans l'échelle §2.1 — à acter ; **CLAUDE.md « Interface en
+  français » à réconcilier avec Q-LANG** (destination EN actée 2026-07-13 — le
+  design-review 2026-07-15 a failli traduire le pilote admin EN en FR sur la foi
+  de cette phrase). PR docs (auto-mergeable).
+  **Déclencheur** : avant la PROCHAINE /design-consultation ou tout nouveau plan UI.
+- [ ] **DESIGN-RESTANT-SERVEUR1 (P2, effort ~0,25 j, 2026-07-15) —
+  `restantDecimal()` recalcule un montant dans l'UI** (`echeances-list.tsx:62-74`,
+  centimes BigInt — pas de float). Contraire au principe « l'UI affiche, ne
+  recalcule rien » (en-tête format-montant.ts) : déplacer le « restant dû » dans
+  la requête/service. **Déclencheur** : prochain chantier échéances.
+
+### Dashboard : carte « Comptes connectés » orpheline (2026-07-15)
+
+- [ ] **DASH-COMPTES-CONNECTES-ORPHELIN1 (P2, effort ~0,25 j, 2026-07-15) — DETTE :
+  `connected-accounts-card.tsx` n'est plus monté par le Dashboard.** Le ticket
+  DASH-RETIRER-COMPTES-CONNECTES1 (branche `fix/dashboard-retirer-comptes-connectes`,
+  `PLAN-dashboard-retirer-comptes-connectes.md`) a DÉBRANCHÉ la carte « Comptes connectés »
+  du dashboard (jugée redondante avec la nav latérale par Etienne) et rééquilibré le layout
+  (graphe `FluxTresorerieCard` pleine largeur + « Synthèse du mois » en bandeau horizontal).
+  Le composant `src/components/dashboard/connected-accounts-card.tsx` et sa démo
+  `src/app/demo/comptes-provenance/page.tsx` n'ont **PAS** été supprimés (règle 12/9 : dead
+  code préexistant → on signale, on ne supprime pas sans demande). Ils ne sont donc plus
+  référencés que par cette démo → **ORPHELINS**. La prop/fetch `comptes` reste utilisée par
+  le dashboard (compteur `SoldesDevisesRow`, pastille `synchroLaPlusRecente`, « N comptes »
+  du sous-titre) — seul le rendu de la carte a disparu. **À trancher** (recycler vs
+  supprimer) : soit la carte est recyclée sur une autre page (ex. future page « Comptes » /
+  détail de connexion), soit elle est supprimée avec sa démo. Pas une dette d'isolation/
+  append-only/montants (pur présentationnel). **Déclencheur** : prochaine décision produit
+  sur une page « Comptes » dédiée, OU revue de dead code de fin d'Epic 3 — l'un tranche.
+
+### Barre de vue globale & bugs /transactions — backlog navbar (2026-07-13)
+
+Retour terrain Etienne (passe navbar + `/transactions`, 2026-07-13) : deux bugs
+fonctionnels (A4 redirect de périmètre, B1 layout du sélecteur de statut), un lot produit
+« barre de vue globale » (A1-A3, à cadrer) et deux irritants UX/feature `/transactions`
+(B2 saut visuel de la recherche, B3 somme nette des résultats). Aucun de ces points ne
+touche l'isolation tenant, l'append-only ni les montants (sinon corrigé immédiatement, pas
+consigné) ; B3 est une FEATURE d'AFFICHAGE de montants — spécifiée ici, non implémentée —
+qui devra respecter la règle 8 (somme PAR devise, chaîne décimale, `tabular-nums`).
+Fichiers cités vérifiés en lecture seule. Cadre plus large : la passe profonde
+`PROD-UX-REVIEW1` (/design-review) est le déclencheur naturel de plusieurs de ces items.
+
+**Topologie (recon)** : la « barre de vue des comptes » = `AppTopbar`
+(`src/components/shell/app-topbar.tsx`), montée GLOBALEMENT par le layout
+(`src/app/(workspace)/layout.tsx:206`) → présente sur TOUTES les pages workspace. Elle
+compose `PeriodeSwitcher` (presets Ce mois/3m/6m/12m/Tout via `?periode`, canal de LECTURE
+hors RLS — `periode-switcher.tsx`, lib `src/lib/periode.ts`), `PerimetreSwitcher` (périmètre
+comptes/entités via Server Action + `redirect` — `perimetre-switcher.tsx`) et `BankCtaLink`.
+
+- [x] **PERIMETRE-REDIRECT-PAGE1 (P1, effort ~0,5 j, 2026-07-13) — BUG : changer le
+  périmètre de comptes depuis `/transactions` (ou toute page ≠ dashboard) REDIRIGE vers le
+  dashboard.** ✅ **RÉSOLU 2026-07-14** (branche `fix/perimetre-redirect-page`, plan
+  `PLAN-perimetre-redirect-page.md`). Les 2 actions de PÉRIMÈTRE reviennent sur la page
+  courante : champ caché `origine` (`usePathname` + `useSyncExternalStore` sur
+  `window.location.search` — jamais `useSearchParams`, bail-out CSR), VALIDÉ serveur par
+  le nouveau `src/lib/redirect-interne.ts` (anti-open-redirect fail-closed : chemin
+  interne absolu uniquement, rejet `//host`, `/\host`, schémas, CRLF ; résolution
+  same-origin en défense en profondeur ; sortie `pathname+search`, jamais d'origine).
+  19 tests unitaires. `basculerWorkspace` garde `redirect("/")` (décision D1 : le switch
+  de workspace purge le viewFilter, et l'action sert aussi `/selection`).
+  ⚠️ **Garde indispensable découverte en recon** (arbitrage Etienne du 2026-07-14) :
+  rester sur la même route est un RE-RENDER, pas un remount → les features clientes qui
+  sèment le RSC dans un `useState` (`transactions-feature.tsx:104`,
+  `graphiques-feature.tsx:121`, `echeances-feature.tsx:93`) auraient affiché des données
+  PÉRIMÉES (topbar « Sucre » + table de tous les comptes). D'où la `key` de périmètre sur
+  le conteneur de page (`layout.tsx`), qui re-sème TOUTE page — présente et future — quand
+  le périmètre change. Contrepartie assumée → dette `TX-FILTRES-URL1` ci-dessous.
+  Mode de défaillance d'origine : sur `/transactions`, ouvrir le sélecteur « Vue »,
+  ajouter/retirer un compte, « Appliquer » → on atterrit sur `/` au lieu de rester sur
+  `/transactions` (perte de place + reset des filtres in-page recherche/statut/date). Cause
+  EXACTE : les trois Server Actions de périmètre finissent par un `redirect("/")` EN DUR —
+  `definirViewFilter` (`src/app/(workspace)/actions.ts:92`), `definirPerimetreEntite`
+  (`:137`) et l'action sœur (`:61`). Attendu : revenir sur la page COURANTE. ⚠️ Le redirect
+  n'est pas gratuit à supprimer : il pilote aujourd'hui le remount propre du
+  `PerimetreSwitcher` via une `key` dérivée du périmètre (`app-topbar.tsx:64`,
+  `perimetre-switcher.tsx:181`) → rester sur place doit quand même RE-résoudre le scope
+  (revalidation) et re-semer la sélection locale. Piste : passer le chemin d'origine à
+  l'action (`usePathname` → champ caché) puis `redirect(origine)` — chemin VALIDÉ (préfixe
+  interne, jamais un chemin client brut → open-redirect). Même composant que
+  UI-PERIMETRE-ACCORDEON1 / PERIMETRE-ENTITE-DERIVE1, à ne pas confondre (eux =
+  accordéon/dérive de libellé ; ici = routage). **Déclencheur** : immédiat (reproduit ;
+  gêne à chaque changement de périmètre hors dashboard). Pas une dette d'isolation (la RLS
+  reste la garde ; c'est du routage).
+
+- [ ] **TX-FILTRES-URL1 (P2, effort ~0,5 j, 2026-07-14) — porter les filtres in-page de
+  `/transactions` (recherche / statut de ventilation / bornes de date) dans les
+  searchParams, pour qu'ils SURVIVENT à un changement de périmètre.** Contrepartie ASSUMÉE
+  de la garde livrée avec PERIMETRE-REDIRECT-PAGE1 (arbitrage Etienne, 2026-07-14) : la
+  `key` de périmètre du conteneur de page (`(workspace)/layout.tsx`) remonte le sous-arbre
+  quand le périmètre change — c'est ce qui interdit d'afficher des données PÉRIMÉES — mais
+  elle réinitialise du même coup l'état CLIENT des filtres (`transactions-feature.tsx:108`,
+  `useState<FiltresTransactions>({})`). Aujourd'hui : on reste bien sur `/transactions`
+  (bug principal réglé) et `?periode` est préservé, mais un changement de périmètre vide la
+  recherche/le statut/les dates. **Cible** : filtres dans l'URL (`?recherche`, `?statut`,
+  `?du`, `?au`) → ils sont alors portés par le chemin de retour (`validerCheminInterne`
+  préserve la query), survivent au remount, ET la page devient deep-linkable/partageable.
+  ⚠️ Recoupe TOOLBAR-DATE-PRECISE1 (qui veut déjà `?du`/`?au` GLOBAUX) : trancher d'abord
+  qui possède les bornes de date (barre de vue globale vs toolbar in-page), sinon deux
+  canaux concurrents. ⚠️ **Point de vigilance (nit cross-review 2026-07-14)** : le champ
+  `origine` du PerimetreSwitcher lit la query via `useSyncExternalStore` abonné au SEUL
+  `popstate` (`perimetre-switcher.tsx`, `souscrireHistorique`). Tant que seule la période
+  mute l'URL (et ferme le popover au clic), la valeur reste fraîche. Mais si ce chantier
+  fait muter la query par `router.replace`/`pushState` SANS fermer le popover (raccourci
+  clavier, debounce), `origine` pourrait poster une query périmée → au moment du fix,
+  patcher `souscrireHistorique` pour intercepter `history.pushState`/`replaceState` (ou
+  relire `window.location.search` au submit). Glitch UX bénin (le filtre vit dans le
+  cookie ; seul le param d'URL régresserait), pas une faille. **Déclencheur** : prochain
+  chantier `/transactions` (ou TOOLBAR-GLOBALE-CADRAGE1, qui tranche la propriété des
+  filtres). Pas une dette d'isolation (la RLS reste la garde ; c'est de l'état d'UI).
+
+- [x] **TX-STATUT-SELECT-LAYOUT1 (P2, effort ~0,25 j, 2026-07-13) — BUG FRONT : ouvrir le
+  filtre « Tous statuts » sur `/transactions` fait SAUTER le layout (barre de scroll
+  parasite).** ✅ **RÉSOLU 2026-07-14** (branche `fix/select-layout-shift`). **Cause réelle**
+  (mesurée, ce n'était pas la scrollbar-gutter supposée) : le popover était `absolute`, donc
+  enfant du groupe de filtres `overflow-x-auto` (`transactions-toolbar.tsx:156`) — or CSS
+  force `overflow-y` à `auto` dès que `overflow-x` ne vaut plus `visible`. Le menu (288px)
+  débordait de la rangée (40px) → **la toolbar devenait scrollable de 142px** (mesuré au
+  navigateur) et le `scrollIntoView` de l'option active la faisait défiler → scrollbar
+  parasite + saut. **Fix** : le menu est PORTALÉ dans `document.body` et positionné en
+  `fixed` sur le rect du trigger (`src/components/ui/select/position-menu.ts`, géométrie
+  PURE + 14 tests unitaires ; `select.tsx` mesure et applique). Un `fixed` échappe à TOUT
+  ancêtre clippant ET, hors flux, ne peut créer aucune scrollbar de document.
+  **Bugs LATENTS de la même famille tués au passage** — dans les 7 FICHIERS appelants du
+  `Select` (14 occurrences), tous re-QA'és : (a) tableau d'assignation
+  (`assignation-comptes.tsx:339` `overflow-x-auto`) — les menus des dernières lignes sortaient
+  SOUS le viewport (mesuré à 1033px pour une fenêtre de 900 → options inatteignables) ;
+  (b) liste des suggestions en modale (`propositions.tsx:233` `max-h-[60vh] overflow-y-auto`)
+  — même clipping. ⚠️ La famille n'est PAS close pour autant : les popovers maison HORS
+  `Select` restent à traiter (cf. SIDEBAR-SWITCHER-CLIP1). Le `z-[60]` du menu est exigé par
+  la NOUVELLE architecture (le menu et l'overlay de la Modal sont désormais deux portals
+  FRÈRES sous `body` : à z-index égal, seul l'ordre du DOM les départagerait) — avant le
+  portal, le menu était un DESCENDANT du contexte d'empilement de l'overlay et passait donc
+  toujours devant : il n'y avait là aucun défaut de z-index, seulement le clipping.
+  Ajouts : FLIP au-dessus quand l'espace manque en bas, hauteur ET ancre bornées au viewport,
+  reposition au scroll/resize (coalescée par rAF), fermeture du menu dès que le trigger n'est
+  plus visible (`IntersectionObserver` — sinon le `fixed`, qui échappe au clip, laisserait le
+  menu ORPHELIN sur une ancre invisible). Les deux derniers points viennent de la revue
+  contradictoire (constats F1/F2, bloquants) — la géométrie sortait de l'écran dès qu'on
+  scrollait menu ouvert ; 3 tests ajoutés, qui échouaient avant le bornage.
+  Effet de bord assumé : le typeahead lit l'horodatage de l'ÉVÉNEMENT au lieu de `Date.now()`
+  (le React Compiler refuse l'appel impur — `react-hooks/purity` — une fois le composant
+  devenu analysable). Pas d'isolation, aucun changement d'API ni de token.
+  Plan + registre de revue : `PLAN-select-layout-shift.md`.
+
+- [ ] **SELECT-MODALE-A11Y1 (P1, effort ~0,5 j, 2026-07-14) — RÉGRESSION A11Y assumée du
+  portal : dans une modale, le menu du `Select` sort du sous-arbre `aria-modal`.** Constat de
+  la revue contradictoire de `fix/select-layout-shift` (confiance 7/10, non reproductible ici
+  faute de lecteur d'écran). `modal.tsx:136` pose `aria-modal="true"` : les AT ignorent alors
+  tout ce qui vit HORS du `role="dialog"`. Or le menu est désormais portalé sous `document.body`
+  → **frère** de l'overlay, pas descendant du dialogue. Un utilisateur NVDA/JAWS/VoiceOver qui
+  ouvre le seul `Select` vivant en modale (`propositions.tsx:422`, sas ADMIN des suggestions)
+  et navigue ↑/↓ pourrait n'entendre AUCUNE option (`aria-activedescendant` pointe un `id`
+  situé dans la zone masquée). Avant le portal, le menu était dans le panneau → annoncé.
+  **Deux correctifs candidats, chacun avec son coût** : (a) portaler dans le panneau du
+  dialogue (`closest('[role="dialog"]')`) — garde le sous-arbre a11y ET échappe au clip de la
+  liste, MAIS les options rejoignent alors la requête du focus-trap de la Modal
+  (`modal.tsx:94`, sélecteur qui n'exclut pas `tabindex="-1"`) → il faut AUSSI durcir la
+  Modal (risque sur TOUTES les modales) ; (b) prop `container?: HTMLElement` sur `Select` +
+  la Modal expose son panneau → API élargie, 3 fichiers. Écarté au MVP : incertitude sur le
+  comportement réel des AT + périmètre (le lot devait rester CONTENU au `Select`, sans
+  changement d'API). C'est le pattern que portent Radix/MUI/Headless UI (portal `body`), avec
+  la même réserve connue. **Déclencheur** : prochaine passe a11y, ou tout chantier touchant
+  `modal.tsx` / le sas ADMIN. Trancher AVANT la prod (P1) — à valider au lecteur d'écran réel.
+
+- [ ] **SIDEBAR-SWITCHER-CLIP1 (P2, effort ~0,25 j, 2026-07-14) — MÊME famille que
+  TX-STATUT-SELECT-LAYOUT1, hors `Select` : le popover du `WorkspaceSwitcher` est clippé par
+  la sidebar.** `workspace-switcher.tsx:60-63` rend son menu en `absolute … mt-2` (il s'ouvre
+  vers le BAS) ; son trigger vit dans le bloc `mt-auto` (collé en BAS) de
+  `app-sidebar.tsx:47-49` — un `<aside class="sticky top-0 flex h-screen … overflow-y-auto">`.
+  Popover `absolute` ouvrant vers le bas depuis le bas d'un conteneur `overflow-y-auto` =
+  exactement la configuration corrigée pour le `Select` : la sidebar devient scrollable à
+  l'ouverture (scrollbar parasite) et le menu est rogné. **Non traité ici** : ce n'est pas un
+  `Select`, le lot devait rester contenu (règle 7, pas d'expansion de périmètre). Correctif :
+  soit réutiliser le `Select` (il porte maintenant le portal), soit remonter la même mécanique
+  (portal + `fixed` + `position-menu.ts`, déjà écrit et testé). **Déclencheur** : prochain
+  chantier navbar/shell (typiquement TOOLBAR-GLOBALE-CADRAGE1). Pas d'isolation.
+
+- [x] **UI-ZINDEX-ECHELLE1 (P2, effort ~0,1 j, 2026-07-14) — `docs/UI_GUIDELINES.md` ne
+  documente AUCUNE échelle de z-index, alors qu'il en existe une de fait.** ✅ **LIVRÉ
+  2026-07-17** (passe PROD-UX-REVIEW1, branche `chore/design-review-20260717`) : registre
+  ajouté à UI_GUIDELINES §4.4, échelle re-vérifiée au grep avant écriture (z-10 ×6, z-20 ×3,
+  z-30 ×1, z-50 ×4, z-[60] ×2 — inchangée depuis le relevé). Le token `z-popover` Tailwind
+  (« éventuellement ») n'a PAS été posé : hors périmètre docs de cette passe, à raccrocher
+  au prochain composant flottant s'il naît. Historique :
+  Relevé par la revue de `fix/select-layout-shift`, qui a dû introduire le premier cran > 50
+  (`z-[60]` du menu portalé, qui doit battre l'overlay Modal `z-50`). Sans registre écrit, le
+  prochain composant flottant tirera un z-index au jugé et passera un jour DERRIÈRE une modale.
+
+- [x] **TOOLBAR-GLOBALE-CADRAGE1 (P2, 2026-07-13) — faire de la « barre de vue » une TOOLBAR
+  GLOBALE cohérente : présente là où c'est pertinent, retirée là où c'est obsolète.**
+  ✅ **CADRÉ + LOT A2 (gating) LIVRÉ 2026-07-14** (branche `feat/toolbar-config`, plan
+  `PLAN-toolbar-config.md`). Matrice tranchée par Etienne, implémentée en fonction PURE
+  `src/components/shell/toolbar-config.ts` (`toolbarConfig(pathname)` → `{periode, perimetre,
+  cta, minimal}`), consommée par un composant CLIENT `barre-vue.tsx` (`usePathname`) —
+  `AppTopbar` reste SERVER et lui passe `BankCtaLink` en slot. **Livré** : période retirée de
+  Banques/Règles/Admin (elle n'y a aucun effet) ; CTA retiré de Graphiques/Échéances ; période
+  retirée d'Échéances (les presets sont rétrospectifs, l'écran regarde le futur) ; bande
+  MINIMALE (repère de tenant seul) sur `/admin/*` ; AUCUNE barre sur `/selection` ; défaut
+  fail-safe explicite pour toute page non cadrée. Reste du lot renvoyé à ses entrées :
+  **TOOLBAR-DATE-PRECISE1** (plage de dates, A1), **horizon futur d'Échéances** (chantier
+  séparé), **TX-TOOLBAR-DEDUP1**. ⚠️ **Deux cellules de la matrice N'ONT PAS été livrées**
+  (périmètre conservé sur Banques et Règles) → cf. TOOLBAR-PERIMETRE-AMPUTATION1 ci-dessous,
+  qui les débloque.
+
+- [x] **TOOLBAR-PERIMETRE-AMPUTATION1 (P1, effort ~0,5 j, 2026-07-14) — amputer le
+  `viewFilter` des surfaces de GESTION `/banques` et `/regles`, puis y retirer le sélecteur
+  de périmètre (2 cellules restantes de la matrice A2).**
+  ✅ **LIVRÉ 2026-07-15** (branche `fix/toolbar-perimetre-amputation`, plan
+  `PLAN-toolbar-perimetre-amputation.md`). Helper renommé `exigerSessionSansPerimetre()`
+  (arbitrage Etienne : nom honnête + alias `exigerSessionAdministration` rétro-compat).
+  Amputé : `banques/page.tsx`, `banques/actions.ts` (×6), `banques/widget-runtime.ts` (×3,
+  NO-OP — découverte), `regles/page.tsx` (découverte), et les **5 écritures** de
+  `regles/actions.ts` (dont `appliquerReglesAction`, la SEULE réellement distordue —
+  INNER JOIN `bank_accounts`). La **lecture** `listerReglesAction` reste en session complète
+  (règles workspace-global, immunes au viewFilter). Matrice : `banques` → `perimetre:false`
+  (CTA seul) ; `regles` → **`MINIMALE`** (plus aucun contrôle → bande de tenant, comme
+  `/admin`). Preuve : `tests/isolation/perimetre-amputation-gestion-isolation.test.ts`
+  (repro + fix des 2 surfaces + non-régression tenant). Effet de bord ASSUMÉ : « Ré-analyser »
+  porte désormais sur tout le tenant quel que soit le filtre d'affichage. Reste : Visual QA +
+  merge (Etienne).
+  Découvert par la cross-review de
+  `feat/toolbar-config` ; **arbitrage Etienne : ne PAS masquer le sélecteur tant que le
+  serveur n'est pas amputé** (sinon on supprime le seul moyen de voir/annuler un filtre qui
+  mord encore). **Le fond du problème** : le `viewFilter` n'est pas un filtre d'affichage
+  local, c'est un prédicat **RLS** (`app.current_view_filter`, policy `account_scope`
+  RESTRICTIVE en USING *et* WITH CHECK, migrations 0016/0017) porté par le **JWT** → il suit
+  l'utilisateur de page en page et mord sur toute page dont la session n'est pas amputée.
+  `/admin/*` l'est déjà (`exigerSessionAdministration()`, `server/auth/session.ts:136` — helper
+  qui NE vérifie PAS le rôle et dont la doc établit « la sécurité est INCHANGÉE, on ne retire
+  qu'une intention d'affichage » ; doctrine : « Administrer porte sur le TENANT ENTIER : un
+  filtre d'affichage n'y a aucun sens »). **Pas `/banques` ni `/regles`, qui tournent sur
+  `exigerSessionWorkspace()` (session COMPLÈTE)** :
+  - `/banques` — filtre actif ⇒ le sync **attache 0 compte SANS erreur** (`WITH CHECK` refuse
+    l'INSERT des comptes hors filtre). **Ce n'est pas théorique** : le repo le documente
+    lui-même comme diagnostic d'un bug terrain « spinner puis rien »
+    (`banques/actions.ts:281-286`). Les compteurs de `listerConnexionsBancaires` (leftJoin
+    `bank_accounts`) sont faux du même coup (« 1 compte » pour une connexion qui en a 5).
+  - `/regles` — filtre actif ⇒ `appliquerReglesAction` (`regles/actions.ts:200`) ne
+    recatégorise **que le périmètre filtré** : le FM croit avoir ré-analysé tout le groupe.
+  **Correctif** : `exigerSessionAdministration()` sur `banques/page.tsx:31`, les 6 actions de
+  `banques/actions.ts` (l.152, 212, 272, 444, 491, 590) et les actions d'écriture de
+  `regles/actions.ts` ; **puis** passer `banques`/`regles` à `perimetre: false` dans
+  `toolbar-config.ts` (⚠️ la garde CI `tests/unit/toolbar-config.test.ts` REFUSE ce passage
+  tant que le segment n'est pas déclaré amputé — c'est voulu). ⚠️ **Touche une surface
+  serveur** → cas d'isolation à ajouter (règle 3), effet de bord ASSUMÉ à valider : «
+  Ré-analyser » portera alors sur tout le tenant quel que soit le filtre d'affichage.
+  **Déclencheur** : immédiat/prochain chantier toolbar — c'est un bug de correction d'AFFICHAGE
+  et d'ÉCRITURE (sync silencieusement vide), pas une dette d'isolation (la RLS reste la garde,
+  aucune fuite cross-tenant : le filtre ne fait que RÉTRÉCIR).
+
+- [x] **TOOLBAR-DATE-PRECISE1 (P2, effort ~0,5 j, 2026-07-13) — ajouter un sélecteur de DATE
+  PRÉCISE (plage `?du`/`?au`) dans la barre de vue, en complément des presets de période.**
+  ✅ **LIVRÉ 2026-07-14 (lot A1)** — branche `feat/toolbar-date-precise`, plan
+  `PLAN-toolbar-date-precise.md`. `src/lib/periode.ts` gère « **plage explicite prime sur
+  preset** » (`lirePlage` = source UNIQUE de validation, partagée serveur/UI : dates
+  calendaires réelles via `estDateISO`, garde `du ≤ au`, amplitude bornée à `MAX_MOIS_PLAGE`
+  = 120 mois — anti-abus d'un `?du` forgé ; toute plage inexploitable → repli silencieux sur
+  le preset). `BornesPeriode.preset` devient `PresetPeriode | null` (null sous plage = garde
+  anti-mensonge au niveau du TYPE). UI : `plage-dates-switcher.tsx` (client) + le
+  `PeriodeSwitcher` n'allume AUCUN segment sous plage (et un clic sur un preset efface la
+  plage). **Câblage serveur RÉEL** : `(dashboard)/page.tsx` → `resoudrePeriode(searchParams)`.
+  ⚠️ **Périmètre RÉDUIT au Dashboard** (arbitrage Etienne, cf. GRAPHIQUES-PERIODE-DEDUP1
+  ci-dessous et TX-TOOLBAR-DEDUP1) : c'est la SEULE page qui lit ces params. La garde CI
+  « une page qui MONTE la période DOIT la LIRE » (`tests/unit/toolbar-config.test.ts`) rend
+  désormais impossible d'afficher un contrôle de période qui ne filtre rien.
+  ⚠️ **BLOQUANT trouvé en cross-review et corrigé (arbitrage Etienne 2026-07-14)** : deux des
+  quatre lectures du Dashboard n'étaient PAS bornées au jour — `syntheseMoisParDevise(mois)`
+  et `syntheseParMois({moisFin, nbMois})` agrégeaient au **MOIS ENTIER**. Invisible avec les
+  presets (leur `from` tombe toujours un 1er du mois → l'agrégat coïncidait), mais une plage
+  « 3 mars → 17 avril » aurait affiché **avril entier** sous une barre annonçant « au 17/04 » :
+  le mensonge d'affichage déplacé de la barre vers la DONNÉE FINANCIÈRE. Les deux repos
+  prennent désormais `{from, to}` (renommage `synthesePeriodeParDevise` / type
+  `SynthesePeriodeDevise` — ils n'agrègent plus « un mois ») ; le GROUP BY reste mensuel, donc
+  sous plage les **mois d'extrémité sont PARTIELS**, ce que le nouveau `libellePeriode`
+  (source unique, calculé par la page) annonce partout — en-tête, Top contreparties, tendance,
+  `aria-label` du graphe — et la carte devient « Synthèse de la période ». Zéro régression sous
+  preset (le mois d'ancrage ENTIER est repassé explicitement). Preuves en suite d'isolation.
+
+- [ ] **GRAPHIQUES-PERIODE-DEDUP1 (P2, effort ~0,5 j, 2026-07-14) — unifier la période de
+  `/graphiques` sur la barre de vue (retirer le sélecteur de période IN-PAGE).** Jumelle de
+  TX-TOOLBAR-DEDUP1, **découverte au cadrage du lot A1** : `graphiques/page.tsx` ne prend même
+  pas `searchParams` — le `PeriodeSwitcher` que la matrice A2 y montait ne filtrait donc RIEN,
+  pendant que le vrai filtre (segmenté « Ce mois-ci / 30 j / 90 j / 12 mois ») vit in-page
+  (`graphiques-feature.tsx:173`, Server Action `analyserCategoriesAction` + `periode-analyse.ts`).
+  **Mitigation immédiate (A1)** : `periode: false` sur `/graphiques` → le no-op est retiré (zéro
+  régression : le filtre in-page reste maître). **Reste à faire** : faire porter les bornes par
+  l'URL (la barre devient source unique), ce qui suppose de **trancher le conflit de
+  vocabulaire des presets** — la barre n'a pas de fenêtre glissante 30 j/90 j, Graphiques n'a
+  pas de « Tout » — puis d'adapter la Server Action (aujourd'hui son contrat est « le client
+  n'envoie qu'un preset fermé, jamais des dates »). ⚠️ Arbitrage PRODUIT requis avant code.
+  **Déclencheur** : le chantier qui tranche la propriété des filtres (avec TX-TOOLBAR-DEDUP1),
+  ou une demande terrain de plage précise sur les graphiques.
+
+- [ ] **TX-TOOLBAR-DEDUP1 (P2, effort ~0,25 j, 2026-07-13) — retirer de la toolbar
+  `/transactions` les contrôles qui DOUBLONNENT la barre de vue globale une fois celle-ci
+  posée.** Corollaire de TOOLBAR-DATE-PRECISE1 (livrée) : dès que la plage de dates vit dans la
+  toolbar globale, les bornes de date in-page (`transactions-toolbar.tsx:233-265`) et toute
+  notion de période in-page deviennent une SECONDE source de filtre concurrente sur le même
+  écran → à supprimer. PRÉCÉDENT exact déjà appliqué : le sélecteur de compte a été retiré de
+  cette toolbar au profit du `PerimetreSwitcher` global (`transactions-toolbar.tsx:13-16`,
+  « retrait feedback 0709 : doublon moche du sélecteur navbar ») → même geste pour les dates.
+  ⚠️ Ne PAS retirer le filtre STATUT ni la recherche (propres à `/transactions`, absents de la
+  toolbar globale). ⚠️ **DETTE PRÉCISÉE PAR A1 (2026-07-14)** : `/transactions` garde
+  `periode: true` dans la matrice alors que sa page **ne lit PAS `?periode`** → ce
+  PeriodeSwitcher est un **NO-OP** aujourd'hui (mensonge d'affichage, laissé INTACT sur
+  arbitrage pour ne pas créer deux filtres de dates concurrents avant d'avoir retiré ceux de la
+  page). Il est tracké : `transactions` est l'UNIQUE **exemption nommée** de la garde CI
+  anti-mensonge (`SEGMENTS_PERIODE_NON_CABLEE`, `tests/unit/toolbar-config.test.ts`). **Ce lot
+  DOIT supprimer cette exemption** (et non l'allonger) : retirer les dates in-page, câbler la
+  page sur `resoudrePeriode(searchParams)`, puis passer `plageDates: true` dans la matrice.
+  **Déclencheur** : maintenant que TOOLBAR-DATE-PRECISE1 est livrée (le remplaçant existe).
+
+- [ ] **TX-RECHERCHE-LAYOUTSHIFT1 (P2, effort ~0,25-0,5 j, 2026-07-13) — UX : la recherche par
+  libellé fait « sauter » l'écran à chaque rechargement de résultats.** ⚠️ NUANCE de recon
+  (à ne pas mal implémenter) : la recherche EST DÉJÀ débouncée ~300 ms
+  (`transactions-toolbar.tsx:48` `DEBOUNCE_RECHERCHE_MS`, effet `:118-131`) → ce n'est PAS
+  « une requête par touche » qu'il faut corriger (le debounce existe déjà), mais le LAYOUT
+  SHIFT au rechargement de la liste : elle se démonte/remonte et sa hauteur change, d'où le
+  saut visuel. Piste : réserver la hauteur (skeleton à même gabarit / `min-height`), garder la
+  liste montée pendant le refetch (état « en cours » superposé plutôt que unmount), ne pas
+  faire clignoter le conteneur. Parent : `src/components/transactions/transactions-feature.tsx`.
+  **Déclencheur** : `/design-review` (cf. PROD-UX-REVIEW1) OU plainte terrain sur le saut
+  visuel. Pas d'isolation.
+
+- [x] **TX-RECHERCHE-SOMME-NETTE1 (P2, effort ~0,5-1 j — dépend d'un agrégat serveur,
+  2026-07-13) — FEATURE : afficher la SOMME NETTE des résultats filtrés (net = entrées −
+  sorties) pendant une recherche.** ✅ LIVRÉ 2026-07-14 (branche `feat/tx-somme-nette`,
+  plan `PLAN-tx-somme-nette.md`). Agrégat SERVEUR `sommeNetteParDevise` (SUM en SQL sous
+  `withWorkspace`/RLS, GROUP BY devise, MÊMES filtres que la liste — schémas dérivés d'un
+  même objet zod + prédicats SQL partagés, donc pas de divergence possible), Server Action
+  `sommeNetteTransactionsAction`, bandeau pur `TransactionsSommeNette` (une ligne par
+  devise, net coloré par son signe, `tabular-nums`, formatage via `src/lib/format-montant.ts`).
+  Le total n'est demandé que sous filtre, et jamais au « Charger plus ». Preuve :
+  `tests/isolation/transactions-somme-nette-isolation.test.ts` (24 cas — cross-tenant,
+  périmètre entité, GROUP BY devise, tombstone, filtres croisés avec la liste, contre-preuve
+  owner ; identité `net = entrées − sorties` vérifiée en centimes entiers BigInt, zéro float).
+  ⚠️ **PIÈGE ÉVITÉ, à ne pas ré-introduire** : `transactions_cache.amount` est stocké en
+  valeur ABSOLUE (`normaliserMontant` rejette tout signe ; `credit_debit` est la seule colonne
+  sous CHECK qui porte le sens). Un agrégat `net = sum(amount)` ADDITIONNE donc les sorties aux
+  entrées (total faux, toujours positif). On somme par `filter (where credit_debit = …)`, comme
+  `cashflowParDevise`/`syntheseMoisParDevise` — une seule convention dans l'app. Le semis du
+  test d'isolation reproduit la PRODUCTION (montants positifs) : le semer en négatif — comme le
+  fait `transactions-isolation.test.ts`, où le signe est invisible — rendrait l'agrégat FAUX au
+  VERT (vérifié par mutation : 13 cas tombent).
+
+- [ ] **AGREGATS-NUMERIC-PLAFOND1 (P2, effort ~0,25 j, 2026-07-14) — DETTE : `::numeric(15,2)`
+  sur une SOMME impose un plafond de précision (|x| < 10^13), pas seulement une échelle.**
+  Relevé en cross-review de TX-RECHERCHE-SOMME-NETTE1 (probe PGlite à l'appui) : deux
+  transactions au montant max accepté par `normaliserMontant` (13 chiffres) dans la même
+  devise ⇒ `coalesce(sum(...),0)::numeric(15,2)` lève `numeric field overflow`, là où le
+  `sum()` nu passe. Sites concernés : `cashflowParDevise` (`src/server/repositories/insights.ts`)
+  et `syntheseMois`/`syntheseMoisParDevise` (`dashboard.ts`). ⚠️ **Fail-LOUD** (erreur, pas un
+  chiffre faux) → ce n'est PAS une dette de montants au sens de la règle 9 (qui interdit la
+  dette produisant un montant FAUX). Correctif : `round(x, 2)::text` — même garantie
+  d'échelle (« 0.00 » sur un groupe vide), sans plafond ; c'est déjà ce qu'emploie
+  `sommeNetteParDevise`. **Déclencheur** : premier import de volume réel, ou apparition d'une
+  devise à faible valeur unitaire. Pas d'isolation (pas de changement de périmètre).
+
+- [ ] **TX-LISTE-ECHEC-SILENCIEUX1 (P2, effort ~0,25-0,5 j, 2026-07-14) — BUG PRÉ-EXISTANT :
+  un échec de rechargement de la liste est INVISIBLE quand des lignes sont déjà affichées.**
+  `transactions-feature.tsx` : `corps` ne monte l'`AppErrorState` que si `erreur && !aDesResultats`
+  → si `listerTransactionsAction` échoue pendant un re-fetch (changement de filtre), l'écran
+  garde les lignes du filtre PRÉCÉDENT, sans aucun message. L'utilisateur croit voir le
+  résultat de sa recherche. (Découvert en cross-review de TX-RECHERCHE-SOMME-NETTE1 ; le
+  bandeau de total, lui, est déjà protégé — il n'est posé QUE si la liste l'est aussi.)
+  Second volet : une Server Action qui **rejette** (session expirée → `exigerSessionWorkspace`
+  hors du `try`) laisse `chargementEnCours="page"` pour toujours (pas de `try/finally` autour
+  de `rechargerPremierePage`) → page figée, toolbar grisée. **Déclencheur** : plainte terrain
+  « la recherche affiche les mauvaises lignes / la page ne répond plus », ou passage
+  /design-review sur les états d'erreur. Pas d'isolation.
+
+- [ ] **TX-SOMME-NETTE-HAUTEUR1 (P2, effort ~0,25 j, 2026-07-14) — UX : la hauteur du bandeau
+  de total varie avec le NOMBRE DE DEVISES du jeu filtré.** Une devise = 1 ligne ; deux devises
+  = 2 lignes + la note « jamais d'addition entre devises » (~44 px de plus). Si une frappe fait
+  passer le jeu filtré de 2 devises à 1, le tableau saute d'autant — cousin de
+  TX-RECHERCHE-LAYOUTSHIFT1 (#206), mais AU-DESSUS de la zone à hauteur plancher, donc non
+  couvert par elle. Les cas franchement janky sont déjà tués (bandeau conservé pendant le
+  re-fetch, wrapper non monté sur un total vide). Piste : créneau à hauteur réservée dès qu'un
+  filtre est actif. **Déclencheur** : `/design-review` (mesure au navigateur — à faire avec
+  captures, pas à l'aveugle). Pas d'isolation.
+
+- [ ] **SCHEMA-FK-CONNECTION-COMPOSITE1 (P2, effort ~0,5 j — migration, 2026-07-14) — DURCISSEMENT :
+  `bank_accounts.connection_id → bank_connections(id)` n'est PAS une FK composite scopée
+  workspace.** CLAUDE.md impose le pattern `(x_id, workspace_id) → table(id, workspace_id)` pour
+  `entity_id` ; `connection_id` y échappe. Rien EN BASE n'interdit donc qu'un compte du tenant A
+  pointe une connexion du tenant B (la RLS `WITH CHECK` ne vérifie que le `workspace_id` de la
+  LIGNE, pas celui de la ligne référencée). Conséquence concrète si ça arrivait : la LISTE
+  `/transactions` (qui `innerJoin` bank_connections pour le nom d'institution) masquerait ces
+  lignes, alors que les AGRÉGATS (qui ne joignent que bank_accounts) les compteraient → total ≠
+  lignes affichées. Non atteignable par l'ingestion actuelle (relevé en cross-review, à titre de
+  durcissement). **Déclencheur** : prochaine migration touchant `bank_accounts`, ou premier
+  incident de cohérence liste/agrégat. Isolation : ajouter le cas au contract-test des FK.
 
 ### Fignolage layout §1.1 — pleine largeur (2026-07-08)
 
@@ -51,6 +903,34 @@ Un lot du plan `PLAN-graphiques-kpi.md` a été **volontairement différé** :
   catégorisation Omni-FI (ou manuelle) couvre une part significative des opérations
   (couverture KPI « Catégorisé » > ~50 % sur un workspace réel) — brancher
   `vendorsParConcentration` filtré par catégorie dominante sous `StatsDevise`.
+
+### Total central du donut — débordement corrigé, accès tactile ouvert (2026-07-21, PR `fix/donut-total-central`)
+
+`DONUT-CENTRE-DEBORDE1` est **clos** : le total au centre passe au format compact
+au-delà d'un seuil mesuré (9 chiffres avec symbole en préfixe, 8 avec code ISO en
+suffixe), et reste PLEIN en deçà. Mesures et protocole :
+`docs/qa/donut-total-central/README.md`. Un point reste ouvert :
+
+- [ ] **DONUT-TOTAL-TACTILE1 (P2, effort ~0,5 j, ouvert 2026-07-21) — le total exact
+  est inatteignable au TACTILE quand il est résumé.** Quand le montant dépasse le seuil,
+  l'exact n'existe plus que via `title` (affordance souris) et `sr-only` (lecteur
+  d'écran). Un utilisateur voyant sur mobile/tablette — un mode que `UI_GUIDELINES` §1.1
+  supporte explicitement en lecture seule — n'a donc aucun chemin vers le montant exact.
+  Le constat vient d'une cross-review et recoupe celui déjà consigné dans
+  `components/ui/action-protegee.tsx:47-50` (« `title` … inatteignable au tactile »).
+  **Pourquoi P2 et pas un correctif immédiat** : au-delà du seuil, le montant ne peut
+  physiquement PAS s'écrire en entier dans l'anneau — le résoudre demande de l'exposer
+  ailleurs dans la carte (en-tête à côté du nom de devise, ou ligne « Total » dans
+  `StatsDevise`), donc un arbitrage de maquette qui appartient à l'humain, pas un
+  câblage. Aucune donnée n'est fausse ni perdue : c'est un chemin d'ACCÈS qui manque.
+  ⚠️ **Ne pas sous-estimer l'exposition** : pour MUR/USD/EUR la bascule ne tombe qu'à
+  partir de 100 000 000, mais pour toute AUTRE devise (repli code ISO en suffixe, plus
+  large de ~16 px) elle tombe dès **10 000 000** — un montant ordinaire, pas un cas
+  extrême. Et sur ces cartes ni la légende (qui porte les parts, pas le total) ni
+  `StatsDevise` (moyenne/opération) n'offrent de repli.
+  **Déclencheur** : premier retour d'usage mobile sur `/graphiques`, ou
+  le prochain lot qui touche `RepartitionDeviseCard`/`StatsDevise` — poser le total
+  exact dans le flux de la carte à ce moment-là.
 
 ### Bandeau/sélecteur par titulaire — dettes ouvertes (2026-07-07)
 
@@ -235,6 +1115,52 @@ recon/plan).
   **Réflexe immédiat** : `git rev-parse --show-toplevel` AVANT toute commande git sensible
   (doit afficher `…/tygr-app`). **Déclencheur** : avant toute opération git destructive à la
   racine OU revue d'hygiène du poste. (Cohérent avec la directive mémoire « racine git ».)
+
+### Granularité de synchronisation — cadrage par banque (2026-07-16, cf. `PLAN-sync-granularite-par-banque.md`)
+
+Constat confirmé par le code : `synchroniserConnexionsAction` (zéro argument) rafraîchit
+**TOUTES** les connexions du workspace d'un coup. La primitive scopée-connexion
+`resynchroniserConnexion` (orchestration.ts:1557) existe déjà mais n'est câblée qu'à la
+réparation MFA. Amont : `POST /sync/{ConnectionId}` est la SEULE granularité de
+déclenchement (pas de sync par compte), cooldown 1/15 min/connexion.
+
+- [ ] **SYNC-COOLDOWN-WATERMARK1 (P1, effort ~0,25 j investigation, 2026-07-16) —
+  watermark cooldown non fiable + sync auto post-connexion.** Diagnostic Absa (2026-07-16) :
+  `next_sync_available_at = NULL` alors qu'un sync avait tourné, et un sync s'est déclenché
+  ~7 min après la connexion **sans déclenchement manuel**. Deux questions : (a) l'onboarding
+  auto-déclenche-t-il un premier sync ? (b) pourquoi `NextSyncAvailableAt` n'est-il pas
+  persisté ? **Bloquant** pour toute UI qui afficherait un compte-à-rebours de cooldown par
+  banque (sinon l'UI ment). **Déclencheur** : avant de câbler l'UI par-banque
+  (SYNC-GRANULARITE-BANQUE1), ou premier retour « le bouton reste grisé/actif à tort ».
+
+- [ ] **SYNC-GRANULARITE-BANQUE1 (P2, effort ~1–1,5 j, 2026-07-16) — synchronisation PAR
+  BANQUE (grain natif Omni-FI).** Exposer `resynchroniserConnexion` via une Server Action
+  utilisateur normale (`synchroniserUneConnexionAction(connectionId)`, zod uuid, RLS tenant,
+  gating `peutModifier`, hors-tenant → 404) + UI par carte de banque sur /banques (bouton +
+  pastille fraîcheur + cooldown). Garder le sync global sur le dashboard. **NE PAS** offrir
+  de refresh « par compte » (impossible amont — `POST /sync` est par connexion ; le « par
+  compte » se règle via `is_selected`, inclusion d'ingestion, déjà en base). Bénéfice réel :
+  ne plus verrouiller 15 min toutes les banques pour n'en rafraîchir qu'une. **Déclencheur** :
+  décision produit d'ouvrir le par-banque, APRÈS résolution de SYNC-COOLDOWN-WATERMARK1.
+
+### Prévisionnel / Scénarios / Ventilation tabulaire — benchmark FYGR (2026-07-16, cf. `PLAN-cadrage-scenario-previsionnel-fygr.md`)
+
+Benchmark des captures `docs/benchmarks/FYGR/` (vue tableau catégories × mois « Réalisé à
+date → Prévision », scénarios nommés what-if, échéances = factures Customers/Suppliers
+alimentant la prévision). ⚠️ La **playlist YouTube n'a pas pu être analysée** (limite
+outil) — cadrage sur captures seules ; visionnage humain requis pour les interactions non
+capturées. Chaîne de dépendances, pas un chantier unique → découpage en 4 incréments A→D.
+
+- [ ] **PROD-SCENARIO-FYGR1 (P2, CADRAGE POSÉ — décision produit requise, 2026-07-16) —
+  roadmap prévisionnel + scénarios en 4 incréments.** A = vue tableau du RÉALISÉ (cat × mois,
+  par devise) ; B = onglet Échéances (registre factures, répond à NAV-ECHEANCES1) ; C =
+  prévisionnel simple (dérivé des échéances) ; D = scénarios nommés. Décisions bloquantes
+  avant C/D : méthode de projection, matrice par devise vs total converti (DASH-FX1),
+  nettage des virements internes, granularité entité. Pré-requis transverse : axe CATÉGORIE
+  (`categorySummary`, PROD-GRAPHS-FYGR1). **Déclencheur** : arbitrage produit sur l'ordre
+  A→D et la méthode de projection ; OU dépôt de captures FYGR complémentaires (édition
+  scénario / saisie prévision). Absorbe la question métier de **NAV-ECHEANCES1** (Échéances =
+  factures à venir qui nourrissent la prévision).
 
 ### Chantiers PRODUIT à cadrer (pas encore lancés, 2026-06-30)
 
@@ -597,17 +1523,45 @@ total sur entité cross-tenant), liste des membres, message email-existant véri
 Deux dettes tracées ci-dessous (aucune ne touche l'isolation/append-only/montants →
 autorisées, règle 9).
 
-- [ ] **AUTH-MDP-TEMPO1 (P1, effort M) — flux « mot de passe temporaire » absent.**
-  L'ADMIN fixe le mot de passe initial du membre à la création (`provisionnerMembre`),
-  mais **rien** n'oblige le membre à le changer : pas de colonne `must_change_password`,
-  pas de gate au premier login, **aucune page self-service de changement de mot de passe**
-  (seul `scripts/reset-password.mjs`, dev-local). Conséquence : l'ADMIN connaît
-  indéfiniment le mot de passe de chaque membre qu'il crée. **À faire** : migration expand
-  (`users.must_change_password boolean default false`), pose du flag à la création, gate
-  au login (rediriger vers un écran de changement tant que le flag est vrai), page + Server
-  Action de changement de mot de passe (argon2 côté action, garde session). **Déclencheur** :
-  premier onboarding de membres réels hors équipe fondatrice (aujourd'hui : seul l'ADMIN
-  seed existe). Réfère `PLAN-membres-creation-scopes.md` §6.
+- [x] **AUTH-MDP-TEMPO1 (P1, effort M) — flux « mot de passe temporaire » : LOT A LIVRÉ**
+  (2026-07-17, plan `PLAN-auth-mdp-temporaire.md`, décisions D1-D9). Migration 0022
+  (`must_change_password` + `password_changed_at`), pose du flag au provisioning (D7),
+  gate par-requête modèle E6 (`etatCompte`, `MotDePasseAChangerError` mappée sur 9 sites),
+  **invalidation de session** par claim `pwdAt` comparé par égalité stricte (D4 — une
+  session ouverte avec le mot de passe temporaire meurt au changement), écran + action
+  self-service `/account/password` (copie EN, Q-LANG), lockout E18 mutualisé sous FOR
+  UPDATE (D6), `reset-password.mjs` (posage systématique + `RESET_MUST_CHANGE`).
+  Dettes filles : lot B ci-dessous + AUTH-AUDIT-EVENT1 / AUTH-INVITATION1 / AUTH-MDP-UX1
+  (§10 du plan).
+
+- [ ] **AUTH-MDP-TEMPO1-LOT-B (P1, effort S-M) — expiration TTL 7 j + reset admin,
+  indissociables** (2026-07-17). L'expiration seule serait une impasse : provisioning
+  anti-écrasement + `reset-password.mjs` refuse la prod → un temporaire expiré bloquerait
+  le membre DÉFINITIVEMENT. À livrer ensemble (plan §D8) : check
+  `TEMP_PASSWORD_EXPIRED` au login (APRÈS vérification argon2, constante
+  `DUREE_VIE_MDP_TEMPORAIRE_MS` = 7 j) + action admin « Issue a new temporary
+  password » dans `liste-membres.tsx` (nouveau hash, flag + posage → tue les sessions
+  du membre via D4, RAZ lockout). **Déclencheur** : premier onboarding de membres réels
+  hors équipe fondatrice (inchangé).
+
+- [ ] **AUTH-AUDIT-EVENT1 (P2, effort S) — événement « password changed »** (2026-07-17).
+  `audit.consigner` exige `ctx.workspaceId` (table tenant-scopée) ; le changement de mot
+  de passe est un fait USER-global → pas d'événement au lot A (plan §D9), logs structurés
+  en attendant. **Déclencheur** : panneau `/audit` / modèle d'événement user-global
+  (Epic 1 L3.4).
+
+- [ ] **AUTH-INVITATION1 (P2, effort M-L) — flux « lien d'invitation »** (2026-07-17).
+  Posture cible SaaS-ready : l'admin ne détient JAMAIS le secret du membre (plan §2 —
+  table `invitation_tokens`, surface publique `/invite/[token]` rate-limitée,
+  anti-énumération). Le socle lot A (gate, invalidation D4, reset D8) reste au passage
+  aux invitations. **Déclencheur** : infra email posée OU premier workspace
+  `EXTERNAL_CLIENT`.
+
+- [ ] **AUTH-MDP-UX1 (P2, effort S) — découvrabilité self-service + blocklist**
+  (2026-07-17). `/account/password` existe mais AUCUNE entrée de menu n'y mène (pas de
+  menu utilisateur dans le shell — on n'en crée pas pour ça, plan §D5) ; blocklist de
+  mots de passe courants (NIST 800-63B, optionnel). **Déclencheur** : refonte du menu
+  utilisateur du shell.
 
 - [ ] **PROV-EMAIL-EXISTANT1 (P2, effort S) — durcir la réutilisation d'utilisateur par
   email (léger oracle d'énumération cross-tenant).** `creerUtilisateurEtRattacher` réutilise
@@ -1542,6 +2496,91 @@ suffisant) :
   (`categorie.name` via `CategorisationStatusBadge`), saisie par l'utilisateur et DÉJÀ en français
   (cf. `types-transactions.ts` : « indépendant de primaryCategory »). La traduire eût été incorrect.
   DR-F1 ne concernait donc que la catégorie OBIE auto, affichée uniquement sur le dashboard.
+- [ ] **SPLIT-PERIME1 (P1, effort M, intégrité des données) — une ventilation SURVIT à un
+  re-sync qui RÉDUIT le montant de sa transaction** — ouvert 2026-07-21 (revue croisée du
+  chantier GRAPHIQUES-CATEG-UTILISATEUR1). **Quoi** : l'invariant `Σ splits ≤ |montant|`
+  n'est validé QU'À L'ÉCRITURE du split (`categorisation.ts`, sous `FOR UPDATE`). L'upsert
+  d'ingestion écrase `amount` (`ingestion.ts:207-224`, `set: { amount: … }`) et laisse
+  délibérément `transaction_categorizations` intacte → une transaction ventilée à 100 %
+  dont l'amont corrige le montant à la BAISSE (pré-autorisation carte réglée plus bas,
+  correction amont) devient SUR-VENTILÉE. Aucun bug d'écriture nécessaire : le chemin est
+  ouvert en fonctionnement normal. **Pourquoi ce n'est pas bloquant** : le donut est
+  désormais fail-safe (`axeCategorieEffective`, garde `ventileValide`) — il IGNORE une
+  ventilation périmée et impute la transaction à sa catégorie bancaire, donc l'exhaustivité
+  `Σ parts = KPI Sorties` tient (prouvé, `graphiques-repartition-isolation.test.ts`,
+  mutation-check M7/M8). **Ce qui reste faux** : la DONNÉE. `/transactions` affiche toujours
+  la transaction comme « COMPLET » alors qu'elle est sur-ventilée, et l'utilisateur ne voit
+  nulle part que sa ventilation ne vaut plus rien. **Correctif attendu** : à l'ingestion,
+  quand `amount` baisse sous `Σ splits`, réduire ou invalider les splits AVEC trace
+  `categorization_audit` (append-only : on écrit un événement correctif, on ne réécrit pas).
+  Décision à prendre : réduire au prorata, ou invalider et laisser l'utilisateur reventiler.
+  **Déclencheur** : premier signalement utilisateur d'une ventilation « disparue » du donut,
+  OU avant le premier gros import d'historique. **Ne PAS traiter côté lecture** — chaque
+  écran qui lit les splits devrait alors reproduire la garde.
+
+- [ ] **STATS-CUMUL-CATEGORIE1 (P2, effort S, lisibilité) — le bandeau de stats raisonne en
+  PARTS, pas en catégories cumulées** — ouvert 2026-07-21 (revue croisée, même chantier).
+  **Quoi** : depuis l'axe de catégorie effective, une catégorie peut produire DEUX parts (la
+  fraction ventilée par l'utilisateur + son reliquat bancaire homonyme). « Poste dominant »
+  annonçait donc la plus grosse PART en la faisant passer pour la plus grosse CATÉGORIE — sur
+  un jeu réel, « Fournisseurs 29 % » là où « Loyer » pesait 46 % en cumulant ses deux parts.
+  **Traité pour l'instant par l'HONNÊTETÉ du libellé** (arbitrage Etienne 2026-07-21) :
+  « Plus grosse part », « Parts » — l'écran dit exactement ce qu'il calcule, et ce que le
+  donut montre (le plus gros SECTEUR est bien celui-là). **Reste à faire** : exposer le vrai
+  cumul par catégorie. Le calcul ne peut PAS se faire côté JS (ce serait additionner des
+  montants — règle 8) : il faut un agrégat SQL supplémentaire sur le libellé, dans
+  `axeCategorieEffective`. **Déclencheur** : retour utilisateur sur l'écart entre le KPI et
+  la lecture du donut, ou ouverture du chantier « matrice catégorie × mois » (qui consommera
+  le même fragment et posera la même question).
+
+- [ ] **GRAPH-TX-ZERO1 (P2, effort XS, cardinalité) — une transaction à 0,00 sans ventilation
+  disparaît du COMPTE d'opérations du donut** — ouvert 2026-07-21 (revue croisée, même
+  chantier). **Quoi** : la branche « reste » filtre `> 0` STRICT (invariant I6, qui interdit
+  les parts fantômes à 0,00). Une transaction de montant nul et non ventilée ne produit donc
+  AUCUNE ligne d'axe : elle sort de `nbTransactions` et du dénominateur de `montantMoyen`.
+  **Portée exacte** : les MONTANTS restent justes (0,00 n'ajoute rien) — seule la cardinalité
+  est touchée : « 12 opérations » devient « 11 », et la moyenne par opération monte
+  légèrement. Le donut peut donc afficher un nombre d'opérations inférieur à `/transactions`
+  sur la même période. **Ce n'est PAS une dette de montant** (règle 9) : rien de faux n'est
+  affiché sur un montant. **Correctif attendu** : compter les transactions par un chemin
+  distinct des parts affichées — les faire entrer par la branche « reste » recréerait
+  exactement la part fantôme que I6 interdit. **Déclencheur** : présence avérée de
+  transactions à 0,00 en base (aucune constatée à ce jour), ou écart signalé entre le compte
+  d'opérations du donut et celui de `/transactions`.
+
+- [ ] **AXE-CEINTURE-JOIN1 (P2, effort S, défense en profondeur) — la ceinture
+  ENTITY-READ-JOIN1 n'est verrouillée par AUCUN test sur l'axe** — ouvert 2026-07-21 (revue
+  croisée, même chantier). **Quoi** : mutation-check M9 — retirer les DEUX
+  `innerJoin(bankAccounts)` de `axeCategorieEffective` laisse toute la suite VERTE. **Ce
+  n'est pas une faiblesse de fixture** : depuis 0017, la policy `account_scope` borne déjà
+  ces tables filles, donc la ceinture est REDONDANTE — et une défense redondante ne peut, par
+  construction, pas se prouver par le comportement (tant que la bretelle tient, la retirer ne
+  change aucun résultat). L'isolation elle-même EST prouvée (test « I4 étage 2 », sous
+  `viewFilter`). **Risque réel** : un refactor qui retirerait la jointure ne casserait rien
+  aujourd'hui, mais rouvrirait le trou le jour où un chemin échappe à la policy — et
+  CLAUDE.md exige la convention aussi pour la CORRECTION des agrégats. **Correctif possible** :
+  garde structurelle en CI (liste blanche des lectures de tables filles, sur le modèle de la
+  garde de périmètre toolbar — un scan générique produirait des faux positifs). **Déclencheur** :
+  troisième repository lisant une table fille de `bank_accounts`, ou premier oubli de jointure
+  constaté en revue.
+
+- [ ] **AXE-PERF-SPLITS1 (P2, effort S, performance) — l'axe effectif est exécuté 3 fois par
+  affichage, sans index de date sur les splits** — ouvert 2026-07-21 (même chantier).
+  **Quoi** : `repartitionParCategorie` instancie `axeCategorieEffective` TROIS fois (parts,
+  cardinalité par devise, fenêtre précédente L4), et chaque instance porte un `UNION ALL`
+  qui scanne `transactions_cache` deux fois — soit ~6 scans par affichage contre 2 avant ce
+  chantier. La cardinalité par devise est en requête séparée parce que `count(distinct …)`
+  est INTERDIT en fonction fenêtre par Postgres (et que le raccourci
+  `sum(count(distinct …)) over (…)` compterait deux fois une transaction partielle).
+  S'ajoute que `transaction_categorizations` n'a AUCUN index dont la tête permette de filtrer
+  par `transaction_date` (`(workspace_id, transaction_id, transaction_date)` et
+  `(workspace_id, category_id)`) : la table dérivée `ventile` filtre donc par date APRÈS le
+  filtre workspace de la RLS. **Sans impact mesuré à ce jour** (volumes de démarrage, fenêtres
+  d'un mois). **Correctifs possibles** : `GROUPING SETS`/`ROLLUP` pour fusionner parts et
+  totaux en une passe ; index `(workspace_id, transaction_date)` sur les splits.
+  **Déclencheur** : premier workspace dépassant ~50 000 transactions, OU une fenêtre « 12
+  mois » ressentie comme lente sur /graphiques.
+
 - [ ] **OBIE-CATALOG1 (P2, medium, robustesse données) — catalogue OBIE→FR FIGÉ, désynchronisé
   de l'amont réel** — Effort S, ouvert 2026-06-23 (sonde runtime, branche `fix/categories-fr-catalogue-obie`).
   DR-F1 avait peuplé `CORRESPONDANCE_FR` (`src/lib/categories-fr.ts`) depuis le **seed de démo**
@@ -1565,6 +2604,20 @@ suffisant) :
   la piste (b)/log devient un signal fiable de trou de catalogue. `primary_category` reste l'OBIE
   brut (anglais) pour les catégories exploitables ; le marqueur de provenance vit dans la nouvelle
   colonne `is_auto_categorized`/`category_source` (cf. migration 0011), distinct de ce mapping FR.
+  **MAJ 2026-07-21 (GRAPHIQUES-CATEG-UTILISATEUR1 Lot 0) — le déclencheur (b) s'est RÉALISÉ, et la
+  cause n'était pas celle qu'on attendait.** Inventaire exhaustif de la base locale ce jour :
+  l'amont n'émet PAS dans la graphie de la sonde du 2026-06-23. Les 4 valeurs réellement présentes
+  sont en **SCREAMING_SNAKE_CASE** : `UNCLASSIFIED`, `UTILITIES`, `BANKING_AND_FINANCE`,
+  `INTER_ACCOUNT_TRANSFER`. Les clés d'UN SEUL mot matchaient encore par `toLowerCase`
+  (`UTILITIES` → `utilities`), mais **toutes les clés COMPOSÉES échouaient** — le catalogue attend
+  `banking & finance`, l'amont envoie `BANKING_AND_FINANCE`. Ce n'était donc pas « une nouvelle
+  catégorie hors catalogue » mais **une graphie différente pour des catégories DÉJÀ cartographiées**
+  — un trou qu'aucun log sur le défaut de `categorieFr` n'aurait qualifié correctement (il aurait
+  signalé « catégorie inconnue » là où le mapping existait). **Correctif livré** : normalisation à
+  la lecture (`normaliserCleObie` : `_and_` → ` & `, `_` → ` `), qui fait matcher toutes les
+  entrées composées sans en dupliquer aucune, + `inter account transfer` → « Virements internes ».
+  **Fragilité résiduelle INCHANGÉE** (liste fermée) ; et la piste (b) reste pertinente, mais doit
+  logger la clé BRUTE, pas seulement le fait qu'on est retombé sur le défaut.
 - [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
   refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`
@@ -1930,16 +2983,43 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   déclencheur : polish du widget). **Hygiène de session**, à ne pas confondre avec la
   révocation de consentement (`DELETE /connections/{id}`, lot L3.3). Sans elle, un
   SessionToken de widget survit à la fermeture de l'onglet jusqu'à son expiration.
-- [ ] **Changement de mot de passe par l'utilisateur** (`AUTH-MDP-TEMPO1`) — Effort M
-  (**P1**, déclencheur : premier déploiement de production). Le provisioning ADMIN et
-  `seed-admin.mjs` posent un mot de passe temporaire ; la rotation passe aujourd'hui
-  par `scripts/reset-password.mjs` (opération d'administration, hors application).
-  Documenté dans `docs/DEMARRAGE-SANDBOX-PROD.md` § « Bootstrap du premier ADMIN ».
+- [x] **Changement de mot de passe par l'utilisateur** (`AUTH-MDP-TEMPO1`) — **LOT A
+  LIVRÉ** (2026-07-17) : page + action self-service `/account/password`, gate
+  `must_change_password`, invalidation de session `pwdAt` (D4). Voir l'entrée détaillée
+  § « Provisioning membres » et `PLAN-auth-mdp-temporaire.md` ; reste le lot B
+  (expiration 7 j + reset admin, entrée AUTH-MDP-TEMPO1-LOT-B).
 
 ### Dette relevée au contrat widget natif (UI, 2026-06-15)
 
-- [ ] **🔴 `finaliserConnexionAction` désalignée du contrat Fern `publicToken` seul**
-  — Effort S (P0, déclencheur : avant la démo du widget natif). Décision 2026-06-15 :
+- [x] **🔴 `finaliserConnexionAction` désalignée du contrat Fern `publicToken` seul**
+  — ✅ **SUPERSEDED / RÉSOLU** (vérifié 2026-07-21). L'entrée décrit du code qui
+  **n'existe plus** : `finaliserConnexionAction` ET `finalisationSchema` sont ABSENTS
+  de tout `src/` et `tests/` (supprimés dès l'unification du câblage — cf. §
+  « Conflit d'agents — câblage widget unifié (2026-06-15, RÉSOLU) » ci-dessus, qui
+  actait déjà la suppression ; cette entrée-ci en était le doublon jamais coché).
+  Le chemin de finalisation ACTIF n'exige que le(s) publicToken(s), bout en bout :
+  1. `banques/page.tsx:69` monte `<BankConnectWidget/>` ;
+  2. `bank-connect-widget.tsx:290` `onConnexions={finaliser}` ;
+  3. `omnifi-link-launcher.tsx:324-330` `onSuccess(payload)` →
+     `publicTokensDepuisPayload` (`:65-70`, n'extrait que `c?.publicToken`) ;
+  4. `bank-connect-widget.tsx:148-154` → `finaliserConnexionDropinAction(publicTokens)` ;
+  5. `banques/actions.ts:203-207` **`dropinSchema`** `.strict()` = `{ publicTokens:
+     string[1..20] }` — **aucun `sessionToken`, aucun `jobId`** ;
+  6. `orchestration.ts:1487-1489` → `finaliserConnexionDropin({ publicToken })`
+     (`FinaliserDropinParams`, `:467-470` : « ni sessionToken ni jobId ») ;
+  7. `orchestration.ts:486-489` **ClientUserId résolu SERVEUR** —
+     `clientUserIdDuWorkspace(tx, ctx.workspaceId)`, jamais un paramètre client ;
+  8. `orchestration.ts:492` → `client.echangerPublicToken(publicToken, clientUserId)`
+     → `client.ts:580-583` `POST /connections/link-exchange` body
+     `{ PublicToken, ClientUserId }`.
+  Aucun des 5 schémas zod de `banques/actions.ts` (`:143`, `:203`, `:461`, `:516`,
+  `:603`) n'exige `sessionToken`/`jobId` pour finaliser — `reparationSchema` (`:461`)
+  porte bien un `jobId`, mais c'est le flux **REPAIR** d'une connexion existante, pas
+  la finalisation d'un publicToken. Les `sessionTokenSchema`/`jobIdSchema`
+  (`widget-runtime.ts:49-50`) survivent sur le chemin **MFA custom MORT** (cf. constat
+  CODE-MORT-MFA1 ci-dessous). Prémisse « bloquant avant la démo du widget natif » :
+  CADUQUE. **CONTEXTE HISTORIQUE conservé ci-dessous :**
+  Décision 2026-06-15 :
   le widget natif Omni-FI (`@omnifi/react`, `onSuccess`) renvoie le **publicToken
   SEUL** (doc Fern `link-connect → PublicToken`). L'UID UI
   (`bank-connect-widget.tsx`) a été aligné : `onSuccess(publicToken: string)`
@@ -1951,6 +3031,26 @@ bancaires. **Aucun constat bloquant ni non-bloquant valide.**
   de `PublicToken` + `ClientUserId`, ce dernier résolu côté serveur depuis le
   workspace). Tant que ce n'est pas fait, le flux de connexion casse à la
   finalisation, même si le widget aboutit.
+- [x] **CODE-MORT-MFA1 (P2) — chemin widget MFA « custom » non monté : CONSERVATION
+  TRANCHÉE, action = DOCUMENTER** — ✅ documenté 2026-07-21 (commentaire en tête de
+  `machine-mfa.ts`). **Ce n'est PAS du code mort à supprimer** : arbitrage Etienne
+  2026-07-21 — la pile (`machine-mfa.ts` / `useOmniFiWidget` / `widget-runtime.ts`) est
+  le **substrat prévu de `SYNC-LOADER-ETAPES1`** (TODOS `:26-34`, qui pose noir sur
+  blanc « le client poll par connexion et **dérive le palier via `machine-mfa.ts`** »).
+  La conserver est donc un investissement, pas un oubli — cohérent avec l'arbitrage
+  initial de 2026-06-15 (« CONSERVÉE + testée, réutilisable hors dropin ; un seul chemin
+  runtime : le dropin »). **Déclencheur de SUPPRESSION** (le seul) : abandon de
+  `SYNC-LOADER-ETAPES1` — tant que ce chantier vit, on garde.
+  Constat factuel qui reste vrai (relevé à la vérification du 2026-07-21) : `useOmniFiWidget`
+  n'est monté par AUCUN composant — seulement ré-exporté par le barrel
+  `components/widget/index.ts:7` ; ses Server Actions `pollJobAction`/`submitMfaAction`/
+  `resendMfaAction` (`widget-runtime.ts`) ne sont importées que par ce hook ;
+  `finaliserConnexion` (orchestration) n'est appelée par aucune action. Reste à surveiller
+  (non bloquant) : ces Server Actions sont une surface authentifiée non exercée par le
+  produit (elles restent gardées par `exigerSession*`). C'est aussi CE code qui fait
+  apparaître des schémas `sessionToken`/`jobId` à un `grep` et a nourri la fausse piste
+  ci-dessus — d'où le commentaire d'en-tête, pour que le prochain lecteur ne rejoue pas
+  l'enquête.
 
 ### Dette acceptée à la PR auth-foundation (2026-06-12)
 
@@ -2239,15 +3339,19 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
   pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
 
-- [ ] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
-  Effort L (CC: ~½j par passe), gardien Front + Design. Ouvert 2026-06-23. Passe
-  /design-review sur les écrans clés (dashboard, /transactions, /regles, sas entités)
-  contre `docs/UI_GUIDELINES.md` : hiérarchie, densités, `tabular-nums`, états
-  loading/vide/erreur/partiel, focus visibles, alignement des virgules décimales
-  multi-devises. Sortie = findings priorisés, écarts OBJECTIFS (tokens) traités comme
-  bloquants (Gate 4), écarts de goût renvoyés en backlog. PAS une refonte from scratch :
-  itération sur l'existant. **Déclencheur** : avant le premier déploiement production
-  (P1). Raccrocher les findings tokens/sémantique à des sous-tickets datés.
+- [x] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
+  ✅ **RÉALISÉ en 2 passes** : 2026-07-15 (PR #215 — 19 findings, 9 fixés, 10 différés
+  tracés en sous-tickets DESIGN-* datés, score B− → B+) et 2026-07-17 (branche
+  `chore/design-review-20260717` — écrans re-audités contre UI_GUIDELINES §6 AU DOM,
+  vraie donnée locale ; 4 findings nouveaux, 4 fixés dont 1 HIGH : scroll horizontal de
+  page à 1024-1279 causé par la barre globale [F-104], zéros colorés vert/rouge sur
+  Synthèse du mois [F-101] et Synthèse prévisionnelle [F-102], formulaire d'échéance non
+  réinitialisé au succès [F-103] ; conformités PROUVÉES : tabular-nums, inflow/outflow,
+  surface-forecast, focus-visible, header sans flex-wrap, suppression 2 temps #216).
+  Rapports : `~/.gstack/projects/tygr-app/designs/design-audit-20260715/` et
+  `…/design-audit-20260717/`. Historique : ouvert 2026-06-23, effort L, gardien
+  Front + Design ; écrans clés dashboard, /transactions, /regles, sas entités ; écarts
+  OBJECTIFS (tokens) bloquants (Gate 4), écarts de goût renvoyés en backlog (faits).
 
 ### Sync / widget (2026-07-13) — dettes de code
 
@@ -2341,15 +3445,107 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   **Déclencheur** : immédiat — avant toute démo sur un env non piloté par `dev-server.sh`.
   **Effort** : XS.
 
-- [ ] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
-  `docs/UI_GUIDELINES.md` §3.4 : « une erreur a TOUJOURS un fond teinté, une icône et un
-  texte » — or les 3 canaux d'erreur du composant (`erreurDemarrage`, `erreurWidget`,
-  `erreurFinalisation`) rendent un `text-danger` NU. Écart **préexistant** et assumé dans le
-  JSDoc du composant (« feedback inline court ») ; `fix/widget-erreur-visible` s'y conforme
-  par cohérence plutôt que de rouvrir une décision UI dans un correctif de bug — mais l'écart
-  compte désormais 3 occurrences. À trancher en une fois : soit §3.4 s'applique (fond
-  `danger-bg` + icône sur les 3), soit §3.4 s'annote d'une exception « feedback inline ».
-  **Déclencheur** : prochain chantier UI touchant `/banques`, OU /design-review. **Effort** : S.
+- [x] **WIDGET-ERR3 (P1) — `WidgetFeedback` viole §3.4 (erreur sans fond ni icône).**
+  ✅ **LIVRÉ (2026-07-20, branche `fix/ux-synchro-et-erreur-connexion`)** — arbitrage rendu
+  dans le premier sens : **§3.4 s'applique**, aucune exception « feedback inline » (la règle
+  ne prévoit pas de dérogation de taille). Les 3 canaux (`erreurDemarrage`, `erreurWidget`,
+  `erreurFinalisation`) passent par la primitive `Callout severite="danger"`
+  (`src/components/ui/states/callout.tsx`) : fond `danger-bg` + icône + message + `role="alert"`.
+  Registre de messages et logique non-énumérante (#229) NON touchés — seul le contenant change.
+  **Trouvaille de la passe design** : le motif `text-danger` sur `bg-danger-bg` plafonne à
+  **4,40:1** et ÉCHOUE l'AA en corps de texte (mesuré, WCAG 2.1). La primitive met donc le
+  MESSAGE en `text-text` (11,46:1) et réserve la couleur de sévérité à l'ICÔNE.
+  **Constat d'origine** : l'écart comptait 3 occurrences, assumé dans le JSDoc du composant.
+
+- [ ] **UI-CALLOUT-MIGRATION1 (P2, effort S, 2026-07-20) — 4 callouts ad-hoc à migrer vers
+  la primitive `Callout`.** Le markup « fond teinté + icône + message » est dupliqué à
+  l'identique dans `components/echeances/echeances-feature.tsx:246`,
+  `components/regles/regles-feature.tsx:260`, `components/transactions/transactions-feature.tsx:459`
+  et `components/admin/avertissement-vue-restreinte.tsx:38` (variante `warning`). Tous portent
+  le défaut de contraste mesuré ci-dessus (`text-danger` sur `danger-bg` = **4,40:1**, sous
+  l'AA de 4,5) : ce n'est donc pas qu'une déduplication, c'est une correction d'accessibilité.
+  Hors périmètre de WIDGET-ERR3 (livré à 2 jours d'une démo, on ne touche pas 4 écrans
+  supplémentaires). **Déclencheur** : prochain chantier UI transverse, OU premier audit a11y.
+
+- [ ] **A11Y-VERT-SUCCES1 (P1, effort S, 2026-07-20) — le token `success` échoue l'AA en
+  corps de texte, ET la doc affirme le contraire.** Mesuré au DOM pendant la Gate 4 de
+  `fix/ux-synchro-et-erreur-connexion` (WCAG 2.1, sur `surface-card`) :
+  `text-success` rendu = **3,46:1**, sous le seuil AA de 4,5. Or `docs/UI_GUIDELINES.md:409`
+  annonce « `success` #079455 (AA sur blanc) » en qualifiant l'accessibilité de « non
+  négociable (audience régulateur) ». **Deux défauts distincts** :
+  1. **dérive de token** — `globals.css:32` livre `--color-success: #1d9e55`, pas le
+     `#079455` documenté ;
+  2. **l'affirmation de la doc est fausse dans les deux cas** — `#079455` mesure **3,91:1**,
+     il échoue l'AA lui aussi. Le seul vert conforme du système est `inflow #157a4a`
+     (**5,36:1**), mais il est RÉSERVÉ à la donnée financière : on ne peut pas le recycler
+     en couleur d'état système sans casser l'étanchéité sémantique du §3.4.
+  **Portée** : tout message de succès de l'app, pas seulement la synchro — `SyncSummary`
+  et `widget-feedback` rendent la MÊME phrase serveur, un correctif unilatéral sur un seul
+  des deux écrans les ferait diverger (classe de bug tuée par la PR #202).
+  **PARTIELLEMENT TRAITÉ (2026-07-20, `fix/ux-synchro-et-erreur-connexion`)** — l'option
+  « partage `Callout` » a été retenue et appliquée aux surfaces du feedback de synchro :
+  notice de succès (`text-text` sur `success-bg`, vert en fond + coche), pastille de
+  fraîcheur (libellé neutre, point coloré), et `widget-feedback` — inclus DÉLIBÉRÉMENT
+  malgré son absence du brief, précisément pour ne pas créer la divergence annoncée
+  ci-dessus (arbitrage Etienne, 2026-07-20). `docs/UI_GUIDELINES.md:409` est corrigée
+  (les deux valeurs annoncées échouaient l'AA) et §3.7 précise que le niveau colore le
+  point, pas le libellé.
+  **RESTE À FAIRE (le P1 ne se ferme PAS)** : les ~10 `text-success` hors périmètre —
+  `admin/entites/{bandeau-recap,assignation-comptes,assignation-entites,propositions}`,
+  `admin/membres/formulaire-provisioning`, `echeance-badge` (badge « Payée »),
+  `connexions-bancaires` (badge « Connectée »), `workspace-switcher`. Plusieurs sont des
+  BADGES `bg-success-bg` + `text-success` : leur ratio est encore plus bas que sur blanc,
+  et le partage `Callout` ne s'y applique pas tel quel (un badge n'a pas d'icône). D'où
+  l'ajout d'un token **`success-700` AA** à trancher, qui reste le vrai objet de ce P1.
+  **Mesure supplémentaire à intégrer au fix** (Gate 4 du 2026-07-20) : l'ICÔNE de la
+  notice de succès (`text-success` sur `success-bg`) tombe à **2,93:1**, 0,07 sous le
+  seuil 3:1 des objets non textuels — le fond teinté rabote le vert (3,46 sur blanc →
+  2,93 sur `success-bg`). Sans conséquence fonctionnelle (icône `aria-hidden`, redondante
+  avec un message à 15,1:1, donc hors champ de 1.4.11), mais `success-700` doit être
+  choisi en visant **≥3:1 sur `success-bg`**, pas seulement sur blanc — sinon le token
+  « corrigé » laissera cet écart en place. Les icônes warning (4,56) et danger (4,40)
+  passent déjà.
+  **Déclencheur** : après la démo BOM Innov8 (branche dédiée, audience régulateur = a11y
+  opposable).
+
+- [x] **WIDGET-ERR6 (P1, effort S, 2026-07-16) — `LOGIN_FAILED` (et la famille des
+  échecs de scraping) tombent sur le message générique : on ferme le widget sans dire
+  POURQUOI.** ✅ **LIVRÉ (2026-07-20, branche `fix/widget-err6-login-failed`)** — 10
+  `SyncJob.Error.Type` mappés au registre S2, lus À LA SOURCE (`omni-fi-core`,
+  `apps/sync_engine/orchestrator.py`, appels `_handle_failure`), aucun code inventé.
+  Le pont `Error.Type → onError.code` est PROUVÉ, pas supposé : le bundle CDN
+  (`staging-cdn.omni-fi.co/v1/omni-fi-connect.js`, relu le 2026-07-20) n'est qu'un
+  relais postMessage sans filtrage (`case ERROR: onError({code: t.code || "UNKNOWN"})`),
+  et `LOGIN_FAILED` — qui n'existe QUE comme `Error.Type` — a bien été observé en
+  console. Trois messages selon l'ACTION possible : identifiants refusés / délai MFA
+  dépassé / panne de la chaîne de récupération (« réessayez **plus tard** », jamais
+  « dans un instant » : un `SCRAPER_UI_CHANGE` exige un correctif amont). Nuance
+  trouvée en implémentant : `LOGIN_FAILED` couvre AUSSI le 3e code MFA erroné
+  (`documentation_api.md`) → le message nomme les deux causes sans dire laquelle.
+  `UNKNOWN_ERROR` laissé au repli DÉLIBÉRÉMENT (angle mort visible), verrouillé par un
+  test. Couverture : 7 cas dans `tests/unit/omnifi-link-erreur.test.ts`. **Reste
+  ouvert** : WIDGET-ERR2 (ces codes ne vivent qu'en console client → invisibles en prod
+  sans télémétrie serveur) et WIDGET-ERR3 (canal d'erreur §3.4 : fond + icône).
+  **Constat d'origine :** Constaté en sandbox sur « Absa Pro » : la connexion passe le login
+  (`link-connect` 201) puis le job de sync bascule sur la branche `↘ FAILED` de la
+  machine SyncJob (`docs/documentation_api.md` §Sync Engine) ; le CDN émet
+  `onError({ code: "LOGIN_FAILED" })` (**vérifié console 2026-07-16** :
+  `[widget Omni-FI] échec LOGIN_FAILED`, `omnifi-link-launcher.tsx:271`). Or
+  `LOGIN_FAILED` est ABSENT de `MESSAGES_PAR_CODE` → repli sur `MESSAGE_PAR_DEFAUT`
+  (« La connexion bancaire a échoué. Réessayez dans un instant. »). L'utilisateur ne
+  sait pas que ce sont ses IDENTIFIANTS : il réessaie à l'identique et échoue en
+  boucle. **Fix envisagé** : mapper `LOGIN_FAILED` sur un message actionnable
+  non-énumérant (p.ex. « Identifiants bancaires incorrects — vérifiez-les et
+  réessayez. ») ET auditer les autres codes terminaux du Sync Engine (scraper/timeout)
+  pour ne pas laisser d'angle mort ; garder la branche par défaut OBLIGATOIRE (le CDN
+  ment sur l'union de types, cf. JSDoc `messageErreurWidget`). Ne JAMAIS afficher/logger
+  le `message` amont (anglais, PII bancaire possible — règle 8) : on mappe le CODE.
+  **Rappel sandbox** : seuls `sandbox@example.com` / `sandbox.mfa@example.com` sont
+  acceptés — un mauvais login y est attendu (mais le message doit quand même être juste).
+  Recoupe **WIDGET-ERR2** (ces codes ne sont visibles qu'en console client → invisibles
+  en prod sans télémétrie serveur) et **WIDGET-ERR3** (le canal d'erreur doit aussi
+  respecter §3.4 : fond + icône). **Déclencheur** : avant la démo BOM Innov8, OU prochain
+  passage sur `/banques`.
 
 ### Epic 8 — Intelligence Métier (interview Accountant Omnicane/OL, 2026-06-11)
 - [ ] **FEAT-8.1 Moteur de catégorisation auto (Nature/Sous-nature + score de

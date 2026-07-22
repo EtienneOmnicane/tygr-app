@@ -11,6 +11,12 @@
  * uniquement parce que `FluxBarres` mesure son SVG (ResizeObserver). L'état « aucun
  * mouvement sur la période » est porté par `FluxBarres` lui-même.
  *
+ * ⚠️ 100 % RÉALISÉ depuis FLUX-PREV-AXE1 (option E du plan §4.1) : la carte ne reçoit plus
+ * de prévision. Les échéances vivent dans `echeances-encart.tsx`, monté SOUS elle par
+ * `dashboard-content.tsx`, à échelle propre — réalisé et échéances saisies ne sont pas
+ * commensurables, et le partage d'axe produisait un faux constat. Le sous-titre et la
+ * légende n'ont donc plus de variante « avec prévision ».
+ *
  * Couleurs (§3.1) : le vert/rouge n'apparaît que DANS le SVG des barres et dans la LÉGENDE
  * (qui décrit la donnée). Hauteur min 380px (§4.2) : la carte garde sa place même vide.
  */
@@ -23,6 +29,7 @@ export function FluxTresorerieCard({
   serieMensuelle,
   grilleMensuelle,
   devise,
+  libellePeriode,
 }: {
   /** Série entrées/sorties (mois × devise) — alimente les barres. */
   serieMensuelle: SyntheseMensuelle[];
@@ -30,19 +37,28 @@ export function FluxTresorerieCard({
   grilleMensuelle: string[];
   /** Devise de base du workspace. */
   devise: string;
+  /** Libellé de la fenêtre appliquée (source unique : la page) — relayé à `FluxBarres`. */
+  libellePeriode?: string;
 }) {
   return (
     <StateCard className="min-h-[380px]">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-text">Flux de trésorerie</h2>
-          <p className="mt-0.5 text-xs text-text-muted">Entrées − sorties par mois</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Entrées − sorties par mois · réalisé
+          </p>
         </div>
 
         <Legende />
       </div>
 
-      <FluxBarres serie={serieMensuelle} grille={grilleMensuelle} devise={devise} />
+      <FluxBarres
+        serie={serieMensuelle}
+        grille={grilleMensuelle}
+        devise={devise}
+        libellePeriode={libellePeriode}
+      />
     </StateCard>
   );
 }

@@ -7,9 +7,11 @@
  * Couvre spécifiquement le chantier « recherche » (FB0709-RECHERCHE-TX1) :
  * - passe-plat de `recherche` (jamais transformé côté UI ; l'échappement LIKE et le
  *   trim/min/max vivent côté serveur — testés en isolation + schema) ;
- * - cumul de plusieurs filtres (recherche + statut + dates) ;
+ * - cumul recherche + statut + FENÊTRE GLOBALE (injectée par le 3e argument `periode`,
+ *   plus par un filtre in-page — TX-TOOLBAR-DEDUP1) ;
  * - absence de `recherche` → champ ABSENT de l'input (pas de clé vide qui casserait
- *   le `.strict()` Zod, et jamais de chaîne vide que `min(1)` rejetterait).
+ *   le `.strict()` Zod, et jamais de chaîne vide que `min(1)` rejetterait) ;
+ * - la somme nette (`versFiltresSommeNette`) hérite de la MÊME fenêtre que la liste.
  *
  * NB : plus de filtre `bankAccountId` au niveau UI — le périmètre de comptes est
  * piloté globalement par le `PerimetreSwitcher` de la navbar (doublon retiré, PR
@@ -18,7 +20,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { versInputBackend } from "@/app/(workspace)/transactions/adapter";
+import {
+  versFiltresSommeNette,
+  versInputBackend,
+} from "@/app/(workspace)/transactions/adapter";
 
 describe("versInputBackend — recherche (FB0709-RECHERCHE-TX1)", () => {
   it("passe la recherche telle quelle dans l'input backend", () => {
@@ -42,15 +47,13 @@ describe("versInputBackend — recherche (FB0709-RECHERCHE-TX1)", () => {
     expect("recherche" in input).toBe(false);
   });
 
-  it("cumule recherche + statut + dates (composeur de filtres)", () => {
+  it("cumule recherche + statut + la fenêtre GLOBALE (injectée par periode)", () => {
+    // Les dates ne sont PLUS un filtre in-page (TX-TOOLBAR-DEDUP1) : elles arrivent de la
+    // barre de vue via le 3e argument `periode`, jamais de l'objet `filtres`.
     const input = versInputBackend(
-      {
-        recherche: "beachcomber",
-        statutCategorisation: "complet",
-        dateDebut: "2026-03-01",
-        dateFin: "2026-03-31",
-      },
+      { recherche: "beachcomber", statutCategorisation: "complet" },
       null,
+      { from: "2026-03-01", to: "2026-03-31" },
     );
     expect(input).toEqual({
       recherche: "beachcomber",
@@ -60,8 +63,42 @@ describe("versInputBackend — recherche (FB0709-RECHERCHE-TX1)", () => {
     });
   });
 
+  it("injecte la fenêtre GLOBALE seule (aucun filtre in-page)", () => {
+    // Vue par défaut : la période borne la lecture même sans recherche/statut.
+    const input = versInputBackend(undefined, null, {
+      from: "2026-01-01",
+      to: "2026-06-30",
+    });
+    expect(input).toEqual({ dateDebut: "2026-01-01", dateFin: "2026-06-30" });
+  });
+
+  it("sans periode, n'ajoute AUCUNE borne de date (surface stub démo/tests)", () => {
+    // `periode` est optionnel : une surface sans fenêtre (démo) ne pose aucune borne.
+    const input = versInputBackend({ recherche: "loyer" }, null);
+    expect("dateDebut" in input).toBe(false);
+    expect("dateFin" in input).toBe(false);
+  });
+
   it("transmet le curseur avec la recherche (page suivante d'un résultat filtré)", () => {
     const input = versInputBackend({ recherche: "loyer" }, "Y3Vyc2V1cg");
     expect(input).toEqual({ recherche: "loyer", curseur: "Y3Vyc2V1cg" });
+  });
+});
+
+describe("versFiltresSommeNette — hérite de la fenêtre globale", () => {
+  it("porte la MÊME période que la liste, SANS curseur ni limite", () => {
+    // La somme dérive de `versInputBackend` : la fenêtre `periode` y descend
+    // mécaniquement → le total est borné à la période EXACTEMENT comme les lignes.
+    const input = versFiltresSommeNette(
+      { statutCategorisation: "partiel" },
+      { from: "2026-03-01", to: "2026-03-31" },
+    );
+    expect(input).toEqual({
+      statut: "PARTIEL",
+      dateDebut: "2026-03-01",
+      dateFin: "2026-03-31",
+    });
+    expect("curseur" in input).toBe(false);
+    expect("limite" in input).toBe(false);
   });
 });

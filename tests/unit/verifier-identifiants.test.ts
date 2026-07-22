@@ -25,6 +25,8 @@ const ALICE: UtilisateurIdentite = {
   isActive: true,
   failedLoginCount: 0,
   lockedUntil: null,
+  mustChangePassword: false,
+  passwordChangedAt: new Date("2026-07-01T08:00:00.000Z"),
 };
 
 function creerDeps(
@@ -69,6 +71,8 @@ describe("chemin heureux", () => {
         id: ALICE.id,
         email: ALICE.email,
         fullName: ALICE.fullName,
+        // Claim d'invalidation D4 : le posage sort tel quel de la base.
+        passwordChangedAt: ALICE.passwordChangedAt,
       },
     });
     expect(identite.reinitialiserEchecs).toHaveBeenCalledWith(ALICE.id);

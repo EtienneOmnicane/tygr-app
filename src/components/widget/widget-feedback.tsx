@@ -9,10 +9,18 @@
  *     Visual QA (Gate 4) — hors auth/DB, capturable en headless.
  *
  * Règles d'affichage (UI_GUIDELINES) :
- *   - Erreur = `text-danger` + `role="alert"` (le fond `danger-bg` est porté au
- *     niveau des états de page ; ici on reste sur le feedback inline court du
- *     widget, cohérent avec l'existant).
- *   - Succès = `text-success`, JAMAIS de rouge (réservé aux montants sortants).
+ *   - Erreur = `Callout severite="danger"` + `role="alert"` — fond `danger-bg`,
+ *     icône et message, les TROIS signaux du §3.4 (WIDGET-ERR3). Le rouge NU qui
+ *     était rendu ici violait la règle : il appartient aux montants `outflow`, et
+ *     rien ne distinguait plus une panne de connexion d'une sortie d'argent. Le
+ *     prétexte « feedback inline court » ne tenait pas — §3.4 ne prévoit pas
+ *     d'exception de taille.
+ *   - Succès = `text-text` (neutre appuyé), JAMAIS de rouge (réservé aux montants
+ *     sortants) et plus de vert non plus : `text-success` mesure 3,46:1, sous l'AA de
+ *     4,5 en corps de texte (A11Y-VERT-SUCCES1). Ici le succès n'a pas de surface
+ *     teintée — c'est une ligne inline, pas une notice — donc le vert n'a nulle part
+ *     où subsister ; le ton se joue entre `text-text` (plein) et `text-text-muted`
+ *     (à réserve).
  *   - Redirection (succès COMPLET) : message bref `role="status"`.
  *   - Succès sans redirection (partiel, ou flag `complet` pas encore exposé) :
  *     confirmation + lien d'action explicite vers le Dashboard (§2.3).
@@ -20,10 +28,35 @@
 import Link from "next/link";
 
 import { cn } from "@/components/ui/states/primitives";
+import { Callout } from "@/components/ui/states/callout";
 import type { RegistreSynchro } from "@/components/sync/registre-synchro";
+import { LoaderSynchro } from "@/components/sync/loader-synchro";
+import {
+  CLE_DRAPEAU_CONNEXION,
+  VALEUR_DRAPEAU_CONNEXION,
+} from "@/components/sync/drapeau-connexion";
+import {
+  nommerToutes,
+  resoudreNomsBanques,
+  type ConnexionNommable,
+} from "@/components/banques/noms-banques";
 
 /** Route du Dashboard de trésorerie (« l'accueil EST le dashboard »). */
 export const ROUTE_DASHBOARD = "/";
+
+/**
+ * Atterrissage APRÈS une CONNEXION tout juste finalisée. Le paramètre arme le nudge
+ * « lancez une première synchronisation » sur le dashboard (cf. `NudgePremiereSynchro`) :
+ * la finalisation rattache les comptes mais n'importe AUCUNE transaction, et la
+ * redirection emmène l'utilisateur loin de cet écran avant qu'il ait pu l'apprendre.
+ *
+ * ⚠️ RÉSERVÉ à la redirection post-finalisation. Le lien « Voir mon tableau de bord »
+ * ci-dessous garde `ROUTE_DASHBOARD` NU, à dessein : ce lien s'affiche aussi après une
+ * SYNCHRONISATION manuelle (les deux gestes alimentent le même `succes`), où l'invite
+ * serait fausse — l'utilisateur vient précisément de faire ce qu'elle demande.
+ */
+export const ROUTE_DASHBOARD_CONNEXION_ETABLIE =
+  `${ROUTE_DASHBOARD}?${CLE_DRAPEAU_CONNEXION}=${VALEUR_DRAPEAU_CONNEXION}` as const;
 
 /** Une connexion à réparer (signal `reparation` du serveur). Identifiants opaques. */
 export interface ConnexionAReparer {
@@ -53,6 +86,8 @@ export function WidgetFeedback({
   reparationEnCours,
   widgetOuvert,
   aReconnecter,
+  connexions,
+  synchroEnCours,
 }: {
   /** Erreur de démarrage (LinkToken) — message déjà mappé S2, non énumérant. */
   erreurDemarrage?: string | null;
@@ -115,33 +150,61 @@ export function WidgetFeedback({
    * vers le bouton « Connecter une banque ». Vide/absent = aucune invite.
    */
   aReconnecter?: ConnexionAReconnecter[];
+  /**
+   * Banques du workspace, telles que la page les a déjà résolues sous RLS. Sert
+   * UNIQUEMENT à traduire les `connectionId` opaques de `reparation`/`aReconnecter` en
+   * NOMS lisibles (cf. `noms-banques.ts`) : sans elles, l'écran ne peut afficher qu'un
+   * compteur anonyme (« 2 banque(s) ») là où l'utilisateur a besoin de savoir LAQUELLE.
+   *
+   * Absent = repli anonyme intégral. C'est ce qui garde ce composant montable tel quel
+   * par la route de démo, et ce qui rend la dégradation explicite plutôt qu'accidentelle.
+   */
+  connexions?: ConnexionNommable[];
+  /**
+   * Une SYNCHRONISATION est en vol → loader indéterminé + durée annoncée, en TÊTE du
+   * feedback. Volontairement distinct d'une finalisation ou d'une réparation en cours :
+   * annoncer « Synchronisation en cours » pendant une réparation MFA serait faux.
+   */
+  synchroEnCours?: boolean;
 }) {
+  // Traduction id amont → nom, faite ICI parce que c'est le seul endroit qui dispose des
+  // deux moitiés. `null` = au moins une banque non nommable → on garde la formulation
+  // anonyme (tout ou rien, cf. `nommerToutes`).
+  const nomsAReconnecter = nommerToutes(
+    (aReconnecter ?? []).map((c) => c.connectionId),
+    connexions ?? [],
+  );
   return (
     <>
+      {/* ATTENTE en tête : c'est ce qui se passe MAINTENANT. Les messages en dessous
+          décrivent le retour PRÉCÉDENT — ils restent lisibles (on ne les vide pas au
+          clic, cf. le reste du flux), mais ils ne sont plus le sujet. */}
+      {synchroEnCours && <LoaderSynchro />}
+
       {erreurDemarrage && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurDemarrage}
-        </p>
+        </Callout>
       )}
       {/* Échec DU WIDGET (onError du CDN) : sans ceci, le widget se fermait sans un
           mot. Le message est déjà mappé (jamais le texte amont, qui peut porter de
           la PII) ; le code machine, lui, est parti au log côté launcher. */}
       {erreurWidget && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurWidget}
-        </p>
+        </Callout>
       )}
       {erreurFinalisation && (
-        <p role="alert" className="text-sm text-danger">
+        <Callout severite="danger" role="alert">
           {erreurFinalisation}
-        </p>
+        </Callout>
       )}
 
       {/* Redirection en cours (succès COMPLET) : message bref et annoncé. Le
           `router.push` du parent emmène vers le Dashboard ; ce repère reste le
           temps que la navigation s'effectue (le widget est démonté à l'arrivée). */}
       {redirection && (
-        <p role="status" className="text-sm text-success">
+        <p role="status" className="text-sm text-text">
           Connexion établie — redirection vers votre tableau de bord…
         </p>
       )}
@@ -154,11 +217,16 @@ export function WidgetFeedback({
         <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* Le TON suit les signaux structurés, pas la simple présence du message : une
               banque en échec dur (fail-soft ⇒ `erreur` reste null, l'échec est écrit DANS
-              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre. */}
+              `succes`) s'affichait ici EN VERT. Le vert exige zéro réserve ; à défaut, neutre.
+              Le ton plein ne colore PLUS le texte en vert (A11Y-VERT-SUCCES1 : 3,46:1,
+              sous l'AA) — il l'appuie en `text-text` face au `text-muted` des comptes
+              rendus à réserve. La MÊME phrase serveur est rendue à l'identique par
+              `SyncSummary` sur le dashboard : les deux écrans doivent bouger ensemble,
+              sans quoi le même message se lit différemment selon l'endroit. */}
           <span
             className={cn(
               "text-sm",
-              registre === "succes" ? "text-success" : "text-text-muted",
+              registre === "succes" ? "text-text" : "text-text-muted",
             )}
           >
             {succes}
@@ -193,23 +261,45 @@ export function WidgetFeedback({
           inerte sans `onReconnecter` (route de démo / Visual QA). */}
       {reparation && reparation.length > 0 && (
         <ul className="flex flex-col gap-1.5">
-          {reparation.map((cx) => (
-            <li key={`${cx.connectionId}:${cx.jobId}`}>
-              <button
-                type="button"
-                onClick={() => onReconnecter?.(cx)}
-                disabled={!onReconnecter || reparationEnCours || widgetOuvert}
-                className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
-                  text-sm font-semibold text-primary transition-colors
-                  hover:text-primary-600 hover:underline focus:outline-none
-                  focus-visible:ring-2 focus-visible:ring-primary
-                  focus-visible:ring-offset-2 disabled:opacity-48"
+          {reparation.map((cx) => {
+            // Nom de CETTE connexion (liste à un élément → `[nom]` ou `[]`). Avec
+            // plusieurs banques à réparer, des boutons « Reconnecter » identiques
+            // empilés ne disent pas lequel ouvre laquelle : c'est le nom qui les
+            // distingue, pas leur position.
+            const [nom] = resoudreNomsBanques(
+              [cx.connectionId],
+              connexions ?? [],
+            );
+            return (
+              <li
+                key={`${cx.connectionId}:${cx.jobId}`}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1"
               >
-                <IconeReconnecter />
-                {reparationEnCours ? "Ouverture…" : "Reconnecter"}
-              </button>
-            </li>
-          ))}
+                {nom && (
+                  <span className="truncate text-sm font-medium text-text">
+                    {nom}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onReconnecter?.(cx)}
+                  disabled={!onReconnecter || reparationEnCours || widgetOuvert}
+                  // Le nom est déjà lu par le lecteur d'écran juste avant, mais il ne
+                  // fait pas partie du bouton : sans `aria-label`, une navigation de
+                  // bouton en bouton n'entendrait que « Reconnecter » à l'identique.
+                  aria-label={nom ? `Reconnecter ${nom}` : undefined}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-control px-2
+                    text-sm font-semibold text-primary transition-colors
+                    hover:text-primary-600 hover:underline focus:outline-none
+                    focus-visible:ring-2 focus-visible:ring-primary
+                    focus-visible:ring-offset-2 disabled:opacity-48"
+                >
+                  <IconeReconnecter />
+                  {reparationEnCours ? "Ouverture…" : "Reconnecter"}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -219,9 +309,18 @@ export function WidgetFeedback({
           clairement (role=status, jamais un rouge de donnée §3.4) sans nommer la banque. */}
       {aReconnecter && aReconnecter.length > 0 && (
         <p role="status" className="text-sm text-text-muted">
-          {aReconnecter.length === 1
-            ? "L’accès d’une banque n’est plus valide : reconnectez-la via « Connecter une banque » ci-dessus."
-            : `L’accès de ${aReconnecter.length} banque(s) n’est plus valide : reconnectez-les via « Connecter une banque » ci-dessus.`}
+          {/* NOMMÉ quand on le peut : mettre la banque EN TÊTE de phrase est tout
+              l'objet du lot — « 2 banque(s) » n'a jamais dit à personne laquelle
+              rouvrir. La syntaxe diffère entre les deux cas à dessein (« Absa — accès
+              à rétablir » vs « L'accès d'une banque n'est plus valide ») : imposer un
+              seul moule aux deux produirait un français bancal (« L'accès de Absa »). */}
+          {nomsAReconnecter
+            ? `${nomsAReconnecter} — accès à rétablir : reconnectez-${
+                aReconnecter.length === 1 ? "la" : "les"
+              } via « Connecter une banque » ci-dessus.`
+            : aReconnecter.length === 1
+              ? "L’accès d’une banque n’est plus valide : reconnectez-la via « Connecter une banque » ci-dessus."
+              : `L’accès de ${aReconnecter.length} banque(s) n’est plus valide : reconnectez-les via « Connecter une banque » ci-dessus.`}
         </p>
       )}
     </>

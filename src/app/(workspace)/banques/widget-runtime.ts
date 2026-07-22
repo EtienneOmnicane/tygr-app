@@ -16,7 +16,7 @@
  */
 import { z } from "zod";
 
-import { exigerSessionWorkspace } from "@/server/auth/session";
+import { exigerSessionSansPerimetre } from "@/server/auth/session";
 import { withWorkspace } from "@/server/db";
 import { peutModifier } from "@/lib/permissions";
 import {
@@ -68,7 +68,12 @@ function versJobPublic(job: OmniFiSyncJob): JobPublic {
 
 /** Vérifie session + gating (MANAGER/ADMIN). Throw si refus. */
 async function exigerDroitWidget(): Promise<void> {
-  const session = await exigerSessionWorkspace();
+  // Surface /banques (gestion de connexions tenant-wide) → session amputée du
+  // viewFilter, comme les actions de `./actions.ts` (TOOLBAR-PERIMETRE-AMPUTATION1).
+  // Ici c'est un NO-OP de correction (on ne vérifie que `ctx.role`, jamais
+  // bank_accounts) : on ampute pour l'UNIFORMITÉ de l'invariant « la page ET toutes
+  // ses Server Actions tournent amputées » (toolbar-config.ts).
+  const session = await exigerSessionSansPerimetre();
   await withWorkspace(session, async (_tx, ctx) => {
     if (!peutModifier(ctx.role)) throw new Error("CONNEXION_NOT_AUTHORIZED");
   });

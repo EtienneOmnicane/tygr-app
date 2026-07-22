@@ -24,15 +24,17 @@ import {
   type ResultatAction,
   type SplitUI,
 } from "@/components/ui/category";
-import { AppErrorState, EmptyState } from "@/components/ui/states";
+import { AppErrorState, cn, EmptyState } from "@/components/ui/states";
 
 import { TransactionsTable } from "./transactions-table";
 import { TransactionsLoading } from "./states/transactions-loading";
+import { TransactionsSommeNette } from "./transactions-somme-nette";
 import { TransactionsToolbar } from "./transactions-toolbar";
 import type {
   ActionsTransactions,
   CurseurTransactions,
   FiltresTransactions,
+  SommeNetteDevise,
   TransactionListItem,
 } from "./types-transactions";
 
@@ -40,6 +42,21 @@ import type {
 interface ModaleEnCours {
   transaction: TransactionListItem;
   initialSplits: SplitUI[];
+}
+
+/**
+ * Un filtre est-il actif ? Pilote l'affichage du TOTAL des résultats filtrés
+ * (TX-RECHERCHE-SOMME-NETTE1) : sans filtre, la liste EST tout le workspace — un
+ * « total des résultats filtrés » n'y voudrait rien dire (c'est le rôle du dashboard),
+ * et on s'épargne un agrégat inutile à chaque montage de la page.
+ *
+ * DÉRIVÉ de l'objet, jamais énuméré champ par champ : `FiltresTransactions` ne contient
+ * QUE des filtres (ni curseur ni limite). Recopier la liste ici la ferait diverger au
+ * premier filtre ajouté au contrat — et « filtrer par ce nouveau critère » n'afficherait
+ * alors AUCUN total, silencieusement.
+ */
+function filtreActif(f: FiltresTransactions): boolean {
+  return Object.values(f).some((v) => v !== undefined && v !== "");
 }
 
 export function TransactionsFeature({
@@ -106,10 +123,28 @@ export function TransactionsFeature({
     initial.curseurSuivant,
   );
   const [filtres, setFiltres] = useState<FiltresTransactions>({});
-  const [chargement, setChargement] = useState(false);
+  // Nature du chargement en cours (plutôt qu'un booléen nu) : on sépare le
+  // (re)chargement de la 1re page — qui REMPLACE la liste (filtres/recherche/
+  // après-sauvegarde) — de la pagination « Charger plus » (append). `chargement`
+  // (dérivé) garde son sens PARTOUT (toolbar/bouton/skeleton) ; seul un
+  // REMPLACEMENT (`rafraichissement`) estompe la liste déjà affichée pendant le
+  // refetch — la pagination, elle, ne l'estompe pas (les lignes en place ne
+  // changent pas, seul le bas s'allonge → estomper serait un artefact).
+  const [chargementEnCours, setChargementEnCours] = useState<
+    "page" | "plus" | null
+  >(null);
+  const chargement = chargementEnCours !== null;
+  const rafraichissement = chargementEnCours === "page";
   const [erreur, setErreur] = useState(false);
   /** Erreur de pagination (page suivante) — n'efface pas ce qui est affiché. */
   const [erreurPagination, setErreurPagination] = useState(false);
+  /**
+   * TOTAL des résultats filtrés, par devise (agrégat SERVEUR — le client ne détient
+   * qu'une page, sommer ici serait faux : TX-FILTRE1). `null` = rien à afficher : aucun
+   * filtre actif, surface sans agrégat (démo), ou échec de l'agrégat. Fail-closed
+   * assumé : PAS de chiffre plutôt qu'un chiffre faux ou périmé.
+   */
+  const [sommeNette, setSommeNette] = useState<SommeNetteDevise[] | null>(null);
 
   const [modale, setModale] = useState<ModaleEnCours | null>(null);
   const [ouvertureEnCours, setOuvertureEnCours] = useState<string | null>(null);
@@ -181,17 +216,44 @@ export function TransactionsFeature({
   /** (Re)charge la PREMIÈRE page pour un jeu de filtres donné (reset curseur). */
   const rechargerPremierePage = useCallback(
     async (f: FiltresTransactions) => {
-      setChargement(true);
+      setChargementEnCours("page");
       setErreur(false);
       setErreurPagination(false);
-      const res = await actions.listerTransactions({ curseur: null, filtres: f });
+
+      // Liste ET total demandés EN PARALLÈLE sur le MÊME instantané de filtres `f` :
+      // le total affiché correspond donc toujours aux lignes affichées. (Les tirer de
+      // deux jeux de filtres différents ferait mentir l'écran — un total qui ne totalise
+      // pas ce qu'on voit.) L'agrégat n'est demandé que si un filtre est actif ET si la
+      // surface l'expose : `sommeNette` est OPTIONNELLE (la démo ne la fournit pas).
+      const demanderSomme = actions.sommeNette;
+      const [res, resSomme] = await Promise.all([
+        actions.listerTransactions({ curseur: null, filtres: f }),
+        // `.catch(() => null)` — le total est un CONFORT : il ne doit JAMAIS pouvoir
+        // emporter la liste avec lui. Une Server Action REJETTE (au lieu de renvoyer
+        // `{ok:false}`) quand la session expire ou que le serveur tombe : sans ce catch,
+        // `Promise.all` rejetterait, la liste ne serait jamais posée ET
+        // `setChargementEnCours(null)` jamais appelé → page définitivement figée
+        // (toolbar grisée, liste estompée, plus rien ne répond) à cause d'un total.
+        demanderSomme && filtreActif(f)
+          ? demanderSomme({ filtres: f }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
       if (res.ok) {
         setLignes(res.data.lignes);
         setCurseur(res.data.curseurSuivant);
       } else {
         setErreur(true);
       }
-      setChargement(false);
+      // Fail-closed — et surtout : le total n'est posé QUE SI LA LISTE l'est aussi
+      // (`res.ok`). Sinon, dans le cas « liste en échec, agrégat OK », les lignes du
+      // filtre PRÉCÉDENT restent à l'écran (elles ne sont pas effacées) et on les
+      // surmonterait du total du NOUVEAU filtre : un chiffre exact, parfaitement
+      // crédible… et rattaché aux mauvaises lignes. C'est le pire résultat possible sur
+      // un écran financier — pire qu'une absence de chiffre. Filtres retirés, agrégat en
+      // échec OU liste en échec ⇒ AUCUN total.
+      setSommeNette(res.ok && resSomme && resSomme.ok ? resSomme.data : null);
+      setChargementEnCours(null);
     },
     [actions],
   );
@@ -205,7 +267,7 @@ export function TransactionsFeature({
   /** Charge la page SUIVANTE et l'ajoute à la liste (append). */
   async function chargerPlus() {
     if (!curseur || chargement) return;
-    setChargement(true);
+    setChargementEnCours("plus");
     setErreurPagination(false);
     const res = await actions.listerTransactions({ curseur, filtres });
     if (res.ok) {
@@ -214,7 +276,7 @@ export function TransactionsFeature({
     } else {
       setErreurPagination(true);
     }
-    setChargement(false);
+    setChargementEnCours(null);
   }
 
   /**
@@ -282,12 +344,14 @@ export function TransactionsFeature({
           />
         );
       }
-      // 3) Autres filtres (statut/dates) sans résultat, ou sync en cours.
+      // 3) Filtre statut sans résultat, période (barre globale) sans opération, ou sync
+      //    en cours. La fenêtre de dates vient désormais de la barre de vue (TX-TOOLBAR-
+      //    DEDUP1) : une plage étroite sans transaction retombe légitimement ici.
       return (
         <EmptyState
           illustration="table"
           title="Aucune transaction pour ces critères"
-          message="Aucune opération ne correspond aux filtres sélectionnés, ou la première synchronisation est encore en cours."
+          message="Aucune opération ne correspond à la période et aux filtres sélectionnés, ou la première synchronisation est encore en cours."
         />
       );
     }
@@ -313,7 +377,50 @@ export function TransactionsFeature({
         }
       />
 
-      {corps}
+      {/* TOTAL des résultats filtrés (TX-RECHERCHE-SOMME-NETTE1) — agrégat SERVEUR, monté
+          seulement sous filtre. Estompé pendant un re-fetch, EXACTEMENT comme la liste
+          ci-dessous : le total et les lignes sont issus du même instantané de filtres, ils
+          doivent donc vieillir ENSEMBLE (un total net qui resterait vif au-dessus d'une
+          liste estompée laisserait croire qu'il est déjà à jour). On garde la valeur
+          précédente pendant le re-fetch au lieu de la vider : sinon le bandeau se
+          démonterait/remonterait à chaque frappe et ferait sauter le tableau
+          (TX-RECHERCHE-LAYOUTSHIFT1). Le wrapper n'est monté QUE s'il y a une devise à
+          afficher : un `totaux` VIDE (recherche sans résultat) rendrait un <div> de
+          hauteur nulle qui consommerait quand même un `gap-4` — 16 px de décalage
+          fantôme au moment où la recherche cesse de matcher. */}
+      {sommeNette && sommeNette.length > 0 && (
+        <div
+          className={cn(
+            "transition-opacity",
+            rafraichissement && "pointer-events-none opacity-60",
+          )}
+        >
+          <TransactionsSommeNette totaux={sommeNette} />
+        </div>
+      )}
+
+      {/* Zone de résultats à hauteur PLANCHER (~8 lignes = gabarit du skeleton
+          TransactionsLoading) : skeleton / table / petite liste / empty partagent
+          ce plancher, donc la zone ne se « collapse » plus au fil de la recherche
+          → fin des sauts de layout (TX-RECHERCHE-LAYOUTSHIFT1). Pendant un RE-fetch
+          de la 1re page AVEC des résultats déjà affichés (recherche/filtre/après-
+          sauvegarde), on GARDE la liste montée et on l'estompe (« en cours » :
+          opacité réduite + aria-busy + non-cliquable) au lieu de la laisser figée
+          sans retour — même idiome que GraphiquesFeature. La pagination « Charger plus »
+          (append) N'estompe PAS : `rafraichissement` ne vaut que pour le refetch
+          page 1. `enChargementInitial` garde le skeleton réservé au cas SANS lignes
+          → jamais de clignotement vers le skeleton quand on avait déjà des lignes. */}
+      <div
+        aria-busy={rafraichissement && aDesResultats}
+        className={cn(
+          "min-h-[512px] transition-opacity",
+          rafraichissement &&
+            aDesResultats &&
+            "pointer-events-none opacity-60",
+        )}
+      >
+        {corps}
+      </div>
 
       {/* Pagination « Charger plus » — masquée si dernière page ou liste vide. */}
       {aDesResultats && curseur && (

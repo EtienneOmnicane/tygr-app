@@ -16,24 +16,57 @@ import { useMemo, useState } from "react";
 import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
+  DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  DEMO_DASHBOARD_PREVISION_CONTRASTEE,
+  DEMO_DASHBOARD_PREVISION_FAIBLE,
+  DEMO_DASHBOARD_PREVISION_SANS_REALISE,
+  DEMO_DASHBOARD_PREVISION_ZERO,
   DEMO_DASHBOARD_UN_MOIS,
+  DEMO_DASHBOARD_HORS_PERIMETRE,
   DEMO_DASHBOARD_VIDE,
   DEMO_MOIS,
 } from "@/lib/dashboard-demo-fixtures";
+import { formaterMoisAnnee } from "@/lib/format-date";
 import {
   DashboardContent,
   type DonneesDashboard,
 } from "@/components/dashboard/dashboard-content";
 
-type EtatDemo = "succes" | "multi-devise" | "un-mois" | "partiel" | "vide";
+type EtatDemo =
+  | "succes"
+  | "prevision-faible"
+  | "prevision-contrastee"
+  | "prevision-zero"
+  | "prevision-sans-realise"
+  | "prevision-autre-devise"
+  | "sans-prevision"
+  | "multi-devise"
+  | "un-mois"
+  | "partiel"
+  | "vide"
+  | "hors-perimetre";
 type FraicheurDemo = "frais" | "recent" | "perime";
 
 const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
-  { id: "succes", label: "Succès" },
+  { id: "succes", label: "Succès (avec prévision)" },
+  // Le cas du défaut (lot 0) : prévision écrasée par l'échelle du réalisé — c'est l'onglet
+  // à capturer en priorité au Visual QA, celui qui manquait au corpus.
+  // Le rapport 1:520 face au RÉALISÉ : depuis l'option E il n'écrase plus rien (l'encart a
+  // son échelle). Onglet conservé comme non-régression — c'est le cas historique.
+  { id: "prevision-faible", label: "Prévision faible / réalisé (résolu par l'encart)" },
+  // Le cas dur de l'ENCART (option E) : fort écart INTERNE à la prévision — une barre
+  // sous-pixel malgré l'échelle propre. C'est l'onglet qui prouve que le montant écrit,
+  // et non la barre, porte la valeur.
+  { id: "prevision-contrastee", label: "Prévision CONTRASTÉE (écart interne)" },
+  { id: "prevision-zero", label: "Prévision à ZÉRO" },
+  { id: "prevision-sans-realise", label: "Prévision SEULE (sans réalisé)" },
+  { id: "prevision-autre-devise", label: "Prévision autre devise" },
+  { id: "sans-prevision", label: "Sans prévision (fenêtre passée)" },
   { id: "multi-devise", label: "Multi-devise (5)" },
   { id: "un-mois", label: "1 mois peuplé (fix courbe)" },
   { id: "partiel", label: "Partiel (post-onboarding)" },
   { id: "vide", label: "Vide" },
+  { id: "hors-perimetre", label: "Hors périmètre" },
 ];
 
 /**
@@ -49,6 +82,39 @@ const DEMO_SOLDES_CINQ_DEVISES: DonneesDashboard["soldesParDevise"] = [
   { currency: "USD", total: "179200.00" },
   { currency: "ZAR", total: "1204360.50" },
 ];
+
+/**
+ * Fixture montée par onglet. Table plutôt que cascade de ternaires : à 8 états, la
+ * cascade devenait illisible et un état oublié y passait inaperçu (le Record force
+ * l'exhaustivité au typecheck).
+ */
+const FIXTURE_PAR_ETAT: Record<EtatDemo, DonneesDashboard> = {
+  succes: DEMO_DASHBOARD,
+  // Le défaut d'ORIGINE (rapport ~1:520 face au réalisé) : sur l'axe partagé, la barre
+  // projetée rendait 0,23 px et la zone paraissait vide. Attendu aujourd'hui : le graphe
+  // n'en montre plus rien (il est 100 % réalisé) et l'encart rend ces échéances à 16 % de
+  // sa piste — lisibles. Onglet de NON-RÉGRESSION du défaut historique.
+  "prevision-faible": DEMO_DASHBOARD_PREVISION_FAIBLE,
+  // Écart interne 1:1260 : dans l'encart, la barre du mois d'ancrage tombe sous le tick
+  // alors que son montant reste parfaitement lisible (canal texte, indépendant de l'échelle).
+  "prevision-contrastee": DEMO_DASHBOARD_PREVISION_CONTRASTEE,
+  // §5.4 : zone présente, tout à zéro → message explicite, jamais un aplat beige muet.
+  "prevision-zero": DEMO_DASHBOARD_PREVISION_ZERO,
+  // Défaut n°1 du plan §5.2 : la prévision doit s'afficher SEULE, jamais « Aucun mouvement ».
+  "prevision-sans-realise": DEMO_DASHBOARD_PREVISION_SANS_REALISE,
+  // §5.3 : colonnes futures à ZÉRO + note — jamais un montant étranger, jamais de FX.
+  "prevision-autre-devise": DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  // D4 : fenêtre passée → AUCUNE zone prévisionnelle (l'axe reste celui d'aujourd'hui).
+  "sans-prevision": { ...DEMO_DASHBOARD, prevision: null },
+  "multi-devise": { ...DEMO_DASHBOARD, soldesParDevise: DEMO_SOLDES_CINQ_DEVISES },
+  "un-mois": DEMO_DASHBOARD_UN_MOIS,
+  partiel: DEMO_DASHBOARD_PARTIEL,
+  vide: DEMO_DASHBOARD_VIDE,
+  // Mêmes données VIDES que ci-dessus : seul le DROIT du lecteur change. Monté ici,
+  // dans le vrai DashboardContent, pour capturer l'écran COMPOSÉ (shell + état) et non
+  // le composant nu — c'est cet écran-là que la Gate 4 doit comparer à « vide ».
+  "hors-perimetre": DEMO_DASHBOARD_HORS_PERIMETRE,
+};
 
 const ONGLETS_FRAICHEUR: Array<{ id: FraicheurDemo; label: string; heures: number }> = [
   { id: "frais", label: "Frais (<6h)", heures: 2 },
@@ -75,16 +141,7 @@ export default function DashboardPreviewPage() {
   const donnees = useMemo<DonneesDashboard>(() => {
     const heures =
       ONGLETS_FRAICHEUR.find((o) => o.id === fraicheur)?.heures ?? 2;
-    const base =
-      etat === "succes"
-        ? DEMO_DASHBOARD
-        : etat === "multi-devise"
-          ? { ...DEMO_DASHBOARD, soldesParDevise: DEMO_SOLDES_CINQ_DEVISES }
-          : etat === "un-mois"
-            ? DEMO_DASHBOARD_UN_MOIS
-            : etat === "partiel"
-              ? DEMO_DASHBOARD_PARTIEL
-              : DEMO_DASHBOARD_VIDE;
+    const base = FIXTURE_PAR_ETAT[etat];
     // L'état « vide » n'a pas de compte → la fraîcheur n'a pas d'effet (pas de pastille).
     return etat === "vide" ? base : avecFraicheur(base, heures);
   }, [etat, fraicheur]);
@@ -161,10 +218,15 @@ export default function DashboardPreviewPage() {
       </div>
 
       {/* role ADMIN : la démo montre le bouton « Synchroniser » actif (état complet). */}
+      {/* Libellés de période : la démo monte le cas PRESET (la page réelle bascule sur
+          l'intervalle « 3 mars → 17 avr. 2026 » et « Synthèse de la période » dès qu'une
+          plage `?du`/`?au` prime — cf. TOOLBAR-DATE-PRECISE1). */}
       <DashboardContent
         donnees={donnees}
         devise="MUR"
-        mois={DEMO_MOIS}
+        libellePeriode="6 derniers mois"
+        syntheseTitre="Synthèse du mois"
+        syntheseLibelle={formaterMoisAnnee(DEMO_MOIS)}
         role="ADMIN"
       />
     </div>

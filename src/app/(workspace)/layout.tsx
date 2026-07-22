@@ -34,6 +34,7 @@ import type { WorkspaceRole } from "@/server/db/schema";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import {
@@ -174,6 +175,9 @@ export default async function WorkspaceLayout({
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
     }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
+    }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");
     }
@@ -193,6 +197,33 @@ export default async function WorkspaceLayout({
     return gererErreurInfra(erreur);
   }
 
+  // Signature du périmètre actif → `key` du conteneur de page (A4 /
+  // PERIMETRE-REDIRECT-PAGE1). GARDE INDISPENSABLE depuis que les actions de
+  // périmètre reviennent sur la page COURANTE au lieu du dashboard :
+  //
+  // rester sur la même route = un RE-RENDER, pas un remount (Next : poser un cookie
+  // dans une Server Action re-rend la page et ses layouts, mais « client state is
+  // preserved for re-rendered components »). Or les features clientes SÈMENT leur
+  // donnée RSC dans un useState — `transactions-feature.tsx:104`,
+  // `graphiques-feature.tsx:121`, `echeances-feature.tsx:93` — et un useState(prop)
+  // ne se re-sème PAS au re-render. Sans cette `key`, « Appliquer » sur
+  // /transactions afficherait « Sucre » dans la topbar pendant que la table
+  // montrerait encore TOUS les comptes : un mensonge d'affichage sur de la donnée
+  // financière.
+  //
+  // Changer la clé démonte/remonte le sous-arbre de page → chaque feature re-sème
+  // depuis les props RSC FRAÎCHES (déjà scopées par la RLS). Garde STRUCTURELLE :
+  // elle couvre aussi les pages FUTURES, sans qu'elles aient à y penser.
+  // Contrepartie assumée (arbitrage 2026-07-14) : les filtres in-page (recherche /
+  // statut / dates) sont réinitialisés à un changement de PÉRIMÈTRE — plus jamais
+  // lors d'une navigation. Dette P2 TX-FILTRES-URL1 : les porter dans l'URL, ils
+  // survivront alors au remount.
+  //
+  // Indépendante de la `key` du PerimetreSwitcher (app-topbar.tsx:64) : chacune n'a
+  // besoin que d'être une signature stable de `viewFilterActif` — elles n'ont pas à
+  // être identiques, donc aucun couplage à maintenir.
+  const clePerimetre = viewFilterActif?.join(",") ?? "groupe";
+
   return (
     <div className="flex min-h-screen bg-surface-page">
       <AppSidebar
@@ -203,13 +234,20 @@ export default async function WorkspaceLayout({
         onDeconnexion={deconnecter}
       />
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Barre de vue : montée GLOBALEMENT, mais chaque page ne rend que les
+            contrôles qui la concernent (matrice `shell/toolbar-config.ts`, lot A2) —
+            /selection n'en rend aucun. `workspaceNom` = repère de la bande minimale
+            (Règles / Membres / Entités), déjà résolu ci-dessus pour la sidebar. */}
         <AppTopbar
           role={contexte.role}
           comptes={contexte.comptes}
           entites={contexte.entites}
           viewFilterActif={viewFilterActif}
+          workspaceNom={contexte.workspaceNom}
         />
-        <div className="min-w-0 flex-1">{children}</div>
+        <div key={clePerimetre} className="min-w-0 flex-1">
+          {children}
+        </div>
       </div>
 
       {/* Garde de session (PR 2′, D2 « Transverse »). Montée EN DEHORS de

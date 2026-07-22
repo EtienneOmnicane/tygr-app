@@ -24,6 +24,11 @@ import {
   type WorkspaceSession,
   type WorkspaceTx,
 } from "@/server/db/tenancy";
+
+// Prédicat PUR sur le contexte (aucun accès DB) — ré-exporté ici pour que les pages
+// le consomment par la même frontière que le reste (`@/server/db`), sans importer
+// `@/server/db/tenancy` en direct.
+export { estLecteurBorne } from "@/server/db/tenancy";
 import {
   creerRepositoryIdentite,
   type RepositoryIdentite,
@@ -91,7 +96,9 @@ export function withWorkspace<T>(
 /** Accès identité pré-contexte (login, re-validation E6) — voir le repository. */
 export const identite: RepositoryIdentite = {
   trouverParEmail: (email) => obtenirIdentite().trouverParEmail(email),
-  estActif: (userId) => obtenirIdentite().estActif(userId),
+  etatCompte: (userId) => obtenirIdentite().etatCompte(userId),
+  changerMotDePasse: (userId, options) =>
+    obtenirIdentite().changerMotDePasse(userId, options),
   enregistrerEchec: (userId, maintenant) =>
     obtenirIdentite().enregistrerEchec(userId, maintenant),
   reinitialiserEchecs: (userId) =>
@@ -108,6 +115,17 @@ export const identite: RepositoryIdentite = {
 };
 
 export { schema };
+
+// Changement de mot de passe (AUTH-MDP-TEMPO1) : erreurs nommées du repository
+// identité, ré-exportées pour que l'action /account/password les mappe sans
+// importer @/server/repositories/* directement (frontière P0-a).
+export {
+  CompteIndisponibleError,
+  CompteSansMotDePasseError,
+  CompteVerrouilleError,
+  MotDePasseActuelIncorrectError,
+} from "@/server/repositories/identite";
+export type { EtatCompte } from "@/server/repositories/identite";
 
 // Provisioning (Epic 2 L3) : ré-exporté via le point d'entrée serveur pour que
 // les Server Actions de app/ l'appellent sans importer @/server/repositories/*
@@ -133,15 +151,17 @@ export type {
 export {
   listerComptes,
   listerConnexionsBancaires,
+  compterConnexionsTenant,
   comptesParEntite,
   listerEntitesVisibles,
   soldeConsolideCourant,
   soldesCourantsParDevise,
   courbeTresorerie,
   syntheseMois,
-  syntheseMoisParDevise,
+  synthesePeriodeParDevise,
   syntheseParMois,
   grilleMois,
+  grilleMoisSuivants,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 export type {
@@ -151,7 +171,7 @@ export type {
   PointCourbe,
   SoldeParDevise,
   SyntheseMois,
-  SyntheseMoisDevise,
+  SynthesePeriodeDevise,
   SyntheseMensuelle,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
@@ -207,11 +227,13 @@ export type {
 // withWorkspace(tx) sans importer @/server/repositories/* directement.
 export {
   listerTransactions,
+  sommeNetteParDevise,
   CurseurInvalideError,
 } from "@/server/repositories/transactions";
 export type {
   TransactionLigne,
   PageTransactions,
+  SommeNetteDevise,
 } from "@/server/repositories/transactions";
 
 // Gestion des Entités (Option B, L3) : référentiel d'entités + sas d'assignation +
@@ -303,6 +325,9 @@ export type {
 export {
   listerEcheances,
   synthetiserHorizon,
+  // Prévisionnel du dashboard (C1) : occurrences dues sur une fenêtre, récurrences
+  // comprises. Lue dans le Promise.all de la page, sous le MÊME tx que le réalisé.
+  occurrencesSurFenetre,
   creerEcheance,
   modifierEcheance,
   changerStatutEcheance,

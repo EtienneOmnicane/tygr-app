@@ -16,7 +16,8 @@ import { peutModifier } from "@/lib/permissions";
 import { listerConnexionsBancaires, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
-  exigerSessionWorkspace,
+  exigerSessionSansPerimetre,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 
@@ -28,10 +29,13 @@ export const metadata = { title: "Connecter une banque — Dodo" };
 export default async function PageBanques() {
   let session;
   try {
-    session = await exigerSessionWorkspace();
+    session = await exigerSessionSansPerimetre();
   } catch (erreur) {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
+    }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
     }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");
@@ -62,7 +66,14 @@ export default async function PageBanques() {
         <ConnexionsBancaires connexions={connexions} />
 
         <div className="rounded-card bg-surface-card p-6 shadow-card">
-          <BankConnectWidget peutConnecter={peutConnecter} />
+          {/* Les connexions descendent aussi ici : c'est ce qui permet au feedback de
+              NOMMER les banques à reconnecter/réparer (leurs identifiants amont sont
+              opaques). Même liste, déjà résolue sous RLS ci-dessus — aucune requête
+              supplémentaire. */}
+          <BankConnectWidget
+            peutConnecter={peutConnecter}
+            connexions={connexions}
+          />
         </div>
       </div>
     </main>

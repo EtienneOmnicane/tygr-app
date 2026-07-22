@@ -39,6 +39,7 @@ import {
   creerEcheance,
   listerEcheances,
   modifierEcheance,
+  occurrencesSurFenetre,
   supprimerEcheance,
   synthetiserHorizon,
   EcheanceHorsPerimetreError,
@@ -57,6 +58,10 @@ const withWorkspace = createWithWorkspace(db);
 const WS_A = "a0000000-0000-4000-8000-000000000001"; // écritures
 const WS_B = "b0000000-0000-4000-8000-000000000002"; // témoin cross-tenant
 const WS_C = "c0000000-0000-4000-8000-000000000003"; // lecture / synthèse
+// WS_D : synthèse des RÉCURRENTES (C0). Workspace SÉPARÉ à dessein — seeder des
+// gabarits dans WS_C fausserait les totaux figés du test 17, qui est la preuve de
+// non-régression du calcul historique.
+const WS_D = "d0000000-0000-4000-8000-000000000004";
 
 // Membres WS_A.
 const ADMIN_A = "a1111111-1111-4111-8111-111111111111"; // ADMIN, Vision Globale
@@ -64,6 +69,7 @@ const MGR_SUCRE = "a2222222-2222-4222-8222-222222222222"; // MANAGER, scopé Suc
 const VIEWER_A = "a3333333-3333-4333-8333-333333333333"; // VIEWER, Vision Globale
 const USER_B = "b1111111-1111-4111-8111-111111111111"; // MANAGER WS_B
 const ADMIN_C = "c1111111-1111-4111-8111-111111111111"; // ADMIN WS_C
+const ADMIN_D = "d1111111-1111-4111-8111-111111111111"; // ADMIN WS_D
 
 // Entités.
 const ENT_SUCRE = "a5000000-0000-4000-8000-000000000001"; // WS_A (scope MGR_SUCRE)
@@ -79,6 +85,10 @@ const ECH_A_MOD = "a7000000-0000-4000-8000-000000000001";
 const ECH_A_STAT = "a7000000-0000-4000-8000-000000000002";
 const ECH_A_STAT2 = "a7000000-0000-4000-8000-000000000003";
 const ECH_A_DEL = "a7000000-0000-4000-8000-000000000004";
+// C1 — projection du dashboard : deux échéances WS_A dans des entités DIFFÉRENTES, pour
+// prouver que la zone prévisionnelle est AMPUTÉE au périmètre du lecteur (étage 2).
+const ECH_A_SUCRE_PROJ = "a7000000-0000-4000-8000-000000000005";
+const ECH_A_ENERGIE_PROJ = "a7000000-0000-4000-8000-000000000006";
 const ECH_B = "b7000000-0000-4000-8000-000000000001";
 
 // Échéances WS_C (synthèse déterministe, entity_id NULL).
@@ -92,13 +102,24 @@ const C7 = "c7000000-0000-4000-8000-000000000007"; // enc MUR 9999 PAYEE (exclu)
 const C8 = "c7000000-0000-4000-8000-000000000008"; // enc MUR 8888 ANNULEE past (exclu)
 const C9 = "c7000000-0000-4000-8000-000000000009"; // enc MUR 7777, 12-01 (hors H90)
 
+// Échéances WS_D — GABARITS récurrents (C0). Toutes entity_id NULL (Vision Globale).
+// Le champ `recurrence` était STOCKÉ mais JAMAIS LU : ces cas échouaient tous avant C0.
+const R1 = "d7000000-0000-4000-8000-000000000001"; // MENSUELLE dec MUR 10000, 07-11 → 1×/2×/3×
+const R2 = "d7000000-0000-4000-8000-000000000002"; // TRIMESTRIELLE enc MUR 5000, 07-05 (OVERDUE) → 2e occ. en H90 seul
+const R3 = "d7000000-0000-4000-8000-000000000003"; // MENSUELLE dec USD 100, 07-11, PAYEE → tête éteinte, série VIVANTE (D1)
+const R4 = "d7000000-0000-4000-8000-000000000004"; // NON récurrente enc MUR 9999, PAYEE → exclue partout (non-régression)
+const R5 = "d7000000-0000-4000-8000-000000000005"; // MENSUELLE dec MUR 7, 08-07 = AUJ+30 PILE → borne + débordement
+
 // « Aujourd'hui » injecté (fuseau Maurice déjà posé en amont — déterminisme).
 const AUJ = "2026-07-08";
+// Bornes d'horizon dérivées de AUJ (rappel pour la lecture des attendus) :
+//   H30 ≤ 2026-08-07 · H60 ≤ 2026-09-06 · H90 ≤ 2026-10-06.
 
 const sessAdminA = { userId: ADMIN_A, activeWorkspaceId: WS_A };
 const sessMgr = { userId: MGR_SUCRE, activeWorkspaceId: WS_A };
 const sessViewer = { userId: VIEWER_A, activeWorkspaceId: WS_A };
 const sessAdminC = { userId: ADMIN_C, activeWorkspaceId: WS_C };
+const sessAdminD = { userId: ADMIN_D, activeWorkspaceId: WS_D };
 
 beforeAll(async () => {
   // 1. Migrations réelles.
@@ -141,19 +162,22 @@ beforeAll(async () => {
     insert into workspaces (id, name, kind, omnifi_client_user_id) values
       ('${WS_A}','Groupe A','INTERNAL_BU','eu-a'),
       ('${WS_B}','Groupe B','INTERNAL_BU','eu-b'),
-      ('${WS_C}','Groupe C','INTERNAL_BU','eu-c');
+      ('${WS_C}','Groupe C','INTERNAL_BU','eu-c'),
+      ('${WS_D}','Groupe D','INTERNAL_BU','eu-d');
     insert into users (id, email, full_name) values
       ('${ADMIN_A}','admin@a.mu','Admin A'),
       ('${MGR_SUCRE}','mgr@a.mu','Mgr Sucre'),
       ('${VIEWER_A}','viewer@a.mu','Viewer A'),
       ('${USER_B}','user@b.mu','User B'),
-      ('${ADMIN_C}','admin@c.mu','Admin C');
+      ('${ADMIN_C}','admin@c.mu','Admin C'),
+      ('${ADMIN_D}','admin@d.mu','Admin D');
     insert into workspace_members (user_id, workspace_id, role) values
       ('${ADMIN_A}','${WS_A}','ADMIN'),
       ('${MGR_SUCRE}','${WS_A}','MANAGER'),
       ('${VIEWER_A}','${WS_A}','VIEWER'),
       ('${USER_B}','${WS_B}','MANAGER'),
-      ('${ADMIN_C}','${WS_C}','ADMIN');
+      ('${ADMIN_C}','${WS_C}','ADMIN'),
+      ('${ADMIN_D}','${WS_D}','ADMIN');
     insert into entities (id, workspace_id, name, code, is_active) values
       ('${ENT_SUCRE}','${WS_A}','Sucrière','SUC',true),
       ('${ENT_ENERGIE}','${WS_A}','Énergie','ENE',true),
@@ -171,7 +195,11 @@ beforeAll(async () => {
       ('${ECH_A_MOD}','${WS_A}','${ENT_SUCRE}','encaissement','À modifier','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z'),
       ('${ECH_A_STAT}','${WS_A}','${ENT_SUCRE}','encaissement','Cycle de vie','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
       ('${ECH_A_STAT2}','${WS_A}','${ENT_SUCRE}','encaissement','Borne réglé','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
-      ('${ECH_A_DEL}','${WS_A}','${ENT_SUCRE}','encaissement','À supprimer','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now());
+      ('${ECH_A_DEL}','${WS_A}','${ENT_SUCRE}','encaissement','À supprimer','1000.00','MUR','2026-09-01','en_cours','${ADMIN_A}',now(),now()),
+      -- Paire de projection (C1) : montants REPÈRES distincts, une par entité. MGR_SUCRE
+      -- (scopé Sucrière) ne doit JAMAIS voir la seconde dans sa zone prévisionnelle.
+      ('${ECH_A_SUCRE_PROJ}','${WS_A}','${ENT_SUCRE}','decaissement','Projection Sucrière','111.00','MUR','2026-07-20','en_cours','${ADMIN_A}',now(),now()),
+      ('${ECH_A_ENERGIE_PROJ}','${WS_A}','${ENT_ENERGIE}','decaissement','Projection Énergie','222.00','MUR','2026-07-21','en_cours','${ADMIN_A}',now(),now());
     -- Témoin cross-tenant.
     insert into echeances
       (id, workspace_id, entity_id, direction, libelle, montant, devise, date_echeance, statut, created_by) values
@@ -188,6 +216,15 @@ beforeAll(async () => {
       ('${C7}','${WS_C}',null,'encaissement','C7','9999.00','MUR','2026-07-15','payee','9999.00','${ADMIN_C}'),
       ('${C8}','${WS_C}',null,'encaissement','C8','8888.00','MUR','2026-07-02','annulee',null,'${ADMIN_C}'),
       ('${C9}','${WS_C}',null,'encaissement','C9','7777.00','MUR','2026-12-01','en_cours',null,'${ADMIN_C}');
+    -- Échéances WS_D — GABARITS récurrents (C0). La colonne recurrence n'était JAMAIS
+    -- lue : chaque ligne ci-dessous était comptée UNE fois, à sa date stockée.
+    insert into echeances
+      (id, workspace_id, entity_id, direction, libelle, montant, devise, date_echeance, statut, recurrence, montant_regle, created_by) values
+      ('${R1}','${WS_D}',null,'decaissement','R1 loyer','10000.00','MUR','2026-07-11','en_cours','mensuelle',null,'${ADMIN_D}'),
+      ('${R2}','${WS_D}',null,'encaissement','R2 abonnement','5000.00','MUR','2026-07-05','en_cours','trimestrielle',null,'${ADMIN_D}'),
+      ('${R3}','${WS_D}',null,'decaissement','R3 SaaS','100.00','USD','2026-07-11','payee','mensuelle','100.00','${ADMIN_D}'),
+      ('${R4}','${WS_D}',null,'encaissement','R4 ponctuelle','9999.00','MUR','2026-07-20','payee',null,'9999.00','${ADMIN_D}'),
+      ('${R5}','${WS_D}',null,'decaissement','R5 borne','7.00','MUR','2026-08-07','en_cours','mensuelle',null,'${ADMIN_D}');
   `);
 
   // 4. Rôle applicatif non-propriétaire (source unique : provisioning prod).
@@ -510,5 +547,231 @@ describe("synthèse par HORIZON × DEVISE (restant dû ; terminaux exclus ; over
         ],
       },
     ]);
+  });
+});
+
+/**
+ * C0 — EXPANSION DES RÉCURRENCES (PLAN-conception-previsionnel-C.md).
+ *
+ * Le champ `recurrence` était STOCKÉ mais JAMAIS LU : `synthetiserHorizon` comptait
+ * chaque échéance UNE fois, à sa date stockée. TOUS les cas de ce bloc échouaient
+ * avant C0 — c'est la preuve du lot, et celle du chiffre faux qui était en production.
+ *
+ * Ces tests valident le CÂBLAGE sous RLS réelle (le repo lit bien `recurrence`, appelle
+ * le moteur et agrège en centimes). La règle de récurrence elle-même (clamp de
+ * quantième, bissextilité, rangs) est prouvée unitairement dans
+ * `tests/unit/echeances-recurrence.test.ts`.
+ */
+describe("C0 — synthèse × RÉCURRENCE (gabarit + tête, D1)", () => {
+  const synthese = () =>
+    withWorkspace(sessAdminD, (tx, ctx) =>
+      synthetiserHorizon(tx, ctx, { aujourdhui: AUJ }),
+    );
+
+  it("18. totaux EXACTS 30/60/90 j avec occurrences récurrentes (MUR + USD)", async () => {
+    // Détail du calcul (AUJ = 07-08 → H30 ≤ 08-07, H60 ≤ 09-06, H90 ≤ 10-06) :
+    //  R1 mensuelle dec MUR 10000 @07-11 : H30 {07-11} · H60 {+08-11} · H90 {+09-11}
+    //     → 10000 / 20000 / 30000  ← LE bug : c'était 10000 à plat.
+    //  R5 mensuelle dec MUR 7 @08-07 (= AUJ+30 PILE) : H30 {08-07}=7 (borne INCLUSIVE)
+    //     · H60 {08-07} = 7 (09-07 déborde) · H90 {08-07, 09-07} = 14
+    //  R2 trimestrielle enc MUR 5000 @07-05 (OVERDUE) : H30/H60 {07-05}=5000
+    //     · H90 {07-05, 10-05} = 10000  ← la 2e occurrence n'entre QUE dans H90
+    //  R3 mensuelle dec USD 100 @07-11 PAYEE : tête ÉTEINTE, série VIVANTE (D1)
+    //     → H30 rien (USD ABSENT) · H60 {08-11} = 100 · H90 {08-11, 09-11} = 200
+    //  R4 non récurrente PAYEE : exclue PARTOUT (comportement historique préservé).
+    expect(await synthese()).toEqual([
+      {
+        jours: 30,
+        lignes: [
+          // dec = 10000 (R1) + 7 (R5, pile sur la borne). USD absent : R3 n'a que sa tête payée.
+          { devise: "MUR", encaissement: "5000.00", decaissement: "10007.00", net: "-5007.00" },
+        ],
+      },
+      {
+        jours: 60,
+        lignes: [
+          // dec = 20000 (R1 ×2) + 7 (R5 ×1). enc = 5000 (R2 ×1).
+          { devise: "MUR", encaissement: "5000.00", decaissement: "20007.00", net: "-15007.00" },
+          // USD réapparaît : occurrence dérivée d'un gabarit dont la TÊTE est payée.
+          { devise: "USD", encaissement: "0.00", decaissement: "100.00", net: "-100.00" },
+        ],
+      },
+      {
+        jours: 90,
+        lignes: [
+          // dec = 30000 (R1 ×3) + 14 (R5 ×2). enc = 10000 (R2 ×2).
+          { devise: "MUR", encaissement: "10000.00", decaissement: "30014.00", net: "-20014.00" },
+          { devise: "USD", encaissement: "0.00", decaissement: "200.00", net: "-200.00" },
+        ],
+      },
+    ]);
+  });
+
+  it("19. une mensuelle pèse 1× / 2× / 3× sur 30 / 60 / 90 j (le constat)", async () => {
+    const s = await synthese();
+    const decMur = (i: number) => s[i].lignes.find((l) => l.devise === "MUR")!.decaissement;
+    // R1 (10000) + R5 (7 / 7 / 14). Avant C0 : 10007 / 10007 / 10007 — plat.
+    expect([decMur(0), decMur(1), decMur(2)]).toEqual(["10007.00", "20007.00", "30014.00"]);
+  });
+
+  it("20. D1 — une tête PAYEE n'éteint PLUS les occurrences futures (fin de l'optimisme silencieux)", async () => {
+    const s = await synthese();
+    // Avant C0, R3 (payee) était filtrée en SQL → USD absent des 3 horizons.
+    expect(s[0].lignes.find((l) => l.devise === "USD")).toBeUndefined(); // tête seule → rien
+    expect(s[1].lignes.find((l) => l.devise === "USD")!.decaissement).toBe("100.00");
+    expect(s[2].lignes.find((l) => l.devise === "USD")!.decaissement).toBe("200.00");
+  });
+
+  it("21. une NON récurrente terminale reste exclue partout (non-régression)", async () => {
+    const s = await synthese();
+    // R4 = 9999 MUR enc payee. Si elle fuyait, l'encaissement MUR le montrerait.
+    for (const h of s) {
+      const mur = h.lignes.find((l) => l.devise === "MUR");
+      expect(mur?.encaissement).not.toContain("9999");
+    }
+    expect(s[2].lignes.find((l) => l.devise === "MUR")!.encaissement).toBe("10000.00");
+  });
+
+  it("22. le RETARD reste compté (pas de borne basse) — R2 exigible avant AUJ", async () => {
+    const s = await synthese();
+    // R2 @07-05 < AUJ (07-08) : la tête en retard pèse dès H30.
+    expect(s[0].lignes.find((l) => l.devise === "MUR")!.encaissement).toBe("5000.00");
+  });
+
+  it("23. AUCUNE addition cross-devise : MUR et USD restent des lignes distinctes", async () => {
+    const s = await synthese();
+    expect(s[2].lignes.map((l) => l.devise)).toEqual(["MUR", "USD"]); // triées, jamais fusionnées
+    // Le net de chaque devise ne mélange que ses propres occurrences.
+    expect(s[2].lignes.find((l) => l.devise === "USD")!.net).toBe("-200.00");
+    expect(s[2].lignes.find((l) => l.devise === "MUR")!.net).toBe("-20014.00");
+  });
+
+  it("25. une échéance TRIMESTRIELLE est créable (migration 0023 — bug 500 en prod)", async () => {
+    // `recurrence` était varchar(12) alors que 'trimestrielle' fait 13 caractères : la
+    // valeur était PHYSIQUEMENT impossible à stocker (Postgres 22001), bien que le
+    // formulaire la propose et que zod l'accepte. Le 22001 n'étant mappé nulle part,
+    // l'utilisateur recevait une 500 brute. La branche 'trimestrielle' du CHECK était
+    // MORTE. Ce test parcourt le chemin RÉEL (Server Action → repository).
+    const { echeanceId } = await withWorkspace(sessAdminA, (tx, ctx) =>
+      creerEcheance(tx, ctx, {
+        entityId: ENT_SUCRE,
+        direction: "encaissement",
+        libelle: "Trimestrielle",
+        montant: "100.00",
+        devise: "MUR",
+        dateEcheance: "2026-09-01",
+        recurrence: "trimestrielle",
+      }),
+    );
+
+    await client.exec(`reset role;`);
+    const r = await client.query<{ recurrence: string | null }>(
+      `select recurrence from echeances where id = '${echeanceId}'`,
+    );
+    await client.exec(`set role tygr_app;`);
+    // Stockée ENTIÈRE : ni tronquée à 12, ni rejetée.
+    expect(r.rows[0].recurrence).toBe("trimestrielle");
+  });
+
+  it("24. isolation tenant : la synthèse de WS_D ne voit RIEN de WS_C (et inversement)", async () => {
+    // WS_C porte des montants repères (7777/9999/8888) et WS_D des gabarits : aucun
+    // ne doit apparaître dans l'autre. L'expansion tourne sous la MÊME RLS.
+    const d = await synthese();
+    const totalD = d[2].lignes.map((l) => `${l.encaissement}/${l.decaissement}`).join("|");
+    expect(totalD).toBe("10000.00/30014.00|0.00/200.00");
+
+    const c = await withWorkspace(sessAdminC, (tx, ctx) =>
+      synthetiserHorizon(tx, ctx, { aujourdhui: AUJ }),
+    );
+    // WS_C n'a aucune récurrente : ses totaux restent ceux du test 17.
+    expect(c[2].lignes.find((l) => l.devise === "MUR")!.decaissement).toBe("600.00");
+  });
+});
+
+/**
+ * C1 — la source du PRÉVISIONNEL du dashboard. `occurrencesSurFenetre` tourne sous les
+ * MÊMES deux étages RLS que le reste de l'écran (elle est lue dans le `Promise.all` de la
+ * page, sous son `tx`) : ces cas le prouvent sous RLS réelle, rôle `tygr_app`.
+ *
+ * La projection est ensuite agrégée par `projeterEcheancesSurGrille` (module PUR, couvert
+ * par `tests/unit/flux-previsionnel.test.ts`) : ici on prouve la LECTURE et ses bornes.
+ */
+describe("C1 — occurrences sur fenêtre (source du prévisionnel dashboard)", () => {
+  // Fenêtre type du dashboard : d'AUJOURD'HUI au dernier jour du 3ᵉ mois projeté (D3).
+  const FENETRE = { debut: AUJ, fin: "2026-09-30", aujourdhui: AUJ };
+
+  it("25. WS_D : expanse les occurrences de la fenêtre, récurrences comprises", async () => {
+    const occ = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const cle = (o: (typeof occ)[number]) => `${o.dateEcheance}:${o.devise}:${o.montant}`;
+    expect(occ.map(cle).sort()).toEqual(
+      [
+        // R1 mensuelle dec MUR 10000 @07-11 : tête + 2 dérivées dans la fenêtre.
+        "2026-07-11:MUR:10000.00",
+        "2026-08-11:MUR:10000.00",
+        "2026-09-11:MUR:10000.00",
+        // R3 mensuelle dec USD 100 @07-11 PAYEE : tête ÉTEINTE, série VIVANTE (D1) —
+        // c'est la fin de l'optimisme silencieux, ici sur le chemin du dashboard.
+        "2026-08-11:USD:100.00",
+        "2026-09-11:USD:100.00",
+        // R5 mensuelle dec MUR 7 @08-07 : tête + 1 dérivée (10-07 déborde la fin).
+        "2026-08-07:MUR:7.00",
+        "2026-09-07:MUR:7.00",
+      ].sort(),
+    );
+    // R4 (ponctuelle payée) n'apparaît nulle part : un terminal non récurrent reste éteint.
+    expect(occ.some((o) => o.montant === "9999.00")).toBe(false);
+  });
+
+  it("26. la BORNE BASSE écarte une tête EN RETARD (≠ synthèse d'horizon, qui la compte)", async () => {
+    // R2 (trimestrielle enc MUR 5000 @07-05) est OVERDUE à AUJ = 07-08.
+    const occ = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    expect(occ.some((o) => o.montant === "5000.00")).toBe(false);
+
+    // …alors que la synthèse d'horizon, elle, la compte (« une dette exigible hier reste
+    // due »). Les deux écrans divergent VOLONTAIREMENT : verser un arriéré dans un mois
+    // PASSÉ des barres le mélangerait au réalisé d'une colonne rendue à 100 % d'opacité.
+    const synth = await withWorkspace(sessAdminD, (tx, ctx) =>
+      synthetiserHorizon(tx, ctx, { aujourdhui: AUJ }),
+    );
+    expect(synth[0].lignes.find((l) => l.devise === "MUR")!.encaissement).toBe("5000.00");
+  });
+
+  it("27. isolation TENANT : la fenêtre de WS_D ne voit RIEN de WS_C (et inversement)", async () => {
+    const d = await withWorkspace(sessAdminD, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    // 7777/8888/9999 sont les montants repères de WS_C : aucun ne doit fuir.
+    expect(d.some((o) => ["7777.00", "8888.00", "9999.00"].includes(o.montant))).toBe(false);
+
+    const c = await withWorkspace(sessAdminC, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    // WS_C ne porte AUCUNE récurrente : ses gabarits de WS_D sont invisibles.
+    expect(c.some((o) => o.montant === "10000.00")).toBe(false);
+    // C7 (payee) et C8 (annulee) restent éteints ; C9 (12-01) déborde la fenêtre.
+    expect(c.map((o) => o.dateEcheance).sort()).toEqual(["2026-07-20", "2026-07-25", "2026-08-01", "2026-08-20", "2026-09-20"]);
+  });
+
+  it("28. isolation ENTITÉ : un membre SCOPÉ ne projette QUE son périmètre", async () => {
+    // ADMIN_A est en Vision Globale : il voit les DEUX entités.
+    const vueGlobale = await withWorkspace(sessAdminA, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const montantsGlobale = vueGlobale.map((o) => o.montant);
+    expect(montantsGlobale).toContain("111.00"); // Sucrière
+    expect(montantsGlobale).toContain("222.00"); // Énergie
+
+    // MGR_SUCRE est scopé Sucrière : l'échéance d'Énergie doit DISPARAÎTRE de sa
+    // projection — sinon la zone prévisionnelle fuirait entre BU du même groupe.
+    const vueScopee = await withWorkspace(sessMgr, (tx, ctx) =>
+      occurrencesSurFenetre(tx, ctx, FENETRE),
+    );
+    const montantsScopee = vueScopee.map((o) => o.montant);
+    expect(montantsScopee).toContain("111.00");
+    expect(montantsScopee).not.toContain("222.00");
   });
 });

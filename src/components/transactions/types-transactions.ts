@@ -133,14 +133,18 @@ export interface TransactionListItem {
 export type CurseurTransactions = string;
 
 /**
- * Filtres optionnels de la liste (B1). Tous nullables = « pas de filtre ».
+ * Filtres IN-PAGE de la liste (B1). Tous nullables = « pas de filtre ».
  * NB : pas de filtre `sens` (Entrées/Sorties) — non supporté par le schéma de
  * lecture Backend v1 ; le filtrer côté client casserait la pagination (TX-FILTRE1).
- * Les BORNES DE DATE (`dateDebut`/`dateFin`), elles, SONT supportées serveur (WHERE
- * `gte/lte` sur `transaction_date`) : exposées ici, elles partent au WHERE via
- * `versInputBackend` — jamais de filtrage date côté client (même piège TX-FILTRE1).
- * Idem pour la RECHERCHE (`recherche`) : ILIKE serveur, jamais de filtrage client.
- * NB : plus de filtre `bankAccountId` — le périmètre de comptes est piloté
+ * La RECHERCHE (`recherche`) part au serveur (ILIKE), jamais de filtrage client.
+ *
+ * ⚠️ La FENÊTRE DE DATES n'est PLUS un filtre in-page (TX-TOOLBAR-DEDUP1) : elle est
+ * portée par la barre de vue GLOBALE (`?periode`/`?du`/`?au`), résolue par
+ * `resoudrePeriode` (source unique, fuseau Maurice) et injectée côté SERVEUR dans
+ * `versInputBackend` (→ `dateDebut`/`dateFin` du schéma Backend, WHERE `gte/lte` sur
+ * `transaction_date`). Elle ne transite donc jamais par cet objet client. Le SCHÉMA
+ * Backend garde `dateDebut`/`dateFin` — c'est ce que la période alimente.
+ * NB : plus de filtre `bankAccountId` non plus — le périmètre de comptes est piloté
  * globalement par le `PerimetreSwitcher` de la navbar (doublon retiré, PR #190).
  */
 export interface FiltresTransactions {
@@ -154,16 +158,42 @@ export interface FiltresTransactions {
   recherche?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
-  /** Borne INCLUSE de début (date comptable Maurice, `YYYY-MM-DD`). */
-  dateDebut?: string;
-  /** Borne INCLUSE de fin (date comptable Maurice, `YYYY-MM-DD`). */
-  dateFin?: string;
 }
 
 /** Une page de résultats (B1). `curseurSuivant` null = dernière page. */
 export interface PageTransactions {
   lignes: TransactionListItem[];
   curseurSuivant: CurseurTransactions | null;
+}
+
+/**
+ * TOTAL des résultats FILTRÉS pour UNE devise (TX-RECHERCHE-SOMME-NETTE1). Miroir UI du
+ * contrat serveur (`SommeNetteDevise` du repository), réconcilié par l'adaptateur
+ * (`currency` → `devise`, comme le reste de ce contrat).
+ *
+ * ⚠️ Le total est calculé EN SQL, sur l'ENSEMBLE du jeu filtré. L'UI ne somme JAMAIS
+ * elle-même : la pagination est en KEYSET, le client ne détient qu'UNE page — additionner
+ * les lignes affichées ne totaliserait que le visible (piège TX-FILTRE1), et un montant
+ * ne se recalcule pas en JS (règle 8 : pas de float sur de l'argent).
+ *
+ * ⚠️ CONVENTION DE SIGNE, à ne pas ré-inventer au rendu :
+ *  - `entrees` / `sorties` = MAGNITUDES POSITIVES (des montants, pas des flux signés) —
+ *    le SENS est porté par le libellé et la couleur (`inflow` / `outflow`) ;
+ *  - `net` = `entrees − sorties`, SIGNÉ : c'est LUI qui porte la couleur sémantique selon
+ *    son signe (négatif = sortie nette).
+ * Même convention que la synthèse des échéances et que le cashflow du dashboard.
+ */
+export interface SommeNetteDevise {
+  /** Devise ISO (MUR/USD/EUR) — une ligne PAR devise, jamais d'addition cross-devise. */
+  devise: string;
+  /** Somme des entrées, chaîne décimale ≥ 0. */
+  entrees: string;
+  /** Somme des sorties, chaîne décimale ≥ 0 (magnitude, pas un négatif). */
+  sorties: string;
+  /** `entrees − sorties`, chaîne décimale SIGNÉE. */
+  net: string;
+  /** Nombre d'opérations agrégées dans cette devise. */
+  nbTransactions: number;
 }
 
 /**
@@ -196,4 +226,22 @@ export interface ActionsTransactions {
     transactionId: string;
     transactionDate: string;
   }): Promise<SplitUI[]>;
+  /**
+   * TOTAL NET des résultats filtrés, une ligne PAR DEVISE (TX-RECHERCHE-SOMME-NETTE1).
+   * Agrégat SERVEUR (`sommeNetteTransactionsAction`) portant EXACTEMENT les mêmes filtres
+   * que `listerTransactions` — mais sans curseur : il totalise TOUT le jeu filtré, pas la
+   * page affichée.
+   *
+   * OPTIONNELLE À DESSEIN : les surfaces qui n'ont pas d'agrégat serveur (tests) ne la
+   * fournissent pas — le conteneur n'affiche alors simplement AUCUN total. Dégradation
+   * silencieuse assumée : pas de chiffre vaut mieux qu'un faux chiffre.
+   *
+   * Ce qu'un stub ne doit JAMAIS faire, c'est SOMMER les lignes affichées : la pagination
+   * est en keyset, il ne totaliserait que la page visible. La démo `app/demo/transactions`
+   * la fournit donc en FIXTURE — montants constants, seule la cardinalité suit le filtre —
+   * pour que le bandeau soit capturable au Visual QA sans jamais calculer un montant.
+   */
+  sommeNette?(args: {
+    filtres?: FiltresTransactions;
+  }): Promise<ResultatAction<SommeNetteDevise[]>>;
 }

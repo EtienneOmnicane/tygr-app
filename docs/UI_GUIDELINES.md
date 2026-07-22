@@ -294,9 +294,16 @@ Badge : 12px/500, padding 2/8, rounded-pill, fond pastel + texte 700 — jamais 
 fond saturé.
 
 ### 3.7 Fraîcheur des données (lien SLO, règle D4 du plan)
-Pastille + horodatage relatif près du solde : vert `success` <6h · ambre `warning`
-<24h · rouge `danger` ≥24h avec CTA "Reconnecter" (mode Repair). Tooltip :
-horodatage absolu + compte concerné.
+Pastille + horodatage relatif, dans le **cluster statut+action** du header (à côté de
+« Synchroniser » : dater la donnée et la rafraîchir sont le même objet mental) : vert
+`success` <6h · ambre `warning` <24h · rouge `danger` ≥24h avec CTA "Reconnecter"
+(mode Repair). Tooltip : horodatage absolu + compte concerné.
+
+Le niveau colore le **point**, jamais le libellé, qui reste en `text-text` — le vert
+échoue l'AA en texte (cf. note contraste du §5) et faire varier la règle selon le niveau
+donnerait à « frais » l'air plus faible que « périmé » pour une raison purement
+technique. Le niveau reste donc lisible sans la couleur (point + libellé relatif), ce
+qui satisfait aussi WCAG 1.4.1.
 
 ---
 
@@ -391,6 +398,12 @@ flux interrompu (bandeau warning + retry auto).
   révocation de consentement — règle D2 du plan).
 - **Onboarding chip** (guide de démarrage) : carte `ink` bas-gauche, 13px blanc,
   progress bar `accent` 4px, réductible. Réservé au premier parcours.
+- **Échelle z-index** (registre de fait, UI-ZINDEX-ECHELLE1) : `z-10` éléments
+  sticky locaux (en-têtes de table, workspace-switcher) · `z-20` popovers de
+  contenu (perimetre-switcher, CategoryPicker) · `z-30` topbar globale ·
+  `z-50` overlay de Modal · `z-[60]` menus portalés qui doivent battre une
+  modale (Select). Tout nouveau composant flottant se place sur CE barème —
+  jamais de valeur au jugé (un popover sous `z-50` passera derrière une modale).
 
 ---
 
@@ -400,10 +413,29 @@ flux interrompu (bandeau warning + retry auto).
 |---|---|---|
 | Vert utilisé à la fois pour nav active, validation ET entrées | Vert = donnée + validation uniquement ; nav active = `accent` ambre | Le vert "marque" dilue le vert "donnée" — la clarté financière exige des canaux sémantiques étanches |
 | Bleu roi (#2D5BFF) + navy comme identité | `ink` #0F1E3D + `primary` #2447D6 + signature ambre | Identité distincte (trade dress), même famille de sobriété |
-| Boutons mint clair (#5CD99B) parfois à faible contraste | `success` #079455 (AA sur blanc) | Accessibilité AA non négociable (audience régulateur) |
+| Boutons mint clair (#5CD99B) parfois à faible contraste | `success` = signal **graphique** (fond, point, icône), jamais du texte de message | Accessibilité AA non négociable (audience régulateur) — mais le vert n'y arrive pas en texte, cf. note ci-dessous |
 | Drapeau de langue dans le header | Pas de sélecteur visible au MVP (FR seul, T-D3) | Chaînes externalisées, EN en phase 2 |
 | Donut "Category analysis" en première position des rapports | Donut disponible mais jamais comme ancre d'écran | Une ancre par écran ; le donut est secondaire |
 | Intercom bubble bas-gauche | Position réservée à l'onboarding chip ; support → menu profil | Deux éléments flottants = bruit |
+
+> **Note contraste du vert (corrigée 2026-07-20 — la ligne ci-dessus annonçait
+> « `success` #079455 (AA sur blanc) », ce qui était faux à deux titres).**
+> D'une part le token LIVRÉ dans `globals.css` est `--color-success: #1d9e55`, pas
+> #079455. D'autre part **aucune des deux valeurs ne passe l'AA en texte** : #1d9e55
+> plafonne à **3,46:1** sur blanc et #079455 à **3,90:1**, pour un seuil AA de 4,5:1.
+> Les deux satisfont en revanche le seuil **3:1 des objets non textuels** (WCAG 1.4.11).
+>
+> D'où la règle, symétrique de §3.4 (erreur ≠ sortie) :
+> - le vert est un signal **graphique** — fond `success-bg`, point de fraîcheur (§3.7),
+>   icône, barre/série de donnée. À ce titre il est conforme ;
+> - un **message** de succès ne se colore JAMAIS en vert : il s'écrit en `text-text` sur
+>   `success-bg` (11,5:1), le vert restant dans le fond et l'icône. Exactement le
+>   traitement de l'erreur, et pour la même raison.
+>
+> Surfaces déjà conformes : notice de succès de la synchro, pastille de fraîcheur §3.7.
+> Le reste des `text-success` du projet (admin entités, provisioning…) est migré par
+> **A11Y-VERT-SUCCES1** (P1, TODOS.md), qui ajoutera un token `success-700` AA pour les
+> rares cas où du texte doit rester vert.
 
 ---
 

@@ -104,14 +104,17 @@ export interface SyntheseMois {
 }
 
 /**
- * Synthèse entrées/sorties/variation d'un mois POUR UNE DEVISE. Multi-devises
- * (CLAUDE.md règle 8) : `syntheseMoisParDevise` renvoie UNE entrée PAR devise — on
+ * Synthèse entrées/sorties/variation d'une PÉRIODE POUR UNE DEVISE. Multi-devises
+ * (CLAUDE.md règle 8) : `synthesePeriodeParDevise` renvoie UNE entrée PAR devise — on
  * n'additionne JAMAIS des MUR et des USD (ce que faisait `syntheseMois`, qui sommait
  * `amount` toutes devises confondues et affichait le total dans la base_currency :
  * faux dès qu'un workspace a des comptes en plusieurs devises). Aucune conversion FX
  * (chantier DASH-FX1) : on expose les flux côte à côte, par devise.
+ *
+ * (Renommé de `SyntheseMoisDevise` en 2026-07-14 : la période n'est plus forcément un
+ * MOIS — une plage précise `?du`/`?au` la borne au JOUR. Cf. `synthesePeriodeParDevise`.)
  */
-export interface SyntheseMoisDevise {
+export interface SynthesePeriodeDevise {
   currency: string;
   entrees: string;
   sorties: string;
@@ -223,6 +226,22 @@ export async function listerComptes(tx: Tx): Promise<CompteConnecte[]> {
  */
 export interface ConnexionBancaire {
   connectionId: string;
+  /**
+   * Identifiant OMNI-FI de la connexion (`bank_connections.omnifi_connection_id`) — à ne
+   * pas confondre avec `connectionId`, qui est notre UUID INTERNE (`bank_connections.id`).
+   *
+   * ⚠️ POURQUOI IL EST EXPOSÉ : c'est la SEULE clé qui permet de rapprocher la liste des
+   * banques de l'écran des signaux `reparation[]` / `aReconnecter[]` d'`EtatFinalisation`,
+   * lesquels portent `cx.ConnectionId` — l'identifiant AMONT (`orchestration.ts`), pas le
+   * nôtre. Sans cette colonne, les deux jeux d'identifiants ne sont pas joignables et
+   * l'UI ne peut afficher qu'un compteur anonyme (« 2 banque(s) »).
+   *
+   * Aucune surface nouvelle : cet identifiant traverse DÉJÀ vers le client dans
+   * `EtatFinalisation.aReconnecter[].connectionId`. C'est un UUID opaque amont, pas de la
+   * PII — et le nom d'institution qu'il permet de résoudre, lui, reste dans l'UI
+   * authentifiée scopée (règle 8 : jamais dans un log, une erreur ou la télémétrie).
+   */
+  omnifiConnectionId: string;
   /** Nom lisible de l'institution ; null si la connexion est antérieure à la colonne. */
   institutionName: string | null;
   /** Statut STOCKÉ (« active », …) — libellé mappé côté UI. */
@@ -240,6 +259,7 @@ export async function listerConnexionsBancaires(
   const lignes = await tx
     .select({
       connectionId: bankConnections.id,
+      omnifiConnectionId: bankConnections.omnifiConnectionId,
       institutionName: bankConnections.institutionName,
       status: bankConnections.status,
       createdAt: bankConnections.createdAt,
@@ -253,6 +273,7 @@ export async function listerConnexionsBancaires(
     .leftJoin(bankAccounts, eq(bankAccounts.connectionId, bankConnections.id))
     .groupBy(
       bankConnections.id,
+      bankConnections.omnifiConnectionId,
       bankConnections.institutionName,
       bankConnections.status,
       bankConnections.createdAt,
@@ -265,6 +286,38 @@ export async function listerConnexionsBancaires(
     ...l,
     lastSyncedAt: l.lastSyncedAt ? new Date(l.lastSyncedAt) : null,
   }));
+}
+
+/**
+ * Le TENANT a-t-il au moins une connexion bancaire ? (NUDGE-VISION-ENTITE1)
+ *
+ * Sert à distinguer deux situations que `listerComptes` rend identiques (0 ligne) :
+ * « cet espace n'a aucune banque » et « cet espace en a une, mais aucun de ses comptes
+ * n'est dans mon périmètre ». Sans ce signal, le dashboard affiche l'empty state global
+ * à un membre scopé — donc lui NIE une connexion que /banques lui montre juste à côté.
+ *
+ * SÉCURITÉ — pourquoi ce COUNT est sûr, et pourquoi il porte sur CETTE table :
+ *  - `bank_connections` ne porte QUE `tenant_isolation` (PERMISSIVE, migration 0003) —
+ *    vérifié exhaustivement sur les migrations : ni `entity_scope`, ni `account_scope`,
+ *    ni clause `view_filter`. Le comptage est donc borné au workspace PAR LA RLS
+ *    elle-même, pas par un WHERE applicatif qu'un oubli pourrait perdre (règle 2) ;
+ *  - il ne joint PAS `bank_accounts` : aucun contournement de l'étage 2. C'est tout
+ *    l'intérêt — un COUNT de comptes « hors scope » exigerait de neutraliser le GUC
+ *    `app.current_entity_scope`, ce qui est INTERDIT ;
+ *  - il ne divulgue rien de neuf : `listerConnexionsBancaires` ci-dessus expose DÉJÀ
+ *    toutes les connexions du tenant à tout membre (nbComptes=0 sous périmètre), et
+ *    /banques n'a pas de garde de rôle. L'appelant n'en dérive qu'un BOOLÉEN — ni id,
+ *    ni nom, ni montant, ni entité.
+ *
+ * À appeler dans le `withWorkspace` DÉJÀ ouvert par la page : un second withWorkspace
+ * rejouerait le défaut d'auto-amputation L8b-1 (un chemin parallèle qui lit sous un
+ * périmètre différent du reste de l'écran).
+ */
+export async function compterConnexionsTenant(tx: Tx): Promise<number> {
+  const [ligne] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(bankConnections);
+  return ligne?.n ?? 0;
 }
 
 /**
@@ -484,19 +537,28 @@ export async function syntheseMois(
 }
 
 /**
- * Synthèse entrées/sorties/variation d'un mois (YYYY-MM) VENTILÉE PAR DEVISE —
+ * Synthèse entrées/sorties/variation d'une PÉRIODE [from, to] VENTILÉE PAR DEVISE —
  * remplace `syntheseMois` pour le multi-devise (challenge mapping 2026-06-22). GROUP BY
- * devise : une ligne par devise présente sur le mois, JAMAIS d'addition cross-devise
+ * devise : une ligne par devise présente sur la période, JAMAIS d'addition cross-devise
  * (CLAUDE.md règle 8). Mêmes règles que `syntheseMois` (somme conditionnelle EN SQL sur
  * le sens, exclusion des tombstones, montants en chaînes) + héritage du scope entité
  * par jointure sur bank_accounts (ENTITY-READ-JOIN1). Ordonné par devise (affichage
- * stable). Mois sans transaction → tableau vide (l'UI affiche 0 dans la devise de base).
+ * stable). Période sans transaction → tableau vide (l'UI affiche 0 dans la devise de base).
+ *
+ * ⚠️ BORNES AU JOUR, INCLUSIVES (TOOLBAR-DATE-PRECISE1, 2026-07-14) — était
+ * `syntheseMoisParDevise(mois)`, qui bornait au MOIS ENTIER (`>= mois-01`,
+ * `< mois-01 + 1 mois`). Ça coïncidait tant que la seule fenêtre possible était un preset
+ * (dont le `from` tombe toujours un 1er du mois). Avec une PLAGE PRÉCISE (`?du`/`?au`),
+ * ça ne coïncide plus : une plage « 3 mars → 17 avril » aurait renvoyé AVRIL ENTIER, donc
+ * des montants HORS période — un mensonge d'affichage sur de la donnée financière. Les
+ * bornes viennent désormais de l'appelant (`resoudrePeriode`), qui possède le contrat
+ * d'URL. `from`/`to` sont des dates comptables MAURICE (E20 : `transaction_date` l'est
+ * déjà — aucune re-conversion de fuseau ici).
  */
-export async function syntheseMoisParDevise(
+export async function synthesePeriodeParDevise(
   tx: Tx,
-  mois: string, // "YYYY-MM"
-): Promise<SyntheseMoisDevise[]> {
-  const debut = `${mois}-01`;
+  opts: { from: string; to: string }, // "YYYY-MM-DD" INCLUSIFS (dates Maurice)
+): Promise<SynthesePeriodeDevise[]> {
   const lignes = await tx
     .select({
       currency: transactionsCache.currency,
@@ -514,8 +576,9 @@ export async function syntheseMoisParDevise(
     .where(
       and(
         eq(transactionsCache.isRemoved, false),
-        gte(transactionsCache.transactionDate, debut),
-        sql`${transactionsCache.transactionDate} < (${debut}::date + interval '1 month')`,
+        // Bornes JOUR inclusives des DEUX côtés (≠ ancien « < 1er du mois suivant »).
+        gte(transactionsCache.transactionDate, opts.from),
+        lte(transactionsCache.transactionDate, opts.to),
       ),
     )
     .groupBy(transactionsCache.currency)
@@ -527,9 +590,17 @@ export async function syntheseMoisParDevise(
  * SÉRIE temporelle mensuelle des entrées/sorties (Cash In/Out), groupée PAR MOIS
  * et PAR DEVISE — destinée à alimenter un graphique Front (barres mensuelles).
  *
- * Fenêtre : les `nbMois` derniers mois jusqu'à `moisFin` INCLUS. `moisFin` est
- * passé explicitement (déterministe + testable ; le mois « courant » dépend du
- * fuseau Maurice et se calcule côté appelant, JAMAIS d'un now() opaque ici).
+ * Fenêtre : [`from`, `to`] au JOUR, bornes INCLUSIVES, passées explicitement
+ * (déterministe + testable ; « aujourd'hui » dépend du fuseau Maurice et se calcule côté
+ * appelant — `resoudrePeriode` —, JAMAIS d'un now() opaque ici).
+ *
+ * ⚠️ BORNES AU JOUR (TOOLBAR-DATE-PRECISE1, 2026-07-14) — la fenêtre était auparavant
+ * `{moisFin, nbMois}`, donc calée sur des BORDS DE MOIS. Ça coïncidait avec le filtre tant
+ * que la seule fenêtre possible était un preset (`from` = un 1er du mois, `to` =
+ * aujourd'hui). Avec une PLAGE PRÉCISE (`?du`/`?au`), une fenêtre « 3 mars → 17 avril »
+ * aurait agrégé MARS ENTIER + AVRIL ENTIER : des montants hors période dans les barres.
+ * Le groupement reste MENSUEL — les mois d'EXTRÉMITÉ d'une plage sont donc légitimement
+ * PARTIELS (mars = 3→31), ce que l'UI annonce par le libellé de période.
  *
  * FUSEAU (CLAUDE.md, non négociable) : on groupe sur `transaction_date`, qui est
  * DÉJÀ la date comptable Maurice (dérivée à l'ingestion via
@@ -551,13 +622,8 @@ export async function syntheseMoisParDevise(
  */
 export async function syntheseParMois(
   tx: Tx,
-  opts: { moisFin: string; nbMois: number }, // moisFin "YYYY-MM", nbMois ≥ 1
+  opts: { from: string; to: string }, // "YYYY-MM-DD" INCLUSIFS (dates Maurice)
 ): Promise<SyntheseMensuelle[]> {
-  // Borne haute EXCLUSIVE = 1er jour du mois SUIVANT moisFin.
-  const finExclusive = `${opts.moisFin}-01`;
-  // Borne basse INCLUSIVE = 1er jour de (moisFin - (nbMois-1) mois). Calcul EN SQL
-  // à partir de la chaîne (déterministe) : interval sur la date de début de moisFin.
-  const reculMois = opts.nbMois - 1;
   const mois = sql<string>`to_char(date_trunc('month', ${transactionsCache.transactionDate}), 'YYYY-MM')`;
   const lignes = await tx
     .select({
@@ -577,10 +643,9 @@ export async function syntheseParMois(
     .where(
       and(
         eq(transactionsCache.isRemoved, false),
-        // ≥ 1er jour de (moisFin - reculMois mois).
-        sql`${transactionsCache.transactionDate} >= (${finExclusive}::date - (${reculMois} || ' month')::interval)`,
-        // < 1er jour du mois suivant moisFin (borne haute exclusive).
-        sql`${transactionsCache.transactionDate} < (${finExclusive}::date + interval '1 month')`,
+        // Bornes JOUR inclusives (≠ anciens bords de MOIS dérivés de moisFin/nbMois).
+        gte(transactionsCache.transactionDate, opts.from),
+        lte(transactionsCache.transactionDate, opts.to),
       ),
     )
     .groupBy(mois, transactionsCache.currency)
@@ -614,6 +679,37 @@ export function grilleMois(nbMois: number, moisAncrage: string): string[] {
     }
   }
   return grille.reverse(); // du plus ancien au plus récent
+}
+
+/**
+ * Grille des `nbMois` mois qui SUIVENT `moisAncrage` (du plus proche au plus lointain),
+ * ancrage EXCLU. Pendant exact de `grilleMois` (qui recule) : même arithmétique entière,
+ * même pureté (sans DB, sans `Date` locale → aucune dérive de fuseau).
+ *
+ * Sert l'axe PRÉVISIONNEL du dashboard (C1) : `grilleMois` couvre le réalisé jusqu'au
+ * mois d'ancrage, `grilleMoisSuivants` prolonge la fenêtre vers l'avant, où les colonnes
+ * sont alimentées par les occurrences d'échéances (jamais par des transactions).
+ *
+ * L'ancrage est EXCLU parce qu'il appartient déjà à la grille du réalisé : le mois
+ * courant est une colonne MIXTE (réalisé + prévision empilés, décision D2) — il n'est
+ * pas dupliqué en tête de la zone future.
+ *
+ * @returns ex. nbMois=3, moisAncrage="2026-11" → ["2026-12","2027-01","2027-02"].
+ */
+export function grilleMoisSuivants(nbMois: number, moisAncrage: string): string[] {
+  const [anneeStr, moisStr] = moisAncrage.split("-");
+  let annee = Number(anneeStr);
+  let mois = Number(moisStr); // 1..12
+  const grille: string[] = [];
+  for (let i = 0; i < nbMois; i++) {
+    mois += 1;
+    if (mois === 13) {
+      mois = 1;
+      annee += 1;
+    }
+    grille.push(`${annee}-${String(mois).padStart(2, "0")}`);
+  }
+  return grille; // déjà du plus proche au plus lointain
 }
 
 /**

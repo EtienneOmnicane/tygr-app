@@ -31,7 +31,7 @@
  * PII (règle 8) : ni `libelle` ni `contrepartie` ne sont journalisés (aucun log ici ;
  * l'action logge un code machine sans PII).
  */
-import { and, asc, eq, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, lte, notInArray, or } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { echeances } from "@/server/db/schema";
@@ -43,6 +43,20 @@ import type {
 import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import { peutModifier } from "@/lib/permissions";
 import { dateCouranteMaurice } from "@/lib/format-date";
+import {
+  STATUTS_TERMINAUX,
+  ajouterJours,
+  expanserOccurrences,
+} from "@/lib/echeances-recurrence";
+import type {
+  EcheanceProjetable,
+  OccurrenceProjetee,
+} from "@/lib/echeances-recurrence";
+import {
+  ZERO_CENTIMES,
+  depuisCentimes,
+  enCentimes,
+} from "@/lib/montant-centimes";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
@@ -50,8 +64,13 @@ type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 const HORIZONS = [30, 60, 90] as const;
 export type HorizonJours = (typeof HORIZONS)[number];
 
-/** Statuts TERMINAUX : exclus de la projection (ne pèsent plus sur la trésorerie). */
-const STATUTS_TERMINAUX: EcheanceStatut[] = ["payee", "annulee"];
+/**
+ * Statuts TERMINAUX : la TÊTE ne pèse plus sur la trésorerie.
+ * ⚠️ Depuis C0 (D1 « gabarit + tête »), un statut terminal n'éteint QUE la tête —
+ * les occurrences FUTURES d'une récurrente restent projetées. La règle vit dans le
+ * moteur pur (source unique) ; on la ré-exporte pour l'API publique du repository.
+ */
+export { STATUTS_TERMINAUX };
 
 /* ------------------------------------------------------------------ */
 /* Types de lecture / écriture                                         */
@@ -169,6 +188,32 @@ export class EcheanceHorsPerimetreError extends Error {
   }
 }
 
+/**
+ * Levée quand la date de référence de la synthèse n'est pas un `YYYY-MM-DD` valide
+ * (l'ancien SQL `${aujourdhui}::date` échouait côté base ; on refuse désormais AVANT
+ * la requête). Fail-loud : jamais de repli silencieux sur une date inventée.
+ */
+export class DateReferenceInvalideError extends Error {
+  readonly code = "REFERENCE_DATE_INVALID";
+  constructor() {
+    super("Date de référence invalide.");
+    this.name = "DateReferenceInvalideError";
+  }
+}
+
+/**
+ * Levée si le moteur d'expansion émet un montant illisible — invariant de code violé
+ * (il n'émet que des chaînes décimales positives bien formées). Bruyant plutôt que
+ * silencieux : avaler ce cas fausserait un total sans que rien ne le signale.
+ */
+export class MontantProjeteInvalideError extends Error {
+  readonly code = "PROJECTED_AMOUNT_INVALID";
+  constructor() {
+    super("Montant projeté invalide.");
+    this.name = "MontantProjeteInvalideError";
+  }
+}
+
 /** Levée quand `montant_regle` viole [0, montant] (CHECK SQL, 23514). */
 export class MontantRegleInvalideError extends Error {
   readonly code = "SETTLED_AMOUNT_INVALID";
@@ -261,20 +306,88 @@ export async function listerEcheances<TDb extends AnyPgDatabase>(
 }
 
 /**
- * Synthèse par HORIZON (30/60/90 j) et par DEVISE des montants RESTANT dus. Pour
- * chaque devise, somme du RESTANT (`montant − coalesce(montant_regle, 0)`) des
- * échéances NON terminales dont `date_echeance <= aujourd'hui + N jours`.
+ * Échéances CANDIDATES à la projection, dont la tête ne dépasse pas `finMax` — la lecture
+ * que partagent la synthèse d'horizon (C0) et la projection du dashboard (C1).
  *
- * Sémantique (cadrage §3.2) : l'horizon N capte tout ce qui pèsera sur la trésorerie
- * d'ici N jours — Y COMPRIS les échéances DÉJÀ EN RETARD (pas de borne basse : une
- * dette exigible hier reste due). `payee`/`annulee` exclues (ne pèsent plus). Le
- * RESTANT (et non le montant plein) projette la part encore à mouvementer d'un
- * règlement partiel.
+ * ⚠️ La clause `or(statut non terminal, recurrence non nulle)` PORTE la décision D1
+ * (« gabarit + tête ») : une récurrente TERMINALE reste candidate, parce que sa tête est
+ * éteinte mais ses occurrences futures restent dues. Un `statut NOT IN (...)` seul — le
+ * comportement d'avant C0 — ré-introduirait l'optimisme silencieux (pointer « payée »
+ * l'occurrence de juin d'un loyer effacerait juillet et toute la suite). Cette clause est
+ * donc lue par UNE seule fonction : dupliquée, elle divergerait au premier correctif.
  *
- * Montants EN SQL (règle 8), sortis en CHAÎNES ; `::numeric(15,2)::text` fige l'échelle
- * à 2 décimales même quand le coalesce tombe sur le littéral 0 (« 0.00 » vs « 0 »).
- * JAMAIS d'addition cross-devise : GROUP BY devise. Aucune valeur d'entrée interpolée
- * (les horizons sont des littéraux figés `HORIZONS` ; `aujourdhui` est un paramètre lié).
+ * Borne : une occurrence est TOUJOURS ≥ sa tête → une échéance dont la tête dépasse
+ * `finMax` n'a aucune occurrence utile. Aucune borne BASSE ici : c'est l'appelant qui
+ * décide du sort de l'arriéré, via les bornes qu'il passe au moteur.
+ *
+ * Isolation : RLS tenant + `entity_scope` (RESTRICTIVE, portée par `echeances.entity_id`)
+ * via le `tx` de `withWorkspace`, plus le filtre `workspace_id` explicite en défense en
+ * profondeur. Paramètres liés uniquement.
+ */
+async function listerProjetables<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  finMax: string,
+): Promise<EcheanceProjetable[]> {
+  return tx
+    .select({
+      id: echeances.id,
+      direction: echeances.direction,
+      montant: echeances.montant,
+      montantRegle: echeances.montantRegle,
+      devise: echeances.devise,
+      dateEcheance: echeances.dateEcheance,
+      statut: echeances.statut,
+      recurrence: echeances.recurrence,
+    })
+    .from(echeances)
+    .where(
+      and(
+        eq(echeances.workspaceId, ctx.workspaceId),
+        lte(echeances.dateEcheance, finMax),
+        or(
+          notInArray(echeances.statut, [...STATUTS_TERMINAUX]),
+          isNotNull(echeances.recurrence),
+        ),
+      ),
+    );
+}
+
+/**
+ * Synthèse par HORIZON (30/60/90 j) et par DEVISE des montants RESTANT dus, **occurrences
+ * récurrentes COMPRISES** (C0 — `PLAN-conception-previsionnel-C.md`).
+ *
+ * ## Ce que ce calcul corrige
+ *
+ * Le champ `recurrence` était STOCKÉ mais JAMAIS LU : chaque échéance était comptée UNE
+ * fois, à sa date stockée. Une mensuelle de 10 000 affichait 10 000 à plat sur 30/60/90 j
+ * au lieu de 10 000 / 20 000 / 30 000 — l'écran SOUS-ESTIMAIT tout engagement récurrent.
+ * L'expansion des occurrences est désormais déléguée au moteur pur `expanserOccurrences`.
+ *
+ * ## Sémantique (cadrage §3.2, inchangée) + D1
+ *
+ * L'horizon N capte tout ce qui pèsera sur la trésorerie d'ici N jours — Y COMPRIS les
+ * échéances DÉJÀ EN RETARD (**pas de borne basse** : une dette exigible hier reste due).
+ * Le RESTANT (`montant − coalesce(montant_regle, 0)`) projette la part encore à
+ * mouvementer d'un règlement partiel.
+ * ⚠️ D1 « gabarit + tête » : `payee`/`annulee` n'excluent QUE la tête — les occurrences
+ * futures d'une récurrente restent dues (fin de l'optimisme silencieux).
+ *
+ * ## Pourquoi l'agrégation quitte le SQL
+ *
+ * La règle de récurrence (clamp de quantième, tête vs dérivée) est le cœur du lot et son
+ * principal risque de bug : elle doit vivre dans une fonction PURE testable unitairement,
+ * pas dans du SQL. On rapatrie donc les échéances CANDIDATES (volume borné : registre
+ * MANUEL, jamais `transactions_cache`) et on agrège en TS — en **centimes entiers BigInt**
+ * (règle 8, aucun float ; `@/lib/montant-centimes`). Écart assumé au « agrégats en SQL »
+ * historique, tracé en revue.
+ *
+ * Isolation INCHANGÉE : RLS tenant + `entity_scope` via `tx` (`withWorkspace`), plus le
+ * filtre explicite `workspace_id` en défense en profondeur. Aucune valeur interpolée
+ * (paramètres liés uniquement). JAMAIS d'addition cross-devise : agrégation PAR devise.
+ *
+ * `opts.aujourdhui` (YYYY-MM-DD) injectable pour des tests déterministes ; défaut = date
+ * courante à Maurice (E20 — le fuseau est posé ICI, une fois, jamais dans le moteur).
  */
 export async function synthetiserHorizon<TDb extends AnyPgDatabase>(
   tx: WorkspaceTx<TDb>,
@@ -283,42 +396,107 @@ export async function synthetiserHorizon<TDb extends AnyPgDatabase>(
 ): Promise<SyntheseEcheances> {
   const aujourdhui = opts.aujourdhui ?? dateCouranteMaurice();
 
-  // Restant dû : montant plein moins la part déjà réglée (0 si aucune).
-  const restant = sql`(${echeances.montant} - coalesce(${echeances.montantRegle}, 0))`;
+  // Bornes hautes des horizons, calculées UNE fois (arithmétique pure, sans `Date`).
+  const bornes = HORIZONS.map((jours) => {
+    const fin = ajouterJours(aujourdhui, jours);
+    if (fin === null) throw new DateReferenceInvalideError();
+    return { jours, fin };
+  });
+  // La plus lointaine borne le rapatriement : une occurrence est TOUJOURS ≥ sa tête,
+  // donc une échéance dont la tête dépasse l'horizon max n'a aucune occurrence utile.
+  const finMax = bornes[bornes.length - 1].fin;
 
-  const synthese: SyntheseHorizon[] = [];
-  for (const jours of HORIZONS) {
-    const lignes = await tx
-      .select({
-        devise: echeances.devise,
-        encaissement: sql<string>`coalesce(sum(${restant}) filter (where ${echeances.direction} = 'encaissement'), 0)::numeric(15,2)::text`,
-        decaissement: sql<string>`coalesce(sum(${restant}) filter (where ${echeances.direction} = 'decaissement'), 0)::numeric(15,2)::text`,
-        net: sql<string>`(
-          coalesce(sum(${restant}) filter (where ${echeances.direction} = 'encaissement'), 0)
-          - coalesce(sum(${restant}) filter (where ${echeances.direction} = 'decaissement'), 0)
-        )::numeric(15,2)::text`,
-      })
-      .from(echeances)
-      .where(
-        and(
-          eq(echeances.workspaceId, ctx.workspaceId),
-          notInArray(echeances.statut, STATUTS_TERMINAUX),
-          // Borne haute INCLUSIVE : `date_echeance <= aujourd'hui + N jours`. `jours`
-          // est un littéral figé (HORIZONS) → inliné via sql.raw sans risque
-          // d'injection ; `aujourdhui` reste un paramètre lié.
-          lte(
-            echeances.dateEcheance,
-            sql`(${aujourdhui}::date + ${sql.raw(String(jours))})`,
-          ),
-        ),
-      )
-      .groupBy(echeances.devise)
-      .orderBy(echeances.devise);
+  // Lecture partagée avec la projection du dashboard (`listerProjetables`) : la clause
+  // qui garde les récurrentes terminales candidates porte D1 et n'existe qu'à un endroit.
+  const candidates = await listerProjetables(tx, ctx, finMax);
 
-    synthese.push({ jours, lignes: lignes as SyntheseHorizonDevise[] });
+  return bornes.map(({ jours, fin }) => {
+    // Agrégation par devise, en centimes entiers. `Map` → une devise n'apparaît que si
+    // elle porte au moins une occurrence dans l'horizon (identique au GROUP BY SQL).
+    const parDevise = new Map<string, { enc: bigint; dec: bigint }>();
+
+    for (const candidate of candidates) {
+      // `deriveesDepuis: aujourdhui` — la TÊTE garde son retard (statut explicite), mais
+      // une occurrence DÉRIVÉE passée n'a aucun statut : rien ne dit si elle a été réglée.
+      // Sans cette borne, un gabarit mensuel vieux d'un an compterait 13 loyers dans
+      // l'horizon 30 j, +1 chaque mois (décision Etienne 2026-07-17, cross-review).
+      for (const occ of expanserOccurrences(candidate, {
+        fin,
+        deriveesDepuis: aujourdhui,
+      })) {
+        const centimes = enCentimes(occ.montant);
+        // Invariant : le moteur n'émet que des montants positifs bien formés. Une
+        // violation est un défaut de code, pas une donnée à avaler en silence.
+        if (centimes === null) throw new MontantProjeteInvalideError();
+
+        const acc = parDevise.get(occ.devise) ?? {
+          enc: ZERO_CENTIMES,
+          dec: ZERO_CENTIMES,
+        };
+        if (occ.direction === "encaissement") acc.enc += centimes;
+        else acc.dec += centimes;
+        parDevise.set(occ.devise, acc);
+      }
+    }
+
+    const lignes: SyntheseHorizonDevise[] = [...parDevise.entries()]
+      // Tri par devise : reprend l'`ORDER BY devise` du SQL (sortie stable).
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([devise, { enc, dec }]) => ({
+        devise,
+        encaissement: depuisCentimes(enc),
+        decaissement: depuisCentimes(dec),
+        // Net = encaissement − décaissement, EN CENTIMES (jamais sur les chaînes).
+        net: depuisCentimes(enc - dec),
+      }));
+
+    return { jours, lignes };
+  });
+}
+
+/**
+ * OCCURRENCES d'échéances dues dans `[debut, fin]` (dates « nues » Maurice, INCLUSIVES) —
+ * la source du PRÉVISIONNEL du dashboard (C1). Rapatrie les candidates puis délègue toute
+ * la règle de récurrence au moteur pur `expanserOccurrences` (rien n'est réimplémenté ici).
+ *
+ * ## Pourquoi une borne BASSE, contrairement à la synthèse d'horizon
+ *
+ * `synthetiserHorizon` n'en pose PAS : « une dette exigible hier reste due », et son écran
+ * assume de compter l'arriéré. Le dashboard, lui, prolonge une fenêtre vers le FUTUR —
+ * `debut` y vaut AUJOURD'HUI (décision D2 : le mois courant montre le réalisé à date + les
+ * échéances RESTANTES du mois). Conséquence ASSUMÉE : une tête en retard n'est pas projetée
+ * sur les barres. La verser dans un mois PASSÉ la mélangerait au réalisé d'une colonne
+ * rendue à 100 % d'opacité — un montant jamais encaissé/décaissé qui se lirait comme
+ * mouvementé. L'arriéré reste porté par l'onglet Échéances, qui le compte (horizons 30/60/90).
+ *
+ * Ces montants ne sont JAMAIS additionnés à du réalisé : deux séries, deux sources, deux
+ * rendus (§3.5). L'agrégation par mois/devise appartient à `projeterEcheancesSurGrille`
+ * (module pur) — ici on ne fait que lire et expanser.
+ *
+ * `opts.aujourdhui` injectable pour des tests déterministes ; défaut = date courante à
+ * Maurice (E20 — le fuseau est posé ICI, une fois, jamais dans le moteur pur).
+ */
+export async function occurrencesSurFenetre<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  opts: { debut: string; fin: string; aujourdhui?: string },
+): Promise<OccurrenceProjetee[]> {
+  const aujourdhui = opts.aujourdhui ?? dateCouranteMaurice();
+  const candidates = await listerProjetables(tx, ctx, opts.fin);
+
+  const occurrences: OccurrenceProjetee[] = [];
+  for (const candidate of candidates) {
+    // `deriveesDepuis: aujourdhui` — même garde que la synthèse : une dérivée PASSÉE n'a
+    // aucun statut, rien ne dit si elle a été réglée (elle serait un arriéré fantôme).
+    occurrences.push(
+      ...expanserOccurrences(candidate, {
+        debut: opts.debut,
+        fin: opts.fin,
+        deriveesDepuis: aujourdhui,
+      }),
+    );
   }
-
-  return synthese;
+  return occurrences;
 }
 
 /* ------------------------------------------------------------------ */

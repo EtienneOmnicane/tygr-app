@@ -8,17 +8,25 @@
  * le calcul passe par des CENTIMES ENTIERS (BigInt) pour éviter l'imprécision
  * binaire (0.1 + 0.2 !== 0.3). On ne reconvertit en chaîne décimale qu'en sortie.
  *
- * NB : on utilise `BigInt(n)` et non les littéraux `0n`/`100n` — la cible
- * tsconfig est ES2017 (les littéraux BigInt exigeraient ES2020), le type bigint
- * reste disponible via `lib: esnext`.
+ * ⚠️ `enCentimes`/`depuisCentimes` ont été EXTRAITS vers `@/lib/montant-centimes`
+ * (source UNIQUE de l'arithmétique de montants) : le moteur de récurrence et les
+ * repositories serveur en ont besoin, et ils ne peuvent pas importer un module de
+ * `src/components/**`. Déplacement PUR — formules inchangées. Ils restent RÉ-EXPORTÉS
+ * ici pour ne casser aucun appelant existant.
  *
  * Formatage d'AFFICHAGE (milliers + espace fine + devise) : ce module n'en fait
  * PAS — il réutilise `formatMontant` de `@/lib/format-montant` (DRY). `allocation.ts`
  * ne fait QUE le calcul.
  */
+import {
+  ZERO_CENTIMES,
+  enCentimes,
+  depuisCentimes,
+} from "@/lib/montant-centimes";
 
-const ZERO = BigInt(0);
-const CENT = BigInt(100);
+export { enCentimes, depuisCentimes };
+
+const ZERO = ZERO_CENTIMES;
 
 /** Montant max représentable : numeric(15,2) → 13 chiffres avant la virgule. */
 const MAX_ENTIERS = 13;
@@ -43,29 +51,6 @@ export interface EtatAllocation {
   ratio: number;
   /** true si au moins une ligne a un montant valide > 0. */
   aAuMoinsUneLigne: boolean;
-}
-
-/** Parse une chaîne décimale en centimes (BigInt). null si format invalide. */
-export function enCentimes(montant: string): bigint | null {
-  const v = montant.trim();
-  if (!/^\d{1,13}(\.\d{1,2})?$/.test(v)) return null;
-  const [entier, decimal = ""] = v.split(".");
-  const centimes = (decimal + "00").slice(0, 2);
-  try {
-    return BigInt(entier) * CENT + BigInt(centimes);
-  } catch {
-    return null;
-  }
-}
-
-/** Formate des centimes (BigInt) en chaîne décimale "1234.50". */
-export function depuisCentimes(centimes: bigint): string {
-  const negatif = centimes < ZERO;
-  const abs = negatif ? -centimes : centimes;
-  const entiers = abs / CENT;
-  const cents = abs % CENT;
-  const txt = `${entiers}.${cents.toString().padStart(2, "0")}`;
-  return negatif ? `-${txt}` : txt;
 }
 
 /** Un montant saisi est-il un format décimal valide (≤ 2 décimales, > 0) ? */

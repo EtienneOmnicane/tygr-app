@@ -32,6 +32,20 @@ export class AucunWorkspaceActifError extends Error {
 }
 
 /**
+ * Gate « mot de passe à changer » (AUTH-MDP-TEMPO1 D3) : le compte porte
+ * `must_change_password` — la seule surface autorisée est /account/password.
+ * Mappée par le layout et les pages → redirect("/account/password"), jamais
+ * un message (registre S2).
+ */
+export class MotDePasseAChangerError extends Error {
+  readonly code = "PASSWORD_CHANGE_REQUIRED";
+  constructor() {
+    super("Changement de mot de passe requis");
+    this.name = "MotDePasseAChangerError";
+  }
+}
+
+/**
  * Erreur d'INFRASTRUCTURE pendant le chemin d'auth (base injoignable, timeout
  * Neon/wsproxy). Distincte des erreurs métier ci-dessus : elle signale un
  * incident temporaire, pas un défaut d'autorisation.
@@ -57,27 +71,80 @@ export class ServiceIndisponibleError extends Error {
   }
 }
 
+/**
+ * Normalisation du claim `pwdAt` et de `password_changed_at` pour la
+ * comparaison D4 : claim absent / null / colonne NULL ≡ null ; sinon epoch ms.
+ * ÉGALITÉ STRICTE (pas de `<`) : insensible aux horloges, et un posage
+ * ultérieur par l'admin (lot B) tue aussi les sessions du membre — voulu.
+ * Les sessions pré-migration (claim absent) face à une colonne NULL sont
+ * ÉGALES → valides : la migration 0022 n'éjecte personne ; le premier
+ * changement, si.
+ */
+export function normaliserPwdAt(
+  valeur: number | Date | null | undefined,
+): number | null {
+  if (valeur === null || valeur === undefined) {
+    return null;
+  }
+  return typeof valeur === "number" ? valeur : valeur.getTime();
+}
+
+/**
+ * Checks par-requête communs aux deux gardes (ordre STRICT §5.3 du plan
+ * AUTH-MDP-TEMPO1) :
+ *   1. compte inexistant OU inactif  → NonAuthentifieError   (E6, inchangé)
+ *   2. pwdAt(session) ≠ pwdAt(base)  → NonAuthentifieError   (D4 — une session
+ *      périmée est INDISTINGUABLE d'un non-connecté : on ne confirme jamais à
+ *      un porteur de session volée que « le mot de passe a changé »)
+ * Le check 3 (gate mustChangePassword) reste chez l'appelant : la surface de
+ * changement et /selection consomment le FLAG retourné, pas l'erreur.
+ */
+async function exigerCompteValide(session: {
+  userId: string;
+  pwdAt?: number | null;
+}): Promise<{ mustChangePassword: boolean }> {
+  // E6 — FAIL-CLOSED : si la base est injoignable, on ne peut PAS prouver que
+  // le compte est actif → on REFUSE en signalant un incident d'infra (jamais
+  // « on suppose actif »). On convertit l'erreur brute du driver (cause
+  // ErrorEvent non sérialisable) en une erreur PROPRE rendable par un boundary.
+  let etat: Awaited<ReturnType<typeof identite.etatCompte>>;
+  try {
+    etat = await identite.etatCompte(session.userId);
+  } catch {
+    // On n'inspecte pas l'erreur driver (et on ne la chaîne pas en `cause` :
+    // c'est précisément ce qui cassait la sérialisation RSC→Client).
+    throw new ServiceIndisponibleError();
+  }
+  if (!etat || !etat.isActive) {
+    throw new NonAuthentifieError();
+  }
+
+  // D4 — invalidation : toute session émise avant le dernier posage de mot de
+  // passe (claim ≠ base) meurt ici, à sa prochaine requête gardée — dont une
+  // session ouverte par l'ADMIN avec le mot de passe temporaire.
+  if (normaliserPwdAt(session.pwdAt) !== normaliserPwdAt(etat.passwordChangedAt)) {
+    throw new NonAuthentifieError();
+  }
+
+  return { mustChangePassword: etat.mustChangePassword };
+}
+
 export async function exigerSessionWorkspace(): Promise<WorkspaceSession> {
   const session = await auth();
   if (!session?.userId) {
     throw new NonAuthentifieError();
   }
 
-  // E6 — re-validation is_active à chaque requête. FAIL-CLOSED : si la base est
-  // injoignable, on ne peut PAS prouver que le compte est actif → on REFUSE en
-  // signalant un incident d'infra (jamais « on suppose actif »). On convertit
-  // l'erreur brute du driver (cause ErrorEvent non sérialisable) en une erreur
-  // PROPRE rendable par un error boundary.
-  let actif: boolean;
-  try {
-    actif = await identite.estActif(session.userId);
-  } catch {
-    // On n'inspecte pas l'erreur driver (et on ne la chaîne pas en `cause` :
-    // c'est précisément ce qui cassait la sérialisation RSC→Client).
-    throw new ServiceIndisponibleError();
-  }
-  if (!actif) {
-    throw new NonAuthentifieError();
+  const { mustChangePassword } = await exigerCompteValide({
+    userId: session.userId,
+    pwdAt: session.pwdAt,
+  });
+
+  // D3 — gate : APRÈS le check d'invalidation (ordre 2-avant-3, §5.3) : une
+  // session pré-changement d'un compte au flag retombé est déconnectée,
+  // jamais re-gatée.
+  if (mustChangePassword) {
+    throw new MotDePasseAChangerError();
   }
 
   if (!session.activeWorkspaceId) {
@@ -101,39 +168,45 @@ export async function exigerSessionWorkspace(): Promise<WorkspaceSession> {
 }
 
 /**
- * Session pour une surface d'ADMINISTRATION (`/admin/*`) — L0 de
- * `PLAN-refonte-entites.md` (§3.3).
+ * Session pour une surface **TENANT-WIDE** — identique à `exigerSessionWorkspace()`,
+ * mais **amputée du `viewFilter`** : le filtre d'AFFICHAGE posé par le sélecteur de
+ * périmètre (L8b-1), qui vit dans le JWT et **persiste de page en page**.
  *
- * Identique à `exigerSessionWorkspace()`, mais **amputée du `viewFilter`** : le filtre
- * d'AFFICHAGE posé par le sélecteur de périmètre (L8b-1), qui vit dans le JWT et
- * **persiste de page en page**.
+ * Trois surfaces portent légitimement sur le TENANT ENTIER, où un filtre d'affichage
+ * n'a aucun sens :
+ *   - `/admin/*` (administration — membres, entités ; L0 de `PLAN-refonte-entites.md` §3.3) ;
+ *   - `/banques` et `/regles` (**gestion** — TOOLBAR-PERIMETRE-AMPUTATION1) : connecter /
+ *     synchroniser une banque attache les comptes de N entités ; « Ré-analyser » doit
+ *     recatégoriser tout le groupe. Un filtre résiduel les trahirait (cf. ci-dessous).
  *
  * POURQUOI (mode de défaillance réel, pas théorique) : le `PerimetreSwitcher` est monté
- * dans le layout `(workspace)` — il est donc **présent sur les écrans d'administration
- * eux-mêmes**. La policy `account_scope` (migrations 0016/0017) est `AS RESTRICTIVE FOR
- * ALL` et porte sa clause `view_filter` en **USING** *et* en **WITH CHECK**. Sans
- * amputation, deux clics (« Périmètre → Entité A ») suffisent pour qu'un écran d'admin :
- *   - en LECTURE, ne montre qu'une fraction des comptes **sans le dire** — un compteur
- *     « 0 compte non assigné » rassurant et FAUX, alors que 77 le sont ;
- *   - en ÉCRITURE, refuse un `UPDATE` sur un compte hors filtre (WITH CHECK) → l'ADMIN
- *     **voit** le compte et **ne peut pas** le ranger (« Ressource introuvable. »).
- * Administrer porte sur le TENANT ENTIER : un filtre d'affichage n'y a aucun sens.
+ * dans le layout `(workspace)` — il est donc **présent sur ces écrans eux-mêmes**. La
+ * policy `account_scope` (migrations 0016/0017) est `AS RESTRICTIVE FOR ALL` et porte sa
+ * clause `view_filter` en **USING** *et* en **WITH CHECK**. Sans amputation, deux clics
+ * (« Périmètre → Entité A ») suffisent pour que :
+ *   - en LECTURE, un écran ne montre qu'une fraction des comptes **sans le dire** — un
+ *     compteur rassurant et FAUX (« 1 compte » pour une connexion qui en a 5) ;
+ *   - en ÉCRITURE, un `INSERT`/`UPDATE` sur un compte hors filtre soit refusé (WITH
+ *     CHECK) → le sync `/banques` **attache 0 compte sans erreur** (« spinner puis
+ *     rien »), « Ré-analyser » `/regles` ne porte que sur le périmètre filtré.
  *
  * Même parade que `layout.tsx` (leçon du bug #143, où le sélecteur s'auto-amputait) :
  * sans `viewFilter`, le GUC `app.current_view_filter` n'est pas posé → la clause est
- * neutre. `tenant_isolation`, `entity_scope` et `account_scope` restent posés :
- * **la sécurité est INCHANGÉE**, on ne retire qu'une intention d'affichage.
+ * neutre. `tenant_isolation`, `entity_scope` et `account_scope` (le DROIT dur, résolu
+ * EN BASE) restent posés : **la sécurité est INCHANGÉE**, on ne retire qu'une intention
+ * d'affichage.
  *
- * ⚠️ Ne vérifie **PAS le rôle** : la garde ADMIN reste applicative, portée par les
- * repositories (`exigerAdmin(ctx)`) sous le `ctx.role` re-résolu par `withWorkspace` à
- * chaque requête. Cette fonction ne neutralise QUE le filtre d'affichage.
+ * ⚠️ Ne vérifie **PAS le rôle** : les gardes de rôle restent applicatives, portées par
+ * les repositories (`exigerAdmin(ctx)` pour l'admin, `peutModifier(ctx.role)` pour les
+ * écritures) sous le `ctx.role` re-résolu par `withWorkspace` à chaque requête. Cette
+ * fonction ne neutralise QUE le filtre d'affichage.
  *
  * ⚠️ Ne neutralise **PAS** `entity_scope` / `account_scope` : ceux-là sont résolus **en
- * base** (`member_entity_scopes` / `user_scopes`), pas depuis la session — un ADMIN qui
- * porterait un périmètre en base resterait borné. Ce résidu est **signalé, fail-safe côté
- * UI** (bandeau « vue restreinte ») et **non tranché** : cf. `PLAN-refonte-entites.md` §12.
+ * base** (`member_entity_scopes` / `user_scopes`), pas depuis la session — un membre
+ * scopé en base resterait borné. Ce résidu est **signalé, fail-safe côté UI** (bandeau
+ * « vue restreinte ») et **non tranché** : cf. `PLAN-refonte-entites.md` §12.
  */
-export async function exigerSessionAdministration(): Promise<WorkspaceSession> {
+export async function exigerSessionSansPerimetre(): Promise<WorkspaceSession> {
   const session = await exigerSessionWorkspace();
   // Exactement les 2 champs du callback jwt — gabarit `layout.tsx:157`. Reconstruire
   // l'objet (plutôt qu'un `delete`) garantit qu'aucun champ d'affichage futur ne fuite.
@@ -141,4 +214,40 @@ export async function exigerSessionAdministration(): Promise<WorkspaceSession> {
     userId: session.userId,
     activeWorkspaceId: session.activeWorkspaceId,
   };
+}
+
+/**
+ * Alias HISTORIQUE d'ADMINISTRATION. `/admin/*` réclame exactement la même session
+ * amputée (administrer porte sur le tenant entier) — conservé pour ne pas churner les
+ * appelants `/admin`. **Même fonction, même sécurité.** Sur une surface de GESTION
+ * (`/banques`, `/regles`), préférer le nom neutre `exigerSessionSansPerimetre` : il ne
+ * ment pas (ces pages ne sont pas de l'administration).
+ */
+export const exigerSessionAdministration = exigerSessionSansPerimetre;
+
+/**
+ * Garde légère PRÉ-WORKSPACE (AUTH-MDP-TEMPO1 D3) : checks 1 (E6) et 2 (D4)
+ * de l'ordre §5.3, SANS exiger de workspace et SANS jeter
+ * `MotDePasseAChangerError` — le flag est RETOURNÉ, l'appelant décide.
+ *
+ * Deux surfaces la consomment :
+ * - /account/password (page + action) : c'est la surface AUTORISÉE au compte
+ *   gaté — elle ne peut pas jeter le gate qui la vise.
+ * - /selection : gagne le re-check E6 qui lui manquait (constat §0 du plan) ;
+ *   `mustChangePassword` true → la page redirige vers /account/password (un
+ *   membre multi-workspace change son mot de passe AVANT de choisir un espace).
+ */
+export async function exigerSessionUtilisateur(): Promise<{
+  userId: string;
+  mustChangePassword: boolean;
+}> {
+  const session = await auth();
+  if (!session?.userId) {
+    throw new NonAuthentifieError();
+  }
+  const { mustChangePassword } = await exigerCompteValide({
+    userId: session.userId,
+    pwdAt: session.pwdAt,
+  });
+  return { userId: session.userId, mustChangePassword };
 }

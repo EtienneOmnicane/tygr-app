@@ -15,6 +15,12 @@
  * curseur opaque, libellé non-PII). La 1re page est chargée ICI (RSC) ; le conteneur
  * recharge/paginera côté client via les mêmes actions.
  *
+ * PÉRIODE (TX-TOOLBAR-DEDUP1) : la fenêtre de dates vient de la barre de vue GLOBALE
+ * (`?periode`/`?du`/`?au`), plus des dates in-page. On lit `searchParams` et on résout
+ * les bornes via `resoudrePeriode` (source unique, fuseau Maurice) — MÊME pattern que le
+ * Dashboard — puis on les injecte côté serveur dans la 1re page, la pagination et la
+ * somme. Le conteneur client REMONTE sur changement de période (prop `key`).
+ *
  * Authz (règle 3) : exigerSessionWorkspace + withWorkspace. Mapping erreurs :
  * non auth → /login ; aucun workspace → /selection.
  */
@@ -24,9 +30,11 @@ import { listerComptes, withWorkspace } from "@/server/db";
 import {
   AucunWorkspaceActifError,
   exigerSessionWorkspace,
+  MotDePasseAChangerError,
   NonAuthentifieError,
 } from "@/server/auth/session";
 import { peutAdministrer } from "@/lib/permissions";
+import { resoudrePeriode } from "@/lib/periode";
 
 import { TransactionsFeature } from "@/components/transactions";
 import type {
@@ -49,12 +57,25 @@ import {
   listerTransactionsAction,
   remplacerSplitsAction,
   renommerCategorieAction,
+  sommeNetteTransactionsAction,
 } from "./actions";
-import { versInputBackend, versPageUI } from "./adapter";
+import {
+  versFiltresSommeNette,
+  versInputBackend,
+  versPageUI,
+  versSommeNetteUI,
+} from "./adapter";
 
 export const metadata = { title: "Transactions — Dodo" };
 
-export default async function PageTransactions() {
+export default async function PageTransactions({
+  searchParams,
+}: {
+  // Next 16 : `searchParams` est un Promise à `await` (AGENTS.md « This is NOT the
+  // Next.js you know »). Le lire opte la page en rendu dynamique — sans impact (la page
+  // fetch déjà par requête sous withWorkspace, jamais prérendue).
+  searchParams: Promise<{ [cle: string]: string | string[] | undefined }>;
+}) {
   let session;
   try {
     session = await exigerSessionWorkspace();
@@ -62,11 +83,23 @@ export default async function PageTransactions() {
     if (erreur instanceof NonAuthentifieError) {
       redirect("/login");
     }
+    if (erreur instanceof MotDePasseAChangerError) {
+      redirect("/account/password"); // gate AUTH-MDP-TEMPO1 (D3)
+    }
     if (erreur instanceof AucunWorkspaceActifError) {
       redirect("/selection");
     }
     throw erreur;
   }
+
+  // Fenêtre de dates = barre de vue GLOBALE (TX-TOOLBAR-DEDUP1). On passe les searchParams
+  // ENTIERS — `?periode` (preset) ET `?du`/`?au` (plage explicite, qui PRIME). On ne garde
+  // que `from`/`to` (bornes au JOUR Maurice, INCLUSIVES) : la liste n'a pas de tendance à
+  // ancrer, contrairement au Dashboard. Toute valeur d'URL invalide est NORMALISÉE par
+  // `resoudrePeriode` (source unique) — l'URL brute ne touche jamais le SQL. URL propre
+  // (aucun param) ⇒ preset par défaut « 6m ».
+  const { from, to } = resoudrePeriode(await searchParams);
+  const periode = { from, to };
 
   // Données serveur : catégories (modale), comptes (filtre + résolution compteNom),
   // rôle (gating UI du CTA d'import — la garde de fond reste serveur). Comptes +
@@ -108,8 +141,11 @@ export default async function PageTransactions() {
   const actionsTransactions: ActionsTransactions = {
     async listerTransactions({ curseur, filtres }) {
       "use server";
+      // Capture `periode` (objet de 2 chaînes, SÉRIALISABLE — sans rapport avec le piège
+      // « capture de fonction locale ») → chaque page reste bornée à la fenêtre globale,
+      // pagination « Charger plus » comprise (sinon la page 2 ramènerait tout l'historique).
       const res = await listerTransactionsAction(
-        versInputBackend(filtres, curseur),
+        versInputBackend(filtres, curseur, periode),
       );
       if (!res.ok) return res;
       return { ok: true, data: versPageUI(res.data, nomParCompte) };
@@ -120,10 +156,26 @@ export default async function PageTransactions() {
       // conteneur catche et bloque l'ouverture de la modale (anti-écrasement).
       return listerSplitsAction(ref);
     },
+    // TOTAL des résultats filtrés (TX-RECHERCHE-SOMME-NETTE1) : agrégat SERVEUR (SUM en
+    // SQL sous RLS) portant les MÊMES filtres que la liste, mais SANS curseur — il
+    // totalise TOUT le jeu filtré, pas la page affichée (piège TX-FILTRE1 : sommer côté
+    // client ne verrait que le visible). `versFiltresSommeNette` dérive la projection de
+    // filtres de `versInputBackend` (source unique) en retirant curseur/limite.
+    async sommeNette({ filtres }) {
+      "use server";
+      const res = await sommeNetteTransactionsAction(
+        versFiltresSommeNette(filtres, periode),
+      );
+      if (!res.ok) return res;
+      return { ok: true, data: versSommeNetteUI(res.data) };
+    },
   };
 
-  // Première page (RSC) — rendue immédiatement, puis paginée/filtrée côté client.
-  const premiere = await listerTransactionsAction(versInputBackend(undefined, null));
+  // Première page (RSC) — rendue immédiatement, puis paginée/filtrée côté client. Bornée
+  // à la fenêtre GLOBALE (`periode`) dès le premier rendu (pas de filtre in-page ici).
+  const premiere = await listerTransactionsAction(
+    versInputBackend(undefined, null, periode),
+  );
   const initial: PageTransactions = premiere.ok
     ? versPageUI(premiere.data, nomParCompte)
     : { lignes: [], curseurSuivant: null };
@@ -204,6 +256,15 @@ export default async function PageTransactions() {
       </div>
 
       <TransactionsFeature
+        // Identité de la fenêtre GLOBALE : quand la période change (barre de vue →
+        // nouvelle URL → RSC re-rendu avec un `initial` frais), la `key` change et le
+        // conteneur CLIENT REMONTE, re-seedant sa liste depuis la page 1 de la nouvelle
+        // période. Sans ça, `TransactionsFeature` garde son `useState(initial)` d'origine
+        // (état dérivé des props, jamais re-synchronisé) → la liste resterait PÉRIMÉE
+        // jusqu'au prochain filtre in-page. (Corollaire assumé : les filtres in-page
+        // recherche/statut se réinitialisent au changement de période — sémantique
+        // « refresh complet » du Dashboard.)
+        key={`${from}|${to}`}
         initial={initial}
         categories={categories}
         actions={actionsTransactions}

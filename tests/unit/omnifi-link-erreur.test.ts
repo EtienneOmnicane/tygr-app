@@ -55,6 +55,29 @@ const CODES_DOCUMENTES: Record<OmniFIErrorCode, true> = {
   VALIDATION_ERROR: true,
 };
 
+/**
+ * Échecs TERMINAUX du Sync Engine (branche `↘ FAILED`), qui n'appartiennent PAS à
+ * l'union `OmniFIErrorCode` du SDK : ce sont les `SyncJob.Error.Type` de l'amont,
+ * relayés VERBATIM par le loader CDN (simple pont postMessage, aucun filtrage).
+ * Liste lue à la source (`omni-fi-core`, `apps/sync_engine/orchestrator.py`, appels
+ * `_handle_failure`) — d'où l'absence de garde par le compilateur ici : aucun type
+ * ne décrit ces codes, seule cette liste les tient.
+ *
+ * `UNKNOWN_ERROR` en est volontairement EXCLU (cf. le test dédié plus bas).
+ */
+const CODES_SYNC_ENGINE = [
+  "LOGIN_FAILED",
+  "MFA_TIMEOUT",
+  "SCRAPER_UI_CHANGE",
+  "SCRAPER_ERROR",
+  "ETL_ERROR",
+  "ENRICHMENT_ERROR",
+  "PERSISTENCE_ERROR",
+  "CREDENTIAL_NOT_FOUND",
+  "CREDENTIAL_ERROR",
+  "KMS_ERROR",
+] as const;
+
 describe("messageErreurWidget — chemin heureux (code connu → message mappé)", () => {
   it("LinkToken mort (invalide/expiré/déjà utilisé) → invite à recommencer", () => {
     const attendu = "La session de connexion a expiré. Recommencez la connexion.";
@@ -101,6 +124,72 @@ describe("messageErreurWidget — chemin heureux (code connu → message mappé)
         MESSAGE_PAR_DEFAUT,
       );
     }
+  });
+});
+
+describe("messageErreurWidget — échecs terminaux du Sync Engine (WIDGET-ERR6)", () => {
+  it("LOGIN_FAILED → message d'IDENTIFIANTS, pas le repli (défaut d'origine)", () => {
+    // Le bug corrigé : `LOGIN_FAILED` (observé en console le 2026-07-16 sur « Absa
+    // Pro ») tombait sur « Réessayez dans un instant » — l'utilisateur ne savait pas
+    // que ses identifiants étaient en cause et rejouait le MÊME essai en boucle.
+    const { code, message } = messageErreurWidget({ code: "LOGIN_FAILED" });
+    expect(code).toBe("LOGIN_FAILED");
+    expect(message).not.toBe(MESSAGE_PAR_DEFAUT);
+    expect(message).toContain("identifiants");
+  });
+
+  it("LOGIN_FAILED couvre AUSSI le 3e code MFA erroné (l'amont confond les deux)", () => {
+    // `docs/documentation_api.md` : « Le 3e mauvais code fait passer Status → FAILED
+    // avec erreur LOGIN_FAILED ». Un message qui ne parlerait QUE de mot de passe
+    // enverrait l'utilisateur vérifier des identifiants pourtant valides.
+    expect(messageErreurWidget({ code: "LOGIN_FAILED" }).message).toContain(
+      "code de vérification",
+    );
+  });
+
+  it("MFA_TIMEOUT → invite à RECOMMENCER (le job est mort, pas en attente)", () => {
+    const { message } = messageErreurWidget({ code: "MFA_TIMEOUT" });
+    expect(message).not.toBe(MESSAGE_PAR_DEFAUT);
+    expect(message).toContain("Recommencez");
+  });
+
+  it("panne de la chaîne de récupération → « plus tard », JAMAIS « dans un instant »", () => {
+    // Piège symétrique de celui de SDK_SCRIPT_LOAD_FAILED : le repli promet une
+    // action qui ne peut PAS aboutir. Un `SCRAPER_UI_CHANGE` (la banque a changé son
+    // HTML) exige un correctif amont — réessayer tout de suite est garanti d'échouer.
+    for (const code of ["SCRAPER_UI_CHANGE", "SCRAPER_ERROR", "PERSISTENCE_ERROR"]) {
+      const { message } = messageErreurWidget({ code });
+      expect(message, code).not.toBe(MESSAGE_PAR_DEFAUT);
+      expect(message, code).toContain("plus tard");
+      expect(message, code).not.toContain("dans un instant");
+    }
+  });
+
+  it("une panne de service n'accuse JAMAIS les identifiants de l'utilisateur", () => {
+    // Symétrique du test LOGIN_FAILED : envoyer vérifier un mot de passe valide fait
+    // boucler tout autant. `SCRAPER_ERROR` peut survenir avant comme après le login,
+    // donc le message n'affirme rien — ni dans un sens, ni dans l'autre.
+    expect(messageErreurWidget({ code: "SCRAPER_ERROR" }).message).not.toContain(
+      "identifiants",
+    );
+  });
+
+  it("registre S2 : aucun code terminal du Sync Engine ne tombe sur le repli", () => {
+    for (const code of CODES_SYNC_ENGINE) {
+      const { message } = messageErreurWidget({ code });
+      expect(message, `code non mappé au registre S2 : ${code}`).not.toBe(
+        MESSAGE_PAR_DEFAUT,
+      );
+    }
+  });
+
+  it("UNKNOWN_ERROR reste au repli — DÉLIBÉRÉMENT (angle mort visible)", () => {
+    // Le fourre-tout `except Exception` de l'orchestrateur amont. Le repli dit déjà
+    // tout ce qu'on sait en dire ; le mapper le maquillerait en cas traité alors
+    // qu'on ignore ce qui s'est passé. Le code, lui, part au log.
+    const { code, message } = messageErreurWidget({ code: "UNKNOWN_ERROR" });
+    expect(message).toBe(MESSAGE_PAR_DEFAUT);
+    expect(code).toBe("UNKNOWN_ERROR");
   });
 });
 
@@ -183,7 +272,7 @@ describe("messageErreurWidget — sécurité (règle 8 : ni PII, ni énumératio
       "Login failed for account 1234",
       "Payment to John Doe rejected",
     ];
-    for (const code of Object.keys(CODES_DOCUMENTES)) {
+    for (const code of [...Object.keys(CODES_DOCUMENTES), ...CODES_SYNC_ENGINE]) {
       for (const amont of amonts) {
         expect(messageErreurWidget({ code, message: amont }).message).not.toContain(
           amont,

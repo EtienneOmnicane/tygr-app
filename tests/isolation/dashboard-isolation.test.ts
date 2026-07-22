@@ -21,7 +21,7 @@ import {
   listerConnexionsBancaires,
   soldeConsolideCourant,
   syntheseMois,
-  syntheseMoisParDevise,
+  synthesePeriodeParDevise,
   transactionsRecentes,
 } from "@/server/repositories/dashboard";
 
@@ -35,7 +35,7 @@ const ALICE = "11111111-1111-4111-8111-111111111111";
 const BOB = "22222222-2222-4222-8222-222222222222";
 const ACC_A = "aaaa1111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 /** 2e compte de WS_A, en USD — is_selected=false pour ne pas changer listerComptes
- *  (qui filtre is_selected), tout en alimentant syntheseMoisParDevise (multi-devise). */
+ *  (qui filtre is_selected), tout en alimentant synthesePeriodeParDevise (multi-devise). */
 const ACC_A_USD = "aaaa3333-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACC_B = "bbbb2222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CONN_A = "aaaacccc-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -134,11 +134,11 @@ describe("isolation : chaque service ne voit que le workspace courant", () => {
     expect(a.map((p) => p.soldeConsolide)).toEqual(["4000.00", "5000.00"]);
   });
 
-  it("syntheseMois (@deprecated) — A : SOMME cross-devise MUR+USD (le bug que corrige syntheseMoisParDevise)", async () => {
+  it("syntheseMois (@deprecated) — A : SOMME cross-devise MUR+USD (le bug que corrige synthesePeriodeParDevise)", async () => {
     // WS_A a 1000 MUR + 500 USD en crédit, 300 MUR + 200 USD en débit. syntheseMois
     // additionne TOUT sans distinguer la devise → entrées 1500, sorties 500. C'est
     // EXACTEMENT le comportement faux (mélange roupies/dollars) qui motive
-    // syntheseMoisParDevise. On fige ici la sémantique dépréciée (tombstone 99 exclu).
+    // synthesePeriodeParDevise. On fige ici la sémantique dépréciée (tombstone 99 exclu).
     const a = await withWorkspace(sessionA, (tx) => syntheseMois(tx, "2026-06"));
     expect(a.entrees).toBe("1500.00"); // 1000 MUR + 500 USD additionnés à tort
     expect(a.sorties).toBe("500.00"); // 300 MUR + 200 USD ; le débit 99 is_removed exclu
@@ -163,10 +163,10 @@ describe("isolation : chaque service ne voit que le workspace courant", () => {
   });
 });
 
-describe("syntheseMoisParDevise — entrées/sorties VENTILÉES par devise (multi-devise correct)", () => {
+describe("synthesePeriodeParDevise — entrées/sorties VENTILÉES par devise (multi-devise correct)", () => {
   it("A : une ligne MUR (entrées 1000 / sorties 300) ET une ligne USD (entrées 500 / sorties 200), jamais d'addition cross-devise", async () => {
     const lignes = await withWorkspace(sessionA, (tx) =>
-      syntheseMoisParDevise(tx, "2026-06"),
+      synthesePeriodeParDevise(tx, { from: "2026-06-01", to: "2026-06-30" }),
     );
     // Ordonné par devise : MUR puis USD.
     const parDevise = new Map(lignes.map((l) => [l.currency, l]));
@@ -187,18 +187,44 @@ describe("syntheseMoisParDevise — entrées/sorties VENTILÉES par devise (mult
 
   it("tenant-scopé : B ne voit QUE sa ligne MUR (sorties 7777), jamais l'USD de A", async () => {
     const lignes = await withWorkspace(sessionB, (tx) =>
-      syntheseMoisParDevise(tx, "2026-06"),
+      synthesePeriodeParDevise(tx, { from: "2026-06-01", to: "2026-06-30" }),
     );
     expect(lignes.map((l) => l.currency)).toEqual(["MUR"]);
     expect(lignes[0].sorties).toBe("7777.00");
     expect(lignes.find((l) => l.currency === "USD")).toBeUndefined();
   });
 
-  it("mois sans transaction → tableau vide (l'UI affichera 0 dans la devise de base)", async () => {
+  it("période sans transaction → tableau vide (l'UI affichera 0 dans la devise de base)", async () => {
     const lignes = await withWorkspace(sessionA, (tx) =>
-      syntheseMoisParDevise(tx, "2020-01"),
+      synthesePeriodeParDevise(tx, { from: "2020-01-01", to: "2020-01-31" }),
     );
     expect(lignes).toEqual([]);
+  });
+
+  it("PLAGE PRÉCISE : les bornes JOUR excluent ce qui est hors période (mois PARTIEL)", async () => {
+    // Correctif TOOLBAR-DATE-PRECISE1 : la fonction bornait au MOIS ENTIER
+    // (`syntheseMoisParDevise(mois)`). Une plage « 6 → 8 juin » aurait donc renvoyé TOUT
+    // JUIN — des montants hors période dans une carte censée résumer la plage.
+    const lignes = await withWorkspace(sessionA, (tx) =>
+      synthesePeriodeParDevise(tx, { from: "2026-06-06", to: "2026-06-08" }),
+    );
+    const parDevise = new Map(lignes.map((l) => [l.currency, l]));
+
+    // MUR : le crédit 1000 du 05/06 est AVANT `from` → exclu. Reste le débit 300 du 08/06
+    // (borne haute INCLUSIVE) ; le tombstone 99 du 08/06 reste exclu (is_removed).
+    expect(parDevise.get("MUR")).toMatchObject({
+      entrees: "0",
+      sorties: "300.00",
+      variation: "-300.00",
+    });
+
+    // USD : le crédit 500 du 06/06 est DANS la plage ; le débit 200 du 09/06 est APRÈS
+    // `to` → exclu (c'est lui qui trahissait le bornage au mois).
+    expect(parDevise.get("USD")).toMatchObject({
+      entrees: "500.00",
+      sorties: "0",
+      variation: "500.00",
+    });
   });
 });
 

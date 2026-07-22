@@ -114,6 +114,37 @@ const FINALISATION_IMPOSSIBLE =
   "La connexion n’a pas pu être finalisée. Réessayez.";
 const BANQUE_INDISPONIBLE = "Cette banque n’est pas disponible pour le moment.";
 
+/**
+ * Échec d'AUTHENTIFICATION à la banque (`LOGIN_FAILED`). Le message couvre
+ * VOLONTAIREMENT les deux causes, parce que l'amont les confond sous un seul code :
+ * des identifiants refusés au login ET le 3e code de vérification erroné
+ * (`docs/documentation_api.md` : « Le 3e mauvais code fait passer Status → FAILED
+ * avec erreur LOGIN_FAILED »). Dire « identifiants incorrects » tout court enverrait
+ * l'utilisateur qui a raté son OTP vérifier un mot de passe pourtant valide.
+ * Non-énumérant : on ne dit PAS laquelle des deux est en cause (on ne le sait pas,
+ * et le savoir ne doit pas se déduire de l'UI).
+ */
+const IDENTIFIANTS_REFUSES =
+  "La banque a refusé la connexion : identifiants ou code de vérification incorrects. Vérifiez-les et recommencez.";
+
+/** Le code MFA n'est jamais arrivé / n'a pas été saisi à temps (`MFA_TIMEOUT`). */
+const DELAI_CODE_EXPIRE =
+  "Le délai de saisie du code de vérification est dépassé. Recommencez la connexion.";
+
+/**
+ * Panne du côté de la chaîne de récupération (scraper, traitement, coffre à
+ * identifiants) : l'utilisateur n'y peut RIEN et aucune re-saisie ne l'aidera.
+ *
+ * ⚠️ « Réessayez PLUS TARD », surtout pas le « dans un instant » du repli : un
+ * connecteur cassé (`SCRAPER_UI_CHANGE` = la banque a changé son HTML) exige un
+ * correctif Omni-FI, pas une nouvelle tentative immédiate. Même logique que
+ * `CODE_SDK_INDISPONIBLE` plus bas : le message doit nommer la seule action qui a
+ * une chance d'aboutir. On n'affirme rien sur la validité des identifiants — un
+ * `SCRAPER_ERROR` peut survenir avant comme après le login.
+ */
+const RECUPERATION_IMPOSSIBLE =
+  "La connexion à votre banque n’a pas pu aboutir. Réessayez plus tard ; si le problème persiste, contactez le support.";
+
 /** Repli — TOUT code hors registre atterrit ici (jamais de catch-all silencieux). */
 const MESSAGE_PAR_DEFAUT =
   "La connexion bancaire a échoué. Réessayez dans un instant.";
@@ -163,6 +194,44 @@ const MESSAGES_PAR_CODE: Record<string, string> = {
     "La connexion bancaire n’est pas autorisée depuis cette adresse.",
   VALIDATION_ERROR:
     "La connexion bancaire a été refusée (données invalides). Réessayez.",
+
+  // ── Sync Engine — échecs TERMINAUX du job (branche `↘ FAILED`) ──────────────
+  //
+  // Ces codes ne viennent PAS de l'union `OmniFIErrorCode` du SDK (elle ne les
+  // contient pas) : ce sont les `SyncJob.Error.Type` de l'amont, relayés tels quels
+  // jusqu'ici. Deux preuves, pas une supposition :
+  //  1. RUNTIME — `LOGIN_FAILED` a été observé en console le 2026-07-16 (« Absa Pro »
+  //     en sandbox). Or ce code n'existe QUE comme `Error.Type` de SyncJob : le pont
+  //     `job.Error.Type → onError.code` est donc établi par constat, pas déduit.
+  //  2. BUNDLE — le loader CDN ne fait que RELAYER le postMessage de l'iframe
+  //     (`case ERROR: onError({code: t.code || "UNKNOWN", …})`) : il ne filtre aucun
+  //     code, donc tout `Error.Type` remonté par l'iframe atterrit ici.
+  //
+  // Liste exhaustive lue à la source (backend Django `omni-fi-core`,
+  // `apps/sync_engine/orchestrator.py` — les appels `_handle_failure`), PAS inventée.
+  // Le regroupement suit l'ACTION possible pour l'utilisateur, pas la taxonomie
+  // amont : le CODE exact reste au log pour le diagnostic (cf. `console.warn`).
+  LOGIN_FAILED: IDENTIFIANTS_REFUSES,
+  MFA_TIMEOUT: DELAI_CODE_EXPIRE,
+  // Scraping : UI de la banque modifiée, timeout, captcha, proxy (ces trois derniers
+  // remontent tous en `SCRAPER_ERROR`, cf. les sous-classes de `ScraperError`).
+  SCRAPER_UI_CHANGE: RECUPERATION_IMPOSSIBLE,
+  SCRAPER_ERROR: RECUPERATION_IMPOSSIBLE,
+  // Traitement aval (parsing/enrichissement/persistance) : la donnée a été atteinte
+  // mais pas menée au bout.
+  ETL_ERROR: RECUPERATION_IMPOSSIBLE,
+  ENRICHMENT_ERROR: RECUPERATION_IMPOSSIBLE,
+  PERSISTENCE_ERROR: RECUPERATION_IMPOSSIBLE,
+  // Coffre à identifiants amont (survient AVANT le login, donc bien dans la fenêtre
+  // où le widget est ouvert). Panne interne : même issue utilisateur.
+  CREDENTIAL_NOT_FOUND: RECUPERATION_IMPOSSIBLE,
+  CREDENTIAL_ERROR: RECUPERATION_IMPOSSIBLE,
+  KMS_ERROR: RECUPERATION_IMPOSSIBLE,
+  //
+  // `UNKNOWN_ERROR` (le fourre-tout `except Exception` de l'orchestrateur) est
+  // DÉLIBÉRÉMENT absent : le repli dit déjà exactement ce qu'on saurait en dire, et
+  // le laisser hors registre garde l'angle mort VISIBLE (message générique + code au
+  // log) au lieu de le maquiller en cas traité. Verrouillé par un test.
 };
 
 /**

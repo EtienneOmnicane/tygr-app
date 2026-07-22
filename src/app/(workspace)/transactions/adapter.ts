@@ -25,10 +25,12 @@
  */
 import type {
   PageTransactions as PageBackend,
+  SommeNetteDevise as SommeNetteDeviseBackend,
   TransactionLigne,
 } from "@/server/repositories/transactions";
 import type {
   ListerTransactionsInput,
+  SommeNetteInput,
   StatutVentilation,
 } from "@/lib/transactions-schema";
 
@@ -36,6 +38,7 @@ import type {
   FiltresTransactions,
   NiveauFiabilite,
   PageTransactions,
+  SommeNetteDevise,
   SourceClassification,
   StatutCategorisation,
   TransactionListItem,
@@ -59,26 +62,78 @@ const STATUT_BACKEND: Record<StatutCategorisation, StatutVentilation> = {
 };
 
 /**
- * Convertit les filtres UI + curseur en entrée du schéma Backend. Le `sens` UI
- * n'est PAS transmis (non supporté serveur). `curseur` null/absent = première page.
+ * Bornes de la FENÊTRE de dates GLOBALE (barre de vue), déjà résolues et validées par
+ * `resoudrePeriode` (`src/lib/periode.ts` — source unique : fuseau Maurice, plage
+ * `?du`/`?au` primant sur preset, garde `from ≤ to`). Dates comptables Maurice
+ * `YYYY-MM-DD`, INCLUSIVES.
+ */
+export interface PeriodeBornes {
+  from: string;
+  to: string;
+}
+
+/**
+ * Convertit les filtres UI + curseur + la fenêtre de dates GLOBALE en entrée du schéma
+ * Backend. Le `sens` UI n'est PAS transmis (non supporté serveur). `curseur` null/absent
+ * = première page.
+ *
+ * ⚠️ La fenêtre de dates n'est PLUS un filtre in-page (TX-TOOLBAR-DEDUP1) : elle arrive
+ * de la barre globale via `periode` (injectée par le RSC `page.tsx`), jamais de `filtres`.
+ * On la traduit en `dateDebut`/`dateFin` (WHERE gte/lte serveur sur `transaction_date`,
+ * qui EST déjà la date Maurice — E20, aucune conversion ici). `periode` absente (surface
+ * sans période : stub de démo/tests) ⇒ aucune borne (comportement « tout »).
  */
 export function versInputBackend(
   filtres: FiltresTransactions | undefined,
   curseur: string | null | undefined,
+  periode?: PeriodeBornes,
 ): Partial<ListerTransactionsInput> {
   const input: Partial<ListerTransactionsInput> = {};
-  // Recherche : passe-plat direct sur cleanLabel (ILIKE serveur, méta-caractères
-  // LIKE échappés côté repository). La toolbar ne remonte jamais une chaîne vide
+  // Recherche : passe-plat direct du terme (ILIKE serveur sur le libellé affiché —
+  // marchand nettoyé sinon brut, cf. `conditionsFiltres` ; méta-caractères LIKE
+  // échappés côté repository). La toolbar ne remonte jamais une chaîne vide
   // (→ undefined), donc pas de garde ici ; Zod re-valide trim/min1/max120.
   if (filtres?.recherche) input.recherche = filtres.recherche;
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
-  // Bornes de date : passe-plat direct (même format YYYY-MM-DD des deux côtés) →
-  // WHERE gte/lte serveur. Zod re-valide forme + validité calendaire + intervalle.
-  if (filtres?.dateDebut) input.dateDebut = filtres.dateDebut;
-  if (filtres?.dateFin) input.dateFin = filtres.dateFin;
+  // Fenêtre GLOBALE → bornes de date (même format YYYY-MM-DD des deux côtés). Zod
+  // re-valide forme + validité calendaire + intervalle ; `resoudrePeriode` garantit
+  // déjà `from ≤ to`, donc jamais de rejet ici.
+  if (periode) {
+    input.dateDebut = periode.from;
+    input.dateFin = periode.to;
+  }
   if (curseur) input.curseur = curseur;
+  return input;
+}
+
+/**
+ * Filtres de l'AGRÉGAT de somme nette (TX-RECHERCHE-SOMME-NETTE1) : EXACTEMENT la même
+ * projection de filtres que la liste, mais SANS curseur ni limite.
+ *
+ * On DÉRIVE de `versInputBackend` au lieu de recopier les champs : le total affiché doit
+ * porter les mêmes lignes que la liste affichée, donc un futur filtre ajouté à la liste
+ * DOIT atterrir mécaniquement dans la somme. Le recopier ouvrirait une divergence
+ * silencieuse (un filtre appliqué à la liste mais pas au total = faux chiffre).
+ *
+ * Le retrait de `curseur`/`limite` est EXPLICITE : une somme porte sur TOUT le jeu
+ * filtré, jamais sur une page (piège TX-FILTRE1), et `sommeNetteSchema` est `.strict()`
+ * — un curseur égaré ferait échouer l'agrégat en INVALID_PARAMS. `versInputBackend(f,
+ * null, periode)` n'en pose aucun aujourd'hui ; ces deux lignes FIGENT l'invariant au
+ * lieu de dépendre de sa relecture.
+ *
+ * La fenêtre GLOBALE (`periode`) descend par le MÊME `versInputBackend` : la somme est
+ * donc bornée à la période EXACTEMENT comme la liste (un total qui ne totaliserait pas
+ * la même fenêtre que les lignes affichées serait un faux chiffre).
+ */
+export function versFiltresSommeNette(
+  filtres: FiltresTransactions | undefined,
+  periode?: PeriodeBornes,
+): Partial<SommeNetteInput> {
+  const input = versInputBackend(filtres, null, periode);
+  delete input.curseur;
+  delete input.limite;
   return input;
 }
 
@@ -133,6 +188,26 @@ export function versLigneUI(
     niveauFiabilite: normaliserNiveauFiabilite(ligne.confidenceLevel),
     sourceClassification: normaliserSourceClassification(ligne.classificationSource),
   };
+}
+
+/**
+ * Convertit les TOTAUX Backend en totaux UI. Seule réconciliation : `currency` → `devise`
+ * (le contrat UI de cette page est en français — `devise`, `montantAbs`, `sens`).
+ *
+ * AUCUN recalcul, aucune addition : les montants sont des chaînes décimales DÉJÀ sommées
+ * en SQL (règle 8 — un `parseFloat` ici perdrait des centimes, et re-sommer côté client
+ * ne verrait de toute façon qu'une page).
+ */
+export function versSommeNetteUI(
+  totaux: SommeNetteDeviseBackend[],
+): SommeNetteDevise[] {
+  return totaux.map((t) => ({
+    devise: t.currency,
+    entrees: t.entrees,
+    sorties: t.sorties,
+    net: t.net,
+    nbTransactions: t.nbTransactions,
+  }));
 }
 
 /** Convertit une page Backend complète en page UI. */

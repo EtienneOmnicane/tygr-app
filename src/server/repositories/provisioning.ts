@@ -112,6 +112,14 @@ export async function creerUtilisateurEtRattacher<TDb extends AnyPgDatabase>(
         email: nouvel.email,
         fullName: nouvel.fullName,
         passwordHash: nouvel.passwordHash,
+        // AUTH-MDP-TEMPO1 D7 : le mot de passe posé par l'ADMIN est TEMPORAIRE —
+        // le membre est gaté vers /account/password jusqu'au changement.
+        // password_changed_at date ce posage (expiration lot B + invalidation D4).
+        // Pose à l'INSERT UNIQUEMENT : le chemin « user existant » ci-dessus
+        // reste intact (on n'invalide jamais les sessions d'un user qu'on ne
+        // re-crédentialise pas).
+        mustChangePassword: true,
+        passwordChangedAt: new Date(),
       })
       .returning({ id: users.id });
     userId = inseres[0].id;

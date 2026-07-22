@@ -10,12 +10,31 @@
  * donc incapturable en headless).
  *
  * À vérifier par vision :
- *   - succès = `text-success` (jamais de rouge, réservé aux montants sortants) ;
- *   - erreur = `text-danger` + alerte ;
+ *   - succès = `text-text` appuyé (jamais de rouge, réservé aux montants sortants ; et
+ *     plus de vert en texte non plus — 3,46:1, sous l'AA, A11Y-VERT-SUCCES1) ;
+ *   - erreur = `Callout severite="danger"` (fond + icône + message, §3.4) + alerte ;
  *   - le lien « Voir mon tableau de bord » a une cible (#) et un focus visible ;
  *   - le message de redirection est bref et neutre.
  */
 import { WidgetFeedback } from "@/components/widget/widget-feedback";
+import type { ConnexionNommable } from "@/components/banques/noms-banques";
+
+/**
+ * Banques de l'écran, telles que le RSC les résout sous RLS. La clé de jointure est
+ * `omnifiConnectionId` — l'identifiant AMONT — et c'est tout l'enjeu du lot : les
+ * signaux `reparation`/`aReconnecter` le portent, tandis que notre UUID interne
+ * (`bank_connections.id`) ne correspondrait JAMAIS.
+ *
+ * La 3ᵉ entrée est SANS nom à dessein (`institution_name` est nullable, dette
+ * DASH-INST1) : c'est elle qui déclenche le repli anonyme du bloc 12. Une fixture où
+ * tout serait nommable rendrait ce repli incapturable — et la vitrine passerait au vert
+ * sans jamais montrer le cas dégradé.
+ */
+const CONNEXIONS_DEMO: ConnexionNommable[] = [
+  { omnifiConnectionId: "omnifi-cx-1", institutionName: "Absa Internet Banking" },
+  { omnifiConnectionId: "omnifi-cx-2", institutionName: "MCB Juice" },
+  { omnifiConnectionId: "omnifi-cx-3", institutionName: null },
+];
 
 function Bloc({
   titre,
@@ -59,7 +78,7 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="2. Succès SANS redirection — bandeau + lien"
-          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre : le partiel est NEUTRE (une phrase d'échec en vert, c'était le faux message de victoire), le complet est vert."
+          description="Succès partiel (au moins un échec) OU flag `complet` pas encore exposé par le Backend. On NE redirige PAS (ne pas masquer un échec) : on confirme et on offre un lien d'action explicite vers le Dashboard. Le TON suit le registre, mais ne passe PLUS par le vert (3,46:1, sous l'AA — A11Y-VERT-SUCCES1) : le partiel est en `text-muted`, le complet en `text-text` appuyé. Une phrase d'échec rendue en vert était le faux message de victoire corrigé par la PR #202 ; la distinction subsiste, elle se joue désormais entre deux neutres."
         >
           {/* PARTIEL — registre `neutre` : le message DIT l'échec, le ton ne le contredit pas. */}
           <WidgetFeedback
@@ -75,14 +94,14 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="3. Erreur de finalisation"
-          description="Message déjà mappé S2 (non énumérant), affiché en text-danger avec role=alert. Pas de redirection."
+          description="Message déjà mappé S2 (non énumérant), rendu en Callout danger (fond danger-bg + icône, §3.4) avec role=alert. Pas de redirection."
         >
           <WidgetFeedback erreurFinalisation="La connexion n'a pas pu être finalisée. Réessayez dans un instant." />
         </Bloc>
 
         <Bloc
           titre="4. Erreur de démarrage (LinkToken)"
-          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Affiché en text-danger."
+          description="Échec à l'ouverture du widget (ex. origine non autorisée en dev http). Rendu en Callout danger (§3.4)."
         >
           <WidgetFeedback erreurDemarrage="Paramètres invalides." />
         </Bloc>
@@ -155,14 +174,60 @@ export default function BanqueConnexionDemoPage() {
 
         <Bloc
           titre="10. Désalignement EndUser (403) — « Reconnecter cette banque »"
-          description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n'est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l'utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
+          description="La synchro a répondu 403 (PUBLIC_TOKEN_CLIENT_MISMATCH) pour une banque : son accès n’est plus valide (comptes silencieusement vides). État ACTIONNABLE distinct de la réparation MFA — pas de reprise possible, l’utilisateur relance une connexion via « Connecter une banque ». Message status, jamais en rouge de donnée."
         >
           <WidgetFeedback
-            succes="Synchronisation effectuée — 1 banque(s) à jour, 2 compte(s) mis à jour. 1 banque(s) doivent être reconnectées — leur accès n'est plus valide."
+            succes="Synchronisation effectuée — 1 banque(s) à jour, 2 compte(s) mis à jour. 1 banque(s) doivent être reconnectées — leur accès n’est plus valide."
             aReconnecter={[{ connectionId: "cx_demo_403" }]}
           />
         </Bloc>
+
+        <BlocsClarteCycle />
       </main>
     </div>
+  );
+}
+
+/**
+ * Blocs AJOUTÉS par le lot « clarté du cycle de connexion » (loader honnête + nom de
+ * banque). Regroupés dans un composant à part pour que la vitrine historique ci-dessus
+ * reste lisible d'un bloc.
+ */
+function BlocsClarteCycle() {
+  return (
+    <>
+        <Bloc
+          titre="11. Synchronisation en cours — loader INDÉTERMINÉ"
+          description="La synchro est serveur-synchrone et dure couramment plusieurs dizaines de secondes ; une ligne de texte immobile se lisait comme un écran figé. À vérifier par vision : PAS de barre qui se remplit, PAS de palier nommé — l'amont n'expose aucune progression pendant le scrape, les inventer mentirait précisément quand le job traîne. La navette dit « ça travaille, durée inconnue », la phrase donne l'ordre de grandeur."
+        >
+          <WidgetFeedback synchroEnCours />
+        </Bloc>
+
+        <Bloc
+          titre="12. Banques NOMMÉES — réparation MFA et accès invalide"
+          description="Le lot « nom de banque » : les signaux portent des identifiants opaques AMONT, la liste de l'écran est indexée par notre UUID interne — la jointure passe par `omnifiConnectionId`. Quand toutes les banques sont nommables, le NOM passe en tête ; sinon on garde la formulation anonyme (tout ou rien). À vérifier : chaque bouton « Reconnecter » porte le nom de SA banque — empilés sans libellé, ils étaient indiscernables."
+        >
+          {/* Toutes nommables → noms affichés. */}
+          <WidgetFeedback
+            connexions={CONNEXIONS_DEMO}
+            reparation={[
+              { connectionId: "omnifi-cx-1", jobId: "job-1" },
+              { connectionId: "omnifi-cx-2", jobId: "job-2" },
+            ]}
+            onReconnecter={() => {}}
+            aReconnecter={[{ connectionId: "omnifi-cx-1" }]}
+          />
+          {/* Une banque sans `institution_name` (colonne nullable) → repli ANONYME
+              intégral, jamais « Absa et 1 autre banque » : nommer à moitié laisserait
+              croire que la seconde est d'une autre nature. */}
+          <WidgetFeedback
+            connexions={CONNEXIONS_DEMO}
+            aReconnecter={[
+              { connectionId: "omnifi-cx-1" },
+              { connectionId: "omnifi-cx-3" },
+            ]}
+          />
+        </Bloc>
+    </>
   );
 }

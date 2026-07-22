@@ -41,6 +41,7 @@ import type { WorkspaceContext, WorkspaceTx } from "@/server/db/tenancy";
 import {
   estDateComptableValide,
   type ListerTransactionsInput,
+  type SommeNetteInput,
   type StatutVentilation,
 } from "@/lib/transactions-schema";
 
@@ -69,7 +70,8 @@ export interface TransactionLigne {
    * REPLI d'affichage quand `cleanLabel` (marchand enrichi) est vide — décision
    * produit assumée 2026-06-23 : on préfère montrer le narratif brut (« DBIT / POS
    * / … ») plutôt qu'un « Opération bancaire » générique. Narratif de relevé, pas
-   * de PII nominative ; la recherche (ILIKE) reste sur cleanLabel uniquement.
+   * de PII nominative ; la recherche (ILIKE) porte sur la même cascade que
+   * l'affichage — marchand nettoyé SINON brut (cf. `conditionsFiltres`).
    */
   bankLabelRaw: string | null;
   primaryCategory: string | null;
@@ -119,6 +121,33 @@ export interface PageTransactions {
   lignes: TransactionLigne[];
   curseurSuivant: string | null;
   hasMore: boolean;
+}
+
+/**
+ * Total des résultats FILTRÉS, pour UNE devise (TX-RECHERCHE-SOMME-NETTE1).
+ *
+ * Multi-devises (règle 8) : une entrée PAR devise, JAMAIS d'addition cross-devise et
+ * aucune conversion FX (chantier DASH-FX1). Montants = chaînes décimales à 2
+ * décimales (l'échelle est figée en SQL — cf. `sommeNetteParDevise`).
+ *
+ * ⚠️ CONVENTION DE SIGNE (identique à `cashflowParDevise`/`synthesePeriodeParDevise` —
+ * une seule convention dans toute l'app) :
+ *  - `entrees` et `sorties` sont des MAGNITUDES POSITIVES (des montants, pas des
+ *    flux signés) ;
+ *  - `net` = `entrees − sorties`, SIGNÉ (négatif si le filtre sort plus qu'il n'entre).
+ * Le SENS d'une transaction vient de `credit_debit` (colonne sous CHECK), JAMAIS du
+ * signe de `amount` : l'ingestion (`normaliserMontant`) persiste une valeur ABSOLUE.
+ */
+export interface SommeNetteDevise {
+  currency: string;
+  /** Somme des Credit, magnitude ≥ 0 (chaîne décimale). */
+  entrees: string;
+  /** Somme des Debit, magnitude ≥ 0 (chaîne décimale). */
+  sorties: string;
+  /** `entrees − sorties`, SIGNÉ (chaîne décimale) — calculé en SQL, jamais en TS. */
+  net: string;
+  /** Nombre de transactions agrégées dans cette devise. */
+  nbTransactions: number;
 }
 
 /** Curseur mal formé / falsifié (forme valide mais contenu indécodable). */
@@ -193,27 +222,13 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
   _ctx: WorkspaceContext,
   params: ListerTransactionsInput,
 ): Promise<PageTransactions> {
-  const { recherche, bankAccountId, statut, dateDebut, dateFin, curseur, limite } =
-    params;
+  const { statut, curseur, limite } = params;
 
-  // Prédicats de filtre. La RLS scope déjà au workspace ; ces conditions sont
-  // métier (jamais workspace_id, qui n'est pas un paramètre).
-  const conditions = [eq(transactionsCache.isRemoved, false)];
-  if (bankAccountId) {
-    conditions.push(eq(transactionsCache.bankAccountId, bankAccountId));
-  }
-  if (recherche) {
-    // ILIKE sur le libellé NETTOYÉ uniquement (bank_label_raw = PII, règle 8).
-    // Échappe les méta-caractères LIKE pour traiter la saisie comme littérale.
-    const motif = `%${recherche.replace(/[\\%_]/g, "\\$&")}%`;
-    conditions.push(ilike(transactionsCache.cleanLabel, motif));
-  }
-  if (dateDebut) {
-    conditions.push(gte(transactionsCache.transactionDate, dateDebut));
-  }
-  if (dateFin) {
-    conditions.push(lte(transactionsCache.transactionDate, dateFin));
-  }
+  // Prédicats de filtre MÉTIER — helper PARTAGÉ avec `sommeNetteParDevise` : le total
+  // affiché DOIT porter exactement les mêmes lignes que la liste affichée. La RLS
+  // scope déjà au workspace ; ces conditions ne touchent jamais workspace_id (qui
+  // n'est pas un paramètre client).
+  const conditions = conditionsFiltres(params);
 
   // Reprise keyset : strictement APRÈS la dernière ligne de la page précédente,
   // dans l'ordre (date DESC, id DESC). Comparateur de TUPLE en SQL.
@@ -250,18 +265,7 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
   // RLS de categories ne peut donc rien filtrer de plus que celle des splits).
   // `array_agg(… order by tc.amount desc, …)` élit la part au plus gros montant ;
   // départage déterministe par nom puis category_id à montants égaux.
-  const agg = sql`(
-    select
-      tc.transaction_id  as txn_id,
-      tc.transaction_date as txn_date,
-      count(*)::int       as nb_splits,
-      coalesce(sum(tc.amount), 0)::numeric as montant_ventile,
-      (array_agg(tc.category_id order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_id,
-      (array_agg(cat.name        order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_nom
-    from transaction_categorizations tc
-    join categories cat on cat.id = tc.category_id
-    group by tc.transaction_id, tc.transaction_date
-  ) agg`;
+  const agg = aggregatVentilation();
 
   // Agrégat « aplati » : COALESCE pour les transactions sans aucun split (la
   // jointure LEFT laisse NULL → 0). Réutilisé en projection ET dans le filtre de
@@ -326,10 +330,7 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       bankConnections,
       eq(bankAccounts.connectionId, bankConnections.id),
     )
-    .leftJoin(
-      agg,
-      sql`agg.txn_id = ${transactionsCache.id} and agg.txn_date = ${transactionsCache.transactionDate}`,
-    )
+    .leftJoin(agg, jointureAggregat())
     .where(and(...conditions))
     // Tri total déterministe (cf. en-tête) — aligné sur l'index couvrant.
     .orderBy(
@@ -357,6 +358,107 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Agrégat — somme nette des résultats FILTRÉS, par devise             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Somme nette du jeu FILTRÉ (TX-RECHERCHE-SOMME-NETTE1), groupée PAR DEVISE.
+ *
+ * POURQUOI un agrégat SERVEUR (piège TX-FILTRE1) : la pagination est en KEYSET → le
+ * client ne détient qu'UNE page. Sommer côté client ne totaliserait que le VISIBLE,
+ * pas l'ensemble filtré. Le total est donc calculé EN SQL, dans la même transaction
+ * `withWorkspace` (RLS), avec les MÊMES prédicats que `listerTransactions`
+ * (`conditionsFiltres` + `predicatStatut`, partagés) mais SANS curseur ni LIMIT :
+ * une somme porte sur TOUT le jeu filtré.
+ *
+ * ⚠️ SIGNE — le piège de cet agrégat. Le sens d'une transaction vient de
+ * `credit_debit` (colonne sous CHECK `IN ('Credit','Debit')`), JAMAIS du signe de
+ * `amount` : l'ingestion (`normaliserMontant`, regex `^\d{1,13}(\.\d+)?$` — aucun
+ * signe accepté) persiste une valeur ABSOLUE, et `amount` n'a aucun CHECK de signe.
+ * Un `sum(amount)` nu ADDITIONNERAIT donc les sorties aux entrées (total faux,
+ * toujours positif). On somme par `filter (where credit_debit = …)`, comme
+ * `cashflowParDevise` et `synthesePeriodeParDevise` — une seule convention dans l'app :
+ * `entrees`/`sorties` = magnitudes positives, `net = entrees − sorties` = signé.
+ *
+ * `round(…, 2)::text` (et non `::text` nu) fige l'ÉCHELLE à 2 décimales même quand le
+ * `coalesce` retombe sur le littéral 0 (devise sans aucune entrée, p. ex.) — sinon "0"
+ * vs "0.00" selon la présence de données, ce qui casserait l'alignement des virgules
+ * décimales à l'affichage (contrat « chaîne décimale », règle 8). Zéro float, de la
+ * base à l'écran.
+ *
+ * ⚠️ `round(…, 2)` et NON `::numeric(15,2)` (le cast qu'emploient `cashflowParDevise` /
+ * `synthesePeriodeParDevise`) : ce cast fige l'échelle MAIS impose aussi un PLAFOND de
+ * précision (|x| < 10^13) — inoffensif sur une colonne, atteignable sur une SOMME. Un
+ * cumul qui le dépasse lève `numeric field overflow` au lieu de renvoyer un total. Cet
+ * agrégat y est plus exposé que ses deux modèles : eux sont bornés par une fenêtre de
+ * dates, lui peut porter sur TOUT l'historique d'une devise. `round` donne la même
+ * garantie d'échelle sans le plafond. (Les deux sites existants gardent le leur : dette
+ * TODOS AGREGATS-NUMERIC-PLAFOND1, hors périmètre de cette PR.)
+ *
+ * Multi-devises (règle 8) : GROUP BY devise, JAMAIS d'addition cross-devise, aucune
+ * conversion FX (chantier DASH-FX1). Ordonné par devise (affichage stable). Jeu
+ * filtré vide → tableau vide.
+ */
+export async function sommeNetteParDevise<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  _ctx: WorkspaceContext,
+  params: SommeNetteInput,
+): Promise<SommeNetteDevise[]> {
+  const conditions = conditionsFiltres(params);
+  if (params.statut) {
+    conditions.push(predicatStatut(params.statut));
+  }
+
+  // Flux par SENS — `credit_debit` (sous CHECK) fait autorité, jamais le signe de
+  // `amount` (cf. avertissement ci-dessus). Fragments réutilisés dans les trois
+  // projections → `net` ne peut pas dériver de `entrees`/`sorties`.
+  const entrees = sql`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Credit'), 0)`;
+  const sorties = sql`coalesce(sum(${transactionsCache.amount}) filter (where ${transactionsCache.creditDebit} = 'Debit'), 0)`;
+
+  const lignes = await tx
+    .select({
+      currency: transactionsCache.currency,
+      entrees: sql<string>`round(${entrees}, 2)::text`,
+      sorties: sql<string>`round(${sorties}, 2)::text`,
+      // net = entrées − sorties, calculé EN SQL (numeric exact), jamais en TS.
+      net: sql<string>`round(${entrees} - ${sorties}, 2)::text`,
+      nbTransactions: sql<number>`count(*)::int`,
+    })
+    .from(transactionsCache)
+    // ENTITY-READ-JOIN1 : héritage de la policy `entity_scope` (étage 2), qui vit sur
+    // bank_accounts. Jointure SÛRE en cardinalité (bank_account_id NOT NULL → 1:1) :
+    // elle ne duplique aucune ligne, donc ne fausse aucun montant.
+    //
+    // ⚠️ Ce n'est PAS la seule garde du périmètre, et pas la principale : depuis 0017,
+    // `transactions_cache` (mère + partitions) porte elle-même `account_scope`
+    // RESTRICTIVE, et `withWorkspace` TRADUIT le scope entité d'un membre en liste de
+    // comptes (GUC account_scope). Le total d'un membre scopé est donc déjà borné sans
+    // cette jointure — elle reste de la DÉFENSE EN PROFONDEUR (axe entité) et l'alignement
+    // strict sur le jeu de lignes de la liste. Ne pas la retirer pour autant : c'est
+    // l'invariant de lecture du dépôt (jamais de lecture des tables filles sans joindre
+    // bank_accounts).
+    //
+    // `bank_connections` n'est délibérément PAS joint (la liste ne le joint que pour
+    // PROJETER institution_name) : cette table ne porte QUE `tenant_isolation` (0003) —
+    // aucune policy entity/account — et `bank_accounts.connection_id` est NOT NULL vers
+    // le même workspace ⇒ la jointure de la liste ne peut écarter aucune ligne.
+    // L'omettre est donc NEUTRE sur le jeu de lignes : la somme reste exactement celle
+    // des lignes listées.
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    // Agrégat de ventilation joint INCONDITIONNELLEMENT (comme la liste) : le filtre de
+    // statut s'appuie dessus, et le brancher conditionnellement ferait diverger les
+    // types du builder. Table dérivée PRÉ-groupée (un seul scan groupé, pas un N+1),
+    // cardinalité 1:1 max par (transaction_id, transaction_date) → aucune duplication
+    // de ligne, donc aucune somme faussée.
+    .leftJoin(aggregatVentilation(), jointureAggregat())
+    .where(and(...conditions))
+    .groupBy(transactionsCache.currency)
+    .orderBy(transactionsCache.currency);
+
+  return lignes;
+}
+
 /**
  * Prédicat SQL du filtre de statut, basé sur l'agrégat JOINT `agg` (mêmes
  * colonnes que la projection → cohérence stricte filtre/affichage). On passe par
@@ -377,4 +479,90 @@ function predicatStatut(statut: StatutVentilation) {
     case "PARTIEL":
       return sql`${nb} > 0 and ${somme} < abs(${transactionsCache.amount})`;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Prédicats & fragments SQL PARTAGÉS (liste ↔ somme nette)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Prédicats de filtre MÉTIER communs à `listerTransactions` et à
+ * `sommeNetteParDevise`. Partagés VOLONTAIREMENT (et non recopiés) : si la somme
+ * filtrait autrement que la liste, le total affiché ne correspondrait plus aux lignes
+ * affichées — un faux chiffre sur un écran financier, sans le moindre signal d'erreur.
+ * Les deux appelants ajoutent ensuite ce qui leur est propre : le curseur keyset (la
+ * liste seule) et le statut de ventilation (qui dépend de l'agrégat joint).
+ *
+ * Ne contient JAMAIS `workspace_id` : l'isolation tenant est portée par la RLS, pas
+ * par un WHERE applicatif (règle 2).
+ */
+function conditionsFiltres(params: {
+  recherche?: string;
+  bankAccountId?: string;
+  dateDebut?: string;
+  dateFin?: string;
+}) {
+  const { recherche, bankAccountId, dateDebut, dateFin } = params;
+
+  const conditions = [eq(transactionsCache.isRemoved, false)];
+  if (bankAccountId) {
+    conditions.push(eq(transactionsCache.bankAccountId, bankAccountId));
+  }
+  if (recherche) {
+    // Échappe les méta-caractères LIKE pour traiter la saisie comme littérale.
+    const motif = `%${recherche.replace(/[\\%_]/g, "\\$&")}%`;
+    // ILIKE sur le libellé CHERCHABLE : le marchand nettoyé s'il est non vide
+    // (même `trim` que `resoudreLibelle`), SINON le brut bancaire — c'est-à-dire
+    // ce que la colonne Libellé AFFICHE. Avant ce correctif, seul `clean_label`
+    // était interrogé : ~1 tx sur 3 (clean_label NULL) restait INTROUVABLE alors
+    // que son libellé brut était à l'écran ET que le moteur de règles, lui, le
+    // matche (incohérence chercher/afficher/règles). Le niveau intermédiaire de
+    // la cascade (« catégorie FR ») est un mapping applicatif TS, non transposable
+    // ici — compromis assumé : la recherche couvre marchand + brut.
+    // Règle 8 : elle interdit le brut dans les LOGS/télémétrie, pas dans un WHERE
+    // (le motif reste un paramètre lié ; rien n'est journalisé) — le brut est
+    // d'ailleurs AFFICHÉ en repli depuis la décision produit du 2026-06-23.
+    conditions.push(
+      ilike(
+        sql`coalesce(nullif(trim(${transactionsCache.cleanLabel}), ''), ${transactionsCache.bankLabelRaw})`,
+        motif,
+      ),
+    );
+  }
+  if (dateDebut) {
+    conditions.push(gte(transactionsCache.transactionDate, dateDebut));
+  }
+  if (dateFin) {
+    conditions.push(lte(transactionsCache.transactionDate, dateFin));
+  }
+  return conditions;
+}
+
+/**
+ * Table dérivée PRÉ-AGRÉGÉE des splits de ventilation (anti-N+1) — le POURQUOI de sa
+ * forme (table dérivée nommée plutôt que sous-requête scalaire ou LATERAL) est détaillé
+ * dans `listerTransactions`. Fragment PARTAGÉ : le filtre de statut de la SOMME doit
+ * s'appuyer sur exactement le même agrégat que celui de la LISTE.
+ *
+ * Renvoyée par une FONCTION (et non exposée en const de module) pour ne jamais partager
+ * une instance de fragment SQL entre deux requêtes.
+ */
+function aggregatVentilation() {
+  return sql`(
+    select
+      tc.transaction_id  as txn_id,
+      tc.transaction_date as txn_date,
+      count(*)::int       as nb_splits,
+      coalesce(sum(tc.amount), 0)::numeric as montant_ventile,
+      (array_agg(tc.category_id order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_id,
+      (array_agg(cat.name        order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_nom
+    from transaction_categorizations tc
+    join categories cat on cat.id = tc.category_id
+    group by tc.transaction_id, tc.transaction_date
+  ) agg`;
+}
+
+/** Condition de jointure de l'agrégat ci-dessus (clé composite de la table partitionnée). */
+function jointureAggregat() {
+  return sql`agg.txn_id = ${transactionsCache.id} and agg.txn_date = ${transactionsCache.transactionDate}`;
 }
