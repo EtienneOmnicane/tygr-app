@@ -45,6 +45,7 @@ import {
   WorkspaceAccessDeniedError,
   type ExecuterWorkspace,
 } from "@/server/db/tenancy";
+import { codePg, PG_PRIVILEGE_INSUFFISANT } from "@/server/db/erreurs-pg";
 import type { OmniFiAccount, OmniFiClient } from "@/server/omnifi";
 import {
   ConnexionHorsPerimetreError,
@@ -115,6 +116,25 @@ async function comptesEnBaseSousOwner(): Promise<string[]> {
   );
   await client.exec(`set role tygr_app;`);
   return r.rows.map((l) => l.oa);
+}
+
+/**
+ * omnifi_connection_id de TOUTES les connexions, lues sous l'OWNER.
+ *
+ * C'est ICI que le ROLLBACK est réellement en jeu, et nulle part ailleurs :
+ * `bank_connections` ne porte que `tenant_isolation` (PERMISSIVE, 0003) — AUCUNE policy
+ * de périmètre. Un membre borné a donc le droit d'y INSÉRER, et `upsertConnexion` passe
+ * avant que `upsertCompte` ne soit refusé. Sur `bank_accounts` la RLS garantit déjà
+ * l'absence d'écriture : y vérifier le rollback est un no-op qui ne prouve rien
+ * (constat de cross-review 2026-07-22 — la suite restait verte en cassant l'atomicité).
+ */
+async function connexionsEnBaseSousOwner(): Promise<string[]> {
+  await client.exec(`reset role;`);
+  const r = await client.query<{ oc: string }>(
+    `select omnifi_connection_id as oc from bank_connections order by omnifi_connection_id`,
+  );
+  await client.exec(`set role tygr_app;`);
+  return r.rows.map((l) => l.oc);
 }
 
 beforeAll(async () => {
@@ -344,7 +364,40 @@ describe("ceinture 42501 — le chemin d'ÉCRITURE nomme aussi le refus", () => 
     ).rejects.toBeInstanceOf(WorkspaceAccessDeniedError);
   });
 
-  it("9. contre-preuve : un MANAGER non borné persiste réellement le compte", async () => {
+  it("9. un 42501 de PRIVILÈGE n'est PAS maquillé en refus de périmètre", async () => {
+    // LE mode de défaillance de tout catch par SQLSTATE. Postgres rend `42501` pour
+    // « violates RLS policy » ET pour « permission denied for table » — indiscernables.
+    // Ici l'acteur est en Vision Globale (AUCUN périmètre) : son 42501 ne PEUT pas être
+    // un refus de périmètre. Le lui dire lui ferait lire « contactez un administrateur »
+    // alors qu'il EST l'administrateur, et déguiserait un drift de provisioning (aléa
+    // documenté du pipeline : les GRANT ne mordent qu'au re-provision post-migrate) en
+    // refus utilisateur routinier.
+    await client.exec(`reset role;`);
+    await client.exec(`revoke insert on bank_accounts from tygr_app;`);
+    await client.exec(`set role tygr_app;`);
+    let erreur: unknown;
+    try {
+      await persisterConnexionEtComptes(
+        execWs(MGR_GLOBAL, WS_A),
+        { ConnectionId: "oc-privilege", InstitutionId: "mcb" },
+        [compteAmont("oa-privilege")],
+      );
+    } catch (e) {
+      erreur = e;
+    } finally {
+      await client.exec(`reset role;`);
+      await client.exec(`grant insert on bank_accounts to tygr_app;`);
+      await client.exec(`set role tygr_app;`);
+    }
+
+    // C'est BIEN un 42501 — sans cette assertion, le test passerait sur n'importe quel
+    // autre échec et ne prouverait rien du tri.
+    expect(codePg(erreur)).toBe(PG_PRIVILEGE_INSUFFISANT);
+    // …et il n'a PAS été traduit.
+    expect(erreur).not.toBeInstanceOf(ConnexionHorsPerimetreError);
+  });
+
+  it("10. contre-preuve : un MANAGER non borné persiste réellement le compte", async () => {
     // Sans elle, les tests 6/7 passeraient sur un `persisterConnexionEtComptes`
     // universellement cassé (tout refuser n'est pas isoler).
     const n = await persisterConnexionEtComptes(
@@ -353,16 +406,33 @@ describe("ceinture 42501 — le chemin d'ÉCRITURE nomme aussi le refus", () => 
       [compteAmont("oa-ok")],
     );
     expect(n).toBe(1);
+    // Assertions d'écriture portées par CE test, pas par le suivant : chaque `it` reste
+    // autonome (le dossier n'a pas de `beforeEach` — les fixtures sont partagées, et une
+    // assertion positive placée dans un test AVAL le rend dépendant de l'ordre).
+    expect(await comptesEnBaseSousOwner()).toContain("oa-ok");
+    expect(await connexionsEnBaseSousOwner()).toContain("oc-ok");
   });
 
-  it("10. aucun compte n'a été écrit par les tentatives refusées", async () => {
-    // La preuve que le refus est bien un ROLLBACK, et non un message posé sur une
-    // écriture déjà passée. Lecture sous l'OWNER : un `[]` sous `tygr_app` serait
-    // ambigu (RLS ou absence ?) — ici la question ne se pose pas.
+  it("11. les tentatives refusées n'ont laissé NI compte NI connexion (rollback)", async () => {
+    // Assertions d'ABSENCE uniquement : insensibles à l'ordre d'exécution et à tout test
+    // futur qui écrirait un compte (une égalité de liste exacte rendait cette suite
+    // dépendante du test 10 — flake sous `--sequence.shuffle`, constat de cross-review).
     const comptes = await comptesEnBaseSousOwner();
-    expect(comptes).toEqual(["oa-ok", "oa-sucre"]);
     expect(comptes).not.toContain("oa-refus-entite");
     expect(comptes).not.toContain("oa-refus-compte");
     expect(comptes).not.toContain("oa-intrus");
+    expect(comptes).not.toContain("oa-privilege");
+
+    // LE cas qui compte : `bank_connections` n'a pas de policy de périmètre, l'INSERT de
+    // la connexion PASSE, et seul le ROLLBACK de la transaction empêche une connexion
+    // orpheline de survivre à un refus. C'est la seule assertion de cette suite qui
+    // tombe si l'atomicité est cassée.
+    const connexions = await connexionsEnBaseSousOwner();
+    expect(connexions).not.toContain("oc-refus-entite");
+    expect(connexions).not.toContain("oc-refus-compte");
+    expect(connexions).not.toContain("oc-intrus");
+    expect(connexions).not.toContain("oc-privilege");
+    // La contre-preuve « le chemin nominal écrit bien » vit dans le test 10, pas ici :
+    // l'y remettre rendrait ce test dépendant de son exécution préalable.
   });
 });

@@ -1652,6 +1652,31 @@ autorisées, règle 9).
   `deriverDateComptableMaurice`) — donc PAS de dette Backend bloquante ; le jour où une
   telle clause SQL sera posée, elle devra employer `Indian/Mauritius`.
 
+### Refus de connexion hors périmètre — constats du mutation-check (2026-07-22, PR `feat/connexion-refus-nomme`)
+
+Lot ENTITY-CONNEXION-REFUS-NOMME1 livré avec sa suite d'isolation
+(`tests/isolation/connexion-perimetre-isolation.test.ts`, 11 cas). Le mutation-check a
+validé 4 mutations sur 5 (clause `accountScope` retirée → tests 1 et 3 rouges ; garde
+amont neutralisée → 2 et 3 ; ceinture devenue catch-all → 8 ; ceinture supprimée → 6 et
+7). La cinquième n'a rien fait rougir — c'est le constat ci-dessous.
+
+- [ ] **CONNEXION-CLAUSE-ENTITE1 (P2, effort ~0 en statu quo) — la clause
+  `ctx.entityScope.mode === "ENTITES"` de `estLecteurBorne` (`src/server/db/tenancy.ts`)
+  n'est protégée par AUCUN test.** Mutation vérifiée le 2026-07-22 : la retirer laisse
+  **11/11** de la suite du lot ET **727/727** de `tests/isolation` au vert. Ce n'est pas
+  un trou de couverture qu'on aurait oublié de boucher : la clause est **logiquement
+  redondante**, parce que `withWorkspace` traduit toujours le périmètre entité en
+  périmètre compte (`ENTITES ⟹ COMPTES`) — sa propre docstring l'énonce déjà. On la
+  **CONSERVE** : c'est une ceinture qui reprendrait son sens si la traduction
+  entité→comptes disparaissait, et la supprimer pour « faire propre » créerait
+  précisément la régression silencieuse qu'elle prévient. Aucune conséquence de
+  sécurité : l'autorité reste la RLS (policies `entity_scope` 0014 / `account_scope`
+  0016), et l'axe entité est prouvé par ailleurs (test 2 du lot, suites `entites-*`).
+  **Déclencheur** : toute retouche du résolveur de scope de `withWorkspace` touchant la
+  traduction entité→comptes — ce jour-là, trancher explicitement entre « la clause
+  redevient nécessaire → lui écrire son test » et « elle est définitivement morte → la
+  retirer ». Ne pas laisser le mutation-check suivant redécouvrir le même angle mort.
+
 ### Entités multi-tenant (Option B) — dettes ouvertes par le plan (2026-06-22)
 
 Plan de référence validé : `PLAN-entites-multi-tenant.md` (§5). Le socle Entités L1→L2

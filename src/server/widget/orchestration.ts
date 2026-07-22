@@ -34,7 +34,11 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import { masquerCompte } from "@/lib/masquage";
 import { peutModifier } from "@/lib/permissions";
-import type { ExecuterWorkspace, WorkspaceTx } from "@/server/db/tenancy";
+import type {
+  ExecuterWorkspace,
+  WorkspaceContext,
+  WorkspaceTx,
+} from "@/server/db/tenancy";
 // Prédicat PARTAGÉ « le périmètre du membre est-il borné ? » — importé, JAMAIS recopié
 // (sa docstring l'exige : une copie ici et une autre dans le test rendrait le test
 // tautologique). Même prédicat pour la lecture et pour cette écriture : les deux axes
@@ -125,8 +129,14 @@ export class ReparationContexteInvalideError extends Error {
  */
 export class ConnexionHorsPerimetreError extends Error {
   readonly code = "ENTITY_CONNECTION_OUT_OF_SCOPE";
-  constructor() {
-    super("Périmètre insuffisant pour rattacher une banque");
+  /**
+   * `options.cause` PORTE l'erreur Postgres d'origine quand le refus vient de la ceinture
+   * 42501 (jamais quand il vient de la garde applicative, qui n'a rien à emballer). Elle
+   * n'est JAMAIS exposée à l'UI — `messageDepuis` ne rend que `MESSAGE_PERIMETRE` — mais
+   * sans elle un 42501 mal classé serait indiagnosticable depuis les logs.
+   */
+  constructor(options?: { cause?: unknown }) {
+    super("Périmètre insuffisant pour rattacher une banque", options);
     this.name = "ConnexionHorsPerimetreError";
   }
 }
@@ -364,17 +374,31 @@ async function ingererPartiesDesComptes(
  * POST — rien n'oblige à enchaîner les étapes dans l'ordre). Sans cette ceinture, ces
  * chemins-là conserveraient le catch-all générique que ce lot existe pour supprimer.
  *
- * Ne capture QUE 42501, et RE-LÈVE tout le reste à l'identique : une panne réseau, une
- * violation d'unicité ou un garde-fou tenant ne doivent JAMAIS être maquillés en refus
- * de périmètre — ce serait exactement le catch-all silencieux qu'interdit la règle 3.
+ * ⚠️ DEUX conditions, et la seconde n'est PAS redondante. Postgres rend `42501` aussi
+ * bien pour « new row violates row-level security policy » que pour « permission denied
+ * for table X » : les deux sont INDISCERNABLES au seul SQLSTATE. Or le drift de
+ * provisioning est un aléa documenté de ce pipeline (CLAUDE.md : les GRANT ne mordent
+ * qu'au re-provision POST-migrate) — une table ajoutée par migration sans re-provision
+ * rendrait un 42501 de PRIVILÈGE. Sans le test `estLecteurBorne(ctx)`, un ADMIN en
+ * Vision Globale lirait alors « Votre périmètre ne permet pas… Contactez un
+ * administrateur » : il EST l'administrateur, et un incident P0 d'infrastructure se
+ * déguiserait en refus utilisateur routinier — UI et télémétrie pointant toutes deux à
+ * côté (constat de cross-review 2026-07-22, reproduit par `revoke insert`).
+ * Un acteur SANS périmètre ne peut pas, par construction, violer un WITH CHECK de
+ * périmètre : son 42501 est forcément autre chose, et doit remonter tel quel.
+ *
+ * La `cause` est PRÉSERVÉE : sans elle, le SQLSTATE et le message Postgres étaient
+ * détruits et le diagnostic d'un défaut de privilège devenait impossible depuis les logs.
+ *
+ * Tout le reste est RE-LEVÉ à l'identique : une panne réseau, une violation d'unicité ou
+ * un garde-fou tenant ne doivent JAMAIS être maquillés en refus de périmètre — ce serait
+ * exactement le catch-all silencieux qu'interdit la règle 3.
  */
-async function nommerRefusDePerimetre<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (e) {
-    if (codePg(e) === PG_PRIVILEGE_INSUFFISANT) throw new ConnexionHorsPerimetreError();
-    throw e;
+function nommerRefusDePerimetre(e: unknown, ctx: WorkspaceContext): unknown {
+  if (codePg(e) === PG_PRIVILEGE_INSUFFISANT && estLecteurBorne(ctx)) {
+    return new ConnexionHorsPerimetreError({ cause: e });
   }
+  return e;
 }
 
 export interface PersistanceOptions {
@@ -410,8 +434,11 @@ export async function persisterConnexionEtComptes(
   // 1. Connexion + comptes dans UNE transaction. On collecte les paires
   //    (compte Omni-FI, bankAccountId local) des comptes RÉELLEMENT rattachés
   //    pour pouvoir lier leurs parties juste après (sans relecture).
-  const rattaches = await nommerRefusDePerimetre(() =>
-    executer(async (tx, ctx) => {
+  // La ceinture 42501 vit DANS le callback : elle a besoin de `ctx` pour distinguer un
+  // refus de périmètre d'un défaut de privilège (cf. nommerRefusDePerimetre). Le `throw`
+  // reste dans la transaction, donc le ROLLBACK est inchangé.
+  const rattaches = await executer(async (tx, ctx) => {
+    try {
     const { connectionId } = await upsertConnexion(tx, ctx, {
       omnifiConnectionId: echange.ConnectionId,
       institutionId: echange.InstitutionId,
@@ -470,8 +497,10 @@ export async function persisterConnexionEtComptes(
         paires.push({ compte: c, bankAccountId });
       }
       return paires;
-    }),
-  );
+    } catch (e) {
+      throw nommerRefusDePerimetre(e, ctx);
+    }
+  });
 
   // 2. Parties (L3) : transaction SÉPARÉE, après le COMMIT des comptes ci-dessus.
   //    Best-effort fail-soft — protège la couche bancaire déjà commitée (DÉCISION 2).
