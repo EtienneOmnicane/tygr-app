@@ -2,8 +2,13 @@
 
 > Phase : **conception**. Écrit le 2026-07-22, branche `feat/perf-ventilation-agg1`.
 > Base de mesure : stack docker locale (`tygr_postgres`), workspace `Omni-FI HQ`
-> (`33c1cbaa-…`), **9 440 transactions / 480 splits**, page 1, sans filtre, `limit 51`,
+> (`33c1cbaa-…`), **9 440 transactions / 510 splits**, page 1, sans filtre, `limit 51`,
 > sous `SET ROLE tygr_app` avec les GUC de `withWorkspace`, Vision Globale.
+>
+> ⚠️ La base locale est **VIVANTE** : elle est passée de 480 à 510 splits pendant la
+> session. Les chiffres ci-dessous datés de l'exploration ont été pris à 480 ; la mesure
+> de livraison (§3.1) est **appariée** à 510. Toute re-mesure doit rejouer avant ET après
+> dos à dos, sinon elle compare deux états différents.
 
 ## 0. Statut documentaire de la dette — À CORRIGER
 
@@ -98,7 +103,12 @@ Nested Loop Left Join                          actual time=7.517..7.772 rows=51
 Execution Time: 7.979 ms
 ```
 
-**1970 ms → 7,98 ms (≈ 247×), cible < 10 ms tenue.**
+**Mesure de livraison appariée (9 440 tx / 510 splits, 3 exécutions dos à dos) :
+1947/1933/1952 ms → 8,47/8,55/8,64 ms, soit ≈ 227×. Cible < 10 ms tenue.**
+
+Équivalence de sortie prouvée sur les 9 440 lignes (toutes colonnes dérivées) : 0
+différence symétrique, 0 désaccord d'ordre, témoin 510 lignes COMPLET. Aucune ligne
+PARTIEL dans ce jeu → ce chemin ne tient que par la fixture PGlite.
 
 ### 3.2 Chemin `?statut=…` — cible NON tenable, et pourquoi
 

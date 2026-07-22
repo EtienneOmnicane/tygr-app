@@ -94,14 +94,24 @@ jour)** : voir le decision log du plan
   `LEFT JOIN LATERAL` **corrélé** sur les ≤51 lignes de la page, par index
   (`txn_categorizations_workspace_txn_idx`) ; (3) `predicatStatut` — qui filtre AVANT la
   pagination et ne peut donc pas se borner à la page — passe en **sous-requêtes corrélées**.
-  **Mesures** (base locale, 9 440 tx / 480 splits, sous `tygr_app` + GUC de `withWorkspace`,
-  Vision Globale, page 1, `limit 51`) :
+  **Mesures APPARIÉES** (base locale, **9 440 tx / 510 splits**, sous `tygr_app` + GUC de
+  `withWorkspace`, Vision Globale, page 1, `limit 51` ; 3 exécutions dos à dos sur le MÊME
+  état de données) :
 
   | Chemin | Avant | Après | Plan après |
   |---|---|---|---|
-  | dominant (sans filtre) | 1833/1843/1970 ms | **8,33/8,41/8,42/8,47 ms** | agrégat `loops=51`, Index Scan |
-  | `?statut=NON_CATEGORISE` | ~1850 ms | **14,4 ms** | Anti Join + agrégat `loops=51` |
-  | `?statut=COMPLET` | ~1850 ms | **14,5 ms** | sous-requêtes corrélées par index |
+  | dominant (sans filtre) | 1947 / 1933 / 1952 ms | **8,47 / 8,55 / 8,64 ms** (**227×**) | agrégat `loops=51`, Index Scan |
+  | `?statut=NON_CATEGORISE` | ~1940 ms | **14,4 ms** | Anti Join + agrégat `loops=51` |
+  | `?statut=COMPLET` | ~1940 ms | **14,5 ms** | sous-requêtes corrélées par index |
+
+  **Équivalence de sortie PROUVÉE sur le jeu réel** (pas seulement sur la fixture PGlite) :
+  les deux formes comparées sur les **9 440 lignes**, toutes colonnes dérivées incluses
+  (`nb_splits`, `montant_ventile`, `statut`, `cat_dominante_id`, `cat_dominante_nom`) →
+  **0 différence symétrique, 0 désaccord d'ordre**. Témoin de non-vacuité : 510 lignes
+  COMPLET portant un agrégat réel. ⚠️ Ce jeu ne contient **aucune** ligne PARTIEL — ce
+  chemin n'est donc couvert que par la fixture PGlite (`T_PART`), pas par cette
+  comparaison. Note : la base locale est VIVANTE (480 → 510 splits pendant la session) ;
+  toute re-mesure doit être appariée, sous peine de comparer deux états différents.
 
   ⚠️ **Le brief d'implémentation imposait une conception FAUSSE, réfutée à la mesure** :
   « CTE `WITH agg AS MATERIALIZED` → barrière d'optimisation → Hash Left Join → 7,9 ms ».
