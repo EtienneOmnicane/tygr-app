@@ -112,9 +112,11 @@ corrigés dans la branche :
 
 ## Réserves
 
-- Un montant à 10 chiffres et plus (« Rs 999 999 999,00 ») resterait à l'étroit au
+- ~~Un montant à 10 chiffres et plus (« Rs 999 999 999,00 ») resterait à l'étroit au
   centre du donut. Aucune fixture ne le couvre : signalé plutôt que corrigé à
-  l'aveugle.
+  l'aveugle.~~ **Levée** — la production a produit le cas (Rs 12 188 030 422,92, qui
+  mordait de 18,9 px). La fixture manquante a été ajoutée à la démo et le total central
+  passe au format compact : `docs/qa/donut-total-central/README.md`.
 - `/demo/perimetre-states` défile horizontalement à 375 px. Le coupable est le faux
   header de la page de démo (`div.ml-auto`, 311 px), pas le sélecteur — préexistant,
   hors périmètre de ce lot.

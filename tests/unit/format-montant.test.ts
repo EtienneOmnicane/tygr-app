@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chiffresPartieEntiere,
   estNegatif,
   estZero,
   formatMontant,
@@ -237,5 +238,41 @@ describe("formatMontantCompact", () => {
         expect(rendu.endsWith(suffixeAttendu)).toBe(true);
       }
     }
+  });
+});
+
+describe("chiffresPartieEntiere", () => {
+  it("compte les chiffres AFFICHÉS avant la virgule", () => {
+    expect(chiffresPartieEntiere("0.99")).toBe(1);
+    expect(chiffresPartieEntiere("999.99")).toBe(3);
+    expect(chiffresPartieEntiere("1000.00")).toBe(4);
+    expect(chiffresPartieEntiere("12188030422.92")).toBe(11);
+    expect(chiffresPartieEntiere("999888777666.55")).toBe(12);
+  });
+
+  it("ignore le signe : c'est une largeur de CHIFFRES, pas une valeur", () => {
+    expect(chiffresPartieEntiere("-12345.00")).toBe(5);
+    expect(chiffresPartieEntiere("12345.00")).toBe(5);
+  });
+
+  it("ignore les zéros de tête — ils ne s'affichent pas, donc ils ne coûtent rien", () => {
+    expect(chiffresPartieEntiere("007.00")).toBe(1);
+    expect(chiffresPartieEntiere("0.00")).toBe(1);
+  });
+
+  it("reste exacte là où un passage par Number perdrait la précision", () => {
+    // 17 chiffres : au-delà des 15-16 chiffres significatifs d'un double. Un
+    // `String(Number(x)).length` basculerait en notation exponentielle ou arrondirait ;
+    // le découpage de chaîne, lui, compte juste.
+    expect(chiffresPartieEntiere("12345678901234567.89")).toBe(17);
+  });
+
+  it("BORNE seuils du centre du donut : discrimine 7/8/9 chiffres", () => {
+    // Ces trois cardinalités gouvernent la bascule plein → compact (deux seuils selon
+    // le gabarit de devise, cf. `donut-categories.tsx`). Si cette fonction se décalait
+    // d'un rang, un montant qui déborde s'afficherait en plein — le défaut d'origine.
+    expect(chiffresPartieEntiere("1234567.89")).toBe(7);
+    expect(chiffresPartieEntiere("12345678.90")).toBe(8);
+    expect(chiffresPartieEntiere("123456789.01")).toBe(9);
   });
 });

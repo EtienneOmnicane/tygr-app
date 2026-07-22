@@ -14,9 +14,10 @@
  * queue + « Non catégorisé » en neutre. Le survol (piloté par la carte parente, partagé
  * avec la légende) met en avant une part et estompe les autres.
  */
-import { formatMontant } from "@/lib/format-montant";
+import { formatMontant, formatMontantCompact } from "@/lib/format-montant";
 import type { PartCategorie } from "@/server/insights/types";
 
+import { doitResumerAuCentre } from "./format-centre";
 import { couleurCategorie } from "./palette-categories";
 import { pourcentPart } from "./pourcent-part";
 
@@ -30,6 +31,14 @@ import { pourcentPart } from "./pourcent-part";
 // 127,9 px pour une corde de 120,2 px à sa hauteur, soit 7,7 px mordus sur l'anneau.
 // Les deux rayons montent de 6 : l'ÉPAISSEUR D'ANNEAU RESTE 36 (on agrandit le trou,
 // on ne rogne pas la donnée) et le trou gagne 9 % de diamètre.
+//
+// ⚠️ Cet élargissement a une LIMITE, atteinte en production : il achète des pixels de
+// façon linéaire quand le montant, lui, s'allonge par ordre de grandeur. Mesuré à
+// 1440 px sur `/demo/graphiques-states` : « Rs 12 188 030 422,92 » = 154,2 px pour la
+// même corde de 135,3 px (18,9 px mordus), « 999 888 777 666,55 GBP » = 180,6 px
+// (45,3 px). Continuer d'agrandir le trou finirait par manger l'anneau, qui est la
+// donnée. Le format COMPACT prend donc le relais au centre (cf. bloc du centre plus
+// bas) : la géométrie règle le cas courant, le format règle la queue.
 const VB = 220;
 const CENTRE = VB / 2;
 const RAYON_EXT = 106; // marge au bord du viewBox : 4 (stroke inter-secteurs = 1,5)
@@ -40,6 +49,57 @@ const DEBUT = -Math.PI / 2; // 12 h (haut), sens horaire
 function fractionGeo(part: string): number {
   const n = Number(part);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Montant affiché au centre de l'anneau : PLEIN tant qu'il tient dans la corde, résumé
+ * au-delà — la décision et ses seuils mesurés vivent dans `format-centre.ts` (testée
+ * là-bas ; ici on ne fait que l'appliquer). Partagé par le total et la part survolée :
+ * les deux occupent le même trou, donc la même contrainte.
+ *
+ * Pourquoi un seuil plutôt que le compact partout : le compact est APPROXIMATIF par
+ * construction et UI_GUIDELINES §4.2 le réserve aux AXES, le readout gardant le format
+ * complet — or le centre du donut est un readout. Résumer un total qui tient
+ * afficherait « Rs 4,9 M » pour Rs 4 987 654,32, soit 87 654 Rs escamotés sans aucun
+ * signal, sur le chiffre le plus lu de l'écran.
+ *
+ * Quand il compacte, l'exact reste atteignable par DEUX voies, parce que le compact ne
+ * remplace jamais l'exact, il le résume :
+ *  - `title` pour la souris, avec `pointer-events-auto` : l'overlay parent porte
+ *    `pointer-events-none` (il couvre des secteurs), et une infobulle native ne se
+ *    déclenche que sur un élément qui REÇOIT le pointeur. Sans ce rattrapage elle
+ *    serait morte — verte au lint, absente à l'usage. Le span tient dans le trou, donc
+ *    il n'intercepte aucun secteur (prouvé par `elementFromPoint`, cf. doc QA) ;
+ *  - `sr-only` en FRÈRE, jamais en enfant : imbriqué, il serait agrégé au nom
+ *    accessible du span et ferait annoncer le montant deux fois (convention retenue en
+ *    cross-review, cf. `components/ui/action-protegee.tsx`).
+ *
+ * Quand il n'y a rien à résumer, on ne rend NI title NI sr-only : le montant plein se
+ * suffit, et un doublon lecteur d'écran serait du bruit.
+ */
+function MontantCentre({ montant, devise }: { montant: string; devise: string }) {
+  const exact = formatMontant(montant, devise);
+
+  if (!doitResumerAuCentre(montant, devise)) {
+    return (
+      <span className="whitespace-nowrap text-base font-bold tabular-nums text-text">
+        {exact}
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <span
+        aria-hidden
+        title={exact}
+        className="pointer-events-auto whitespace-nowrap text-base font-bold tabular-nums text-text"
+      >
+        {formatMontantCompact(montant, devise)}
+      </span>
+      <span className="sr-only">{exact}</span>
+    </>
+  );
 }
 
 /** Point (x, y) sur un cercle centré, angle en radians. */
@@ -133,9 +193,16 @@ export function DonutCategories({
           Overlay HTML (pas du <text> SVG) → `tabular-nums` et mise en forme CSS normale.
           Un montant ne se replie JAMAIS sur deux lignes : son séparateur de milliers est
           une espace fine INSÉCABLE (U+202F, cf. `format-montant`), le `whitespace-nowrap`
-          ci-dessous ne fait qu'expliciter cette garantie. S'il ne tient pas, c'est la
-          géométrie qu'on corrige (rayons), pas le montant qu'on casse.
-          `pointer-events-none` : ne bloque pas le survol des secteurs. */}
+          ci-dessous ne fait qu'expliciter cette garantie.
+          `pointer-events-none` : ne bloque pas le survol des secteurs.
+          Le montant lui-même (plein ou résumé, et son repli vers l'exact) est la
+          responsabilité de `MontantCentre` ci-dessus — pas celle de ce bloc.
+
+          Un montant n'est JAMAIS coupé ici : la règle 8 proscrit l'ellipse sur un
+          chiffre (elle ment sur la valeur sans le dire), et `truncate` ne porte donc que
+          sur le LIBELLÉ de catégorie ci-dessous. Le format compact, lui, n'est pas une
+          coupure mais un résumé documenté qui ne peut que sous-estimer — et il ne se
+          déclenche qu'au-delà de ce que la corde peut afficher. */}
       {/* Largeur en POURCENTAGE, pas en px : le SVG est fluide (`w-full`), donc un
           padding fixe (`px-8`) ne suit pas l'échelle — il laissait 156 px de texte pour
           un trou de 128 px. 58 % du côté reste inscrit dans le cercle intérieur (2×70/220
@@ -146,9 +213,7 @@ export function DonutCategories({
             <span className="max-w-full truncate text-xs font-medium text-text-muted">
               {partActive.categorie}
             </span>
-            <span className="whitespace-nowrap text-base font-bold tabular-nums text-text">
-              {formatMontant(partActive.montant, devise)}
-            </span>
+            <MontantCentre montant={partActive.montant} devise={devise} />
             <span className="text-xs tabular-nums text-text-faint">
               {pourcentPart(partActive.part)}
             </span>
@@ -158,9 +223,7 @@ export function DonutCategories({
             <span className="text-xs font-medium uppercase tracking-wide text-text-muted">
               Total
             </span>
-            <span className="whitespace-nowrap text-base font-bold tabular-nums text-text">
-              {formatMontant(total, devise)}
-            </span>
+            <MontantCentre montant={total} devise={devise} />
           </>
         )}
       </div>
