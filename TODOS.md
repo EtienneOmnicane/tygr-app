@@ -63,6 +63,92 @@ jour)** : voir le decision log du plan
   (`schema.ts:1032`) sans policy d'étage 2, et c'est **correct** — c'est la table de DROITS
   qui définit le périmètre ; la scoper par lui-même serait une auto-référence circulaire.
   Y poser une policy serait un défaut, pas un correctif (plan §2.3).
+
+### Performance `/transactions` (2026-07-22, plan `PLAN-perf-ventilation-agg1.md`)
+
+> ⚠️ **Trou de procédure à ne pas reproduire (règle 9)** : cette section a été créée le
+> 2026-07-22, EN MÊME TEMPS que le correctif. La session de conception qui a produit le
+> diagnostic avait rédigé un prompt d'implémentation (`PROMPT-impl-perf-ventilation-agg1.md`)
+> renvoyant à une entrée `PERF-VENTILATION-AGG1` de ce fichier… qui n'a JAMAIS été écrite.
+> Le brief citait même des numéros de ligne (74-142) pointant en réalité sur la section
+> « Clarté du cycle de connexion ». Une dette qui ne vit que dans un prompt non suivi par
+> git n'existe pas : elle n'est ni priorisée, ni revue en fin d'epic, et le prochain lot
+> part sur des chiffres que personne ne peut recouper. **Le registre canonique est
+> TODOS.md** — un diagnostic n'est acquis qu'une fois inscrit ICI.
+
+- [x] **PERF-VENTILATION-AGG1 (P1, ouvert et RÉSOLU le 2026-07-22, effort ~0,5 j) — la
+  liste `/transactions` mettait ~1,85 s côté base.** **Cause** : `aggregatVentilation()`
+  était une table dérivée PRÉ-GROUPÉE sur toute `transaction_categorizations`, jointe en
+  LEFT JOIN. Sous RLS, tous les prédicats passent par `current_setting(…)`, **opaque à
+  l'estimateur** → `rows=1` estimé à chaque étage contre 9 440 réels → **Nested Loop Left
+  Join** qui RESCANNE l'agrégat par ligne externe (`Rows Removed by Join Filter: 4 415 760`).
+  Modèle de coût **O(N_transactions × N_splits)** : les deux axes grossissent en prod.
+  **Résolution** (forme retenue, cf. plan §3) : (1) la page se résout d'abord dans une
+  sous-requête dont le `LIMIT` sert de **barrière d'optimisation** (PostgreSQL n'aplatit
+  jamais une sous-requête portant un LIMIT) ; (2) l'agrégat est calculé en
+  `LEFT JOIN LATERAL` **corrélé** sur les ≤51 lignes de la page, par index
+  (`txn_categorizations_workspace_txn_idx`) ; (3) `predicatStatut` — qui filtre AVANT la
+  pagination et ne peut donc pas se borner à la page — passe en **sous-requêtes corrélées**.
+  **Mesures APPARIÉES** (base locale, **9 440 tx / 510 splits**, sous `tygr_app` + GUC de
+  `withWorkspace`, Vision Globale, page 1, `limit 51` ; 3 exécutions dos à dos sur le MÊME
+  état de données) :
+
+  | Chemin | Avant | Après | Plan après |
+  |---|---|---|---|
+  | dominant (sans filtre) | 1947 / 1933 / 1952 ms | **8,47 / 8,55 / 8,64 ms** (**227×**) | agrégat `loops=51`, Index Scan |
+  | `?statut=NON_CATEGORISE` | ~1940 ms | **14,4 ms** | Anti Join + agrégat `loops=51` |
+  | `?statut=COMPLET` | ~1940 ms | **14,5 ms** | sous-requêtes corrélées par index |
+
+  **Équivalence de sortie PROUVÉE sur le jeu réel** (pas seulement sur la fixture PGlite) :
+  les deux formes comparées sur les **9 440 lignes**, toutes colonnes dérivées incluses
+  (`nb_splits`, `montant_ventile`, `statut`, `cat_dominante_id`, `cat_dominante_nom`) →
+  **0 différence symétrique, 0 désaccord d'ordre**. Témoin de non-vacuité : 510 lignes
+  COMPLET portant un agrégat réel. ⚠️ Ce jeu ne contient **aucune** ligne PARTIEL — ce
+  chemin n'est donc couvert que par la fixture PGlite (`T_PART`), pas par cette
+  comparaison. Note : la base locale est VIVANTE (480 → 510 splits pendant la session) ;
+  toute re-mesure doit être appariée, sous peine de comparer deux états différents.
+
+  ⚠️ **Le brief d'implémentation imposait une conception FAUSSE, réfutée à la mesure** :
+  « CTE `WITH agg AS MATERIALIZED` → barrière d'optimisation → Hash Left Join → 7,9 ms ».
+  Mesuré : **324 ms**. La matérialisation empêche le RECALCUL (agrégat bien en `loops=1`,
+  1,0 ms) mais **ne choisit pas la méthode de jointure** — le planificateur garde un Nested
+  Loop et rescanne la CTE (`Rows Removed by Join Filter: 4 530 720`). `enable_nestloop=off`
+  agissait sur la méthode, pas sur la matérialisation ; les deux ont été confondus. Deuxième
+  contre-épreuve : piloter la jointure « depuis le petit côté » (agrégat 480 lignes en tête)
+  → le planificateur **réordonne** et retombe sur le rescan → **286 ms**. **Leçon
+  transposable** : sous RLS, l'estimateur est aveugle ; la robustesse ne s'obtient pas en
+  espérant un bon plan mais en écrivant une forme **non réordonnable** — une sous-requête
+  corrélée s'évalue par ligne, par index, quoi que décide le planificateur.
+  **Correction connexe livrée** : `predicatStatut(COMPLET)` ne testait pas `nb_splits > 0`
+  là où `statutExpr` le fait. `amount` étant `numeric(15,2)` **sans contrainte de
+  positivité**, une transaction à montant NUL et sans split satisfaisait `0 >= abs(0)` : le
+  filtre « Complet » l'aurait capturée alors que la colonne affichait « Non catégorisé » —
+  divergence LATENTE (aucune ligne à montant nul en base aujourd'hui, vérifié) que
+  l'ancien code portait tout en documentant l'inverse. Garde `exists` ajouté.
+  **Preuve** : `tests/isolation/transactions-statut-coherence-isolation.test.ts` (8 cas,
+  mutation-check concluant — 3 tests tombent si l'on retire le garde).
+
+- [ ] **PERF-KEYSET-INDEX-RLS1 (P2, effort ~0,5–1 j, ouvert 2026-07-22) — l'index couvrant
+  de la pagination n'est JAMAIS emprunté, pour cause d'opacité RLS.** **Quoi** : sur la base
+  locale (9 440 tx), la seule résolution de page — **sans aucune jointure ni agrégat** —
+  coûte déjà **5,1 ms**, en `Seq Scan` sur la partition + `top-N heapsort` de toutes les
+  lignes. L'index `transactions_cache_<part>_workspace_id_transaction_date_idx
+  (workspace_id, transaction_date DESC NULLS LAST)` **existe** (vérifié) et n'est pas
+  utilisé : le prédicat RLS `workspace_id = current_setting(…)` étant opaque, l'estimateur
+  table sur `rows=5` et juge tout plan gratuit — donc jamais le parcours d'index ORDONNÉ qui
+  s'arrêterait après 51 lignes. **Mode de défaillance** : le coût est **O(N)** en nombre de
+  transactions du workspace, pas O(log N). Invisible à 9 440 lignes (5 ms), linéaire ensuite
+  — à 500 000 lignes le chargement initial repasse en centaines de ms, et **aucun test ne le
+  signalera** (les suites tournent sur PGlite, qui ne prouve pas les plans).
+  **Pourquoi ce n'est PAS traité ici** : foyer DISTINCT de la ventilation — il concerne la
+  résolution de page, pas l'agrégat ; le mêler à PERF-VENTILATION-AGG1 aurait été du scope
+  creep sur la surface d'isolation (règle 7). Arbitré par Etienne le 2026-07-22.
+  **Pistes** : `ALTER TABLE … ALTER COLUMN workspace_id SET STATISTICS`, ou une fonction
+  `STABLE` encapsulant le GUC pour rendre le prédicat estimable, ou `pg_hint_plan`. À
+  **mesurer**, pas à supposer. **Déclencheur** : le premier des deux — (a) le chemin
+  `?statut=` doit descendre sous ~15 ms, (b) un workspace de production dépasse ~100 000
+  transactions.
+
 ### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
 Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
 post-connexion, banques nommées sur `/banques`, loader indéterminé honnête. Aucun

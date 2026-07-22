@@ -247,46 +247,19 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
     );
   }
 
-  // Résumé de ventilation ANTI-N+1 — table dérivée PRÉ-AGRÉGÉE jointe en LEFT
-  // JOIN. On groupe les splits par (transaction_id, transaction_date) UNE fois,
-  // puis on joint : un seul scan groupé de transaction_categorizations pour toute
-  // la page, jamais une requête par ligne. La RLS s'applique aussi à
-  // transaction_categorizations → l'agrégat reste scopé au workspace courant.
-  //
-  // Pourquoi une table dérivée et pas des sous-requêtes scalaires projetées : en
-  // rowMode "array", Drizzle mappe les colonnes par POSITION ; une sous-requête
-  // scalaire `(select …)` de tête désaligne ce mapping (le résumé ressortait à 0
-  // alors que le CASE, lui, voyait le bon agrégat — symptôme observé en test).
-  // Une table dérivée expose des colonnes nommées sans ambiguïté. (LATERAL écarté :
-  // Drizzle préfixe un `left join` redondant via .leftJoin().)
-  // Catégorie DOMINANTE (FB0709-TX-CATEGORIE-VISIBLE1) : jointure INTERNE sur
-  // categories DANS l'agrégat — sûre en cardinalité (category_id NOT NULL + FK
-  // composite (category_id, workspace_id) → même workspace, PK unique → 1:1, la
-  // RLS de categories ne peut donc rien filtrer de plus que celle des splits).
-  // `array_agg(… order by tc.amount desc, …)` élit la part au plus gros montant ;
-  // départage déterministe par nom puis category_id à montants égaux.
-  const agg = aggregatVentilation();
-
-  // Agrégat « aplati » : COALESCE pour les transactions sans aucun split (la
-  // jointure LEFT laisse NULL → 0). Réutilisé en projection ET dans le filtre de
-  // statut pour garantir leur cohérence stricte.
-  const nbSplitsExpr = sql<number>`coalesce(agg.nb_splits, 0)`;
-  const montantVentileExpr = sql<string>`coalesce(agg.montant_ventile, 0)::text`;
-  const statutExpr = sql<StatutVentilation>`
-    case
-      when coalesce(agg.nb_splits, 0) = 0 then 'NON_CATEGORISE'
-      when coalesce(agg.montant_ventile, 0) >= abs(${transactionsCache.amount}) then 'COMPLET'
-      else 'PARTIEL'
-    end
-  `;
-
-  // Filtre de statut : porte sur l'agrégat joint (même expression que ci-dessus →
-  // cohérence projection/filtre garantie). Reste dans la même passe que la lecture.
+  // Filtre de statut : prédicats CORRÉLÉS sur transaction_categorizations (cf.
+  // `predicatStatut`). Il porte sur le jeu AVANT pagination — un statut ne peut donc
+  // pas se borner à la page, contrairement à l'agrégat de projection ci-dessous.
   if (statut) {
     conditions.push(predicatStatut(statut));
   }
 
-  const lignes = await tx
+  // ┌─ ÉTAGE 1 — la PAGE ────────────────────────────────────────────────────────┐
+  // Résout d'abord QUELLES lignes composent la page (≤ limite+1), sans toucher à la
+  // ventilation. Le `LIMIT` de cette sous-requête est aussi une BARRIÈRE
+  // d'optimisation : PostgreSQL n'aplatit jamais une sous-requête portant un LIMIT,
+  // donc l'étage 2 ne peut pas être ré-inliné et ré-exploser (cf. PLAN §3.1).
+  const sousRequetePage = tx
     .select({
       id: transactionsCache.id,
       transactionDate: transactionsCache.transactionDate,
@@ -310,13 +283,6 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       // identifiant opaque sans usage d'affichage (décision plan §3, dette P2 si besoin).
       confidenceLevel: transactionsCache.confidenceLevel,
       classificationSource: transactionsCache.classificationSource,
-      nbSplits: nbSplitsExpr,
-      montantVentile: montantVentileExpr,
-      statut: statutExpr,
-      // Colonnes NOMMÉES de la table dérivée (jamais de sous-requête scalaire ici,
-      // cf. avertissement rowMode "array" ci-dessus). NULL si aucun split (LEFT JOIN).
-      categorieDominanteId: sql<string | null>`agg.cat_dominante_id`,
-      categorieDominanteNom: sql<string | null>`agg.cat_dominante_nom`,
     })
     .from(transactionsCache)
     // Jointures de provenance. innerJoin SÛR : transactions_cache.bank_account_id est
@@ -330,15 +296,68 @@ export async function listerTransactions<TDb extends AnyPgDatabase>(
       bankConnections,
       eq(bankAccounts.connectionId, bankConnections.id),
     )
-    .leftJoin(agg, jointureAggregat())
     .where(and(...conditions))
-    // Tri total déterministe (cf. en-tête) — aligné sur l'index couvrant.
+    // Tri total déterministe (cf. en-tête).
     .orderBy(
       sql`${transactionsCache.transactionDate} desc`,
       sql`${transactionsCache.id} desc`,
     )
     // +1 pour détecter la page suivante sans COUNT.
-    .limit(limite + 1);
+    .limit(limite + 1)
+    .as("page");
+
+  // Agrégat « aplati ». Les COALESCE sont une CEINTURE, pas le mécanisme : le LATERAL
+  // rend TOUJOURS exactement une ligne (agrégat sans `group by`), y compris pour une
+  // transaction sans aucun split — `nb_splits` vaut alors 0, pas NULL. L'invariant qui
+  // compte est « exactement 1, jamais N » : cf. `aggregatVentilationLateral`, dont
+  // dépend `hasMore`. `statutExpr` et `predicatStatut` restent deux vues du MÊME
+  // agrégat (cf. `predicatStatut`).
+  const nbSplitsExpr = sql<number>`coalesce(agg.nb_splits, 0)`;
+  const montantVentileExpr = sql<string>`coalesce(agg.montant_ventile, 0)::text`;
+  const statutExpr = sql<StatutVentilation>`
+    case
+      when coalesce(agg.nb_splits, 0) = 0 then 'NON_CATEGORISE'
+      when coalesce(agg.montant_ventile, 0) >= abs(${sousRequetePage.amount}) then 'COMPLET'
+      else 'PARTIEL'
+    end
+  `;
+
+  // ┌─ ÉTAGE 2 — l'agrégat BORNÉ à la page ──────────────────────────────────────┐
+  // Le LATERAL est corrélé à CHAQUE ligne de `page` : il s'exécute au plus
+  // limite+1 fois, par index (txn_categorizations_workspace_txn_idx), au lieu d'être
+  // rescanné par ligne de TOUT le jeu. C'est le correctif PERF-VENTILATION-AGG1 :
+  // 1970 ms → 8 ms sur 9 440 transactions / 480 splits (plans dans la PR).
+  const lignes = await tx
+    .select({
+      id: sousRequetePage.id,
+      transactionDate: sousRequetePage.transactionDate,
+      bankAccountId: sousRequetePage.bankAccountId,
+      accountName: sousRequetePage.accountName,
+      institutionName: sousRequetePage.institutionName,
+      amount: sousRequetePage.amount,
+      currency: sousRequetePage.currency,
+      creditDebit: sousRequetePage.creditDebit,
+      cleanLabel: sousRequetePage.cleanLabel,
+      bankLabelRaw: sousRequetePage.bankLabelRaw,
+      primaryCategory: sousRequetePage.primaryCategory,
+      subCategory: sousRequetePage.subCategory,
+      isAutoCategorized: sousRequetePage.isAutoCategorized,
+      categorySource: sousRequetePage.categorySource,
+      confidenceLevel: sousRequetePage.confidenceLevel,
+      classificationSource: sousRequetePage.classificationSource,
+      nbSplits: nbSplitsExpr,
+      montantVentile: montantVentileExpr,
+      statut: statutExpr,
+      // Colonnes NOMMÉES du LATERAL (jamais de sous-requête scalaire PROJETÉE ici :
+      // en rowMode "array", Drizzle mappe par POSITION et une scalaire de tête
+      // désaligne le mapping — symptôme observé en test). NULL si aucun split.
+      categorieDominanteId: sql<string | null>`agg.cat_dominante_id`,
+      categorieDominanteNom: sql<string | null>`agg.cat_dominante_nom`,
+    })
+    .from(sousRequetePage)
+    .leftJoinLateral(aggregatVentilationLateral(sousRequetePage), sql`true`)
+    // Une sous-requête ne garantit PAS de propager son ordre : on le re-pose ici.
+    .orderBy(sql`${sousRequetePage.transactionDate} desc`, sql`${sousRequetePage.id} desc`);
 
   const hasMore = lignes.length > limite;
   const page = hasMore ? lignes.slice(0, limite) : lignes;
@@ -446,12 +465,13 @@ export async function sommeNetteParDevise<TDb extends AnyPgDatabase>(
     // L'omettre est donc NEUTRE sur le jeu de lignes : la somme reste exactement celle
     // des lignes listées.
     .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
-    // Agrégat de ventilation joint INCONDITIONNELLEMENT (comme la liste) : le filtre de
-    // statut s'appuie dessus, et le brancher conditionnellement ferait diverger les
-    // types du builder. Table dérivée PRÉ-groupée (un seul scan groupé, pas un N+1),
-    // cardinalité 1:1 max par (transaction_id, transaction_date) → aucune duplication
-    // de ligne, donc aucune somme faussée.
-    .leftJoin(aggregatVentilation(), jointureAggregat())
+    // PLUS d'agrégat joint ici (PERF-VENTILATION-AGG1) : depuis que `predicatStatut`
+    // est CORRÉLÉ, le filtre de statut se suffit à lui-même et cette somme n'a jamais
+    // projeté les colonnes de l'agrégat (elle ne rend que des sommes par devise). La
+    // jointure était donc devenue du poids mort — et un agrégat global joint est
+    // exactement ce qui coûtait 1970 ms à la liste. Le fragment `predicatStatut`
+    // restant PARTAGÉ avec `listerTransactions`, le total continue de porter
+    // exactement les lignes listées.
     .where(and(...conditions))
     .groupBy(transactionsCache.currency)
     .orderBy(transactionsCache.currency);
@@ -460,24 +480,53 @@ export async function sommeNetteParDevise<TDb extends AnyPgDatabase>(
 }
 
 /**
- * Prédicat SQL du filtre de statut, basé sur l'agrégat JOINT `agg` (mêmes
- * colonnes que la projection → cohérence stricte filtre/affichage). On passe par
- * COALESCE car la jointure LEFT laisse NULL pour une transaction sans split.
+ * Prédicat SQL du filtre de statut — sous-requêtes CORRÉLÉES sur
+ * transaction_categorizations (mêmes règles que `statutExpr` → cohérence stricte
+ * filtre/affichage).
  *  - NON_CATEGORISE : aucun split rattaché.
- *  - COMPLET : somme des splits ≥ |montant| (l'invariant repository garantit
- *    qu'elle ne le dépasse jamais ; ≥ couvre l'égalité exacte).
+ *  - COMPLET : au moins un split ET somme ≥ |montant| (l'invariant repository
+ *    garantit qu'elle ne le dépasse jamais ; ≥ couvre l'égalité exacte).
  *  - PARTIEL : au moins un split mais somme < |montant|.
+ *
+ * POURQUOI CORRÉLÉ et non un agrégat global joint (PERF-VENTILATION-AGG1) : sous
+ * RLS, tous les prédicats passent par `current_setting(…)`, OPAQUE à l'estimateur,
+ * qui table sur `rows=1` là où il y en a des milliers. Un agrégat joint — table
+ * dérivée OU CTE, même `MATERIALIZED` — laisse alors le planificateur choisir un
+ * Nested Loop qui le RESCANNE par ligne externe : 1970 ms mesurés, et 324 ms même
+ * en CTE `MATERIALIZED` (la matérialisation empêche le RECALCUL, pas le RESCAN —
+ * elle ne choisit pas la méthode de jointure). Une sous-requête corrélée, elle,
+ * n'est PAS réordonnable par le planificateur : elle s'évalue par ligne, par index
+ * (txn_categorizations_workspace_txn_idx). Le plan devient robuste par CONSTRUCTION
+ * au lieu de dépendre d'une estimation que la RLS rend impossible. Coût
+ * O(N × log M) au lieu de O(N × M) : ~16-22 ms (cf. PLAN §3.2). Ne pas « simplifier »
+ * en re-joignant un agrégat global — ce serait rouvrir la dette.
+ *
+ * ⚠️ `exists` est REQUIS sur COMPLET, il n'est pas décoratif : `amount` est
+ * `numeric(15,2)` SANS contrainte de positivité (0 est permis par le schéma). Sans
+ * ce garde, une transaction à montant nul et SANS split satisferait `0 >= abs(0)` et
+ * serait capturée par le filtre COMPLET, alors que `statutExpr` la classe
+ * NON_CATEGORISE (il teste nb_splits=0 d'abord) — le filtre contredirait la colonne
+ * affichée. L'ancienne version portait cette divergence (latente : aucune ligne à
+ * montant nul en base, vérifié) tout en documentant l'inverse.
  */
 function predicatStatut(statut: StatutVentilation) {
-  const nb = sql`coalesce(agg.nb_splits, 0)`;
-  const somme = sql`coalesce(agg.montant_ventile, 0)`;
+  const existeSplit = sql`exists (
+    select 1 from transaction_categorizations z
+    where z.transaction_id = ${transactionsCache.id}
+      and z.transaction_date = ${transactionsCache.transactionDate}
+  )`;
+  const sommeSplits = sql`(
+    select coalesce(sum(z.amount), 0) from transaction_categorizations z
+    where z.transaction_id = ${transactionsCache.id}
+      and z.transaction_date = ${transactionsCache.transactionDate}
+  )`;
   switch (statut) {
     case "NON_CATEGORISE":
-      return sql`${nb} = 0`;
+      return sql`not ${existeSplit}`;
     case "COMPLET":
-      return sql`${somme} >= abs(${transactionsCache.amount})`;
+      return sql`${existeSplit} and ${sommeSplits} >= abs(${transactionsCache.amount})`;
     case "PARTIEL":
-      return sql`${nb} > 0 and ${somme} < abs(${transactionsCache.amount})`;
+      return sql`${existeSplit} and ${sommeSplits} < abs(${transactionsCache.amount})`;
   }
 }
 
@@ -539,30 +588,68 @@ function conditionsFiltres(params: {
 }
 
 /**
- * Table dérivée PRÉ-AGRÉGÉE des splits de ventilation (anti-N+1) — le POURQUOI de sa
- * forme (table dérivée nommée plutôt que sous-requête scalaire ou LATERAL) est détaillé
- * dans `listerTransactions`. Fragment PARTAGÉ : le filtre de statut de la SOMME doit
- * s'appuyer sur exactement le même agrégat que celui de la LISTE.
+ * Agrégat de ventilation d'UNE ligne de page, en LATERAL corrélé (anti-N+1 SANS
+ * agrégat global — cf. le POURQUOI détaillé dans `predicatStatut`).
+ *
+ * ⚠️ REND TOUJOURS EXACTEMENT UNE LIGNE — jamais 0, jamais N. Un agrégat SANS
+ * `GROUP BY` rend une ligne même sur une entrée vide (`count(*)`=0, `sum`=NULL). C'est
+ * l'invariant PORTEUR de la pagination : `hasMore = lignes.length > limite` et le calcul
+ * du curseur supposent que le LATERAL ne DUPLIQUE jamais une ligne de page. Ajouter un
+ * `group by` ici (p. ex. pour remonter le détail par catégorie) le ferait rendre N
+ * lignes : chaque ligne de page serait dupliquée, `hasMore` passerait à true sur une page
+ * non pleine, `slice(0, limite)` amputerait des lignes RÉELLES et le curseur serait
+ * calculé depuis un doublon → frontière de page qui répète des lignes. Le `LEFT JOIN` ne
+ * protège que du cas 0 ligne, pas de celui-là. (Les `coalesce` externes sont donc une
+ * ceinture : `agg.nb_splits` n'est en pratique jamais NULL.)
+ *
+ * Corrélé sur la clé COMPOSITE `(transaction_id, transaction_date)`. Attention à la
+ * raison : ce n'est PAS parce que cette table serait partitionnée — elle ne l'est pas
+ * (heap ; c'est `transactions_cache` qui est partitionnée par `transaction_date`). C'est
+ * pour épouser l'index `txn_categorizations_workspace_txn_idx (workspace_id,
+ * transaction_id, transaction_date)` et la FK composite `txn_categorizations_transaction_fk`.
+ * Corréler sur le seul `transaction_id` resterait CORRECT (la FK le rend déterminant)
+ * mais perdrait la 3ᵉ colonne de l'index.
+ *
+ * La RLS s'applique PLEINEMENT ici : `transaction_categorizations` porte
+ * `tenant_isolation` (étage 1) ET `account_scope` RESTRICTIVE (étage 2, migration
+ * 0017) — l'agrégat borné à la page ne peut donc pas voir un split hors workspace ni
+ * hors périmètre, quelle que soit la forme de la requête. C'est pourquoi ce LATERAL n'a
+ * pas besoin de joindre `bank_accounts` : sa policy porte son propre `EXISTS` vers
+ * `transactions_cache`, qui réapplique account_scope ET view_filter sous les mêmes GUC.
+ *
+ * Catégorie DOMINANTE (FB0709-TX-CATEGORIE-VISIBLE1) : jointure INTERNE sur
+ * `categories` — sûre en cardinalité (category_id NOT NULL + FK composite
+ * (category_id, workspace_id) → même workspace, PK unique → 1:1, la RLS de categories
+ * ne peut donc rien filtrer de plus que celle des splits). `array_agg(… order by
+ * z.amount desc, …)` élit la part au plus gros montant ; départage déterministe par
+ * nom puis category_id à montants égaux.
+ *
+ * ⚠️ N'AJOUTE JAMAIS ICI UN PRÉDICAT QUE `predicatStatut` NE PORTE PAS. Ce LATERAL joint
+ * `categories`, le filtre de statut NON : les deux ne s'accordent aujourd'hui que parce
+ * que cette jointure ne peut ni écarter ni dupliquer une ligne. Le piège concret :
+ * `categories.is_active` existe et n'est pas consommé — y ajouter `and cat.is_active`
+ * paraîtrait anodin et ferait diverger le filtre de la colonne affichée (un split sur
+ * catégorie archivée passerait COMPLET au filtre, NON_CATEGORISE à l'écran). Idem si
+ * `categories` recevait un jour une policy de périmètre. Toute condition ajoutée ici doit
+ * être répercutée dans `predicatStatut` — et couverte par
+ * `tests/isolation/transactions-statut-coherence-isolation.test.ts`.
  *
  * Renvoyée par une FONCTION (et non exposée en const de module) pour ne jamais partager
  * une instance de fragment SQL entre deux requêtes.
  */
-function aggregatVentilation() {
+function aggregatVentilationLateral(page: {
+  id: unknown;
+  transactionDate: unknown;
+}) {
   return sql`(
     select
-      tc.transaction_id  as txn_id,
-      tc.transaction_date as txn_date,
-      count(*)::int       as nb_splits,
-      coalesce(sum(tc.amount), 0)::numeric as montant_ventile,
-      (array_agg(tc.category_id order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_id,
-      (array_agg(cat.name        order by tc.amount desc, cat.name asc, tc.category_id asc))[1] as cat_dominante_nom
-    from transaction_categorizations tc
-    join categories cat on cat.id = tc.category_id
-    group by tc.transaction_id, tc.transaction_date
+      count(*)::int as nb_splits,
+      coalesce(sum(z.amount), 0)::numeric as montant_ventile,
+      (array_agg(z.category_id order by z.amount desc, cat.name asc, z.category_id asc))[1] as cat_dominante_id,
+      (array_agg(cat.name      order by z.amount desc, cat.name asc, z.category_id asc))[1] as cat_dominante_nom
+    from transaction_categorizations z
+    join categories cat on cat.id = z.category_id
+    where z.transaction_id = ${page.id}
+      and z.transaction_date = ${page.transactionDate}
   ) agg`;
-}
-
-/** Condition de jointure de l'agrégat ci-dessus (clé composite de la table partitionnée). */
-function jointureAggregat() {
-  return sql`agg.txn_id = ${transactionsCache.id} and agg.txn_date = ${transactionsCache.transactionDate}`;
 }
