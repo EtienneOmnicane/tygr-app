@@ -89,6 +89,14 @@ export function ReglesFeature({
     setRegles(fraiches);
   }, [actions]);
 
+  /**
+   * Le bouton « Ré-analyser » est-il RÉELLEMENT offert à l'écran ? Défini ici (et pas
+   * juste avant le rendu) parce que la microcopie de réactivation le CITE : les deux
+   * doivent dépendre de la même condition, sinon le message renvoie vers un bouton
+   * absent.
+   */
+  const offreReanalyse = peutGerer && typeof actions.appliquerRegles === "function";
+
   const creer = useCallback(
     async (input: {
       pattern: string;
@@ -153,11 +161,21 @@ export function ReglesFeature({
           return;
         }
         await recharger();
+        // Le formulaire d'édition porte AUSSI une case « Règle active », initialisée
+        // au montage (`key` = id de la règle éditée) et TOUJOURS renvoyée au submit.
+        // S'il est ouvert sur la règle qu'on vient de réactiver, il montre encore
+        // « archivée » et un « Enregistrer » la RÉ-ARCHIVERAIT en silence, défaisant
+        // ce clic. On le referme donc — mais seulement pour CETTE règle, pour ne pas
+        // jeter une saisie en cours sur une autre. Forme fonctionnelle : pas de
+        // dépendance sur `regleEnEdition` (le callback resterait périmé).
+        setRegleEnEdition((courante) =>
+          courante?.id === ruleId ? null : courante,
+        );
         // Anti-illusion : réactiver ne reclasse RIEN rétroactivement — la ré-analyse
         // ne touche que les transactions SANS ventilation (MANUAL prime, jamais
-        // écrasé). On ne cite le bouton que s'il est réellement offert.
+        // écrasé). On ne cite le bouton que s'il est réellement à l'écran.
         setInfo(
-          typeof actions.appliquerRegles === "function"
+          offreReanalyse
             ? "Règle réactivée. Lancez « Ré-analyser les transactions » pour l’appliquer aux transactions non catégorisées."
             : "Règle réactivée. Elle s’appliquera aux prochaines transactions non catégorisées.",
         );
@@ -167,7 +185,7 @@ export function ReglesFeature({
         setReactivationEnCours(null);
       }
     },
-    [actions, recharger],
+    [actions, recharger, offreReanalyse],
   );
 
   const demarrerEdition = useCallback((regle: RegleUI) => {
@@ -285,7 +303,6 @@ export function ReglesFeature({
   );
 
   const aucuneRegle = regles.length === 0;
-  const offreReanalyse = peutGerer && typeof actions.appliquerRegles === "function";
 
   return (
     <div className="flex flex-col gap-4">
@@ -300,7 +317,7 @@ export function ReglesFeature({
         </div>
       )}
 
-      {/* Confirmation neutre d'une ré-analyse. */}
+      {/* Confirmation neutre (ré-analyse ou réactivation). */}
       {info && (
         <div
           role="status"
