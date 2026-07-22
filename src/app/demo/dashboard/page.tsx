@@ -17,6 +17,7 @@ import {
   DEMO_DASHBOARD,
   DEMO_DASHBOARD_PARTIEL,
   DEMO_DASHBOARD_PREVISION_AUTRE_DEVISE,
+  DEMO_DASHBOARD_PREVISION_CONTRASTEE,
   DEMO_DASHBOARD_PREVISION_FAIBLE,
   DEMO_DASHBOARD_PREVISION_SANS_REALISE,
   DEMO_DASHBOARD_PREVISION_ZERO,
@@ -34,6 +35,7 @@ import {
 type EtatDemo =
   | "succes"
   | "prevision-faible"
+  | "prevision-contrastee"
   | "prevision-zero"
   | "prevision-sans-realise"
   | "prevision-autre-devise"
@@ -49,7 +51,13 @@ const ONGLETS: Array<{ id: EtatDemo; label: string }> = [
   { id: "succes", label: "Succès (avec prévision)" },
   // Le cas du défaut (lot 0) : prévision écrasée par l'échelle du réalisé — c'est l'onglet
   // à capturer en priorité au Visual QA, celui qui manquait au corpus.
-  { id: "prevision-faible", label: "Prévision FAIBLE (barre écrasée)" },
+  // Le rapport 1:520 face au RÉALISÉ : depuis l'option E il n'écrase plus rien (l'encart a
+  // son échelle). Onglet conservé comme non-régression — c'est le cas historique.
+  { id: "prevision-faible", label: "Prévision faible / réalisé (résolu par l'encart)" },
+  // Le cas dur de l'ENCART (option E) : fort écart INTERNE à la prévision — une barre
+  // sous-pixel malgré l'échelle propre. C'est l'onglet qui prouve que le montant écrit,
+  // et non la barre, porte la valeur.
+  { id: "prevision-contrastee", label: "Prévision CONTRASTÉE (écart interne)" },
   { id: "prevision-zero", label: "Prévision à ZÉRO" },
   { id: "prevision-sans-realise", label: "Prévision SEULE (sans réalisé)" },
   { id: "prevision-autre-devise", label: "Prévision autre devise" },
@@ -82,9 +90,14 @@ const DEMO_SOLDES_CINQ_DEVISES: DonneesDashboard["soldesParDevise"] = [
  */
 const FIXTURE_PAR_ETAT: Record<EtatDemo, DonneesDashboard> = {
   succes: DEMO_DASHBOARD,
-  // Le défaut d'origine (rapport ~1:520) : la barre projetée rend 0,23 px. Sans étiquette
-  // de substitution, la zone paraît VIDE alors qu'elle porte de la donnée.
+  // Le défaut d'ORIGINE (rapport ~1:520 face au réalisé) : sur l'axe partagé, la barre
+  // projetée rendait 0,23 px et la zone paraissait vide. Attendu aujourd'hui : le graphe
+  // n'en montre plus rien (il est 100 % réalisé) et l'encart rend ces échéances à 16 % de
+  // sa piste — lisibles. Onglet de NON-RÉGRESSION du défaut historique.
   "prevision-faible": DEMO_DASHBOARD_PREVISION_FAIBLE,
+  // Écart interne 1:1260 : dans l'encart, la barre du mois d'ancrage tombe sous le tick
+  // alors que son montant reste parfaitement lisible (canal texte, indépendant de l'échelle).
+  "prevision-contrastee": DEMO_DASHBOARD_PREVISION_CONTRASTEE,
   // §5.4 : zone présente, tout à zéro → message explicite, jamais un aplat beige muet.
   "prevision-zero": DEMO_DASHBOARD_PREVISION_ZERO,
   // Défaut n°1 du plan §5.2 : la prévision doit s'afficher SEULE, jamais « Aucun mouvement ».
