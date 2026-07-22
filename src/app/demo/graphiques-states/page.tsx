@@ -13,6 +13,8 @@
  *   - les KPI d'en-tête par devise (moyenne/op, couverture, poste dominant, top 3) ;
  *   - la variation vs période précédente dans la légende (flèche neutre ▴/▾, « nouv. »,
  *     « – » stable) — jeux calibrés pour exercer les 4 sens ;
+ *   - les GROS montants (11-12 chiffres), mono ET multi-devises : le seul jeu capable
+ *     d'attraper un débordement du total central (`DONUT-CENTRE-DEBORDE1`) ;
  *   - les deux états vides (aucune banque → CTA ; banque sans données sur la période).
  */
 import type {
@@ -104,6 +106,50 @@ const MUR_ENTREES: RepartitionDevise = {
   ],
 };
 
+// ── Gros montants (DONUT-CENTRE-DEBORDE1) ─────────────────────────────────────
+// Les jeux ci-dessus plafonnent à 7 chiffres : le centre du donut y tient TOUJOURS,
+// donc ils ne peuvent pas attraper le débordement observé en production. La réserve
+// du lot précédent (`docs/qa/polish-front-demo/README.md` §3 — « aucune fixture ne
+// couvre 10 chiffres et plus ») est levée ici : sans ces deux jeux, la Gate 4 passe
+// au vert sans mentir, sur un écran qui n'expose simplement pas le défaut.
+//
+// MUR : le montant RÉEL relevé en prod (Rs 12 188 030 422,92 — 11 chiffres).
+// GBP : pire cas de LARGEUR, et il ne vient pas du seul nombre de chiffres — devise
+// inconnue de `SYMBOLES_PREFIXE`, donc repli code ISO en SUFFIXE (« … GBP »), qui
+// ajoute 4 caractères LÀ où le symbole préfixe n'en coûtait que 2.
+//
+// Origine (#241) : toutes les parts sont `AMONT` — ce sont des totaux bancaires bruts,
+// sans ventilation TYGR, donc `categorieId: null` (un id n'existe que pour `TYGR`). Le
+// « Non catégorisé » porte `AUCUNE`, l'invariant du type étant
+// `estNonCategorise === true ⟺ origine === "AUCUNE"`. Ces jeux servent à éprouver une
+// LARGEUR de montant, pas la cascade d'origines : le cas homonyme TYGR/AMONT est déjà
+// couvert par `MUR_SORTIES` ci-dessus, et le dupliquer ici brouillerait ce qu'ils
+// prouvent.
+const MUR_MILLIARDS: RepartitionDevise = {
+  currency: "MUR",
+  total: "12188030422.92",
+  montantMoyen: "9829056.79",
+  nbTransactions: 1240,
+  parts: [
+    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "5000000000.00", montantPrecedent: "4800000000.00", part: "0.410237", nbTransactions: 310 },
+    { categorie: "Salaires", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "4000000000.00", montantPrecedent: "4000000000.00", part: "0.328190", nbTransactions: 520 },
+    { categorie: "Fournisseurs", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "3000000000.00", montantPrecedent: "3400000000.00", part: "0.246142", nbTransactions: 380 },
+    { categorie: "Non catégorisé", estNonCategorise: true, origine: "AUCUNE", categorieId: null, montant: "188030422.92", montantPrecedent: "150000000.00", part: "0.015428", nbTransactions: 30 },
+  ],
+};
+
+const GBP_MILLIARDS: RepartitionDevise = {
+  currency: "GBP",
+  total: "999888777666.55",
+  montantMoyen: "11492974455.94",
+  nbTransactions: 87,
+  parts: [
+    { categorie: "Fournisseurs étrangers", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "600000000000.00", montantPrecedent: "550000000000.00", part: "0.600066", nbTransactions: 40 },
+    { categorie: "Investissements", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "300000000000.00", montantPrecedent: "300000000000.00", part: "0.300033", nbTransactions: 32 },
+    { categorie: "Frais de structure", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "99888777666.55", montantPrecedent: "120000000000.00", part: "0.099899", nbTransactions: 15 },
+  ],
+};
+
 // Fenêtre précédente (L4) : même longueur (8 j), contiguë, finissant la veille de
 // `from` — 2026-06-23..2026-06-30 (règle uniforme de `bornesPeriodePrecedente`).
 const SORTIES: RepartitionCategories = {
@@ -122,6 +168,67 @@ const ENTREES: RepartitionCategories = {
   fromPrecedent: "2026-06-23",
   toPrecedent: "2026-06-30",
   devises: [MUR_ENTREES],
+};
+
+// ── Cas DISCRIMINANT du seuil (à ne pas retirer) ──────────────────────────────
+// Les deux devises portent ici la MÊME cardinalité — 8 chiffres — et doivent rendre
+// DIFFÉREMMENT : « Rs 12 345 678,90 » en plein (il tient : 127,8 px pour 135,3 px de
+// corde), « 12,3 M GBP » en compact (le suffixe ISO coûte ~16 px de plus et déborde).
+// C'est le seul jeu capable de prouver que les DEUX seuils existent : avec des
+// cardinalités différentes de part et d'autre, un seuil unique passerait le test sans
+// qu'on le voie.
+const MUR_HUIT_CHIFFRES: RepartitionDevise = {
+  currency: "MUR",
+  total: "12345678.90",
+  montantMoyen: "205761.32",
+  nbTransactions: 60,
+  parts: [
+    { categorie: "Loyer & locaux", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "8000000.00", montantPrecedent: "7500000.00", part: "0.647999", nbTransactions: 24 },
+    { categorie: "Salaires", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "4345678.90", montantPrecedent: "4400000.00", part: "0.352001", nbTransactions: 36 },
+  ],
+};
+
+const GBP_HUIT_CHIFFRES: RepartitionDevise = {
+  currency: "GBP",
+  total: "12345678.90",
+  montantMoyen: "274348.42",
+  nbTransactions: 45,
+  parts: [
+    { categorie: "Fournisseurs étrangers", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "8000000.00", montantPrecedent: "7000000.00", part: "0.647999", nbTransactions: 20 },
+    { categorie: "Investissements", estNonCategorise: false, origine: "AMONT", categorieId: null, montant: "4345678.90", montantPrecedent: "4500000.00", part: "0.352001", nbTransactions: 25 },
+  ],
+};
+
+const SEUIL: RepartitionCategories = {
+  sens: "outflow",
+  from: "2026-07-01",
+  to: "2026-07-08",
+  fromPrecedent: "2026-06-23",
+  toPrecedent: "2026-06-30",
+  devises: [MUR_HUIT_CHIFFRES, GBP_HUIT_CHIFFRES],
+};
+
+// Multi-devises à gros montants : deux cartes, deux largeurs de centre différentes
+// (préfixe `Rs` court vs suffixe ` GBP` long) — c'est la comparaison qui compte.
+const GROS_MULTI: RepartitionCategories = {
+  sens: "outflow",
+  from: "2026-07-01",
+  to: "2026-07-08",
+  fromPrecedent: "2026-06-23",
+  toPrecedent: "2026-06-30",
+  devises: [MUR_MILLIARDS, GBP_MILLIARDS],
+};
+
+// Mono-devise à gros montant : la carte occupe toute la largeur, mais le donut reste
+// borné (`max-w-[220px]`) — donc le centre subit EXACTEMENT la même contrainte qu'en
+// multi. Cas gardé pour le prouver plutôt que le supposer.
+const GROS_MONO: RepartitionCategories = {
+  sens: "outflow",
+  from: "2026-07-01",
+  to: "2026-07-08",
+  fromPrecedent: "2026-06-23",
+  toPrecedent: "2026-06-30",
+  devises: [GBP_MILLIARDS],
 };
 
 const VIDE: RepartitionCategories = {
@@ -146,6 +253,18 @@ const ACTIONS_VIDES: ActionsGraphiques = {
   analyser: async (sel) => ({ ok: true, data: { ...VIDE, sens: sel.sens } }),
 };
 
+const ACTIONS_SEUIL: ActionsGraphiques = {
+  analyser: async (sel) => ({ ok: true, data: { ...SEUIL, sens: sel.sens } }),
+};
+
+const ACTIONS_GROS_MULTI: ActionsGraphiques = {
+  analyser: async (sel) => ({ ok: true, data: { ...GROS_MULTI, sens: sel.sens } }),
+};
+
+const ACTIONS_GROS_MONO: ActionsGraphiques = {
+  analyser: async (sel) => ({ ok: true, data: { ...GROS_MONO, sens: sel.sens } }),
+};
+
 export default function GraphiquesStatesDemoPage() {
   return (
     <div className="min-h-screen bg-surface-page">
@@ -163,7 +282,7 @@ export default function GraphiquesStatesDemoPage() {
       </div>
 
       <main className="mx-auto w-full max-w-3xl px-6 py-8">
-        <section className="mb-10">
+        <section className="mb-10" id="courants">
           <h1 className="text-xl font-semibold text-text">Analyse par catégorie</h1>
           <p className="mt-1 mb-6 text-sm text-text-muted">
             Répartition des sorties (défaut) sur trois devises : MUR (queue neutre +
@@ -175,6 +294,42 @@ export default function GraphiquesStatesDemoPage() {
             selectionInitiale={SELECTION_INITIALE}
             aucuneBanque={false}
             actions={ACTIONS_RICHES}
+          />
+        </section>
+
+        <section className="mb-10" id="seuil">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-text-muted">
+            Seuil — même montant (8 chiffres), deux rendus : plein en Rs, compact en GBP
+          </h2>
+          <GraphiquesFeature
+            initiale={SEUIL}
+            selectionInitiale={SELECTION_INITIALE}
+            aucuneBanque={false}
+            actions={ACTIONS_SEUIL}
+          />
+        </section>
+
+        <section className="mb-10" id="gros-multi">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-text-muted">
+            Gros montants — multi-devises (MUR 11 chiffres, GBP 12 chiffres)
+          </h2>
+          <GraphiquesFeature
+            initiale={GROS_MULTI}
+            selectionInitiale={SELECTION_INITIALE}
+            aucuneBanque={false}
+            actions={ACTIONS_GROS_MULTI}
+          />
+        </section>
+
+        <section className="mb-10" id="gros-mono">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-text-muted">
+            Gros montants — mono-devise (GBP, repli code ISO en suffixe)
+          </h2>
+          <GraphiquesFeature
+            initiale={GROS_MONO}
+            selectionInitiale={SELECTION_INITIALE}
+            aucuneBanque={false}
+            actions={ACTIONS_GROS_MONO}
           />
         </section>
 

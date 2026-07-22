@@ -912,6 +912,34 @@ Un lot du plan `PLAN-graphiques-kpi.md` a été **volontairement différé** :
   (couverture KPI « Catégorisé » > ~50 % sur un workspace réel) — brancher
   `vendorsParConcentration` filtré par catégorie dominante sous `StatsDevise`.
 
+### Total central du donut — débordement corrigé, accès tactile ouvert (2026-07-21, PR `fix/donut-total-central`)
+
+`DONUT-CENTRE-DEBORDE1` est **clos** : le total au centre passe au format compact
+au-delà d'un seuil mesuré (9 chiffres avec symbole en préfixe, 8 avec code ISO en
+suffixe), et reste PLEIN en deçà. Mesures et protocole :
+`docs/qa/donut-total-central/README.md`. Un point reste ouvert :
+
+- [ ] **DONUT-TOTAL-TACTILE1 (P2, effort ~0,5 j, ouvert 2026-07-21) — le total exact
+  est inatteignable au TACTILE quand il est résumé.** Quand le montant dépasse le seuil,
+  l'exact n'existe plus que via `title` (affordance souris) et `sr-only` (lecteur
+  d'écran). Un utilisateur voyant sur mobile/tablette — un mode que `UI_GUIDELINES` §1.1
+  supporte explicitement en lecture seule — n'a donc aucun chemin vers le montant exact.
+  Le constat vient d'une cross-review et recoupe celui déjà consigné dans
+  `components/ui/action-protegee.tsx:47-50` (« `title` … inatteignable au tactile »).
+  **Pourquoi P2 et pas un correctif immédiat** : au-delà du seuil, le montant ne peut
+  physiquement PAS s'écrire en entier dans l'anneau — le résoudre demande de l'exposer
+  ailleurs dans la carte (en-tête à côté du nom de devise, ou ligne « Total » dans
+  `StatsDevise`), donc un arbitrage de maquette qui appartient à l'humain, pas un
+  câblage. Aucune donnée n'est fausse ni perdue : c'est un chemin d'ACCÈS qui manque.
+  ⚠️ **Ne pas sous-estimer l'exposition** : pour MUR/USD/EUR la bascule ne tombe qu'à
+  partir de 100 000 000, mais pour toute AUTRE devise (repli code ISO en suffixe, plus
+  large de ~16 px) elle tombe dès **10 000 000** — un montant ordinaire, pas un cas
+  extrême. Et sur ces cartes ni la légende (qui porte les parts, pas le total) ni
+  `StatsDevise` (moyenne/opération) n'offrent de repli.
+  **Déclencheur** : premier retour d'usage mobile sur `/graphiques`, ou
+  le prochain lot qui touche `RepartitionDeviseCard`/`StatsDevise` — poser le total
+  exact dans le flux de la carte à ce moment-là.
+
 ### Bandeau/sélecteur par titulaire — dettes ouvertes (2026-07-07)
 
 - [ ] **TITULAIRE-GENERIQUE1 (P2, effort ~15 min) — sentinelle « Account Holder » en
