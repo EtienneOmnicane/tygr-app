@@ -113,8 +113,12 @@ const LIGNES: TransactionListItem[] = [
     bankAccountId: "acc-mur",
     statutCategorisation: "complet",
     // Multi-ventilation avec dominante CONNUE (FB0709-TX-CATEGORIE-VISIBLE1) :
-    // badge nommé « Charges fixes » + suffixe « +2 » au lieu du compteur générique.
-    categorie: { id: "cat-charges", name: "Charges fixes" },
+    // badge nommé + suffixe « +2 » au lieu du compteur générique. La dominante
+    // COLLE aux SPLITS de t3 (s3 « Matériel » porte la plus grosse part) : le
+    // badge et le filtre par catégorie consultent le même monde — sinon filtrer
+    // la catégorie affichée ferait « disparaître » la ligne au Visual QA
+    // (incohérence de fixture relevée en cross-review 2026-07-22).
+    categorie: { id: "cat-charges-mat", name: "Matériel" },
     nbCategories: 3,
     // Multi-catégories + ML moyen : pas de badge « À vérifier », ⚙ modèle. Vérifie que
     // le badge dominant « +2 » et l'icône coexistent sans gêne.
@@ -226,7 +230,11 @@ const LIGNES: TransactionListItem[] = [
   },
 ];
 
-// Splits fictifs renvoyés à l'ouverture de la modale, par transaction.
+// Splits fictifs renvoyés à l'ouverture de la modale, par transaction. AUSSI la
+// source du filtre par catégorie du stub (`correspondAuxFiltres`) : toute ligne
+// dont le BADGE affiche une catégorie DOIT porter le split correspondant ici,
+// sinon filtrer la catégorie affichée fait « disparaître » la ligne au Visual QA
+// (fixture menteuse — cross-review 2026-07-22).
 const SPLITS: Record<string, SplitUI[]> = {
   t1: [
     { id: "s1", categoryId: "cat-income-clients", amount: "10000.00", source: "MANUAL", ruleId: null },
@@ -238,6 +246,16 @@ const SPLITS: Record<string, SplitUI[]> = {
     { id: "s3", categoryId: "cat-charges-mat", amount: "100000.00", source: "MANUAL", ruleId: null },
     { id: "s4", categoryId: "cat-charges-loyer", amount: "40000.00", source: "MANUAL", ruleId: null },
     { id: "s5", categoryId: "cat-charges-elec", amount: "12340.00", source: "MANUAL", ruleId: null },
+  ],
+  // t5 (badge « Loyer · complet ») : le split existe pour le FILTRE — la modale,
+  // elle, ne le verra jamais (chargerSplits LÈVE sur t5 AVANT de consulter SPLITS,
+  // simulation d'échec conservée).
+  t5: [
+    { id: "s6", categoryId: "cat-charges-loyer", amount: "65000.00", source: "MANUAL", ruleId: null },
+  ],
+  // t8 (badge « Matériel · partiel ») : split partiel (150000 / 284530.75).
+  t8: [
+    { id: "s7", categoryId: "cat-charges-mat", amount: "150000.00", source: "MANUAL", ruleId: null },
   ],
 };
 

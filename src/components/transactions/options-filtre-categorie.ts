@@ -6,11 +6,13 @@
  *
  * Hiérarchie visuelle = idiome `grouperParNature` du CategoryPicker (§4.4) : un
  * groupe par Nature (en-tête = son nom), contenant la Nature ELLE-MÊME
- * (sélectionnable — un split peut viser une racine) puis ses Sous-natures. Les
- * enfants ORPHELINS (parent absent de la liste — p. ex. parent archivé alors que
- * l'enfant reste actif) sont regroupés en fin, SANS en-tête : fail-safe, aucune
- * catégorie active ne disparaît des options (elle resterait sinon infiltrables
- * depuis l'UI alors que ses splits existent).
+ * (sélectionnable — un split peut viser une racine) puis ses Sous-natures. Toute
+ * catégorie NON RATTACHABLE à une racine de la liste est regroupée en fin, SANS
+ * en-tête : parent archivé (absent de la liste active) MAIS AUSSI parent présent
+ * sans être une racine (« petit-enfant » — le schéma serveur ne borne pas la
+ * profondeur, cross-review 2026-07-22). Fail-safe : aucune catégorie active ne
+ * disparaît des options (elle resterait sinon infiltrable depuis l'UI alors que
+ * ses splits existent).
  *
  * Tri par nom (localeCompare fr) à chaque niveau : le serveur trie déjà à plat,
  * mais l'état LOCAL du conteneur APPEND les catégories créées en cours de session
@@ -39,8 +41,12 @@ const parNom = (a: CategorieOptionFiltre, b: CategorieOptionFiltre) =>
 export function construireGroupesCategories(
   categories: CategorieOptionFiltre[],
 ): GroupeSelect[] {
-  const ids = new Set(categories.map((c) => c.id));
   const racines = categories.filter((c) => c.parentId === null).sort(parNom);
+  // Rattachables = enfants DIRECTS d'une racine. Tester l'appartenance aux RACINES
+  // (pas à la liste entière) : un « petit-enfant » dont le parent est présent mais
+  // non-racine ne serait sinon ni groupé (la boucle ne parcourt que les enfants de
+  // racines) ni orphelin (son parent existe) → il disparaîtrait en silence.
+  const racineIds = new Set(racines.map((r) => r.id));
   const groupes: GroupeSelect[] = racines.map((nature) => ({
     label: nature.name,
     options: [
@@ -53,7 +59,7 @@ export function construireGroupesCategories(
   }));
 
   const orphelins = categories
-    .filter((c) => c.parentId !== null && !ids.has(c.parentId))
+    .filter((c) => c.parentId !== null && !racineIds.has(c.parentId))
     .sort(parNom);
   if (orphelins.length > 0) {
     groupes.push({

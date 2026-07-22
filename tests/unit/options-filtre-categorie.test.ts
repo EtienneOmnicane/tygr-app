@@ -61,6 +61,28 @@ describe("construireGroupesCategories", () => {
     ]);
   });
 
+  it("FAIL-SAFE petit-enfant : parent PRÉSENT mais non-racine → groupe final quand même (cross-review 2026-07-22)", () => {
+    // Le schéma serveur ne borne pas la profondeur (creerCategorieSchema accepte
+    // n'importe quel parentId) : un niveau 3 créé hors-UI ne doit pas disparaître
+    // en silence des options — il resterait sinon infiltrable alors que ses
+    // splits existent. AUCUNE catégorie de l'entrée ne doit manquer à la sortie.
+    const petitEnfant = {
+      id: "pe-1",
+      name: "Petit-enfant",
+      parentId: "sn-loyer", // parent présent, mais lui-même enfant de n-cha
+    };
+    const groupes = construireGroupesCategories([...REFERENTIEL, petitEnfant]);
+    const toutesValeurs = groupes.flatMap((g) => g.options.map((o) => o.value));
+    expect(toutesValeurs).toContain("pe-1");
+    const dernier = groupes[groupes.length - 1];
+    expect(dernier.label).toBe("");
+    expect(dernier.options).toEqual([{ value: "pe-1", label: "Petit-enfant" }]);
+    // Invariant de complétude : entrée et sortie portent EXACTEMENT les mêmes ids.
+    expect(toutesValeurs.sort()).toEqual(
+      [...REFERENTIEL.map((c) => c.id), "pe-1"].sort(),
+    );
+  });
+
   it("référentiel VIDE → aucun groupe (la toolbar ne rend alors pas le Select)", () => {
     expect(construireGroupesCategories([])).toEqual([]);
   });

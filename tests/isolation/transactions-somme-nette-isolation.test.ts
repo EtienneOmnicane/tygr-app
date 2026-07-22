@@ -532,6 +532,35 @@ describe("filtres — le total totalise EXACTEMENT les lignes listées", () => {
     // Pas de « Rs 0,00 » : le bandeau UI se démonte AVEC la liste, jamais un total
     // au-dessus d'un vide.
   });
+
+  it("catégorie × keyset — frontière de page SANS doublon ni trou (limite=1), pas de page fantôme", async () => {
+    // Le prédicat EXISTS doit être NEUTRE en cardinalité malgré les 2 splits de M2 :
+    // un JOIN nu dupliquerait M2, ferait mentir hasMore (page fantôme) et
+    // calculerait le curseur depuis un doublon. Ordre keyset : (date DESC, id DESC).
+    const p1 = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(
+        tx,
+        ctx,
+        parseListe({ categorieId: CAT_A, limite: 1 }),
+      ),
+    );
+    expect(p1.lignes.map((l) => l.id)).toEqual([M2]); // 2026-03-14
+    expect(p1.hasMore).toBe(true);
+
+    const p2 = await withWorkspace(sessionA, (tx, ctx) =>
+      listerTransactions(
+        tx,
+        ctx,
+        parseListe({
+          categorieId: CAT_A,
+          limite: 1,
+          curseur: p1.curseurSuivant as string,
+        }),
+      ),
+    );
+    expect(p2.lignes.map((l) => l.id)).toEqual([M3]); // 2026-03-13, ni doublon ni trou
+    expect(p2.hasMore).toBe(false); // pas de page fantôme résiduelle
+  });
 });
 
 describe("filtre catégorie × RLS tenant — jamais d'oracle cross-workspace", () => {

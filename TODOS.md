@@ -2260,6 +2260,22 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
       le Select. **Déclencheur** : retour utilisateur demandant qu'une Nature agrège
       ses sous-natures dans le filtre.
 
+- [ ] **TX-FILTRE-RACE1 (P2) — réponses out-of-order entre deux rechargements de la
+      page 1 de /transactions** — Effort S-M. Date 2026-07-22 (cross-review du filtre
+      catégorie ; défaut PRÉ-EXISTANT, pas introduit par lui). Deux
+      `rechargerPremierePage` concurrents ne sont pas séquencés
+      (`src/components/transactions/transactions-feature.tsx`, pas de jeton de
+      requête/abort) : la toolbar est `disabled` pendant un chargement MAIS le timer
+      de debounce de la recherche (`transactions-toolbar.tsx`) peut émettre pendant un
+      vol → si la réponse du filtre N arrive APRÈS celle du filtre N+1, liste + bandeau
+      affichent un jeu qui ne correspond plus à l'état des filtres. Même famille : le
+      nettoyage post-archivage dans `rechargerReferentiel` ré-applique un instantané de
+      `filtres` capturé avant un `await` (fenêtre quasi inatteignable — un `filtresRef`,
+      idiome déjà présent dans la toolbar, la fermerait). Correctif cible : jeton de
+      séquence (ignorer toute réponse qui n'est pas la dernière émise). Occurrence
+      rare (exige une inversion réseau). **Déclencheur** : signalement d'une liste
+      incohérente avec les filtres affichés, ou prochaine itération sur la toolbar.
+
 - [x] **TX-QA-SPLIT-DOUBLON1 (P1) — deux splits sur la MÊME catégorie autorisés sur une
       transaction ventilée** — ✅ LIVRÉ (branche `feat/tx-split-doublon`, 2026-07-01). Garde
       SERVEUR canonique `CategorieDupliqueeError` (code `CATEGORY_DUPLICATE_IN_SPLIT`) dans
