@@ -40,6 +40,59 @@ const ACTIONS_STUB: ActionsReferentielCategories = {
   archiverCategorie: async () => ({ ok: true, data: undefined }),
 };
 
+/**
+ * Référentiel VOLUMINEUX (8 Natures × 4 sous-catégories = 40 lignes). Sa raison d'être
+ * est de faire ÉCHOUER la modale si elle régresse : `Modal` verrouille le scroll du body
+ * et centre son panneau, donc une liste non bornée déborderait au-dessus du bord haut du
+ * viewport — titre et recherche deviendraient inatteignables. Un jeu de démo confortable
+ * ne peut pas capturer ce défaut, c'est pourquoi celui-ci existe.
+ */
+const CATEGORIES_VOLUMINEUSES: CategorieUI[] = [
+  "Revenus",
+  "Charges d’exploitation",
+  "Taxes & impôts",
+  "Personnel",
+  "Investissements",
+  "Financement",
+  "Frais généraux",
+  "Divers",
+].flatMap((nature, i) => {
+  const idNature = `vol-nature-${i}`;
+  return [
+    { id: idNature, name: nature, parentId: null, isActive: true },
+    ...["Électricité", "Loyer", "Prestations", "Matériel"].map((sous, j) => ({
+      id: `vol-sous-${i}-${j}`,
+      name: `${sous} ${i + 1}`,
+      parentId: idNature,
+      isActive: true,
+    })),
+  ];
+});
+
+/**
+ * Stub d'ÉCHEC : chaque écriture répond un code du registre S2. Sert à capturer l'état
+ * d'erreur au CONTACT du geste (un échec d'archivage doit se rendre sur la ligne
+ * concernée, jamais sous le bouton « Créer » comme le faisait la version précédente).
+ */
+const ACTIONS_STUB_ECHEC: ActionsReferentielCategories = {
+  listerCategories: async () => CATEGORIES_DEMO,
+  creerCategorie: async () => ({
+    ok: false,
+    code: "CATEGORIE_DEJA_EXISTANTE",
+    message: "Conflit serveur.",
+  }),
+  renommerCategorie: async () => ({
+    ok: false,
+    code: "CATEGORY_NOT_AUTHORIZED",
+    message: "Refus serveur.",
+  }),
+  archiverCategorie: async () => ({
+    ok: false,
+    code: "CATEGORY_NOT_FOUND",
+    message: "Introuvable côté serveur.",
+  }),
+};
+
 // Sous-ensemble « importé » simulé pour la démo du picker VIDE (QA-ONBOARD-CATEG1).
 const REFERENTIEL_IMPORTE_DEMO: CategorieUI[] = [
   { id: "cat-imp-revenus", name: "Revenus", parentId: null, isActive: true },
@@ -48,9 +101,33 @@ const REFERENTIEL_IMPORTE_DEMO: CategorieUI[] = [
   { id: "cat-imp-loyer", name: "Loyer", parentId: "cat-imp-charges", isActive: true },
 ];
 
+/** Variante du gestionnaire à monter (null = fermé). */
+type VarianteManager = "peuple" | "volumineux" | "vide" | "erreur";
+
+function BoutonDemo({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-10 cursor-pointer items-center rounded-control bg-primary px-4
+        text-sm font-semibold text-text-onink transition-colors hover:bg-primary-600
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+        focus-visible:ring-offset-2"
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function CategoryStatesDemoPage() {
   const [selectionnee, setSelectionnee] = useState<string | null>("cat-charges-elec");
-  const [managerOuvert, setManagerOuvert] = useState(false);
+  const [managerOuvert, setManagerOuvert] = useState<VarianteManager | null>(null);
   const [splitOuvert, setSplitOuvert] = useState(false);
   // État local pour la section CategoryPicker (la création y ajoute une catégorie).
   const [categoriesDemo, setCategoriesDemo] =
@@ -158,26 +235,42 @@ export default function CategoryStatesDemoPage() {
           />
         </section>
 
-        {/* 3. CategoryManagerModal */}
+        {/* 3. CategoryManagerModal — les états capturés au Gate 4 */}
         <section className="rounded-card bg-surface-card p-6 shadow-card">
           <h2 className="mb-4 text-base font-semibold text-text">
-            CategoryManagerModal
+            CategoryManagerModal — refonte ergonomique
           </h2>
-          <button
-            type="button"
-            onClick={() => setManagerOuvert(true)}
-            className="inline-flex h-10 items-center rounded-control bg-primary px-4
-              text-sm font-semibold text-text-onink transition-colors
-              hover:bg-primary-600 focus:outline-none focus-visible:ring-2
-              focus-visible:ring-primary focus-visible:ring-offset-2"
-          >
-            Ouvrir le gestionnaire
-          </button>
+          <p className="mb-4 max-w-2xl text-sm text-text-muted">
+            Accordéons repliés par défaut (compteur de sous-catégories comme sommaire),
+            recherche insensible aux accents, création CONTEXTUELLE sous chaque Nature,
+            archivage sous confirmation inline, actions en boutons-icônes 32×32. Chaque
+            variante ci-dessous isole un état à capturer.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <BoutonDemo onClick={() => setManagerOuvert("peuple")}>
+              Peuplé (3 Natures)
+            </BoutonDemo>
+            <BoutonDemo onClick={() => setManagerOuvert("volumineux")}>
+              Volumineux (8 Natures / 40 lignes)
+            </BoutonDemo>
+            <BoutonDemo onClick={() => setManagerOuvert("vide")}>
+              Référentiel vide
+            </BoutonDemo>
+            <BoutonDemo onClick={() => setManagerOuvert("erreur")}>
+              Erreur serveur (toutes actions en échec)
+            </BoutonDemo>
+          </div>
           <CategoryManagerModal
-            open={managerOuvert}
-            onClose={() => setManagerOuvert(false)}
-            categories={CATEGORIES_DEMO}
-            actions={ACTIONS_STUB}
+            open={managerOuvert !== null}
+            onClose={() => setManagerOuvert(null)}
+            categories={
+              managerOuvert === "vide"
+                ? []
+                : managerOuvert === "volumineux"
+                  ? CATEGORIES_VOLUMINEUSES
+                  : CATEGORIES_DEMO
+            }
+            actions={managerOuvert === "erreur" ? ACTIONS_STUB_ECHEC : ACTIONS_STUB}
           />
         </section>
 
