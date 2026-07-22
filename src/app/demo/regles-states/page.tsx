@@ -6,8 +6,9 @@
  * actions STUB (aucun serveur, aucune DB). Sert à capturer hors auth/DB (Quality
  * Gate 4) : formulaire d'édition (pré-remplissage + case « Règle active » + microcopy
  * anti-illusion), poignées de glisser + flèches ↑/↓, bouton « Modifier » y compris sur
- * une règle archivée, focus visibles. Les stubs simulent le réordonnancement en
- * mémoire pour vérifier que la liste bouge.
+ * une règle archivée, et surtout l'état RÈGLE ARCHIVÉE + bouton « Réactiver »
+ * (chemin direct depuis la liste). Les stubs simulent le réordonnancement ET la
+ * réactivation en mémoire pour vérifier que la liste bouge.
  */
 import { useRef, useState } from "react";
 
@@ -99,7 +100,7 @@ export default function ReglesStatesDemoPage() {
 
       <div className="bg-warning-bg px-6 py-2 text-xs font-medium text-warning">
         Domaine Règles — données fictives, actions inertes. Édition, réordonnancement
-        (glisser + flèches), réactivation d’une règle archivée.
+        (glisser + flèches), réactivation d’une règle archivée en un clic.
       </div>
 
       <main className="mx-auto w-full max-w-3xl px-6 py-8">
@@ -107,8 +108,8 @@ export default function ReglesStatesDemoPage() {
           <h1 className="text-xl font-semibold text-text">Règles de catégorisation</h1>
           <p className="mt-1 text-sm text-text-muted">
             Glissez une règle (ou utilisez ▲/▼) pour changer sa priorité — la règle du
-            haut l’emporte. « Modifier » ouvre le formulaire (y compris pour réactiver
-            une règle archivée).
+            haut l’emporte. Une règle archivée porte un bouton « Réactiver » : un clic
+            la remet en service, sans passer par le formulaire.
           </p>
         </div>
         <ReglesFeature

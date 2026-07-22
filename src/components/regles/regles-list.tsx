@@ -10,9 +10,13 @@
  * glisser-déposer (drag HTML5 natif, zéro dépendance) ET par des flèches ↑/↓ (chemin
  * accessible au clavier). Seules les règles ACTIVES sont réordonnables.
  *
- * « Modifier » est offert sur TOUTES les règles (y compris archivées → seul chemin de
- * réactivation via la case « Règle active » du formulaire). « Supprimer » (= archiver)
- * ne concerne que les actives. Aucune couleur en dur ; vert/rouge réservés à la DONNÉE.
+ * « Modifier » est offert sur TOUTES les règles (y compris archivées). Les deux autres
+ * gestes sont EXCLUSIFS et symétriques : « Supprimer » (= archiver) sur les actives,
+ * « Réactiver » sur les archivées — la case « Règle active » du formulaire reste un
+ * second chemin (utile quand on réactive EN MÊME TEMPS qu'on édite d'autres champs),
+ * elle n'est plus le seul. Aucune couleur en dur ; vert/rouge réservés à la DONNÉE :
+ * « Réactiver » est un geste neutre/positif → jamais `danger` (réservé à « Supprimer »),
+ * jamais un vert de « succès » décoratif.
  */
 import { CategoryBadge } from "@/components/ui/category";
 
@@ -75,6 +79,8 @@ export function ReglesList({
   nomParCategorie,
   onSupprimer,
   suppressionEnCours,
+  onReactiver,
+  reactivationEnCours,
   onModifier,
   onReordonner,
   idsActifsOrdonnes = [],
@@ -89,6 +95,13 @@ export function ReglesList({
   onSupprimer: (ruleId: string) => void;
   /** id de la règle en cours de suppression (désactive son bouton), si une. */
   suppressionEnCours?: string | null;
+  /**
+   * Réactive une règle ARCHIVÉE (is_active=true). Le conteneur appelle l'action.
+   * Absent = pas de bouton « Réactiver » (le formulaire reste alors le seul chemin).
+   */
+  onReactiver?: (ruleId: string) => void;
+  /** id de la règle en cours de réactivation (désactive son bouton), si une. */
+  reactivationEnCours?: string | null;
   /** Ouvre l'édition de la règle (pré-remplit le formulaire du conteneur). */
   onModifier?: (regle: RegleUI) => void;
   /** Remonte le nouvel ordre des règles ACTIVES (ids) après drag/flèche. */
@@ -123,6 +136,7 @@ export function ReglesList({
       {regles.map((regle) => {
         const nomCat = nomParCategorie.get(regle.categoryId) ?? "Catégorie inconnue";
         const enSuppression = suppressionEnCours === regle.id;
+        const enReactivation = reactivationEnCours === regle.id;
         const glissable = reordonnable && regle.isActive && !reordreEnCours;
         const posActif = idsActifsOrdonnes.indexOf(regle.id);
         const estPremier = posActif === 0;
@@ -237,6 +251,22 @@ export function ReglesList({
                       disabled:opacity-[0.48]"
                   >
                     {enSuppression ? "Suppression…" : "Supprimer"}
+                  </button>
+                )}
+                {/* Archivée : « Réactiver » est l'action PRINCIPALE de la ligne (bordure
+                    + texte pleine intensité), « Modifier » reste tertiaire. Exclusif
+                    avec « Supprimer » ci-dessus. */}
+                {!regle.isActive && onReactiver && (
+                  <button
+                    type="button"
+                    onClick={() => onReactiver(regle.id)}
+                    disabled={enReactivation}
+                    className="rounded-control border border-line px-2.5 py-1.5 text-xs
+                      font-medium text-text transition-colors hover:bg-surface-inset
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-primary
+                      disabled:opacity-[0.48]"
+                  >
+                    {enReactivation ? "Réactivation…" : "Réactiver"}
                   </button>
                 )}
               </div>

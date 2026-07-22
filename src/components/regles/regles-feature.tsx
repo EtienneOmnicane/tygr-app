@@ -2,7 +2,7 @@
 
 /**
  * Conteneur CLIENT de la page « Règles de catégorisation ». Orchestre la liste, la
- * création et la suppression (archivage) en s'appuyant sur les Server Actions
+ * création, la suppression (archivage) et la réactivation en s'appuyant sur les Server Actions
  * injectées (`ActionsRegles`) — il ne touche JAMAIS la DB ni ne connaît le
  * workspace (scopé serveur). Recharge la liste après chaque mutation réussie.
  *
@@ -70,6 +70,7 @@ export function ReglesFeature({
   const [erreur, setErreur] = useState<string | null>(null);
   const [creationEnCours, setCreationEnCours] = useState(false);
   const [suppressionEnCours, setSuppressionEnCours] = useState<string | null>(null);
+  const [reactivationEnCours, setReactivationEnCours] = useState<string | null>(null);
   const [reanalyseEnCours, setReanalyseEnCours] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   /** Règle en cours d'édition (null = formulaire en mode création). */
@@ -129,6 +130,41 @@ export function ReglesFeature({
         setErreur("La suppression a échoué. Réessayez.");
       } finally {
         setSuppressionEnCours(null);
+      }
+    },
+    [actions, recharger],
+  );
+
+  /**
+   * Réactive une règle archivée depuis la LISTE (chemin direct, sans passer par le
+   * formulaire). Même idiome que `supprimer` ; côté serveur c'est la même action que
+   * l'édition (`modifierRegle`), dont la garde de rôle re-résout MANAGER/ADMIN dans
+   * la transaction — `peutGerer` n'est qu'une défense en profondeur.
+   */
+  const reactiver = useCallback(
+    async (ruleId: string) => {
+      setErreur(null);
+      setInfo(null);
+      setReactivationEnCours(ruleId);
+      try {
+        const res = await actions.modifierRegle({ ruleId, isActive: true });
+        if (!res.ok) {
+          setErreur(messagePourCode(res.code, res.message));
+          return;
+        }
+        await recharger();
+        // Anti-illusion : réactiver ne reclasse RIEN rétroactivement — la ré-analyse
+        // ne touche que les transactions SANS ventilation (MANUAL prime, jamais
+        // écrasé). On ne cite le bouton que s'il est réellement offert.
+        setInfo(
+          typeof actions.appliquerRegles === "function"
+            ? "Règle réactivée. Lancez « Ré-analyser les transactions » pour l’appliquer aux transactions non catégorisées."
+            : "Règle réactivée. Elle s’appliquera aux prochaines transactions non catégorisées.",
+        );
+      } catch {
+        setErreur("La réactivation a échoué. Réessayez.");
+      } finally {
+        setReactivationEnCours(null);
       }
     },
     [actions, recharger],
@@ -345,6 +381,8 @@ export function ReglesFeature({
             nomParCategorie={nomParCategorie}
             onSupprimer={supprimer}
             suppressionEnCours={suppressionEnCours}
+            onReactiver={reactiver}
+            reactivationEnCours={reactivationEnCours}
             onModifier={demarrerEdition}
             onReordonner={reordonner}
             idsActifsOrdonnes={idsActifsOrdonnes}
