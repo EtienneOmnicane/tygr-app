@@ -158,6 +158,15 @@ export interface FiltresTransactions {
   recherche?: string;
   /** Restreindre par statut de ventilation. */
   statutCategorisation?: StatutCategorisation;
+  /**
+   * Restreindre aux transactions portant AU MOINS un split de cette catégorie du
+   * référentiel TYGR (uuid ; sémantique EXISTS serveur, PLAN-transactions-filtre-
+   * categorie §2). `undefined` = pas de filtre — jamais de chaîne vide (le Zod
+   * `uuid()` la rejetterait). NB : combiné à `statutCategorisation:
+   * "non_categorise"`, l'ensemble est VIDE par construction (un split de X
+   * contredit « aucun split ») — état légitime, l'empty state standard s'affiche.
+   */
+  categorieId?: string;
 }
 
 /** Une page de résultats (B1). `curseurSuivant` null = dernière page. */

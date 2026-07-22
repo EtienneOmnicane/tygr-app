@@ -203,15 +203,8 @@ export function TransactionsFeature({
     [importerCategoriesStandard],
   );
 
-  // Recharge le RÉFÉRENTIEL de catégories depuis le serveur (source de vérité)
-  // après une mutation du gestionnaire (renommage/archivage/création). Remplace
-  // l'état local par la liste fraîche (les archivées disparaissent, les renommées
-  // s'actualisent) → les pickers reflètent immédiatement l'état réel.
-  const rechargerReferentiel = useCallback(async () => {
-    if (!actionsReferentiel) return;
-    const fraiches = await actionsReferentiel.listerCategories();
-    setCategoriesLocales(fraiches);
-  }, [actionsReferentiel]);
+  // (rechargerReferentiel est déclaré plus bas : il dépend d'appliquerFiltres —
+  // ordre de déclaration des useCallback, cf. le commentaire sur place.)
 
   /** (Re)charge la PREMIÈRE page pour un jeu de filtres donné (reset curseur). */
   const rechargerPremierePage = useCallback(
@@ -259,10 +252,37 @@ export function TransactionsFeature({
   );
 
   /** Applique un changement de filtre : recharge depuis la page 1. */
-  function appliquerFiltres(f: FiltresTransactions) {
-    setFiltres(f);
-    void rechargerPremierePage(f);
-  }
+  const appliquerFiltres = useCallback(
+    (f: FiltresTransactions) => {
+      setFiltres(f);
+      void rechargerPremierePage(f);
+    },
+    [rechargerPremierePage],
+  );
+
+  // Recharge le RÉFÉRENTIEL de catégories depuis le serveur (source de vérité)
+  // après une mutation du gestionnaire (renommage/archivage/création). Remplace
+  // l'état local par la liste fraîche (les archivées disparaissent, les renommées
+  // s'actualisent) → les pickers reflètent immédiatement l'état réel.
+  //
+  // Déclaré APRÈS appliquerFiltres (dépendance) : si la catégorie du filtre ACTIF
+  // vient d'être ARCHIVÉE (absente de la liste fraîche), on EFFACE le filtre et on
+  // recharge la page 1 — sinon la liste resterait bornée à un filtre que le Select
+  // ne peut plus NOMMER (l'option a disparu, trigger vide : UI menteuse sur un
+  // écran financier). La garde vit ICI, sur le chemin de MUTATION (handler), pas
+  // dans un effet (react-hooks/set-state-in-effect) : seule cette recharge peut
+  // RETIRER une catégorie — la création ne fait qu'APPEND.
+  const rechargerReferentiel = useCallback(async () => {
+    if (!actionsReferentiel) return;
+    const fraiches = await actionsReferentiel.listerCategories();
+    setCategoriesLocales(fraiches);
+    if (
+      filtres.categorieId &&
+      !fraiches.some((c) => c.id === filtres.categorieId)
+    ) {
+      appliquerFiltres({ ...filtres, categorieId: undefined });
+    }
+  }, [actionsReferentiel, filtres, appliquerFiltres]);
 
   /** Charge la page SUIVANTE et l'ajoute à la liste (append). */
   async function chargerPlus() {
@@ -371,6 +391,11 @@ export function TransactionsFeature({
       <TransactionsToolbar
         filtres={filtres}
         onChange={appliquerFiltres}
+        // Options du filtre catégorie (TX-QA-FILTRE-CAT1) : le référentiel LOCAL
+        // (frais — suit créations/renommages/archivages de la session, cf.
+        // FB0709-CAT-PICKER-FRAICHEUR1), pas la prop RSC figée au montage. La
+        // toolbar reste pure : elle reçoit la liste, ne la fetch jamais.
+        categories={categoriesLocales}
         disabled={chargement}
         onOuvrirGestionCategories={
           actionsReferentiel ? () => setManagerOuvert(true) : undefined

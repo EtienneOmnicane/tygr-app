@@ -548,14 +548,31 @@ function predicatStatut(statut: StatutVentilation) {
 function conditionsFiltres(params: {
   recherche?: string;
   bankAccountId?: string;
+  categorieId?: string;
   dateDebut?: string;
   dateFin?: string;
 }) {
-  const { recherche, bankAccountId, dateDebut, dateFin } = params;
+  const { recherche, bankAccountId, categorieId, dateDebut, dateFin } = params;
 
   const conditions = [eq(transactionsCache.isRemoved, false)];
   if (bankAccountId) {
     conditions.push(eq(transactionsCache.bankAccountId, bankAccountId));
+  }
+  if (categorieId) {
+    // Filtre par catégorie (TX-QA-FILTRE-CAT1) : EXISTS un split de cette catégorie
+    // — sémantique d'APPARTENANCE (PLAN §2), calquée sur `predicatStatut` (même
+    // corrélation composite, même index txn_categorizations_workspace_txn_idx, même
+    // robustesse sous RLS — cf. le POURQUOI corrélé de predicatStatut). Un JOIN, lui,
+    // DUPLIQUERAIT les lignes multi-splits (pagination ET somme faussées) ; l'EXISTS
+    // est insensible à la cardinalité. Paramètre LIÉ ; jamais de workspace_id ici
+    // (RLS, règle 2) : `transaction_categorizations` porte tenant_isolation +
+    // account_scope, un categorieId étranger rend 0 ligne sans oracle d'existence.
+    conditions.push(sql`exists (
+      select 1 from transaction_categorizations z
+      where z.transaction_id = ${transactionsCache.id}
+        and z.transaction_date = ${transactionsCache.transactionDate}
+        and z.category_id = ${categorieId}
+    )`);
   }
   if (recherche) {
     // Échappe les méta-caractères LIKE pour traiter la saisie comme littérale.

@@ -12,9 +12,10 @@
  * - CONVENTION DE SIGNE (le piège de cet agrégat, cf. ci-dessous).
  * - `net = entrées − sorties`, vérifié en CENTIMES ENTIERS (BigInt) — zéro float, y
  *   compris dans le test.
- * - Tombstone (`is_removed`) exclu ; filtres (recherche / dates / statut / compte)
- *   appliqués EXACTEMENT comme dans la liste (assertion croisée avec
- *   `listerTransactions` : le total totalise bien les lignes affichées).
+ * - Tombstone (`is_removed`) exclu ; filtres (recherche / dates / statut / compte /
+ *   catégorie TX-QA-FILTRE-CAT1) appliqués EXACTEMENT comme dans la liste
+ *   (assertion croisée avec `listerTransactions` : le total totalise bien les
+ *   lignes affichées).
  *
  * ⚠️⚠️ CONVENTION DE SIGNE — POURQUOI LE SEMIS EST EN MONTANTS POSITIFS.
  * En base, `transactions_cache.amount` est une valeur ABSOLUE : l'ingestion
@@ -73,11 +74,15 @@ const ACC_B = "dddd0003-dddd-4ddd-8ddd-dddddddddddd"; // WS_B
 const ENT_NORD = "eeee0001-eeee-4eee-8eee-eeeeeeeeeeee";
 const ENT_SUD = "eeee0002-eeee-4eee-8eee-eeeeeeeeeeee";
 const CAT_A = "aaaacccc-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+// Filtre par catégorie (TX-QA-FILTRE-CAT1) :
+const CAT_MIN = "aaaacccd-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // WS_A · split MINORITAIRE sur M2 (préserve la sémantique EXISTS vs dominante)
+const CAT_SANS = "aaaaccce-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // WS_A · ACTIVE mais AUCUN split
+const CAT_B = "bbbbcccc-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // WS_B · jamais visible depuis A
 
 // ── Jeu de données WS_A (montants POSITIFS + sens sur credit_debit = PRODUCTION) ──
 // MUR (ACC_MUR) :
 //   M1  2026-03-15  Credit 1000.00  « Salaire ACME »       (non catégorisé)
-//   M2  2026-03-14  Debit   300.00  « Achat Fournisseur »  (PARTIEL : split 100)
+//   M2  2026-03-14  Debit   300.00  « Achat Fournisseur »  (PARTIEL : splits 100 CAT_A + 150 CAT_MIN)
 //   M3  2026-03-13  Debit   200.00  « Loyer ACME »         (COMPLET : split 200)
 //   M4  2026-03-12  Debit   999.00  « Supprimee »          ← TOMBSTONE (is_removed)
 //   M5  2026-03-11  Credit    50.00 « Remboursement »      (non catégorisé)
@@ -192,7 +197,10 @@ beforeAll(async () => {
       ('${WS_A}','${CAROL}','${ENT_NORD}');
 
     insert into categories (id,workspace_id,name) values
-      ('${CAT_A}','${WS_A}','Fournisseurs');
+      ('${CAT_A}','${WS_A}','Fournisseurs'),
+      ('${CAT_MIN}','${WS_A}','Transport'),
+      ('${CAT_SANS}','${WS_A}','Divers'),
+      ('${CAT_B}','${WS_B}','Frais B');
 
     -- ⚠️ MONTANTS POSITIFS + sens sur credit_debit = convention de PRODUCTION
     -- (normaliserMontant rejette tout signe). Cf. l'avertissement en tête de fichier.
@@ -211,11 +219,16 @@ beforeAll(async () => {
       (id,workspace_id,bank_account_id,omnifi_txn_id,transaction_date,booking_date_time,amount,currency,credit_debit,bank_label_raw,clean_label,is_removed) values
       ('${B1}','${WS_B}','${ACC_B}','b1','2026-03-15','2026-03-15T08:00:00Z','7777.00','MUR','Debit','rawB','Secret B',false);
 
-    -- Splits : M2 PARTIEL (100/300) ; M3 COMPLET (200/200). M1/M5 sans split.
+    -- Splits : M2 PARTIEL (100 CAT_A + 150 CAT_MIN = 250/300 — CAT_A y est
+    -- MINORITAIRE, la dominante est CAT_MIN : c'est ce qui rend la sémantique du
+    -- filtre catégorie FALSIFIABLE, cf. le cas « appartenance, pas dominance ») ;
+    -- M3 COMPLET (200 CAT_A / 200). M1/M5 sans split. B1 ventilé sur CAT_B (WS_B).
     insert into transaction_categorizations
       (workspace_id,transaction_id,transaction_date,category_id,amount,source,created_by) values
       ('${WS_A}','${M2}','2026-03-14','${CAT_A}','100.00','MANUAL','${ALICE}'),
-      ('${WS_A}','${M3}','2026-03-13','${CAT_A}','200.00','MANUAL','${ALICE}');
+      ('${WS_A}','${M2}','2026-03-14','${CAT_MIN}','150.00','MANUAL','${ALICE}'),
+      ('${WS_A}','${M3}','2026-03-13','${CAT_A}','200.00','MANUAL','${ALICE}'),
+      ('${WS_B}','${B1}','2026-03-15','${CAT_B}','50.00','MANUAL','${BOB}');
   `);
 
   await client.exec(
@@ -462,6 +475,86 @@ describe("filtres — le total totalise EXACTEMENT les lignes listées", () => {
     expect(totaux).toEqual([]);
     // Un « Rs 0,00 » serait un mensonge : 0 dans QUELLE devise ? L'UI n'affiche rien.
   });
+
+  // ── Filtre par CATÉGORIE (TX-QA-FILTRE-CAT1) — sémantique EXISTS, PLAN §2 ──
+
+  it("catégorie CAT_A — ne garde que M2 et M3, total cohérent avec la liste", async () => {
+    const totaux = parDevise(await verifierCoherenceListe({ categorieId: CAT_A }));
+    expect(Object.keys(totaux)).toEqual(["MUR"]);
+    expect(totaux.MUR).toMatchObject({
+      entrees: "0.00",
+      sorties: "500.00", // M2 (300) + M3 (200) — le jeu filtré n'a que des sorties
+      net: "-500.00",
+      nbTransactions: 2,
+    });
+    const page = await liste(sessionA, { categorieId: CAT_A });
+    expect(page.lignes.map((l) => l.id).sort()).toEqual([M2, M3].sort());
+  });
+
+  it("catégorie — APPARTENANCE, pas dominance : le split MINORITAIRE suffit (arbitrage §2a)", async () => {
+    // M2 est ventilé 100 CAT_A + 150 CAT_MIN : sa DOMINANTE est CAT_MIN. Le filtre
+    // CAT_A doit QUAND MÊME retenir M2 — une implémentation « dominante = X »
+    // (option b, écartée au PLAN) le cacherait et ce cas casserait. Et l'EXISTS ne
+    // DUPLIQUE pas M2 malgré ses 2 splits (un JOIN nu le compterait deux fois).
+    const page = await liste(sessionA, { categorieId: CAT_A });
+    expect(page.lignes.filter((l) => l.id === M2)).toHaveLength(1);
+    // Contre-angle : filtrer par la dominante CAT_MIN retient aussi M2, seul.
+    const pageMin = await liste(sessionA, { categorieId: CAT_MIN });
+    expect(pageMin.lignes.map((l) => l.id)).toEqual([M2]);
+  });
+
+  it("catégorie + statut PARTIEL cumulés en AND — ne garde que M2", async () => {
+    const totaux = parDevise(
+      await verifierCoherenceListe({ categorieId: CAT_A, statut: "PARTIEL" }),
+    );
+    expect(totaux.MUR).toMatchObject({
+      sorties: "300.00",
+      net: "-300.00",
+      nbTransactions: 1,
+    });
+  });
+
+  it("catégorie + NON_CATEGORISE = ensemble VIDE par construction (documenté, pas une erreur)", async () => {
+    // Avoir un split de CAT_A contredit « aucun split » : l'AND est vide par
+    // construction. C'est un état LÉGITIME (empty state standard côté UI), le
+    // contrat ne le rejette pas — et liste ET somme se vident ENSEMBLE.
+    const totaux = await verifierCoherenceListe({
+      categorieId: CAT_A,
+      statut: "NON_CATEGORISE",
+    });
+    expect(totaux).toEqual([]);
+  });
+
+  it("catégorie ACTIVE sans transaction → liste VIDE et somme [] sur le MÊME jeu (le vrai piège)", async () => {
+    const page = await liste(sessionA, { categorieId: CAT_SANS });
+    expect(page.lignes).toEqual([]);
+    expect(await somme(sessionA, { categorieId: CAT_SANS })).toEqual([]);
+    // Pas de « Rs 0,00 » : le bandeau UI se démonte AVEC la liste, jamais un total
+    // au-dessus d'un vide.
+  });
+});
+
+describe("filtre catégorie × RLS tenant — jamais d'oracle cross-workspace", () => {
+  it("B filtré par SA catégorie voit B1 ; A armé du MÊME uuid voit 0 ligne", async () => {
+    // Côté B (propriétaire de CAT_B) : le filtre mord normalement.
+    const pageB = await liste(sessionB, { categorieId: CAT_B });
+    expect(pageB.lignes.map((l) => l.id)).toEqual([B1]);
+    const totauxB = await somme(sessionB, { categorieId: CAT_B });
+    expect(totauxB).toHaveLength(1);
+    expect(totauxB[0]).toMatchObject({
+      currency: "MUR",
+      sorties: "7777.00",
+      nbTransactions: 1,
+    });
+
+    // Côté A, armé de l'uuid d'une catégorie du tenant B : 0 ligne et somme [] —
+    // la MÊME réponse qu'une catégorie inexistante (aucun oracle d'existence, et
+    // la RLS de transaction_categorizations rend le split de B invisible au
+    // sous-EXISTS, quelle que soit la forme de la requête).
+    const pageA = await liste(sessionA, { categorieId: CAT_B });
+    expect(pageA.lignes).toEqual([]);
+    expect(await somme(sessionA, { categorieId: CAT_B })).toEqual([]);
+  });
 });
 
 /**
@@ -509,6 +602,7 @@ describe("contrat de lecture (sommeNetteSchema)", () => {
     const filtres = {
       recherche: "acme",
       bankAccountId: ACC_MUR,
+      categorieId: CAT_A,
       statut: "COMPLET" as const,
       dateDebut: "2026-03-01",
       dateFin: "2026-03-31",
