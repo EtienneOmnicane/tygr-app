@@ -194,4 +194,20 @@ describe("detailBucketParamsSchema — cohérence bucket ↔ granularité", () =
         .success,
     ).toBe(false);
   });
+
+  it("semaine EXIGE un lundi (aligné date_trunc('week')) — refuse un mercredi", () => {
+    // 2026-01-12 est un lundi ; 2026-01-14 un mercredi.
+    expect(
+      detailBucketParamsSchema.safeParse({
+        granularite: "semaine",
+        bucket: "2026-01-12",
+      }).success,
+    ).toBe(true);
+    expect(
+      detailBucketParamsSchema.safeParse({
+        granularite: "semaine",
+        bucket: "2026-01-14",
+      }).success,
+    ).toBe(false);
+  });
 });

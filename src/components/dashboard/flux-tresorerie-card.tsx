@@ -22,7 +22,7 @@
  * 100 % RÉALISÉ depuis FLUX-PREV-AXE1 : aucune prévision ici (échéances → `echeances-encart`).
  * Couleurs (§3.1) : vert/rouge n'apparaît que dans les barres, le tableau et la légende.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 import type {
@@ -146,8 +146,14 @@ export function FluxTresorerieCard({
     [donnee.granularite, chargement, serieMensuelle, grilleMensuelle, periodeParams],
   );
 
+  // Garde de requête (anti-réponse-périmée) : ouvrir vite le drill de B après A pourrait
+  // laisser la réponse de A (plus lente) écraser celle de B → listes de A sous le titre de
+  // B. On ignore toute réponse dont le bucket ≠ la DERNIÈRE demande.
+  const demandeDrillRef = useRef<string | null>(null);
+
   const ouvrirDrill = useCallback(
     async (bucket: string) => {
+      demandeDrillRef.current = bucket;
       setBucketDrill(bucket);
       setDetail(null);
       setErreurDetail(null);
@@ -158,21 +164,28 @@ export function FluxTresorerieCard({
           bucket,
           ...periodeParams,
         });
+        if (demandeDrillRef.current !== bucket) return; // réponse périmée : ignorée
         if (!res.ok) {
           setErreurDetail(res.message);
           return;
         }
         setDetail(res.data);
       } catch {
+        if (demandeDrillRef.current !== bucket) return;
         setErreurDetail("Le chargement du détail a échoué.");
       } finally {
-        setChargementDetail(false);
+        // Seule la DERNIÈRE demande pilote l'indicateur de chargement.
+        if (demandeDrillRef.current === bucket) setChargementDetail(false);
       }
     },
     [donnee.granularite, periodeParams],
   );
 
-  const fermerDrill = useCallback(() => setBucketDrill(null), []);
+  // Fermer annule aussi la demande en vol (une réponse tardive ne ré-ouvrira rien).
+  const fermerDrill = useCallback(() => {
+    demandeDrillRef.current = null;
+    setBucketDrill(null);
+  }, []);
 
   // Devises présentes dans la donnée COURANTE, devise de base en tête.
   const devisesDisponibles = useMemo(

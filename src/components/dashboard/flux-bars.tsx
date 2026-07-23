@@ -210,6 +210,9 @@ function BarresMensuelles({
 
   // Index de la colonne survolée (îlot client). `null` = aucun survol → pas de tooltip.
   const [survol, setSurvol] = useState<number | null>(null);
+  // Index de la colonne FOCUSÉE au clavier (drill L4) — rend un anneau de focus visible sur
+  // la barre cliquable (le repo impose un indicateur de focus partout, WCAG 2.4.7).
+  const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const moisActif = survol != null ? mois[survol] : null;
 
   // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
@@ -325,6 +328,22 @@ function BarresMensuelles({
             </g>
           );
         })}
+        {/* Anneau de FOCUS clavier (drill L4) — au-dessus des barres, sous les zones de
+            hit. Token `primary`, jamais une couleur de donnée. `pointer-events-none` :
+            purement décoratif, ne capte aucun événement. */}
+        {focusIdx != null && (
+          <rect
+            x={focusIdx * pas + 1.5}
+            y={1.5}
+            width={Math.max(pas - 3, 0)}
+            height={Math.max(hauteurZone - 3, 0)}
+            rx={3}
+            fill="none"
+            stroke="var(--color-primary)"
+            strokeWidth={2}
+            pointerEvents="none"
+          />
+        )}
         {/* Zones de HIT : une par colonne, PLEINE largeur/hauteur et transparentes,
             posées en DERNIER (au-dessus des barres) pour capter le survol partout
             dans la colonne — pas seulement sur la barre étroite. */}
@@ -347,6 +366,23 @@ function BarresMensuelles({
             aria-label={
               onSelectionnerBucket
                 ? `Détail — ${etiquetteBucket(granularite, m.libelleMois).complet}`
+                : undefined
+            }
+            // Focus clavier : anneau visible + tooltip de la colonne (comme au survol).
+            onFocus={
+              onSelectionnerBucket
+                ? () => {
+                    setFocusIdx(i);
+                    setSurvol(i);
+                  }
+                : undefined
+            }
+            onBlur={
+              onSelectionnerBucket
+                ? () => {
+                    setFocusIdx(null);
+                    setSurvol(null);
+                  }
                 : undefined
             }
             onClick={

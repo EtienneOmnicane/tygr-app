@@ -68,9 +68,13 @@ function bucketCoherent(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(bucket)) return false;
   const [a, mo, j] = bucket.split("-").map(Number);
   const d = new Date(Date.UTC(a, mo - 1, j));
-  return (
-    d.getUTCFullYear() === a && d.getUTCMonth() === mo - 1 && d.getUTCDate() === j
-  );
+  const calendaireOk =
+    d.getUTCFullYear() === a && d.getUTCMonth() === mo - 1 && d.getUTCDate() === j;
+  // Un bucket « semaine » légitime est TOUJOURS un lundi (`date_trunc('week')` PG). L'exiger
+  // ferme la porte à un bucket forgé sur un autre jour, qui produirait une fenêtre de drill
+  // désalignée (défense en profondeur — le client n'envoie que des lundis de la grille).
+  if (granularite === "semaine") return calendaireOk && d.getUTCDay() === 1;
+  return calendaireOk;
 }
 
 /**
