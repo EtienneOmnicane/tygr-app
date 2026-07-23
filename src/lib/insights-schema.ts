@@ -50,6 +50,48 @@ export const fluxParamsSchema = z.object({
 });
 export type FluxParams = z.infer<typeof fluxParamsSchema>;
 
+/**
+ * Un bucket est-il COHÉRENT avec sa granularité ? Garde d'entrée du drill (L4) : « mois »
+ * attend "YYYY-MM" (01..12), « jour »/« semaine » une date calendaire "YYYY-MM-DD" RÉELLE
+ * (rejette 2026-02-30). Empêche qu'un bucket forgé serve à dériver une fenêtre absurde.
+ */
+function bucketCoherent(
+  granularite: "jour" | "semaine" | "mois",
+  bucket: string,
+): boolean {
+  if (granularite === "mois") {
+    const m = /^\d{4}-(\d{2})$/.exec(bucket);
+    if (!m) return false;
+    const mois = Number(m[1]);
+    return mois >= 1 && mois <= 12;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bucket)) return false;
+  const [a, mo, j] = bucket.split("-").map(Number);
+  const d = new Date(Date.UTC(a, mo - 1, j));
+  return (
+    d.getUTCFullYear() === a && d.getUTCMonth() === mo - 1 && d.getUTCDate() === j
+  );
+}
+
+/**
+ * Paramètres du drill d'un bucket (L4) : granularité + le bucket cliqué + le descripteur
+ * de période (pour re-dériver la fenêtre GLOBALE côté serveur et l'intersecter avec le
+ * bucket). Le bucket est re-validé contre sa granularité (défense en profondeur).
+ */
+export const detailBucketParamsSchema = z
+  .object({
+    granularite: granulariteCashflowSchema,
+    bucket: z.string(),
+    periode: z.string().optional(),
+    du: z.string().optional(),
+    au: z.string().optional(),
+  })
+  .refine((v) => bucketCoherent(v.granularite, v.bucket), {
+    message: "bucket incohérent avec la granularité",
+    path: ["bucket"],
+  });
+export type DetailBucketParams = z.infer<typeof detailBucketParamsSchema>;
+
 /** Sens d'analyse des vendors (enum fermée). */
 export const directionVendorsSchema = z.enum(["inflow", "outflow", "both"]);
 

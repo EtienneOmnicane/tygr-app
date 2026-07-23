@@ -92,3 +92,29 @@ export function grilleBuckets(
 function estIso(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
+
+/**
+ * Fenêtre [from, to] (dates comptables Maurice "YYYY-MM-DD", INCLUSIVES) d'UN bucket —
+ * pour le drill (L4). Pendant de `grilleBuckets` : mêmes conventions de bord.
+ *  - mois    "YYYY-MM"    → 1er au dernier jour du mois ;
+ *  - jour    "YYYY-MM-DD" → le jour lui-même ;
+ *  - semaine "YYYY-MM-DD" → le lundi (from) au dimanche (from + 6 j).
+ * ⚠️ L'appelant (la Server Action) INTERSECTE cette fenêtre avec la fenêtre GLOBALE : un
+ * bucket d'extrémité est PARTIEL, et le détail doit couvrir exactement ce que la barre
+ * agrège (bornes de la fenêtre écran), pas le bucket entier.
+ */
+export function bornesBucket(
+  granularite: GranulariteBucket,
+  bucket: string,
+): { from: string; to: string } {
+  if (granularite === "mois") {
+    const [a, m] = bucket.split("-").map(Number);
+    const dernier = new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
+    return { from: `${bucket}-01`, to: dernier };
+  }
+  if (granularite === "semaine") {
+    const fin = jourIso(versUtc(bucket) + 6 * UN_JOUR_MS);
+    return { from: bucket, to: fin };
+  }
+  return { from: bucket, to: bucket };
+}

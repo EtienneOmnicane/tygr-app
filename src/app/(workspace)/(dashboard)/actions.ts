@@ -23,8 +23,13 @@ import {
   premierJourMoisRecul,
   resoudrePeriode,
 } from "@/lib/periode";
-import { fluxParamsSchema, MAX_BUCKETS_FLUX } from "@/lib/insights-schema";
-import { grilleBuckets } from "@/components/charts/grille-buckets";
+import {
+  detailBucketParamsSchema,
+  fluxParamsSchema,
+  MAX_BUCKETS_FLUX,
+  VENDORS_TOP_N_DEFAUT,
+} from "@/lib/insights-schema";
+import { bornesBucket, grilleBuckets } from "@/components/charts/grille-buckets";
 import {
   exigerSessionWorkspace,
   ServiceIndisponibleError,
@@ -32,11 +37,18 @@ import {
 import {
   cashflowParDevise,
   InsightsParamsInvalidesError,
+  repartitionParCategorie,
   type SyntheseMensuelle,
   syntheseParMois,
+  vendorsParConcentration,
   withWorkspace,
 } from "@/server/db";
-import type { GranulariteCashflow, PointCashflow } from "@/server/insights/types";
+import type {
+  ConcentrationVendors,
+  GranulariteCashflow,
+  PointCashflow,
+  RepartitionCategories,
+} from "@/server/insights/types";
 
 export type ResultatAction<T = void> =
   | { ok: true; data: T }
@@ -188,6 +200,105 @@ export async function chargerFluxAction(
           : code === "INVALID_PARAMS"
             ? "Paramètres invalides."
             : "L’opération a échoué. Réessayez.",
+    };
+  }
+}
+
+/** Détail d'un bucket cliqué (L4) : catégories + contreparties de dépenses, sur la
+ * fenêtre du bucket INTERSECTÉE avec la fenêtre écran. La synthèse entrées/sorties/net,
+ * elle, vient de la barre côté client (identité garantie avec le graphe). */
+export interface DetailBucket {
+  from: string;
+  to: string;
+  /** Répartition des SORTIES par catégorie (multi-devise ; le client filtre à sa devise). */
+  categories: RepartitionCategories;
+  /** Concentration des contreparties de SORTIES (multi-devise). */
+  contreparties: ConcentrationVendors;
+}
+
+/**
+ * Détail d'un bucket au clic sur une barre (L4). Réutilise les lectures EXISTANTES
+ * (`repartitionParCategorie`, `vendorsParConcentration`) sur la fenêtre du bucket
+ * INTERSECTÉE avec la fenêtre écran — un bucket d'extrémité est PARTIEL, et le détail
+ * doit couvrir exactement ce que la barre agrège. Aucun repo neuf → surface d'isolation
+ * INCHANGÉE (les deux lectures sont déjà prouvées en isolation).
+ *
+ * Exit-criteria (règle 3) : authz `exigerSessionWorkspace` + `withWorkspace` (RLS tenant
+ * + scope entité par jointure) ; zod strict (granularité fermée, bucket re-validé contre
+ * sa granularité) ; fenêtre re-dérivée à Maurice (`resoudrePeriode`) ; retour normalisé ;
+ * logs corrélés sans PII. UNE lecture par ouverture de panneau (pas de N+1).
+ */
+export async function detailBucketAction(
+  input: unknown,
+): Promise<ResultatAction<DetailBucket>> {
+  const session = await exigerSessionWorkspace();
+  const parsed = detailBucketParamsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, code: "INVALID_PARAMS", message: "Paramètres invalides." };
+  }
+  const { granularite, bucket, periode, du, au } = parsed.data;
+  const bornes = bornesBucket(granularite, bucket);
+  const fenetre = resoudrePeriode({ periode, du, au });
+  const from = bornes.from > fenetre.from ? bornes.from : fenetre.from;
+  const to = bornes.to < fenetre.to ? bornes.to : fenetre.to;
+  // Bucket hors fenêtre écran (défensif — le bucket cliqué vient de la série, donc
+  // intersecte toujours) : rien à détailler, on ne lance aucun SQL.
+  if (from > to) {
+    return {
+      ok: true,
+      data: {
+        from,
+        to,
+        categories: {
+          sens: "outflow",
+          from,
+          to,
+          fromPrecedent: "",
+          toPrecedent: "",
+          devises: [],
+        },
+        contreparties: { direction: "outflow", lignes: [] },
+      },
+    };
+  }
+  try {
+    const data = await withWorkspace(session, async (tx) => {
+      const categories = await repartitionParCategorie(tx, {
+        sens: "outflow",
+        from,
+        to,
+      });
+      const contreparties = await vendorsParConcentration(tx, {
+        direction: "outflow",
+        topN: VENDORS_TOP_N_DEFAUT,
+        from,
+        to,
+      });
+      return { from, to, categories, contreparties };
+    });
+    return { ok: true, data };
+  } catch (erreur) {
+    const code =
+      erreur instanceof InsightsParamsInvalidesError
+        ? "INVALID_PARAMS"
+        : erreur instanceof ServiceIndisponibleError
+          ? "SERVICE_UNAVAILABLE"
+          : "ERREUR";
+    console.warn(
+      JSON.stringify({
+        evt: "dashboard_echec",
+        action: "detail-bucket",
+        workspaceId: session.activeWorkspaceId,
+        code,
+      }),
+    );
+    return {
+      ok: false,
+      code,
+      message:
+        code === "SERVICE_UNAVAILABLE"
+          ? "Service momentanément indisponible."
+          : "L’opération a échoué. Réessayez.",
     };
   }
 }

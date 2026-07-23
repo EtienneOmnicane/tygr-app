@@ -11,8 +11,9 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { grilleBuckets } from "@/components/charts/grille-buckets";
+import { bornesBucket, grilleBuckets } from "@/components/charts/grille-buckets";
 import { etiquetteBucket } from "@/components/charts/etiquette-bucket";
+import { detailBucketParamsSchema } from "@/lib/insights-schema";
 import { grilleMois } from "@/server/repositories/dashboard";
 
 function jourSemaine(iso: string): number {
@@ -129,5 +130,68 @@ describe("etiquetteBucket — passe par format-date (source unique)", () => {
       court: "Sem. 8 juin",
       complet: "Semaine du 8 juin 2026",
     });
+  });
+});
+
+describe("bornesBucket — fenêtre [from,to] d'un bucket (drill L4)", () => {
+  it("mois → 1er au dernier jour (28 février une année non bissextile)", () => {
+    expect(bornesBucket("mois", "2026-02")).toEqual({
+      from: "2026-02-01",
+      to: "2026-02-28",
+    });
+  });
+  it("mois → 29 février une année BISSEXTILE", () => {
+    expect(bornesBucket("mois", "2024-02")).toEqual({
+      from: "2024-02-01",
+      to: "2024-02-29",
+    });
+  });
+  it("jour → le jour lui-même", () => {
+    expect(bornesBucket("jour", "2026-03-15")).toEqual({
+      from: "2026-03-15",
+      to: "2026-03-15",
+    });
+  });
+  it("semaine → lundi (from) au dimanche (from + 6 j)", () => {
+    // 2026-01-12 est un lundi (cf. tests grilleBuckets semaine).
+    expect(bornesBucket("semaine", "2026-01-12")).toEqual({
+      from: "2026-01-12",
+      to: "2026-01-18",
+    });
+  });
+});
+
+describe("detailBucketParamsSchema — cohérence bucket ↔ granularité", () => {
+  it("mois accepte 'YYYY-MM', refuse 'YYYY-MM-DD'", () => {
+    expect(
+      detailBucketParamsSchema.safeParse({ granularite: "mois", bucket: "2026-06" })
+        .success,
+    ).toBe(true);
+    expect(
+      detailBucketParamsSchema.safeParse({
+        granularite: "mois",
+        bucket: "2026-06-01",
+      }).success,
+    ).toBe(false);
+  });
+  it("jour/semaine acceptent une date calendaire RÉELLE, refusent 30 février", () => {
+    expect(
+      detailBucketParamsSchema.safeParse({
+        granularite: "jour",
+        bucket: "2026-06-11",
+      }).success,
+    ).toBe(true);
+    expect(
+      detailBucketParamsSchema.safeParse({
+        granularite: "semaine",
+        bucket: "2026-02-30",
+      }).success,
+    ).toBe(false);
+  });
+  it("granularité hors énum → refus", () => {
+    expect(
+      detailBucketParamsSchema.safeParse({ granularite: "annee", bucket: "2026" })
+        .success,
+    ).toBe(false);
   });
 });

@@ -66,6 +66,7 @@ export function FluxBarres({
   libellePeriode,
   visibles = TOUTES_SERIES_VISIBLES,
   granularite = "mois",
+  onSelectionnerBucket,
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
@@ -88,6 +89,11 @@ export function FluxBarres({
    * jour/semaine → "YYYY-MM-DD").
    */
   granularite?: GranulariteBucket;
+  /**
+   * Clic sur un bucket (drill L4) : ouvre le détail de CE bucket. Absent → barres non
+   * cliquables (rendu inchangé). Reçoit l'étiquette brute du bucket ("YYYY-MM"/"YYYY-MM-DD").
+   */
+  onSelectionnerBucket?: (bucket: string) => void;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
   const montrerEntrees = visibles.has("entrees");
@@ -133,6 +139,7 @@ export function FluxBarres({
         montrerEntrees={montrerEntrees}
         montrerSorties={montrerSorties}
         granularite={granularite}
+        onSelectionnerBucket={onSelectionnerBucket}
       />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -180,6 +187,7 @@ function BarresMensuelles({
   montrerEntrees,
   montrerSorties,
   granularite,
+  onSelectionnerBucket,
 }: {
   mois: MoisAffiche[];
   max: number;
@@ -192,6 +200,8 @@ function BarresMensuelles({
   montrerSorties: boolean;
   /** Granularité des buckets (format des étiquettes d'axe/tooltip). */
   granularite: GranulariteBucket;
+  /** Clic sur un bucket (drill L4). Absent → barres non cliquables. */
+  onSelectionnerBucket?: (bucket: string) => void;
 }) {
   const { ref, largeur, hauteur } = useDimensionsSvg(
     LARGEUR_DEFAUT,
@@ -328,6 +338,32 @@ function BarresMensuelles({
             fill="transparent"
             onMouseEnter={() => setSurvol(i)}
             onMouseLeave={() => setSurvol(null)}
+            // Drill (L4) : cliquable + accessible au clavier UNIQUEMENT si un handler est
+            // fourni. `role/tabIndex/aria-label/onKeyDown` ne sont posés que dans ce cas —
+            // sinon la zone reste un simple capteur de survol (rendu inchangé).
+            style={onSelectionnerBucket ? { cursor: "pointer" } : undefined}
+            role={onSelectionnerBucket ? "button" : undefined}
+            tabIndex={onSelectionnerBucket ? 0 : undefined}
+            aria-label={
+              onSelectionnerBucket
+                ? `Détail — ${etiquetteBucket(granularite, m.libelleMois).complet}`
+                : undefined
+            }
+            onClick={
+              onSelectionnerBucket
+                ? () => onSelectionnerBucket(m.libelleMois)
+                : undefined
+            }
+            onKeyDown={
+              onSelectionnerBucket
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectionnerBucket(m.libelleMois);
+                    }
+                  }
+                : undefined
+            }
           />
         ))}
       </svg>

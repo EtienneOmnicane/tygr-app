@@ -25,16 +25,27 @@
 import { useCallback, useMemo, useState } from "react";
 
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
-import type { PointCashflow } from "@/server/insights/types";
+import type {
+  LigneVendor,
+  PartCategorie,
+  PointCashflow,
+} from "@/server/insights/types";
 
-import { chargerFluxAction } from "@/app/(workspace)/(dashboard)/actions";
+import {
+  chargerFluxAction,
+  detailBucketAction,
+  type DetailBucket,
+} from "@/app/(workspace)/(dashboard)/actions";
 import { StateCard } from "@/components/dashboard/states/primitives";
 import { FluxBarres } from "@/components/dashboard/flux-bars";
 import { TableauEvolution } from "@/components/dashboard/monthly-cashflow";
 import { Select } from "@/components/ui/select/select";
 import { ControleSegmente } from "@/components/ui/controle-segmente";
+import { Modal } from "@/components/ui/modal/modal";
 import { LegendeSeries } from "@/components/charts/legende-series";
 import { ToggleVue, type VueFlux } from "@/components/charts/toggle-vue";
+import { PanneauDetailPeriode } from "@/components/charts/panneau-detail-periode";
+import { etiquetteBucket } from "@/components/charts/etiquette-bucket";
 import type { GranulariteBucket } from "@/components/charts/grille-buckets";
 import {
   SERIES_FLUX,
@@ -95,6 +106,12 @@ export function FluxTresorerieCard({
   const [chargement, setChargement] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
 
+  // Drill (L4) : bucket cliqué + détail fetché. `bucketDrill=null` ⇒ modale fermée.
+  const [bucketDrill, setBucketDrill] = useState<string | null>(null);
+  const [detail, setDetail] = useState<DetailBucket | null>(null);
+  const [chargementDetail, setChargementDetail] = useState(false);
+  const [erreurDetail, setErreurDetail] = useState<string | null>(null);
+
   const changerGranularite = useCallback(
     async (g: GranulariteBucket) => {
       if (g === donnee.granularite || chargement) return;
@@ -129,6 +146,34 @@ export function FluxTresorerieCard({
     [donnee.granularite, chargement, serieMensuelle, grilleMensuelle, periodeParams],
   );
 
+  const ouvrirDrill = useCallback(
+    async (bucket: string) => {
+      setBucketDrill(bucket);
+      setDetail(null);
+      setErreurDetail(null);
+      setChargementDetail(true);
+      try {
+        const res = await detailBucketAction({
+          granularite: donnee.granularite,
+          bucket,
+          ...periodeParams,
+        });
+        if (!res.ok) {
+          setErreurDetail(res.message);
+          return;
+        }
+        setDetail(res.data);
+      } catch {
+        setErreurDetail("Le chargement du détail a échoué.");
+      } finally {
+        setChargementDetail(false);
+      }
+    },
+    [donnee.granularite, periodeParams],
+  );
+
+  const fermerDrill = useCallback(() => setBucketDrill(null), []);
+
   // Devises présentes dans la donnée COURANTE, devise de base en tête.
   const devisesDisponibles = useMemo(
     () => devisesPresentes(donnee.serie, devise),
@@ -141,6 +186,34 @@ export function FluxTresorerieCard({
 
   const basculerSerie = (id: IdSerieFlux) =>
     setVisibles((v) => basculerVisibilite(v, id));
+
+  // Détail du bucket cliqué (L4). La SYNTHÈSE vient de la barre (le point de la série
+  // pour ce bucket + la devise affichée) → identité garantie avec le graphe, affichée
+  // sans attendre le fetch. Catégories/contreparties filtrées à la devise + bornées.
+  const pointDrill = bucketDrill
+    ? donnee.serie.find(
+        (s) => s.mois === bucketDrill && s.currency === deviseAffichee,
+      )
+    : undefined;
+  const syntheseDrill = {
+    entrees: pointDrill?.entrees ?? "0",
+    sorties: pointDrill?.sorties ?? "0",
+    net: pointDrill?.variation ?? "0",
+  };
+  const catsDrill: PartCategorie[] =
+    detail?.categories.devises
+      .find((d) => d.currency === deviseAffichee)
+      ?.parts.slice(0, 6) ?? [];
+  const contrepsDrill: LigneVendor[] =
+    detail?.contreparties.lignes
+      .filter((l) => l.currency === deviseAffichee)
+      .slice(0, 5) ?? [];
+  const hrefDrill = detail
+    ? `/transactions?du=${detail.from}&au=${detail.to}`
+    : "";
+  const titreDrill = bucketDrill
+    ? etiquetteBucket(donnee.granularite, bucketDrill).complet
+    : "";
 
   return (
     <StateCard className="min-h-[380px]">
@@ -211,6 +284,7 @@ export function FluxTresorerieCard({
             libellePeriode={libellePeriode}
             visibles={visibles}
             granularite={donnee.granularite}
+            onSelectionnerBucket={(b) => void ouvrirDrill(b)}
           />
         ) : (
           <TableauEvolution
@@ -221,6 +295,35 @@ export function FluxTresorerieCard({
           />
         )}
       </div>
+
+      {/* Drill (L4) : détail du bucket cliqué en MODALE (primitive ui/modal — focus trap,
+          Escape, scroll verrouillé). La synthèse s'affiche tout de suite ; les listes après
+          le fetch. */}
+      <Modal
+        open={bucketDrill !== null}
+        onClose={fermerDrill}
+        title={titreDrill}
+        size="sm"
+      >
+        {erreurDetail ? (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-control bg-danger-bg px-4 py-3 text-sm text-danger"
+          >
+            <span aria-hidden>⚠</span>
+            <span>{erreurDetail}</span>
+          </div>
+        ) : (
+          <PanneauDetailPeriode
+            synthese={syntheseDrill}
+            devise={deviseAffichee}
+            categories={catsDrill}
+            contreparties={contrepsDrill}
+            hrefTransactions={hrefDrill}
+            chargement={chargementDetail}
+          />
+        )}
+      </Modal>
     </StateCard>
   );
 }
