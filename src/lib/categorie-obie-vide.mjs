@@ -51,11 +51,19 @@ export const CATEGORIES_OBIE_VIDES = Object.freeze(["uncategorized", "unclassifi
 
 /**
  * Caractères retirés aux deux bords avant comparaison. Explicite parce que les deux
- * moteurs ne s'accordent PAS par défaut : `String.prototype.trim()` retire tous les
- * blancs (espace, \t, \n, \r, \v, \f, blancs Unicode), là où `btrim(x)` en SQL ne
- * retire que l'ESPACE. Sans cette liste passée explicitement à `btrim`, une valeur
- * `"\tUNCLASSIFIED"` serait jugée VIDE côté TS et EXPLOITABLE côté SQL — la parité
- * serait fausse sur un cas qu'aucun test « normal » ne produit.
+ * moteurs ne s'accordent PAS par défaut : `String.prototype.trim()` (TS) retire tous
+ * les blancs ASCII (espace, \t, \n, \r, \v, \f), là où `btrim(x)` en SQL ne retire que
+ * l'ESPACE. Cette liste, passée explicitement à `btrim`, rétablit la parité SUR CES
+ * SEULS blancs ASCII : sans elle, une valeur `"\tUNCLASSIFIED"` serait jugée VIDE côté
+ * TS et EXPLOITABLE côté SQL.
+ *
+ * ⚠️ PARITÉ PARTIELLE — bornée aux blancs ASCII ci-dessus, PAS totale. `trim()` retire
+ * EN PLUS les blancs Unicode de catégorie Zs (NBSP U+00A0, narrow NBSP U+202F, thin
+ * space U+2009, idéographique U+3000, …) que `btrim(col, BLANCS)` NE retire PAS. Un
+ * préfixe NBSP `" UNCLASSIFIED"` reste donc jugé VIDE côté TS et EXPLOITABLE
+ * côté SQL : la divergence n'est pas fermée, seulement repoussée hors ASCII. Impact
+ * prod faible (les codes OBIE émis par l'amont sont ASCII), donc consigné en dette
+ * plutôt que corrigé ici — cf. TODOS.md `FIABILITE-PARITE-UNICODE`.
  */
 const BLANCS = " \t\n\r\v\f";
 
