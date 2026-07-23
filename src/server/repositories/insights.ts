@@ -193,15 +193,26 @@ export async function cashflowParDevise(
  * défensive). Les deux bornes vont ensemble (XOR interdit) ; sans fenêtre, on agrège
  * tout l'historique (comportement historique conservé pour les appelants existants).
  *
- * NB : le top N est appliqué APRÈS agrégation, sur l'ensemble multi-devise trié par
- * montant — c'est un classement des plus gros postes toutes devises confondues, pas un
- * top N par devise (cohérent avec « concentration des dépenses »). La `part` reste,
- * elle, relative à la devise de la ligne (jamais un ratio cross-devise) et au total de
- * la FENÊTRE (le dénominateur est lui aussi filtré par [from, to]).
+ * `currency` OPTIONNELLE (code ISO, sensible à la casse) : quand fournie, la lecture est
+ * BORNÉE à cette devise et le top N porte donc sur SES contreparties (drill L4 — la
+ * « Principales sorties » couvre exactement ce que la barre agrège pour la devise affichée).
+ * SANS elle, le top N s'applique après agrégation sur l'ensemble multi-devise trié par
+ * montant — classement des plus gros postes toutes devises confondues (carte « Top
+ * contreparties »). ⚠️ Le top-N global tronque une devise minoritaire évincée par les gros
+ * postes d'une autre : la filtrer côté client APRÈS coup vide/rogne le drill (constat de
+ * cross-review PR #259) → passer `currency` À LA LECTURE, jamais filtrer après le LIMIT.
+ * La `part` reste relative à la devise de la ligne (jamais un ratio cross-devise) et au
+ * total de la FENÊTRE (window `over (partition by currency)`, calculée AVANT le LIMIT).
  */
 export async function vendorsParConcentration(
   tx: Tx,
-  params: { direction: DirectionVendors; topN?: number; from?: string; to?: string },
+  params: {
+    direction: DirectionVendors;
+    topN?: number;
+    from?: string;
+    to?: string;
+    currency?: string;
+  },
 ): Promise<ConcentrationVendors> {
   const direction = params.direction;
   if (direction !== "inflow" && direction !== "outflow" && direction !== "both") {
@@ -215,11 +226,16 @@ export async function vendorsParConcentration(
   }
   // Fenêtre optionnelle : les deux bornes ensemble ou aucune (XOR interdit), mêmes
   // règles calendaires que cashflowParDevise (défense en profondeur, pièges F1/F2).
-  const { from, to } = params;
+  const { from, to, currency } = params;
   if ((from === undefined) !== (to === undefined)) {
     throw new InsightsParamsInvalidesError(
       "from et to doivent être fournis ensemble",
     );
+  }
+  // Devise optionnelle re-bornée défensivement (code ISO 3 lettres) — même philosophie
+  // que les dates/topN : un appelant interne ne contourne pas la validation zod amont.
+  if (currency !== undefined && !/^[A-Za-z]{3}$/.test(currency)) {
+    throw new InsightsParamsInvalidesError(`devise invalide : ${currency}`);
   }
   if (from !== undefined && to !== undefined) {
     if (!estDateCalendaireValide(from) || !estDateCalendaireValide(to)) {
@@ -271,6 +287,11 @@ export async function vendorsParConcentration(
                 sql`(${to}::date + interval '1 day')`,
               ),
             ]
+          : []),
+        // Devise optionnelle (drill L4) : borne AVANT le LIMIT → le top-N porte sur cette
+        // seule devise. Paramètre LIÉ (aucune interpolation). Absente → toutes devises.
+        ...(currency !== undefined
+          ? [eq(transactionsCache.currency, currency)]
           : []),
       ),
     )

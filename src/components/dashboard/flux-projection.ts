@@ -86,6 +86,39 @@ export function maxFenetreVisible(
   return max;
 }
 
+/**
+ * Les trois états d'affichage du graphe de barres, DÉRIVÉS de la donnée projetée et de la
+ * visibilité de légende (L1) — extraits ici (module NEUTRE) pour être testables SANS
+ * renderer React (le projet n'en a pas). Ils distinguent deux cas qu'un graphe à plat
+ * rendrait à l'identique, mais qui appellent des messages OPPOSÉS :
+ *
+ *  - `"vide"`          : fenêtre RÉELLEMENT vide — aucun mouvement, TOUTES séries
+ *                        confondues. C'est le SEUL cas qui justifie le nudge
+ *                        « synchronisez ». Mesuré sur les deux séries (pas seulement les
+ *                        visibles), sinon on confondrait « rien en banque » et « série
+ *                        cachée ».
+ *  - `"serie-masquee"` : la donnée EXISTE sur la période, mais la ou les séries VISIBLES
+ *                        n'y ont aucun mouvement — l'utilisateur a masqué la série non
+ *                        vide (ex. seules des entrées existent, mais seules les Sorties
+ *                        sont affichées). Message NEUTRE, JAMAIS de nudge de synchro.
+ *  - `"donnees"`       : au moins une série visible porte un mouvement → on trace.
+ *
+ * Pur (aucun hook, booléens plats) : garde ce module réutilisable côté serveur ET testé.
+ */
+export type EtatFluxBarres = "vide" | "serie-masquee" | "donnees";
+
+export function etatFluxBarres(
+  mois: MoisAffiche[],
+  montrerEntrees: boolean,
+  montrerSorties: boolean,
+): EtatFluxBarres {
+  if (maxFenetreVisible(mois, true, true) === 0) return "vide";
+  if (maxFenetreVisible(mois, montrerEntrees, montrerSorties) === 0) {
+    return "serie-masquee";
+  }
+  return "donnees";
+}
+
 /* ------------------------------------------------------------------ */
 /* PRÉVISIONNEL (C1) — échéances projetées, jamais du réalisé          */
 /* ------------------------------------------------------------------ */

@@ -20,6 +20,7 @@ import { expanserOccurrences } from "@/lib/echeances-recurrence";
 import type { OccurrenceProjetee } from "@/lib/echeances-recurrence";
 import {
   composerColonnes,
+  etatFluxBarres,
   largeurRelative,
   maxFenetreColonnes,
   maxPrevision,
@@ -54,6 +55,34 @@ function realise(p: Partial<MoisAffiche> = {}): MoisAffiche {
     ...p,
   };
 }
+
+describe("etatFluxBarres — fenêtre vide vs série masquée vs données (cross-review #259)", () => {
+  const avecEntree = realise({ entrees: "100.00", sorties: "0" });
+  const avecSortie = realise({ entrees: "0", sorties: "80.00" });
+  const vide = realise({ entrees: "0", sorties: "0" });
+
+  it("fenêtre RÉELLEMENT vide (aucune donnée, toutes séries) → 'vide' (nudge de synchro)", () => {
+    expect(etatFluxBarres([vide, vide], true, true)).toBe("vide");
+  });
+
+  it("au moins une série visible non vide → 'donnees'", () => {
+    expect(etatFluxBarres([avecEntree, avecSortie], true, true)).toBe("donnees");
+  });
+
+  it("série non vide MASQUÉE (que des entrées, Entrées cachée) → 'serie-masquee', jamais 'vide'", () => {
+    // La fenêtre PORTE des entrées, mais seules les Sorties (vides) sont affichées : la
+    // donnée existe, elle est cachée — surtout pas le message « synchronisez ».
+    expect(etatFluxBarres([avecEntree], false, true)).toBe("serie-masquee");
+  });
+
+  it("symétrique (que des sorties, Sorties cachée) → 'serie-masquee'", () => {
+    expect(etatFluxBarres([avecSortie], true, false)).toBe("serie-masquee");
+  });
+
+  it("la série visible NON vide prime : entrées affichées avec des entrées → 'donnees'", () => {
+    expect(etatFluxBarres([avecEntree], true, false)).toBe("donnees");
+  });
+});
 
 describe("projeterEcheancesSurGrille — agrégation mensuelle", () => {
   it("ventile encaissement et décaissement selon `direction`, jamais le signe du montant", () => {

@@ -162,15 +162,21 @@ describe("bornesBucket — fenêtre [from,to] d'un bucket (drill L4)", () => {
 });
 
 describe("detailBucketParamsSchema — cohérence bucket ↔ granularité", () => {
+  // `currency` est requise (drill PAR devise, cross-review PR #259) : chaque cas en porte
+  // une valide → la cohérence bucket↔granularité reste la SEULE raison d'échec testée ici.
   it("mois accepte 'YYYY-MM', refuse 'YYYY-MM-DD'", () => {
     expect(
-      detailBucketParamsSchema.safeParse({ granularite: "mois", bucket: "2026-06" })
-        .success,
+      detailBucketParamsSchema.safeParse({
+        granularite: "mois",
+        bucket: "2026-06",
+        currency: "MUR",
+      }).success,
     ).toBe(true);
     expect(
       detailBucketParamsSchema.safeParse({
         granularite: "mois",
         bucket: "2026-06-01",
+        currency: "MUR",
       }).success,
     ).toBe(false);
   });
@@ -179,19 +185,24 @@ describe("detailBucketParamsSchema — cohérence bucket ↔ granularité", () =
       detailBucketParamsSchema.safeParse({
         granularite: "jour",
         bucket: "2026-06-11",
+        currency: "MUR",
       }).success,
     ).toBe(true);
     expect(
       detailBucketParamsSchema.safeParse({
         granularite: "semaine",
         bucket: "2026-02-30",
+        currency: "MUR",
       }).success,
     ).toBe(false);
   });
   it("granularité hors énum → refus", () => {
     expect(
-      detailBucketParamsSchema.safeParse({ granularite: "annee", bucket: "2026" })
-        .success,
+      detailBucketParamsSchema.safeParse({
+        granularite: "annee",
+        bucket: "2026",
+        currency: "MUR",
+      }).success,
     ).toBe(false);
   });
 
@@ -201,12 +212,14 @@ describe("detailBucketParamsSchema — cohérence bucket ↔ granularité", () =
       detailBucketParamsSchema.safeParse({
         granularite: "semaine",
         bucket: "2026-01-12",
+        currency: "MUR",
       }).success,
     ).toBe(true);
     expect(
       detailBucketParamsSchema.safeParse({
         granularite: "semaine",
         bucket: "2026-01-14",
+        currency: "MUR",
       }).success,
     ).toBe(false);
   });

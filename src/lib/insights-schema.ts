@@ -36,18 +36,45 @@ export const granulariteCashflowSchema = z.enum(["jour", "semaine", "mois"]);
 export const MAX_BUCKETS_FLUX = 400;
 
 /**
+ * Bornes de FORME des descripteurs de période d'URL (`periode`/`du`/`au`) relayés par le
+ * client. Ces valeurs sont RE-NORMALISÉES côté serveur par `resoudrePeriode` (preset →
+ * bornes, plage → dates) ; on borne ici leur longueur ET leur jeu de caractères pour
+ * REJETER BRUYAMMENT (règle 3) tout param forgé ou surdimensionné AVANT qu'il n'atteigne
+ * le normaliseur — jamais un strip silencieux. La chaîne VIDE reste tolérée (= param
+ * absent → repli sur le défaut, comportement historique de `resoudrePeriode`).
+ */
+const presetPeriodeParam = z
+  .string()
+  .max(16)
+  .regex(/^[a-z0-9-]*$/, "preset de période invalide");
+
+/**
+ * `du`/`au` : date d'URL "YYYY-MM-DD" (ou VIDE = absente → repli preset). Format seul ici ;
+ * la validité CALENDAIRE (2026-02-30) et l'amplitude sont re-vérifiées par `lirePlage`/les
+ * repos (défense en profondeur — cette borne empêche juste une chaîne arbitraire).
+ */
+const dateOuVideParam = z
+  .string()
+  .regex(/^(\d{4}-\d{2}-\d{2})?$/, "date attendue au format YYYY-MM-DD");
+
+/**
  * Paramètres de la Server Action de flux (L2) : granularité (enum fermée → littéral SQL
  * figé côté repo) + le descripteur de PÉRIODE de l'URL (`periode`/`du`/`au`, chaînes).
  * Le client renvoie les MÊMES paramètres d'URL qu'il a reçus ; les bornes [from, to] sont
  * re-dérivées À MAURICE côté serveur par `resoudrePeriode` (qui normalise toute valeur
  * inconnue) — le client n'impose jamais une borne de date brute au SQL.
+ *
+ * `.strict()` (miroir de `syntheseParMoisSchema`) : une clé INCONNUE est rejetée
+ * bruyamment, jamais strippée en silence (règle 3).
  */
-export const fluxParamsSchema = z.object({
-  granularite: granulariteCashflowSchema,
-  periode: z.string().optional(),
-  du: z.string().optional(),
-  au: z.string().optional(),
-});
+export const fluxParamsSchema = z
+  .object({
+    granularite: granulariteCashflowSchema,
+    periode: presetPeriodeParam.optional(),
+    du: dateOuVideParam.optional(),
+    au: dateOuVideParam.optional(),
+  })
+  .strict();
 export type FluxParams = z.infer<typeof fluxParamsSchema>;
 
 /**
@@ -78,18 +105,34 @@ function bucketCoherent(
 }
 
 /**
- * Paramètres du drill d'un bucket (L4) : granularité + le bucket cliqué + le descripteur
- * de période (pour re-dériver la fenêtre GLOBALE côté serveur et l'intersecter avec le
- * bucket). Le bucket est re-validé contre sa granularité (défense en profondeur).
+ * Devise AFFICHÉE du drill (L4) : code ISO 4217 (3 lettres). Passée à la LECTURE pour un
+ * top-N des contreparties PAR DEVISE — sans elle, le top-N global toutes devises confondues
+ * tronque/vide la liste du drill en multi-devise, contredisant la barre (constat de
+ * cross-review PR #259). NON transformée (ni upper ni trim) : le client renvoie la valeur
+ * EXACTE issue de la série (donc de la base), et le filtre SQL est une égalité sensible à
+ * la casse — la transformer désaccorderait le filtre du contenu réel.
+ */
+const deviseParam = z
+  .string()
+  .regex(/^[A-Za-z]{3}$/, "devise invalide (code ISO 3 lettres)");
+
+/**
+ * Paramètres du drill d'un bucket (L4) : granularité + le bucket cliqué + la devise
+ * affichée + le descripteur de période (pour re-dériver la fenêtre GLOBALE côté serveur et
+ * l'intersecter avec le bucket). Le bucket est re-validé contre sa granularité (défense en
+ * profondeur). `.strict()` (miroir de `syntheseParMoisSchema`) : clé inconnue rejetée
+ * bruyamment.
  */
 export const detailBucketParamsSchema = z
   .object({
     granularite: granulariteCashflowSchema,
     bucket: z.string(),
-    periode: z.string().optional(),
-    du: z.string().optional(),
-    au: z.string().optional(),
+    currency: deviseParam,
+    periode: presetPeriodeParam.optional(),
+    du: dateOuVideParam.optional(),
+    au: dateOuVideParam.optional(),
   })
+  .strict()
   .refine((v) => bucketCoherent(v.granularite, v.bucket), {
     message: "bucket incohérent avec la granularité",
     path: ["bucket"],
