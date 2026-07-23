@@ -189,6 +189,78 @@ BEGIN
 END
 $$;
 
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ 7. Rôle `tygr_service` (lot W3) — résolution webhook + quarantaine         │
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- Spec : docs/specs/PLAN-webhook-ingestion.md §5.2 / §7.2 / §7.4.
+--
+-- MOINDRE PRIVILÈGE EXTRÊME : ce rôle n'existe QUE pour (a) résoudre le TENANT d'un
+-- webhook — SELECT de 3 colonnes non métier sur bank_connections — et (b) gérer la
+-- table de quarantaine. JAMAIS `BYPASSRLS`. NOLOGIN ici (patron C4) : LOGIN + mot de
+-- passe posés HORS script (`ALTER ROLE tygr_service LOGIN PASSWORD …` depuis un secret
+-- d'env, jamais commité), rotation au runbook. La résolution webhook est CROSS-TENANT
+-- par nature (on cherche À QUI est l'événement) : on la confine par le PRIVILÈGE
+-- (column-level + FOR SELECT), pas par la RLS.
+--
+-- ⚠️ PÉRIMÈTRE GELÉ (CLAUDE.md règle 2, exception documentée) : ces 3 colonnes, cette
+-- table, FOR SELECT — rien d'autre, JAMAIS. Toute extension exige un arbitrage humain.
+-- Le cross-check d'environnement se lit sous `tygr_app` APRÈS résolution (workspaces
+-- n'a pas de RLS) : tygr_service N'A PAS besoin de `workspaces` (décision D1 — annule
+-- la décision D2 du plan parent, gain net de moindre privilège).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tygr_service') THEN
+    CREATE ROLE tygr_service NOLOGIN;
+  END IF;
+END
+$$;
+
+GRANT USAGE ON SCHEMA public TO tygr_service;
+
+-- 7a. Résolution connection→workspace. GRANT COLUMN-LEVEL (3 colonnes) + policy
+--     PERMISSIVE FOR SELECT. Conditionnel à l'existence (deux ordres de pipeline).
+--     La policy est NÉCESSAIRE : bank_connections est en FORCE ROW LEVEL SECURITY
+--     (0003) → sans policy applicable à tygr_service, il verrait 0 ligne. PERMISSIVE
+--     + TO tygr_service : s'OR-e avec tenant_isolation, INVISIBLE à tygr_app (contre-
+--     preuve d'isolation). `USING (true)` : la sélectivité vient du GRANT column-level
+--     et de FOR SELECT (la résolution DOIT voir tous les tenants), jamais de la policy.
+--     Idempotent : DROP puis CREATE (CREATE POLICY n'a pas de IF NOT EXISTS).
+DO $$
+BEGIN
+  IF to_regclass('public.bank_connections') IS NOT NULL THEN
+    GRANT SELECT (id, omnifi_connection_id, workspace_id)
+      ON public.bank_connections TO tygr_service;
+    DROP POLICY IF EXISTS webhook_resolution ON public.bank_connections;
+    CREATE POLICY webhook_resolution ON public.bank_connections
+      AS PERMISSIVE FOR SELECT TO tygr_service USING (true);
+  END IF;
+END
+$$;
+
+-- 7b. Quarantaine `webhook_events_pending` — DEUX gardes complémentaires contre
+--     tygr_app (le GRANT global de l'étape 3 + les DEFAULT PRIVILEGES de l'étape 4
+--     rendent TOUTE table future accessible à tygr_app : il faut un REVOKE explicite).
+--     Aucune ne suffit seule (leçon append-only : la 1re garde a été contournée par
+--     une 2nde voie) :
+--       (1) PRIVILÈGE : REVOKE ALL … FROM tygr_app ;
+--       (2) RLS : FORCE (migration 0026) + une seule policy FOR ALL TO tygr_service —
+--           AUCUNE policy ne s'applique à tygr_app ⇒ 0 ligne même si un GRANT
+--           réapparaissait par accident.
+--     tygr_service reçoit SELECT/INSERT/UPDATE/DELETE (DELETE = purge TTL du rejeu W5 ;
+--     table système NON append-only). Conditionnel à l'existence, idempotent.
+DO $$
+BEGIN
+  IF to_regclass('public.webhook_events_pending') IS NOT NULL THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE
+      ON public.webhook_events_pending TO tygr_service;
+    REVOKE ALL ON public.webhook_events_pending FROM tygr_app;
+    DROP POLICY IF EXISTS webhook_pending_service ON public.webhook_events_pending;
+    CREATE POLICY webhook_pending_service ON public.webhook_events_pending
+      AS PERMISSIVE FOR ALL TO tygr_service USING (true) WITH CHECK (true);
+  END IF;
+END
+$$;
+
 -- NB déploiement : ce script est ADDITIF (CREATE IF NOT EXISTS, GRANT) — aucun
 -- DROP. Ordre de pipeline non négociable : db:provision -> migrate -> deploy.
 -- Rappel tombstone : ne JAMAIS ajouter transactions_cache / balance_history (ni

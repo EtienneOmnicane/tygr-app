@@ -55,8 +55,32 @@ const FRONTIERE_SYSTEME = {
   group: ["**/server/db/systeme", "**/db/systeme", "**/systeme"],
   message:
     "Primitive système (executerPourWorkspaceSysteme) réservée aux fonctions Inngest " +
-    "(src/server/inngest/**) — PLAN-ingestion-webhook-omnifi.md §6.1. Toute surface " +
-    "utilisateur passe par withWorkspace(session, fn).",
+    "(src/server/inngest/**) et à la route webhook (src/server/webhooks/omnifi/**) — " +
+    "PLAN-ingestion-webhook-omnifi.md §6.1. Toute surface utilisateur passe par " +
+    "withWorkspace(session, fn).",
+};
+
+/**
+ * Frontière du CLIENT DB DE SERVICE (lot W3/W4, PLAN-webhook-ingestion.md §7.4/§8.1)
+ * — même mécanique de constante RÉPÉTÉE que FRONTIERE_SYSTEME.
+ *
+ * `src/server/db/service.ts` porte le rôle `tygr_service`, cross-tenant au périmètre
+ * gelé (résolution `omnifi_connection_id → workspace_id` du webhook). Il n'est
+ * légitime QUE pour `src/server/webhooks/omnifi/**`. Importé d'ailleurs, il ouvrirait
+ * une résolution cross-tenant hors de la seule surface qui en a besoin : la règle rend
+ * l'oubli IMPOSSIBLE. TROIS globs, du plus précis au plus large — chacun ferme une voie
+ * de contournement : `../db/service` (relatif depuis src/server/*) ne contient pas
+ * « server/ » ; `./service` (voisin dans src/server/db/) ne contient pas « db/ ». Le
+ * dernier motif interdit du même coup un éventuel ré-export par db/index.ts. Aucun autre
+ * module `service` dans le repo (vérifié) — un futur homonyme porterait ce message.
+ * Pas d'allowTypeImports : aucun type de ce module n'a vocation à circuler.
+ */
+const FRONTIERE_SERVICE = {
+  group: ["**/server/db/service", "**/db/service", "**/service"],
+  message:
+    "Client DB de service (tygr_service) réservé à la résolution webhook " +
+    "(src/server/webhooks/omnifi/**) — PLAN-webhook-ingestion.md §7.4. Rôle cross-tenant " +
+    "au périmètre GELÉ (3 colonnes de bank_connections) : aucune autre surface ne l'importe.",
 };
 
 const eslintConfig = defineConfig([
@@ -106,21 +130,35 @@ const eslintConfig = defineConfig([
     rules: {
       "no-restricted-imports": [
         "error",
-        { patterns: [FRONTIERE_DONNEES, FRONTIERE_SYSTEME] },
+        { patterns: [FRONTIERE_DONNEES, FRONTIERE_SYSTEME, FRONTIERE_SERVICE] },
       ],
     },
   },
 
-  // Frontière de la primitive système DANS la couche serveur (W1) : hors
-  // src/server/inngest/**, aucun module serveur (repository, orchestration,
-  // auth…) ne consomme executerPourWorkspaceSysteme. Bloc SÉPARÉ du précédent :
-  // celui-ci ignore src/server/** en entier (les repositories DOIVENT importer
-  // le schéma), ici on ne restreint QUE la primitive.
+  // Frontières SYSTÈME + SERVICE DANS la couche serveur (W1/W4) : hors des surfaces
+  // légitimes, aucun module serveur ne consomme la primitive système ni le client de
+  // service. Bloc SÉPARÉ du précédent (celui-ci ignore src/server/** en entier pour le
+  // schéma ; ici on ne restreint QUE ces deux modules). Les DEUX frontières vivent dans
+  // LE MÊME bloc `no-restricted-imports` (⚠️ flat config : deux blocs qui matchent le
+  // même fichier se REMPLACENT — cf. FRONTIERE_DONNEES). Conséquence des `ignores`
+  // partagés : `src/server/inngest/**` est aussi exempté de FRONTIERE_SERVICE — bénin,
+  // un job Inngest a déjà son workspaceId résolu et n'importe jamais le client de
+  // service (aucune résolution cross-tenant côté worker). Les importeurs légitimes :
+  //   - systeme  → inngest/** + webhooks/omnifi/** (+ systeme.ts lui-même) ;
+  //   - service  → webhooks/omnifi/** (+ service.ts lui-même).
   {
     files: ["src/server/**/*.{ts,tsx}"],
-    ignores: ["src/server/inngest/**", "src/server/db/systeme.ts"],
+    ignores: [
+      "src/server/inngest/**",
+      "src/server/db/systeme.ts",
+      "src/server/webhooks/omnifi/**",
+      "src/server/db/service.ts",
+    ],
     rules: {
-      "no-restricted-imports": ["error", { patterns: [FRONTIERE_SYSTEME] }],
+      "no-restricted-imports": [
+        "error",
+        { patterns: [FRONTIERE_SYSTEME, FRONTIERE_SERVICE] },
+      ],
     },
   },
 
@@ -147,6 +185,7 @@ const eslintConfig = defineConfig([
           patterns: [
             FRONTIERE_DONNEES,
             FRONTIERE_SYSTEME,
+            FRONTIERE_SERVICE,
             {
               // `paths` ne matche QUE le spécifieur exact : un import RELATIF
               // (`../../../../server/auth/session`) passait à travers. `group` matche le

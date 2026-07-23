@@ -169,6 +169,13 @@
       "when": 1784615257975,
       "tag": "0024_account-party-role-scope",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784700000000,
+      "tag": "0026_webhook-events-pending",
+      "breakpoints": true
     }
   ]
 }

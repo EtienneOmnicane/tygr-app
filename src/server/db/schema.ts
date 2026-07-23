@@ -1411,3 +1411,74 @@ export const auditEvents = pgTable(
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Webhook Omni-FI — QUARANTAINE des événements non résolus (lot W4).   */
+/* Plan : docs/specs/PLAN-webhook-ingestion.md §7.1.                    */
+/*                                                                     */
+/* Table SYSTÈME, PAS financière, PAS append-only : le DELETE de purge  */
+/* (TTL 30 j, lot W5) est LÉGITIME. Le tenant est INCONNU par           */
+/* définition (un webhook peut arriver avant `link-exchange`), donc     */
+/* PAS de `workspace_id` et PAS de policy tenant. L'isolation repose    */
+/* sur DEUX gardes complémentaires posées HORS de ce fichier (le        */
+/* provisioning donne SELECT/INSERT/UPDATE sur TOUTE table, présente    */
+/* comme future — cf. tygr_app.sql §3/§4) :                            */
+/*   (1) REVOKE ALL … FROM tygr_app        (privilège)                 */
+/*   (2) RLS FORCE + une seule policy FOR ALL TO tygr_service          */
+/* Ces deux gardes vivent dans drizzle/provisioning/tygr_app.sql (le    */
+/* rôle tygr_service y est créé ; une migration ne peut pas le          */
+/* référencer, elle tourne AVANT le provisioning). Ici : `.enableRLS()` */
+/* pose l'ENABLE ; le FORCE + la policy sont dans la migration/provi.   */
+/* ------------------------------------------------------------------ */
+
+/** Motifs de quarantaine — pourquoi l'événement n'a pas été enfilé. Liste fermée. */
+export const WEBHOOK_MOTIFS = [
+  "CONNEXION_INCONNUE",
+  "AMBIGUE",
+  "ENV_MISMATCH",
+] as const;
+export type WebhookMotif = (typeof WEBHOOK_MOTIFS)[number];
+
+export const webhookEventsPending = pgTable(
+  "webhook_events_pending",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * `EventId` amont — dédup PRÉ-tenant. Unicité GLOBALE acceptable ICI (table
+     * système, invisible des tenants, jamais exposée par une API ⇒ pas d'oracle
+     * exploitable) — à NE PAS confondre avec `audit_events` où l'unicité est
+     * composite `(workspace_id, omnifi_event_id)` (Q4, oracle cross-tenant évité).
+     */
+    omnifiEventId: varchar("omnifi_event_id", { length: 64 }).notNull().unique(),
+    /** Clé de rejeu (lot W5) — la connexion amont à re-résoudre. */
+    omnifiConnectionId: varchar("omnifi_connection_id", { length: 64 }).notNull(),
+    /** `EventType` amont VERBATIM — union OUVERTE (l'amont émet librement). */
+    eventType: varchar("event_type", { length: 60 }).notNull(),
+    omnifiJobId: varchar("omnifi_job_id", { length: 64 }),
+    /** Env du DÉPLOIEMENT qui a reçu (CHECK aligné sur workspaces.omnifi_environment). */
+    omnifiEnvironment: varchar("omnifi_environment", { length: 10 }).notNull(),
+    motif: varchar("motif", { length: 30 }).notNull(),
+    /** Body validé zod, borné par la limite de 64 Ko du corps ; identifiants techniques. */
+    payload: jsonb("payload").notNull().default({}),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** NULL = en attente de rejeu (lot W5). */
+    replayedAt: timestamp("replayed_at", { withTimezone: true }),
+    /** Plafond anti-boucle (10, appliqué par le rejeu W5). */
+    replayCount: integer("replay_count").notNull().default(0),
+  },
+  (t) => [
+    index("webhook_events_pending_connection_idx").on(t.omnifiConnectionId),
+    // Balayage du rejeu : les événements EN ATTENTE (replayed_at IS NULL).
+    index("webhook_events_pending_replay_idx").on(t.replayedAt),
+    check(
+      "webhook_events_pending_env_check",
+      sql`${t.omnifiEnvironment} IN ('sandbox','production')`,
+    ),
+    check(
+      "webhook_events_pending_motif_check",
+      sql`${t.motif} IN ('CONNEXION_INCONNUE','AMBIGUE','ENV_MISMATCH')`,
+    ),
+  ],
+).enableRLS();
