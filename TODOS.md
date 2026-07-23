@@ -3600,7 +3600,19 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
 
 ### Chantiers produit prioritaires (revue PM/Architecture, 2026-06-23)
 
-- [ ] **PROD-MERCHANT1 (P1) — afficher le marchand réel + la catégorie amont (tuer « Opération bancaire »)** —
+- [x] **PROD-MERCHANT1 (P1) — afficher le marchand réel + la catégorie amont (tuer « Opération bancaire »)** —
+  **LIVRÉ 2026-06-23, mergé sur `main` (PR #102 `b4505a4` + PR #105 `8cedc26`).** Vérifié
+  au code le 2026-07-23 : `types.ts` lit l'enrichissement IMBRIQUÉ sous `Enrichment{}` (fin du
+  « à plat ») ; `orchestrateur.ts` (chemin réel `src/server/ingestion/`) mappe
+  `e?.CleanMerchantName / PrimaryCategory / SubCategory` avec normalisation `"" → null` ;
+  `adapter.ts` expose le marchand via `resoudreLibelle` (cascade marchand → catégorie FR →
+  brut → repli). `LIBELLE_REPLI` (« Opération bancaire ») ne subsiste QUE comme filet ultime
+  quand les trois sont absents amont — conforme au critère du ticket. La grounding runtime
+  (contrat sous `Enrichment{}`) avait déjà été prouvée sur api-stage (PR #101). Reste ouvert :
+  polissage P2 `TECH-MERCHANT-POLISH1` (plus bas). ⚠️ Case restée décochée par oubli de
+  bookkeeping — un brief a été ré-émis à partir de cette entrée périmée (ses citations
+  `file:line` décrivaient l'état PRÉ-#102). Les citations d'origine ci-dessous sont conservées
+  à titre HISTORIQUE et ne correspondent plus au code.
   Effort M, gardien Front + Backend (contrat). Ouvert 2026-06-23. Le fallback
   `"Opération bancaire"` (`transactions/adapter.ts:83`, `transactions-table.tsx:54`)
   s'affiche quand `clean_label` est null. L'enrichissement amont est DÉJÀ ingéré et
