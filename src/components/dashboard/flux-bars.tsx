@@ -40,13 +40,17 @@ import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant, estNegatif } from "@/lib/format-montant";
 import {
-  maxFenetre,
+  maxFenetreVisible,
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
 import { echelleNice } from "@/components/dashboard/echelle-nice";
 import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
 import { useDimensionsSvg } from "@/components/dashboard/use-dimensions-svg";
+import {
+  TOUTES_SERIES_VISIBLES,
+  type VisibiliteSeries,
+} from "@/components/charts/series-types";
 
 /**
  * Corps « barres » de l'ancre Flux : projette la série sur la grille puis rend les barres.
@@ -57,6 +61,7 @@ export function FluxBarres({
   grille,
   devise,
   libellePeriode,
+  visibles = TOUTES_SERIES_VISIBLES,
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
@@ -67,14 +72,22 @@ export function FluxBarres({
    * chose qu'un lecteur d'écran entend de la fenêtre (TOOLBAR-DATE-PRECISE1).
    */
   libellePeriode?: string;
+  /**
+   * Séries VISIBLES (légende interactive, L1). Une série masquée n'est ni tracée ni
+   * comptée dans l'échelle. Défaut = les deux (rendu identique à l'historique).
+   */
+  visibles?: VisibiliteSeries;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
+  const montrerEntrees = visibles.has("entrees");
+  const montrerSorties = visibles.has("sorties");
 
-  // Le max BRUT pilote la détection « aucun mouvement » (0 = fenêtre vide) ; le max
-  // « nice » (toujours ≥ 1, jamais 0) sert UNIQUEMENT à l'échelle du rendu des barres
-  // non-vides — sans cette séparation, une fenêtre vide afficherait des barres à
-  // plat au lieu du message neutre (echelleNice(0) = 1 ≠ 0).
-  const maxBrut = maxFenetre(mois);
+  // Le max BRUT (sur les SEULES séries visibles) pilote la détection « aucun mouvement »
+  // (0 = fenêtre vide DANS ce qui est affiché) ; le max « nice » (toujours ≥ 1, jamais 0)
+  // sert UNIQUEMENT à l'échelle du rendu des barres non-vides — sans cette séparation, une
+  // fenêtre vide afficherait des barres à plat au lieu du message neutre
+  // (echelleNice(0) = 1 ≠ 0). Masquer une série la retire de l'échelle (§9.1).
+  const maxBrut = maxFenetreVisible(mois, montrerEntrees, montrerSorties);
   const aucunMouvement = maxBrut === 0;
   const max = echelleNice(maxBrut);
   const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
@@ -106,6 +119,8 @@ export function FluxBarres({
         max={max}
         devise={devise}
         libellePeriode={libellePeriode}
+        montrerEntrees={montrerEntrees}
+        montrerSorties={montrerSorties}
       />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -150,12 +165,18 @@ function BarresMensuelles({
   max,
   devise,
   libellePeriode,
+  montrerEntrees,
+  montrerSorties,
 }: {
   mois: MoisAffiche[];
   max: number;
   devise: string;
   /** Libellé de la fenêtre appliquée — seule description de la période pour un lecteur d'écran. */
   libellePeriode?: string;
+  /** Tracer la série des entrées (au-dessus de l'axe) ? */
+  montrerEntrees: boolean;
+  /** Tracer la série des sorties (en dessous de l'axe) ? */
+  montrerSorties: boolean;
 }) {
   const { ref, largeur, hauteur } = useDimensionsSvg(
     LARGEUR_DEFAUT,
@@ -239,24 +260,29 @@ function BarresMensuelles({
           const labelVisible = i % pasLabel === 0 || i === dernier;
           return (
             <g key={m.libelleMois}>
-              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={yAxe - hEntree}
-                width={largeurBarre}
-                height={hEntree}
-                rx={2}
-                fill="var(--color-inflow)"
-              />
-              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={yAxe}
-                width={largeurBarre}
-                height={hSortie}
-                rx={2}
-                fill="var(--color-outflow)"
-              />
+              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1). Non tracée
+                  si la série est masquée par la légende (L1). */}
+              {montrerEntrees && (
+                <rect
+                  x={cx}
+                  y={yAxe - hEntree}
+                  width={largeurBarre}
+                  height={hEntree}
+                  rx={2}
+                  fill="var(--color-inflow)"
+                />
+              )}
+              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1). */}
+              {montrerSorties && (
+                <rect
+                  x={cx}
+                  y={yAxe}
+                  width={largeurBarre}
+                  height={hSortie}
+                  rx={2}
+                  fill="var(--color-outflow)"
+                />
+              )}
               {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
                   court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
                   complet reste dans le tableau « Évolution mensuelle ». */}

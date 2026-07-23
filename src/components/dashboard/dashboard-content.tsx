@@ -61,7 +61,6 @@ import { EcheancesEncart } from "@/components/dashboard/echeances-encart";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
 import { TopVendorsCard } from "@/components/dashboard/top-vendors-card";
-import { MonthlyCashflow } from "@/components/dashboard/monthly-cashflow";
 import { TransactionsTable } from "@/components/dashboard/transactions-table";
 
 export interface DonneesDashboard {
@@ -329,14 +328,9 @@ export function DashboardContent({
             le libellé reprend la formulation du sous-titre d'en-tête. */}
         <TopVendorsCard concentration={topVendors} libellePeriode={libellePeriode} />
 
-        {/* Tendance : entrées/sorties sur la fenêtre appliquée (barres + tableau). Sous
-            plage, les mois d'extrémité sont PARTIELS — d'où le libellé explicite. */}
-        <MonthlyCashflow
-          serie={serieMensuelle}
-          grille={grilleMensuelle}
-          devise={devise}
-          libellePeriode={libellePeriode}
-        />
+        {/* NB : la « tendance mensuelle » (tableau) n'est plus une carte autonome — elle
+            est devenue la VUE TABLEAU de l'ancre « Flux de trésorerie » ci-dessus (toggle
+            L1). Une seule série, deux représentations, plus de carte redondante. */}
 
         {/* Table : vide par section si pas encore de transactions. */}
         {transactionsRecentes.length > 0 ? (

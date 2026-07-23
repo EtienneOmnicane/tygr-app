@@ -28,6 +28,7 @@ import { LIBELLE_PERIODE, PERIODES } from "@/lib/periode-analyse";
 import type { RepartitionCategories, SensFlux } from "@/server/insights/types";
 
 import { EmptyState } from "@/components/ui/states";
+import { ControleSegmente } from "@/components/ui/controle-segmente";
 
 import { MentionReanalyse } from "./mention-reanalyse";
 import { RepartitionDeviseCard } from "./repartition-devise-card";
@@ -55,54 +56,6 @@ const SENS_OPTIONS: Array<{ valeur: SensFlux; label: string }> = [
   { valeur: "outflow", label: "Sorties" },
   { valeur: "inflow", label: "Entrées" },
 ];
-
-/**
- * Contrôle segmenté générique (radiogroup, motif §2 / periode-switcher). Segment
- * actif = `bg-primary text-text-onink`. Désactivé en bloc pendant un re-fetch.
- */
-function ControleSegmente<T extends string>({
-  label,
-  options,
-  valeur,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  options: Array<{ valeur: T; label: string }>;
-  valeur: T;
-  onChange: (valeur: T) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className="inline-flex w-fit rounded-full border border-line bg-surface-card p-0.5"
-    >
-      {options.map((o) => {
-        const actif = o.valeur === valeur;
-        return (
-          <button
-            key={o.valeur}
-            type="button"
-            role="radio"
-            aria-checked={actif}
-            disabled={disabled}
-            onClick={() => onChange(o.valeur)}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-              "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-              "disabled:cursor-not-allowed disabled:opacity-60",
-              actif ? "bg-primary text-text-onink" : "text-text-muted hover:text-text",
-            )}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 export function GraphiquesFeature({
   initiale,
