@@ -22,12 +22,14 @@
  *    erreur d'isolation (UnsafeDatabaseRoleError…) — elles font échouer le run,
  *    visibles au dashboard (leçon PR #123).
  *
- * Idempotence : upserts d'ingestion idempotents (les « bretelles » du plan) +
- * `concurrency: 1` par connexion (deux événements rapprochés se sérialisent, le
- * second ne ré-ingère rien de neuf). L'option `idempotency` Inngest par
- * `omnifiEventId` arrive avec la dédup DB du webhook (W4, plan §4.2) ; la poser
- * aujourd'hui sur un champ absent des émetteurs W1/W2 dédupliquerait À TORT des
- * événements distincts (clé vide partagée).
+ * Idempotence, TROIS étages : (1) upserts d'ingestion idempotents (« bretelles »)
+ * + `concurrency: 1` par connexion (deux événements rapprochés se sérialisent) ;
+ * (2) dédup PERMANENTE par tenant dans `audit_events` (côté webhook, W4) ;
+ * (3) `idempotency: "event.data.cleIdempotence"` ci-dessous — clé TOUJOURS
+ * présente (D2, W4), donc « rejeu ×5 → 1 seul RUN » sur la fenêtre SDK de 24 h.
+ * On dédup sur `cleIdempotence` et NON `omnifiEventId` : ce dernier est absent
+ * des émetteurs cron/manuel ; la clé PAR ÉMETTEUR (wh:/cron:/man:, cf. client.ts)
+ * garantit que deux événements DISTINCTS ne collisionnent jamais.
  */
 import { and, eq } from "drizzle-orm";
 
@@ -286,6 +288,10 @@ export const syncIngest = inngest.createFunction(
     // sérialisent (le second ne fait qu'une relecture idempotente).
     concurrency: [{ key: "event.data.omnifiConnectionId", limit: 1 }],
     retries: 3,
+    // §6.2 (D2) : dédup Inngest « 1 événement → 1 run » sur la fenêtre SDK de 24 h.
+    // Clé PAR ÉMETTEUR (wh:/cron:/man:) : deux événements distincts ne collisionnent
+    // jamais ; un rejeu amont du même EventId (`wh:${EventId}`) collapse en 1 run.
+    idempotency: "event.data.cleIdempotence",
     triggers: [{ event: evenementSyncIngest }],
   },
   async ({ event, step }) => {

@@ -26,6 +26,7 @@ import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 import type { AnyPgDatabase, WorkspaceTx } from "@/server/db/tenancy";
 
 import * as schema from "./schema";
+import type { WebhookMotif } from "./schema";
 
 // Câblage neonConfig — RÉPLIQUÉ de src/server/db/index.ts (config GLOBALE et
 // idempotente du driver). service.ts doit fonctionner même si index.ts n'a pas été
@@ -142,4 +143,55 @@ export function resoudreConnexionParId(
   omnifiConnectionId: string,
 ): Promise<LigneConnexionResolue[]> {
   return createResoudreConnexion(obtenirServiceDb())(omnifiConnectionId);
+}
+
+/** Événement à mettre en QUARANTAINE (webhook_events_pending) — écrit sous tygr_service
+ *  (tygr_app n'a AUCUN accès à cette table : REVOKE + RLS). */
+export interface EvenementQuarantaine {
+  omnifiEventId: string;
+  omnifiConnectionId: string;
+  eventType: string;
+  omnifiJobId?: string | null;
+  omnifiEnvironment: "sandbox" | "production";
+  motif: WebhookMotif;
+  /** Body validé zod (identifiants techniques amont) — jamais loggé, jamais dans audit_events. */
+  payload: Record<string, unknown>;
+}
+
+/**
+ * INSÈRE un événement non résolu en quarantaine, sous `tygr_service`, avec dédup
+ * `ON CONFLICT (omnifi_event_id) DO NOTHING` (un rejeu du même EventId ne crée pas de
+ * doublon). Rend `{ insere }`. Garde runtime `exigerRoleService` DANS la transaction.
+ * Table système NON append-only : le rejeu (W5) et la purge TTL sont des UPDATE/DELETE
+ * légitimes, réservés à tygr_service.
+ */
+export function createInsererQuarantaine<TDb extends AnyPgDatabase>(db: TDb) {
+  return async function insererQuarantaine(
+    evt: EvenementQuarantaine,
+  ): Promise<{ insere: boolean }> {
+    return db.transaction(async (tx) => {
+      await exigerRoleService<TDb>(tx as WorkspaceTx<TDb>);
+      const lignes = await (tx as WorkspaceTx<TDb>)
+        .insert(schema.webhookEventsPending)
+        .values({
+          omnifiEventId: evt.omnifiEventId,
+          omnifiConnectionId: evt.omnifiConnectionId,
+          eventType: evt.eventType,
+          omnifiJobId: evt.omnifiJobId ?? null,
+          omnifiEnvironment: evt.omnifiEnvironment,
+          motif: evt.motif,
+          payload: evt.payload,
+        })
+        .onConflictDoNothing({ target: schema.webhookEventsPending.omnifiEventId })
+        .returning({ id: schema.webhookEventsPending.id });
+      return { insere: lignes.length > 0 };
+    });
+  };
+}
+
+/** Instance applicative — quarantaine sous `tygr_service` réel. */
+export function insererQuarantaine(
+  evt: EvenementQuarantaine,
+): Promise<{ insere: boolean }> {
+  return createInsererQuarantaine(obtenirServiceDb())(evt);
 }

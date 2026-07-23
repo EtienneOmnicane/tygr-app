@@ -11,8 +11,15 @@
  *
  * PROTOCOLE DE MUTATION (§10.2) : après le commit vert, muter CHAQUE garde une par
  * une (retirer le REVOKE, retirer la policy webhook_resolution, élargir le GRANT à une
- * 4e colonne, remplacer LIMIT 2 par LIMIT 1) et vérifier que le test correspondant
- * ROUGIT. Une garde dont la mutation laisse la suite verte n'est pas prouvée.
+ * 4e colonne) et vérifier que le test correspondant ROUGIT. Une garde dont la mutation
+ * laisse la suite verte n'est pas prouvée.
+ *
+ * NB couverture (cross-review W3) : la garde SQL `LIMIT 2` (multiplicité) n'est PAS
+ * exerçable ici — l'unique GLOBALE de omnifi_connection_id interdit de seeder 2 lignes
+ * pour une même clé (le vrai test à 2 tenants arrive au CONTRACT, §5.4). La DÉCISION
+ * d'ambiguïté (≥2 lignes → AMBIGUE, jamais un choix) est prouvée par le test unitaire
+ * pur `tests/unit/webhook-resolution.test.ts`. La garde RUNTIME `exigerRoleService`
+ * (que le SQL brut ne traverse pas) est prouvée par `webhook-integration-isolation`.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -242,3 +249,23 @@ describe("webhook_events_pending : DEUX gardes complémentaires contre tygr_app"
     await client.exec(`reset role;`);
   });
 });
+
+describe("non-régression : aucune RESTRICTIVE sur bank_connections (§10.2 cas 9)", () => {
+  it("9. une policy RESTRICTIVE casserait la résolution (AND) → il ne doit y en avoir AUCUNE", async () => {
+    // webhook_resolution est PERMISSIVE (s'OR-e). Si une RESTRICTIVE apparaissait un
+    // jour sur bank_connections, elle AND-erait et masquerait les lignes en silence
+    // sous tygr_service. Cette assertion fige l'invariant du plan §1.1.
+    const r = await client.query<{ policyname: string }>(
+      `select policyname from pg_policies
+       where tablename = 'bank_connections' and permissive = 'RESTRICTIVE'`,
+    );
+    expect(r.rows, "aucune policy RESTRICTIVE sur bank_connections").toHaveLength(0);
+  });
+});
+
+// NB : l'effet de FORCE ROW LEVEL SECURITY sur le PROPRIÉTAIRE (réparation sous owner
+// exige SET ROLE tygr_service, §7.2) n'est PAS démontrable en PGlite : le rôle bootstrap
+// (`reset role`) y est SUPERUSER, qui contourne toujours la RLS (FORCE ne mord que sur un
+// owner NON-superuser, ex. tygr_owner en prod). Le FORCE reste posé (0026) par cohérence
+// avec 0001/0003/0021 ; la sécurité ne dépend PAS de cette propriété (tygr_app bloqué par
+// REVOKE + RLS ci-dessus ; l'owner est de toute façon refusé au runtime par la garde C6).

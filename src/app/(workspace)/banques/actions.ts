@@ -339,6 +339,9 @@ export async function synchroniserConnexionsAction(): Promise<EtatFinalisation> 
             omnifiConnectionId: c.connectionId,
             omnifiJobId: c.jobId,
             declencheur: "MANUAL",
+            // D2 (W4) : clé d'idempotence Inngest, TOUJOURS présente. Manuel =
+            // jamais dédupliqué (chaque clic est une intention distincte) → uuid neuf.
+            cleIdempotence: `man:${crypto.randomUUID()}`,
           }),
         ),
       );

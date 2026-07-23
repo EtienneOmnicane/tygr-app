@@ -262,7 +262,14 @@ END
 $$;
 
 -- NB déploiement : ce script est ADDITIF (CREATE IF NOT EXISTS, GRANT) — aucun
--- DROP. Ordre de pipeline non négociable : db:provision -> migrate -> deploy.
+-- DROP. Ordre de pipeline non négociable : db:provision -> migrate -> db:provision
+-- (RE-provision) -> deploy. Le RE-provision post-migrate n'est PAS optionnel : les
+-- blocs conditionnels à l'existence d'une table (étapes 5, 7a, 7b) sont SAUTÉS au 1er
+-- provision d'une base neuve (les tables n'existent pas encore) et ne prennent effet
+-- qu'au re-provision — sinon `tygr_service` n'a aucun GRANT (INSERT quarantaine =
+-- permission denied) et la liste blanche DELETE reste vide. Fail-closed entre les
+-- deux (jamais d'octroi non voulu), mais le pipeline DOIT rejouer ce script après
+-- migrate. Séquence détaillée : CLAUDE.md § « Séquence d'initialisation ».
 -- Rappel tombstone : ne JAMAIS ajouter transactions_cache / balance_history (ni
 -- une partition) à la liste blanche de l'étape 5.
 -- Rappel append-only STRICT : ne JAMAIS ajouter consent_records / audit_events /

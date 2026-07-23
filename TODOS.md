@@ -3956,3 +3956,56 @@ serveur RLS, fail-closed) est sain ; ces entrées sont de la réutilisation/effi
   T-C3 (conflit de canal) ; aucune migration de schéma requise.
 - [ ] **Réévaluer bases séparées par tenant (C2)** — si une exigence de conformité
   client externe l'impose (taste T1 du gate : RLS partagée retenue au MVP).
+
+### Webhook Omni-FI — lots W3 + W4 LIVRÉS (branche `feat/webhook-ingestion`, 2026-07-23)
+
+Réf. `docs/specs/PLAN-webhook-ingestion.md`, runbook `docs/RUNBOOK-webhook-enrolement.md`.
+**`GAP-WEBHOOK1`** (P1, l.3762) et **`WEBHOOK-TENANT-FIRST1`** (P1, l.3013) sont désormais
+SUBSTANTIELLEMENT adressés : route `POST /api/webhooks/omnifi` (HMAC-SHA256 constant-time
+sur octets bruts, fenêtre de fraîcheur, zod strict, résolution tenant fail-closed sous
+`tygr_service`, cross-check env, idempotence 3 étages, quarantaine, 202 uniforme). Ne PAS
+les clore tant que W5 (rejeu) et W2 (filet pull) ne sont pas livrés. Décisions actées :
+D1 (cross-check env sous tygr_app, D2-parent annulée), D2 (`cleIdempotence`), D3 (enqueue
+AVANT audit), D4 (fenêtre 12 h).
+
+Dette DIFFÉRÉE (à traiter à un chantier nommé) :
+
+- [ ] **WEBHOOK-W5 (P1, effort ~1 j) — rejeu de la quarantaine.** `webhook_events_pending`
+  s'accumule sans être rejoué (visible en base/log, jamais silencieux). Livrer : enqueue
+  `omnifi/webhook.replay.requested` au `link-exchange` + cron filet + purge TTL 30 j avec
+  log d'abandon. **Déclencheur** : immédiat (le webhook est en prod sans rejeu).
+- [ ] **WEBHOOK-W2 (P1) — cron 06:00 MUT + `sync_runs`.** SANS lui, le webhook n'a AUCUN
+  filet pull : un événement perdu (enqueue échoué, secret en rotation, déploiement) ne se
+  rattrape que par un clic manuel. Recommandé avant/en parallèle d'un usage prod réel.
+- [ ] **WEBHOOK-FENETRE1 (P2, effort ~0,25 j) — resserrer la fenêtre de fraîcheur.**
+  Fixée à 12 h (≤ idempotence Inngest 24 h, vérifiée). La resserrer à 10-15 min dès que la
+  **politique de retry amont (D4-b)** est connue. Constante `FENETRE_FRAICHEUR_MS`
+  (`src/server/webhooks/omnifi/fraicheur.ts`), testée.
+- [ ] **WEBHOOK-D4 (P2) — questions amont à confirmer (Etienne → Omni-FI).** (a) l'amont
+  émet-il au-delà du mock `POST /dev/webhooks/test` ? (b) politique de retry sur non-2xx
+  (dimensionne la fenêtre) ? (c) `Payload{}` porte-t-il des champs utiles ? (d) plage d'IP
+  source stable (→ allowlist défense en profondeur, §4.3) + préfixe `sha256=` sur le
+  header (déjà absorbé défensivement) ?
+- [ ] **WEBHOOK-MIGRATION-NUM (P2, hygiène) — numéro de migration.** Le plan §7.1/§12
+  écrivait `0025` ; livré en **`0026`** (0025 réservé à treso-eod ; 0024 dernière
+  existante). ⚠️ **Ne JAMAIS réutiliser 0019** (déjà prise, `0019_echeances`). Trou d'idx
+  25 dans `_journal.json` (comblé au merge de treso-eod) : la suite de cohérence l'accepte
+  (égalité d'ensembles, pas contiguïté).
+- [ ] **WEBHOOK-SNAPSHOT-0026 (P2, hygiène Drizzle) — snapshot manquant.** `0026` a été
+  hand-write (comme 0020/0021/0024, sans `meta/0026_snapshot.json`). Un futur `db:generate`
+  diffe contre le dernier snapshot présent (0023) et pourrait ré-émettre
+  `webhook_events_pending`. **Déclencheur** : prochain `db:generate` — régénérer proprement
+  les snapshots ou ajouter 0026.
+- [ ] **WEBHOOK-LIMIT2-CONTRACT (P2) — test de multiplicité.** La garde SQL `LIMIT 2`
+  (résolution ambiguë) n'est exerçable qu'au CONTRACT (retrait de l'unique GLOBALE de
+  `omnifi_connection_id`, 0018→CONTRACT) : impossible de seeder 2 lignes pour une clé
+  aujourd'hui. La DÉCISION est couverte par le test unitaire pur ; ajouter le test
+  d'intégration 2-tenants au CONTRACT.
+- [ ] **WEBHOOK-ROTATION-SECRET (P2) — double validité amont.** `rotate-secret` invalide
+  l'ancien immédiatement → trou de 401 entre rotation et redéploiement (rattrapé par W2).
+  Demander à Omni-FI une fenêtre de double validité (D4). Runbook §5 documente la procédure
+  provisoire.
+- [ ] **WEBHOOK-RL-MULTIINSTANCE (P3) — rate-limit par instance.** Le seau glissant est en
+  mémoire du process (approximatif en multi-instances). Ce n'est PAS le contrôle d'accès
+  (c'est l'HMAC), il ne borne que le coût. À reconsidérer si déploiement multi-instances +
+  besoin d'une garantie globale (store partagé).
