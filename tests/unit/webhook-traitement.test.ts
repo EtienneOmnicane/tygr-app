@@ -16,9 +16,7 @@ import {
   WebhookNonConfigureError,
   WebhookPayloadInvalideError,
   WebhookSignatureInvalideError,
-  WebhookTropDeRequetesError,
 } from "@/server/webhooks/omnifi/erreurs";
-import { creerSeaux } from "@/server/webhooks/omnifi/rate-limit";
 import {
   traiterWebhook,
   type DepsTraitementWebhook,
@@ -43,7 +41,7 @@ function corpsValide(surcharge: Record<string, unknown> = {}) {
 function requeteSignee(corps: object, secret = SECRET) {
   const octets = Buffer.from(JSON.stringify(corps), "utf8");
   const signature = createHmac("sha256", secret).update(octets).digest("hex");
-  return { octets, signature, xForwardedFor: "203.0.113.1" };
+  return { octets, signature };
 }
 
 const connexion = (workspaceId = WS): LigneConnexionResolue => ({
@@ -67,7 +65,6 @@ function faireDeps(
     envDeploiement: "sandbox",
     secret: o.secret === undefined ? SECRET : o.secret,
     maintenant: () => NOW,
-    seaux: creerSeaux(),
     resoudreConnexion: vi.fn(async () => o.resolues ?? [connexion()]),
     insererQuarantaine: vi.fn(async () => ({ insere: true })),
     lireEnvWorkspace: vi.fn(async () => o.envWs ?? "sandbox"),
@@ -202,7 +199,7 @@ describe("rejets — aucun écrit DB avant signature valide", () => {
     const octets = Buffer.from("pas du json", "utf8");
     const signature = createHmac("sha256", SECRET).update(octets).digest("hex");
     await expect(
-      traiterWebhook(deps, { octets, signature, xForwardedFor: null }, "req-8"),
+      traiterWebhook(deps, { octets, signature }, "req-8"),
     ).rejects.toBeInstanceOf(WebhookPayloadInvalideError);
   });
 
@@ -216,18 +213,9 @@ describe("rejets — aucun écrit DB avant signature valide", () => {
     ).rejects.toBeInstanceOf(WebhookHorsFenetreError);
     expect(deps.resoudreConnexion).not.toHaveBeenCalled();
   });
-
-  it("rate-limit dépassé → WebhookTropDeRequetesError (429), avant le HMAC", async () => {
-    const deps = faireDeps();
-    // On sature le seau partagé de ces deps.
-    const req = requeteSignee(corpsValide());
-    for (let i = 0; i < 60; i++) {
-      await traiterWebhook(deps, req, `req-flood-${i}`);
-    }
-    await expect(
-      traiterWebhook(deps, req, "req-flood-61"),
-    ).rejects.toBeInstanceOf(WebhookTropDeRequetesError);
-  });
+  // NB : le rate-limit (429) est désormais appliqué par la coquille de transport AVANT
+  // la lecture du corps (C2) — couvert par tests/unit/webhook-rate-limit.test.ts et
+  // tests/unit/webhook-route.test.ts.
 });
 
 describe("ordre enqueue → audit (§6.3)", () => {

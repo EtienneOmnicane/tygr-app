@@ -4,10 +4,12 @@
  * horloge, secret) — la route ne fait que lire les octets, câbler les vraies deps et
  * mapper le résultat → HTTP. Testable in-process (§10.3) sans réseau ni DB réelle.
  *
- * Ordre (§2 / §6.3) : (0) secret → (1) rate-limit → (2) HMAC → (3) zod → (4) fraîcheur
- * → (5) résolution → (6) cross-check env → (7) ENQUEUE (avant audit) → (8) audit → 202.
- * Toute étape d'échec LÈVE une `ErreurWebhook` (la route mappe `.statutHttp`, corps
- * vide) ; la quarantaine et le succès RETOURNENT (202).
+ * Ordre (§2 / §6.3) : le RATE-LIMIT (étage 1) est fait par la coquille de transport
+ * AVANT la lecture du corps (route-handler, anti-DoS — constat cross-review W4 C2) ;
+ * ici : (0) secret → (2) HMAC → (3) zod → (4) fraîcheur → (5) résolution →
+ * (6) cross-check env → (7) ENQUEUE (avant audit) → (8) audit → 202. Toute étape d'échec
+ * LÈVE une `ErreurWebhook` (la route mappe `.statutHttp`, corps vide) ; la quarantaine et
+ * le succès RETOURNENT (202).
  */
 import type { EvenementQuarantaine, LigneConnexionResolue } from "@/server/db/service";
 import type { WebhookMotif } from "@/server/db/schema";
@@ -22,7 +24,6 @@ import {
 } from "./erreurs";
 import { verifierFraicheur } from "./fraicheur";
 import { tronquerSignature, verifierHmac, type EnvOmniFi } from "./hmac";
-import { verifierRateLimit, type SeauxRateLimit } from "./rate-limit";
 import { deciderResolution } from "./resolution";
 import { parserPayloadWebhook, type PayloadWebhook } from "./schema";
 
@@ -45,8 +46,6 @@ export interface DepsTraitementWebhook {
   secret: string | null;
   /** Horloge injectable (prod : `Date.now`). */
   maintenant: () => number;
-  /** État du rate-limit (singleton process en prod ; neuf par test). */
-  seaux: SeauxRateLimit;
   /** Résolution tygr_service `omnifi_connection_id → connexion(s)` (LIMIT 2). */
   resoudreConnexion: (
     omnifiConnectionId: string,
@@ -69,8 +68,6 @@ export interface RequeteWebhook {
   octets: Buffer;
   /** En-tête `x-omnifi-signature`. */
   signature: string | null;
-  /** En-tête `x-forwarded-for` (rate-limit). */
-  xForwardedFor: string | null;
 }
 
 export type ResultatWebhook =
@@ -127,13 +124,11 @@ export async function traiterWebhook(
   const now = deps.maintenant();
 
   // (0) Secret configuré pour l'env courant ? Sinon route INERTE (503) — jamais une
-  //     dégradation en « on accepte sans vérifier ».
+  //     dégradation en « on accepte sans vérifier ». (Le rate-limit, étage 1, a déjà été
+  //     appliqué par la coquille de transport AVANT la lecture du corps — C2.)
   if (deps.secret === null) {
     throw new WebhookNonConfigureError();
   }
-
-  // (1) Rate-limit AVANT tout calcul (borne le coût ; propriété anti-DoS).
-  verifierRateLimit(deps.seaux, requete.xForwardedFor, now);
 
   // (2) HMAC sur les OCTETS BRUTS. Aucun parse JSON, aucun écrit DB avant ce point.
   const signature = verifierHmac(requete.octets, requete.signature, deps.secret);

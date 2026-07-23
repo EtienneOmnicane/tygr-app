@@ -29,7 +29,7 @@ import {
   WebhookTropVolumineuxError,
 } from "./erreurs";
 import { selectionnerSecretWebhook, type EnvOmniFi } from "./hmac";
-import { creerSeaux } from "./rate-limit";
+import { creerSeaux, verifierRateLimit } from "./rate-limit";
 import { traiterWebhook, type DepsTraitementWebhook } from "./traitement";
 
 /** Borne de taille du corps : 64 Ko (§3.1). Accepté ≤ borne, rejeté au-delà. */
@@ -119,13 +119,18 @@ export async function traiterRequeteWebhook(request: Request): Promise<Response>
   const requestId = crypto.randomUUID();
   console.info(JSON.stringify({ evt: "webhook_recu", requestId }));
   try {
-    // (0) Transport — taille : content-length (rejet précoce, coût nul) puis octets réels
-    //     (un content-length menteur ne passe pas). La méthode ≠ POST → 405 (Next : seul
-    //     POST est exporté par la route).
+    // (0) Transport — taille : content-length (rejet précoce, coût nul). La méthode
+    //     ≠ POST → 405 (Next : seul POST est exporté par la route).
     const contentLength = request.headers.get("content-length");
     if (contentLength && Number(contentLength) > TAILLE_MAX_OCTETS) {
       throw new WebhookTropVolumineuxError();
     }
+
+    // (1) Rate-limit AVANT la lecture du corps (§4.1, C2) : la clé (XFF) ne dépend pas
+    //     du corps → on borne le coût de buffering d'une inondation non authentifiée.
+    verifierRateLimit(seauxWebhook, request.headers.get("x-forwarded-for"), Date.now());
+
+    // Octets réels APRÈS le rate-limit (un content-length menteur ne passe pas la borne).
     const octets = Buffer.from(await request.arrayBuffer());
     if (octets.byteLength > TAILLE_MAX_OCTETS) {
       throw new WebhookTropVolumineuxError();
@@ -139,7 +144,6 @@ export async function traiterRequeteWebhook(request: Request): Promise<Response>
         production: process.env.OMNIFI_WEBHOOK_SECRET_PRODUCTION,
       }),
       maintenant: () => Date.now(),
-      seaux: seauxWebhook,
       resoudreConnexion: resoudreConnexionParId,
       insererQuarantaine,
       lireEnvWorkspace,
@@ -152,7 +156,6 @@ export async function traiterRequeteWebhook(request: Request): Promise<Response>
       {
         octets,
         signature: request.headers.get("x-omnifi-signature"),
-        xForwardedFor: request.headers.get("x-forwarded-for"),
       },
       requestId,
     );

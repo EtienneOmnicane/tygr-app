@@ -4007,5 +4007,14 @@ Dette DIFFÉRÉE (à traiter à un chantier nommé) :
   provisoire.
 - [ ] **WEBHOOK-RL-MULTIINSTANCE (P3) — rate-limit par instance.** Le seau glissant est en
   mémoire du process (approximatif en multi-instances). Ce n'est PAS le contrôle d'accès
-  (c'est l'HMAC), il ne borne que le coût. À reconsidérer si déploiement multi-instances +
-  besoin d'une garantie globale (store partagé).
+  (c'est l'HMAC), il ne borne que le coût. La mémoire est désormais BORNÉE (balayage des
+  buckets périmés au-delà de `MAX_BUCKETS`, constat cross-review W4 C1). À reconsidérer si
+  déploiement multi-instances + besoin d'une garantie globale (store partagé).
+- [ ] **WEBHOOK-RL-XFF (P3) — IP source de confiance.** `extraireIp` prend la valeur la
+  plus À GAUCHE de `x-forwarded-for` ; selon la config edge (Vercel/ALB peuvent AJOUTER
+  l'IP réelle en fin de chaîne), un attaquant peut prépender un XFF factice rotatif et
+  contourner le plafond par IP. Toléré car (a) ce n'est PAS le contrôle d'accès (HMAC) et
+  (b) la mémoire est bornée. À durcir si la plateforme de déploiement expose une position
+  d'IP fiable (index depuis la fin, ou en-tête plateforme dédié) — vaut aussi pour le
+  rate-limit login (`src/server/auth/rate-limit-ip.ts`, fonction PARTAGÉE : ne pas la
+  diverger sans re-valider le login).

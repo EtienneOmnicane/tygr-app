@@ -5,11 +5,16 @@
 import { WebhookHorsFenetreError } from "./erreurs";
 
 /**
- * Inngest déduplique sur une fenêtre de 24 h (vérifié doc SDK). On borne la fraîcheur à
- * 12 h (≤ 24 h, marge §6.1) : un rejeu de plus de 12 h est rejeté ICI (étage 1) AVANT
- * de pouvoir sortir de la fenêtre d'idempotence Inngest (étage 3) — aucun trou.
- * Elle borne aussi l'exposition d'une requête signée capturée. TODOS WEBHOOK-FENETRE :
- * resserrer à 10-15 min dès que la politique de retry amont (D4-b) est connue.
+ * Fenêtre d'idempotence Inngest = **24 h**, VÉRIFIÉE contre la doc SDK (point bloquant
+ * §6.1, non présent dans les typings) : inngest.com/docs/guides/handling-idempotency —
+ * « Each unique expression will only trigger one function execution per 24 hour period ».
+ * On borne donc la fraîcheur à 12 h (≤ 24 h, marge §6.1) : un rejeu de plus de 12 h est
+ * rejeté ICI (étage 1) AVANT de pouvoir SORTIR de la fenêtre d'idempotence Inngest
+ * (étage 3) → aucun trou où un rejeu ré-enqueuerait un nouveau run. (Filet en profondeur
+ * même si l'hypothèse dérivait : upserts idempotents + `concurrency:1` par connexion du
+ * worker préviennent toute double-ingestion.) Elle borne aussi l'exposition d'une requête
+ * signée capturée. TODOS WEBHOOK-FENETRE1 : resserrer à 10-15 min dès que la politique de
+ * retry amont (D4-b) est connue.
  */
 export const FENETRE_FRAICHEUR_MS = 12 * 60 * 60 * 1000; // 12 h
 /** Dérive d'horloge tolérée vers le FUTUR (symétrique — sinon une horloge amont décalée
