@@ -108,13 +108,22 @@ export function categorieAutoValide(primaryCategory: string | undefined | null):
 }
 
 /**
- * Solde courant à persister (`running_balance`) : GARDE DE DEVISE (§2.4) + normalisation
- * NON-levante (§5.4). Fonction pure. Le `RunningBalance` amont porte la devise de la
- * TRANSACTION (`serializers.py` : `Currency = obj.currency`) ; s'il diffère de la devise
- * du montant (opération FX sur un compte d'une autre devise), le solde est dans une AUTRE
- * devise — l'écrire dans la série du compte serait une addition cross-devise déguisée
- * (règle 8). On NULLIFIE alors (fail-closed). Absent / forme inattendue / >2 décimales
- * significatives ⇒ null aussi (jamais un throw : ne pas faire perdre la page).
+ * Solde courant à persister (`running_balance`) : GARDE DE DEVISE d'INGESTION (§2.4) +
+ * normalisation NON-levante (§5.4). Fonction pure. Le `RunningBalance` amont porte la
+ * devise de la TRANSACTION (`serializers.py` : `Currency = obj.currency`). On n'accepte
+ * le solde QUE si sa devise égale celle du montant (`t.Amount.Currency` = la colonne
+ * `currency` de la ligne) : le solde stocké est ainsi TOUJOURS cohérent avec la devise de
+ * SA PROPRE ligne — jamais un solde d'une autre devise taggé sous celle-ci (règle 8).
+ * Sinon NULLIFIÉ (fail-closed).
+ *
+ * ⚠️ Cette garde d'ingestion N'EXCLUT PAS à elle seule un solde FX de la série d'un compte
+ * d'une AUTRE devise (Amount USD sur un compte MUR ⇒ ligne `currency=USD`, cohérente) :
+ * l'exclusion de la série MUR est la GARDE D'ÉLECTION (§2.2, `currency = D_c` = devise du
+ * COMPTE), HORS périmètre de ce lot. `courbeTresorerie` (déjà corrigée) sépare déjà par
+ * devise, donc aucune addition cross-devise n'est possible en aval quoi qu'il arrive.
+ *
+ * Absent / forme inattendue / >2 décimales significatives ⇒ null aussi (jamais un throw :
+ * ne pas faire perdre la page de transactions).
  */
 function deriverSoldeCourant(t: OmniFiTransaction): string | null {
   const rb = t.RunningBalance;
