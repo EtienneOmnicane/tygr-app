@@ -85,6 +85,49 @@ describe("versInputBackend — recherche (FB0709-RECHERCHE-TX1)", () => {
   });
 });
 
+describe("versInputBackend — filtre catégorie (TX-QA-FILTRE-CAT1)", () => {
+  const CAT = "9f8e7d6c-5b4a-4321-8abc-0123456789ab";
+
+  it("passe le categorieId tel quel dans l'input backend", () => {
+    expect(versInputBackend({ categorieId: CAT }, null)).toEqual({
+      categorieId: CAT,
+    });
+  });
+
+  it("n'ajoute PAS le champ quand il est absent (pas de clé vide sous .strict)", () => {
+    const input = versInputBackend({ recherche: "loyer" }, null);
+    expect("categorieId" in input).toBe(false);
+  });
+
+  it("cumule catégorie + recherche + statut + fenêtre GLOBALE", () => {
+    const input = versInputBackend(
+      {
+        recherche: "beachcomber",
+        statutCategorisation: "partiel",
+        categorieId: CAT,
+      },
+      null,
+      { from: "2026-03-01", to: "2026-03-31" },
+    );
+    expect(input).toEqual({
+      recherche: "beachcomber",
+      statut: "PARTIEL",
+      categorieId: CAT,
+      dateDebut: "2026-03-01",
+      dateFin: "2026-03-31",
+    });
+  });
+
+  it("la somme nette hérite MÉCANIQUEMENT du filtre catégorie (dérivation, pas recopie)", () => {
+    // C'est LA garantie anti-divergence : un total qui ne porterait pas le filtre
+    // catégorie totaliserait d'autres lignes que celles affichées (faux chiffre).
+    const input = versFiltresSommeNette({ categorieId: CAT });
+    expect(input).toEqual({ categorieId: CAT });
+    expect("curseur" in input).toBe(false);
+    expect("limite" in input).toBe(false);
+  });
+});
+
 describe("versFiltresSommeNette — hérite de la fenêtre globale", () => {
   it("porte la MÊME période que la liste, SANS curseur ni limite", () => {
     // La somme dérive de `versInputBackend` : la fenêtre `periode` y descend

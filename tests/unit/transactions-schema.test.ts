@@ -10,6 +10,7 @@ import {
   LIMITE_DEFAUT,
   LIMITE_MAX,
   listerTransactionsSchema,
+  sommeNetteSchema,
 } from "@/lib/transactions-schema";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
@@ -36,6 +37,7 @@ describe("listerTransactionsSchema", () => {
     const r = listerTransactionsSchema.safeParse({
       recherche: "loyer",
       bankAccountId: UUID,
+      categorieId: UUID,
       statut: "PARTIEL",
       dateDebut: "2026-01-01",
       dateFin: "2026-03-31",
@@ -43,6 +45,27 @@ describe("listerTransactionsSchema", () => {
       limite: 25,
     });
     expect(r.success).toBe(true);
+  });
+
+  // TX-QA-FILTRE-CAT1 : le filtre vit dans `filtresTransactions` (source unique)
+  // → il DOIT être accepté par la liste ET la somme (propagation mécanique), et
+  // rejeté bruyamment des deux côtés quand il n'est pas un uuid.
+  it("accepte un categorieId uuid — liste ET somme (schémas dérivés du même objet)", () => {
+    expect(
+      listerTransactionsSchema.safeParse({ categorieId: UUID }).success,
+    ).toBe(true);
+    expect(sommeNetteSchema.safeParse({ categorieId: UUID }).success).toBe(true);
+  });
+
+  it("REFUSE un categorieId non-uuid — liste ET somme", () => {
+    for (const invalide of ["x", "Fournisseurs", "", 42]) {
+      expect(
+        listerTransactionsSchema.safeParse({ categorieId: invalide }).success,
+      ).toBe(false);
+      expect(
+        sommeNetteSchema.safeParse({ categorieId: invalide }).success,
+      ).toBe(false);
+    }
   });
 
   it("clampe la limite : 0 et au-delà de la borne max sont refusés", () => {

@@ -83,6 +83,15 @@ const filtresTransactions = z.object({
   recherche: z.string().trim().min(1).max(120).optional(),
   /** Restreint à un compte bancaire (uuid). */
   bankAccountId: z.string().uuid().optional(),
+  /**
+   * Restreint aux transactions portant AU MOINS un split de cette catégorie du
+   * référentiel TYGR (sémantique EXISTS, arbitrage PLAN-transactions-filtre-categorie
+   * §2 : la DOMINANTE est un choix d'affichage, pas un critère d'appartenance —
+   * filtrer dessus cacherait les splits minoritaires). Égalité STRICTE sur
+   * category_id (pas de sous-arbre Nature→Sous-natures : TX-FILTRE-CAT-SOUSARBRE1).
+   * Un uuid inconnu/étranger rend simplement 0 ligne (fail-safe non-énumérant).
+   */
+  categorieId: z.string().uuid().optional(),
   /** Filtre sur l'état de catégorisation. */
   statut: z.enum(STATUTS_VENTILATION).optional(),
   /** Bornes de date comptable (incluses). */

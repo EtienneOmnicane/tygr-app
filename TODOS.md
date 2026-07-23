@@ -2291,17 +2291,46 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
       (conteneur `flex` ligne 298, `input flex-1` ligne 320, boutons lignes 324 et 335).
       **Déclencheur** : cette passe QA (layout du bloc de création inline).
 
-- [ ] **TX-QA-FILTRE-CAT1 (P2) — filtre par catégorie absent sur `/transactions`** —
-      Effort S (gardien Front). Date 2026-07-01. La toolbar propose Compte, Statut de
-      ventilation et bornes de date, mais **aucun filtre par catégorie** ; l'utilisateur
-      demande de pouvoir restreindre la liste à une catégorie donnée. Fichier :
-      `src/components/transactions/transactions-toolbar.tsx` (aucun select catégorie). À
-      distinguer de **TX-FILTRE1** (filtre *Sens* Entrées/Sorties), qui est un besoin
-      différent : ici il s'agit bien de la CATÉGORIE. NB (lecture seule, non tranché) : le
-      schéma de lecture Backend (`listerTransactionsSchema`, `.strict`) ne porte pas non
-      plus de champ catégorie aujourd'hui — un filtrage purement client casserait la
-      pagination keyset (même piège que TX-FILTRE1), à arbitrer au moment de l'implémentation.
-      **Déclencheur** : cette demande utilisateur de filtrer par catégorie.
+- [x] **TX-QA-FILTRE-CAT1 (P2) — filtre par catégorie absent sur `/transactions`** —
+      ✅ LIVRÉ (branche `feat/transactions-filtre-categorie`, 2026-07-22, plan
+      `docs/specs/PLAN-transactions-filtre-categorie.md`). Arbitrage §2 : sémantique
+      **EXISTS un split de la catégorie** (appartenance — pas la dominante, pas la
+      catégorie OBIE amont), prédicat corrélé ajouté à `conditionsFiltres` (partagé
+      liste ↔ somme nette : propagation mécanique via `filtresTransactions`).
+      Select « Toutes catégories » (hiérarchie Nature → Sous-natures) dans la toolbar,
+      options fournies par le conteneur (toolbar pure). `categorieId` + statut « Non
+      catégorisé » = ensemble vide PAR CONSTRUCTION (documenté, empty state standard).
+      Preuves : schéma/adaptateur/groupeur en unitaire + 6 cas d'isolation (cohérence
+      liste↔somme, split minoritaire, AND cumulé, catégorie sans transaction,
+      cross-tenant sans oracle).
+
+- [ ] **TX-FILTRE-CAT-SOUSARBRE1 (P2) — filtre catégorie : pas de sémantique
+      « sous-arbre » (Nature ⊅ Sous-natures)** — Effort S. Date 2026-07-22. Le filtre
+      livré par TX-QA-FILTRE-CAT1 est une égalité STRICTE sur `category_id` : filtrer
+      par une Nature ne remonte PAS les splits posés sur ses Sous-natures (choix
+      assumé, PLAN-transactions-filtre-categorie §2.2 — le sous-arbre est une
+      sémantique différente qui mérite son propre arbitrage produit et son libellé
+      UI). Si le besoin « la Nature et tout ce qu'elle contient » émerge, étendre le
+      prédicat EXISTS à `category_id IN (X, enfants de X)` côté repository (le
+      référentiel est à 2 niveaux, pas de récursion nécessaire) + le documenter dans
+      le Select. **Déclencheur** : retour utilisateur demandant qu'une Nature agrège
+      ses sous-natures dans le filtre.
+
+- [ ] **TX-FILTRE-RACE1 (P2) — réponses out-of-order entre deux rechargements de la
+      page 1 de /transactions** — Effort S-M. Date 2026-07-22 (cross-review du filtre
+      catégorie ; défaut PRÉ-EXISTANT, pas introduit par lui). Deux
+      `rechargerPremierePage` concurrents ne sont pas séquencés
+      (`src/components/transactions/transactions-feature.tsx`, pas de jeton de
+      requête/abort) : la toolbar est `disabled` pendant un chargement MAIS le timer
+      de debounce de la recherche (`transactions-toolbar.tsx`) peut émettre pendant un
+      vol → si la réponse du filtre N arrive APRÈS celle du filtre N+1, liste + bandeau
+      affichent un jeu qui ne correspond plus à l'état des filtres. Même famille : le
+      nettoyage post-archivage dans `rechargerReferentiel` ré-applique un instantané de
+      `filtres` capturé avant un `await` (fenêtre quasi inatteignable — un `filtresRef`,
+      idiome déjà présent dans la toolbar, la fermerait). Correctif cible : jeton de
+      séquence (ignorer toute réponse qui n'est pas la dernière émise). Occurrence
+      rare (exige une inversion réseau). **Déclencheur** : signalement d'une liste
+      incohérente avec les filtres affichés, ou prochaine itération sur la toolbar.
 
 - [x] **TX-QA-SPLIT-DOUBLON1 (P1) — deux splits sur la MÊME catégorie autorisés sur une
       transaction ventilée** — ✅ LIVRÉ (branche `feat/tx-split-doublon`, 2026-07-01). Garde

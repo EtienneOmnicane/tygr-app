@@ -97,6 +97,9 @@ export function versInputBackend(
   if (filtres?.statutCategorisation) {
     input.statut = STATUT_BACKEND[filtres.statutCategorisation];
   }
+  // Catégorie (TX-QA-FILTRE-CAT1) : passe-plat de l'uuid, garde falsy comme
+  // `recherche` (jamais de clé vide — `.strict()` + `uuid()` Zod la rejetteraient).
+  if (filtres?.categorieId) input.categorieId = filtres.categorieId;
   // Fenêtre GLOBALE → bornes de date (même format YYYY-MM-DD des deux côtés). Zod
   // re-valide forme + validité calendaire + intervalle ; `resoudrePeriode` garantit
   // déjà `from ≤ to`, donc jamais de rejet ici.

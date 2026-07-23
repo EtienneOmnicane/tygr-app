@@ -14,7 +14,8 @@
  *   de la navbar (topbar) → scope serveur via `withWorkspace`/RLS. La toolbar ne
  *   duplique DONC PLUS de sélecteur de compte (retrait feedback 0709 : doublon moche
  *   du sélecteur navbar).
- * - Recherche par libellé (débouncée) et statut de ventilation. La FENÊTRE DE DATES
+ * - Recherche par libellé (débouncée), catégorie du référentiel (TX-QA-FILTRE-CAT1)
+ *   et statut de ventilation. La FENÊTRE DE DATES
  *   ne vit plus ici : elle est portée par la barre de vue GLOBALE (`?periode`/`?du`/
  *   `?au`, `resoudrePeriode`), source unique, injectée côté serveur (TX-TOOLBAR-DEDUP1).
  * - Action secondaire à DROITE : « Gérer les catégories » (ADMIN seul). Elle vit ICI
@@ -37,10 +38,15 @@
  * disparaît au profit de la seule icône, et le groupe de filtres devient scrollable
  * horizontalement plutôt que de casser la ligne.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Select } from "@/components/ui/select";
 
+import {
+  construireGroupesCategories,
+  VALEUR_TOUTES_CATEGORIES,
+  type CategorieOptionFiltre,
+} from "./options-filtre-categorie";
 import type {
   FiltresTransactions,
   StatutCategorisation,
@@ -61,11 +67,20 @@ const OPTIONS_STATUT: Array<{ valeur: StatutCategorisation | ""; label: string }
 export function TransactionsToolbar({
   filtres,
   onChange,
+  categories = [],
   disabled = false,
   onOuvrirGestionCategories,
 }: {
   filtres: FiltresTransactions;
   onChange: (filtres: FiltresTransactions) => void;
+  /**
+   * Référentiel de catégories ACTIVES pour le filtre (TX-QA-FILTRE-CAT1), fourni
+   * par le conteneur (qui le tient de `withWorkspace` via le RSC — la toolbar
+   * reste PURE, zéro fetch). Liste VIDE (référentiel non initialisé, démo nue) ⇒
+   * le Select catégorie n'est pas rendu du tout (pas de contrôle mort à une
+   * seule option « Toutes catégories »).
+   */
+  categories?: CategorieOptionFiltre[];
   /** Désactive les contrôles pendant un chargement. */
   disabled?: boolean;
   /**
@@ -131,6 +146,13 @@ export function TransactionsToolbar({
     // `filtres`/`onChange` ne sont pas référencés dans l'effet (lus via refs à l'émission),
     // donc pas de re-run en boucle ni de stale closure — l'exhaustive-deps est satisfait.
   }, [termeSaisi]);
+
+  // Options du filtre catégorie (hiérarchie Nature → Sous-natures, module pur).
+  // Recalculées seulement quand le référentiel change.
+  const groupesCategories = useMemo(
+    () => construireGroupesCategories(categories),
+    [categories],
+  );
 
   function effacerRecherche() {
     setTermeSaisi("");
@@ -215,6 +237,34 @@ export function TransactionsToolbar({
             </button>
           )}
         </div>
+
+        {/* Filtre par catégorie (TX-QA-FILTRE-CAT1) — rendu SEULEMENT si le
+            référentiel a des catégories (liste vide ⇒ contrôle absent, pas mort).
+            Sémantique SERVEUR : EXISTS un split de la catégorie (PLAN §2) — la
+            toolbar ne recode rien, elle remonte un uuid. Combiné au statut « Non
+            catégorisé », l'ensemble est vide PAR CONSTRUCTION → empty state
+            standard, jamais une erreur (documenté, pas bloqué). */}
+        {groupesCategories.length > 0 && (
+          <div className="shrink-0">
+            <Select
+              ariaLabel="Filtrer par catégorie"
+              value={filtres.categorieId ?? VALEUR_TOUTES_CATEGORIES}
+              disabled={disabled}
+              onChange={(v) =>
+                onChange({ ...filtres, categorieId: v || undefined })
+              }
+              groups={[
+                {
+                  label: "",
+                  options: [
+                    { value: VALEUR_TOUTES_CATEGORIES, label: "Toutes catégories" },
+                  ],
+                },
+                ...groupesCategories,
+              ]}
+            />
+          </div>
+        )}
 
         {/* Statut de ventilation */}
         <div className="shrink-0">
