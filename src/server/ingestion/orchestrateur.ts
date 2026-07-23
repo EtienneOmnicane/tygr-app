@@ -23,6 +23,7 @@ import type { ExecuterWorkspace } from "@/server/db/tenancy";
 import {
   deriverDateComptableMaurice,
   normaliserMontant,
+  normaliserSoldeCourant,
   validerCreditDebit,
 } from "./conversion";
 import {
@@ -106,6 +107,21 @@ export function categorieAutoValide(primaryCategory: string | undefined | null):
   return !CATEGORIES_OBIE_VIDES.has(clef);
 }
 
+/**
+ * Solde courant à persister (`running_balance`) : GARDE DE DEVISE (§2.4) + normalisation
+ * NON-levante (§5.4). Fonction pure. Le `RunningBalance` amont porte la devise de la
+ * TRANSACTION (`serializers.py` : `Currency = obj.currency`) ; s'il diffère de la devise
+ * du montant (opération FX sur un compte d'une autre devise), le solde est dans une AUTRE
+ * devise — l'écrire dans la série du compte serait une addition cross-devise déguisée
+ * (règle 8). On NULLIFIE alors (fail-closed). Absent / forme inattendue / >2 décimales
+ * significatives ⇒ null aussi (jamais un throw : ne pas faire perdre la page).
+ */
+function deriverSoldeCourant(t: OmniFiTransaction): string | null {
+  const rb = t.RunningBalance;
+  if (rb == null || rb.Currency !== t.Amount.Currency) return null;
+  return normaliserSoldeCourant(rb.Amount);
+}
+
 /** Mappe une transaction OBIE → ligne à persister (conversions règle 8 / E20). */
 export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
   // L'enrichissement est IMBRIQUÉ sous `Enrichment{}` (serializer Django faisant foi),
@@ -125,6 +141,8 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     amount: normaliserMontant(t.Amount.Amount),
     currency: t.Amount.Currency,
     creditDebit: validerCreditDebit(t.CreditDebitIndicator),
+    // Solde EOD (PROD-TRESO-EOD1) : garde de devise + normalisation non-levante.
+    runningBalance: deriverSoldeCourant(t),
     // Libellé brut = `TransactionInformation` (nom OBIE officiel du narratif). Le code
     // lisait `t.Description`, champ INEXISTANT dans le contrat HTTP public → bank_label_raw
     // était NULL sur 100 % des transactions (bug confirmé runtime + audit serializer
