@@ -2786,6 +2786,32 @@ suffisant) :
   entrées composées sans en dupliquer aucune, + `inter account transfer` → « Virements internes ».
   **Fragilité résiduelle INCHANGÉE** (liste fermée) ; et la piste (b) reste pertinente, mais doit
   logger la clé BRUTE, pas seulement le fait qu'on est retombé sur le défaut.
+- [ ] **FIABILITE-UNCLASSIFIED — lots B/C/D (Vague 2)** — Plan : `docs/specs/PLAN-fiabilite-unclassified.md`.
+  Ouvert 2026-07-23. **Lot A (backfill `is_auto_categorized`) : ✅ LIVRÉ** (branche
+  `fix/categorie-backfill-unclassified`) — `is_auto_categorized=true` était posé à tort sur 100 %
+  des lignes (9 056) alors que 606 seulement (6,7 %) portent une classification réelle. Restent en
+  **Vague 2, à ne pas ouvrir sans leur propre PR** :
+  - **Lot B (P2, `TECH-MERCHANT-POLISH1`)** : unifier le rendu de l'absence de catégorie Dashboard
+    (`transactions-table.tsx:73`, texte « Non catégorisé » en colonne) vs `/transactions`
+    (`adapter.ts:240`, sous-texte masqué) + tester `traduireCategorieBanque` (non couverte).
+    **Décision D-5 ouverte** (quelle convention unique). **Déclencheur** : prochaine passe UI
+    catégories.
+  - **Lot C (P2, `OBIE-CATALOG1` piste (b))** : log structuré de la clé BRUTE sur trou de catalogue.
+    **Décision D-4 ouverte** (logger à l'ingestion vs au rendu). **Déclencheur** : ce ticket.
+  - **Lot D (P2, `GAP-CATEG-NATIVE1`)** : file de revue + score de confiance. **Dépend du Lot A**
+    (livré) : le score se bâtit sur `is_auto_categorized`/`category_source`, qui mentaient avant.
+    **Décision D-1 ouverte et structurante** (une file mêlant les ~93 % « Non catégorisé » et le
+    lot « À vérifier », ou deux entrées — reco du plan : deux).
+  **Décision D-3 tranchée de facto par le Lot A** : le backfill porte sur TOUTE la base (rôle owner,
+  hors RLS), pas sur les seuls workspaces actifs — c'est une correction de données globale, assumée
+  et prouvée (`tests/isolation/backfill-auto-categorized-isolation.test.ts` cas 7).
+  **Dette de divergence refermée par le Lot A** (ne pas la rouvrir) : le prédicat « catégorie
+  exploitable » vivait en DEUX exemplaires — le `Set` TS de `orchestrateur.ts` et une copie SQL
+  recopiée à la main dans `scripts/backfill-auto-categorized.mjs`. La copie SQL était restée sur
+  `'uncategorized'` seul après #243 : lancé tel quel, le backfill aurait re-marqué ~93 % des lignes
+  « catégorisées par l'amont » — le défaut qu'il devait corriger, en silence et sous le rôle owner.
+  Source unique désormais : `src/lib/categorie-obie-vide.mjs` (prédicat SQL DÉRIVÉ + paramètre lié).
+  **Toute nouvelle graphie de sentinelle amont s'ajoute LÀ, jamais dans une requête.**
 - [x] **DR-F2 (P3, polish) — carte « Comptes connectés » : nom de compte tronqué** —
   ✅ **LIVRÉ 2026-06-22** (branche `feat/lot3-4-polish-ui`, Lot 4). `connected-accounts-card.tsx`
   refondue sur 2 lignes : banque en LABEL (`text-[11px] text-text-muted uppercase`, `truncate`
