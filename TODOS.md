@@ -2417,16 +2417,13 @@ et n'est donc PAS ré-ouvert ici (règle 9). Fichiers cités vérifiés en lectu
   ≥1280px sain (parcours FM réel), mobile non prioritaire. **Déclencheur** : premier chantier
   responsive du shell (les tableaux denses passeront en scroll-x encapsulé `overflow-x-auto`
   ou en cartes empilées sous `md`). Signalé à l'humain dans la note de PR.
-- [ ] **DASH-CASHFLOW-MULTISERIE — la courbe de flux n'affiche qu'UNE devise (P2, UI/data)** —
-  ouvert 2026-06-24 (PR « dashboard insights »). Effort M. `cashflowParDevise` renvoie le
-  flux net par (mois, devise) ; la page (`(dashboard)/page.tsx`) filtre sur `base_currency`
-  pour rester mono-série (`flux.points.filter(p => p.currency === deviseBase)`). Conséquence :
-  un workspace dont les flux sont MAJORITAIREMENT dans une devise ≠ base_currency verra une
-  courbe vide (état « partiel ») alors que des transactions existent — les SOLDES et la
-  SYNTHÈSE (ventilée, non filtrée) restent affichés, donc pas de perte de donnée, juste la
-  courbe muette. **Déclencheur** : premier workspace réellement multi-devise actif en démo.
-  Résolution : courbe multi-série (une ligne/devise) ou sélecteur de devise au-dessus de la
-  carte. Aucune addition cross-devise (DASH-FX1 reste interdit).
+- [x] **DASH-CASHFLOW-MULTISERIE — la courbe de flux n'affiche qu'UNE devise (P2, UI/data)** —
+  ✅ **RÉSOLU 2026-07-23 (branche `feat/graphs-fygr`, L3 de PROD-GRAPHS-FYGR1)** : SÉLECTEUR DE
+  DEVISE sur l'ancre « Flux de trésorerie » (`flux-tresorerie-card.tsx`) — une série à la fois,
+  affiché uniquement en multi-devise, devise de base par défaut. Le graphe (et le tableau)
+  peuvent désormais montrer n'importe quelle devise présente dans la fenêtre. Aucune addition
+  cross-devise (DASH-FX1 reste interdit). Historique : ouvert 2026-06-24. `cashflowParDevise`
+  renvoyait déjà le multi-devise ; seule la page filtrait sur `base_currency`.
 - [ ] **DASH-COURBE-SOLDE-EOD — réintroduire la vue « solde » quand l'API livrera l'historique (P2, data)** —
   ouvert 2026-06-24. Effort M. La courbe consommait `courbeTresorerie` (`balance_history`),
   remplacée par le flux net (`cashflowParDevise`) car `balance_history` est VIDE en Staging
@@ -3919,6 +3916,27 @@ matrice pivot → `FEAT-3.2` (P2) ; import OCR → `FEAT-1.3` (P3). Voir
   `TECH-API-INSIGHTS`** — PROD-GRAPHS-FYGR1 en est le volet VISUALISATION ; ne pas livrer sans
   trancher l'option insights d'abord. **Déclencheur** : ouverture Epic 8.3 OU demande
   produit « graphiques comme FYGR ». **Raccroché à TECH-API-INSIGHTS + FEAT-3.2.**
+  **MAJ 2026-07-23 (plan `docs/specs/PLAN-graphs-fygr.md`, branche `feat/graphs-fygr`)** :
+  lots **L1→L4 LIVRÉS** (option « recalculer en interne » retenue — `/insights` amont
+  toujours 501, cf. INSIGHTS-AMONT1) : L1 toggle graphique/tableau + légende nommée
+  interactive ; L2 périodicité jour/semaine/mois (`chargerFluxAction`, `grille-buckets`) ;
+  L3 sélecteur de devise (ferme DASH-CASHFLOW-MULTISERIE) ; L4 drill du bucket en modale
+  (`detailBucketAction`). Reste **L5 ci-dessous** (bloqué treso-eod) + les volets hors
+  périmètre du plan (scénarios/formules/export, §11). D1 (fenêtre) tranchée « périodicité
+  LOCALE » → `GRAPHIQUES-PERIODE-DEDUP1` NON fermée (la fenêtre reste la période globale).
+
+- [ ] **GRAPHS-FYGR-L5 (P2) — série « Position de trésorerie » (courbe bleue) sur l'ancre Flux** —
+  Effort L, gardien Front + Backend. Ouvert 2026-07-23 (plan `PLAN-graphs-fygr.md` §7, lot L5
+  laissé CONDITIONNÉ). FYGR superpose au flux une courbe de POSITION (un STOCK, pas un flux).
+  Côté TYGR cette série n'est PAS alimentable aujourd'hui : `balance_history` est vide, et
+  `courbeTresorerie` (`dashboard.ts`) est débranchée **avec un bug cross-devise connu** (somme
+  sans `GROUP BY currency`) à corriger AVANT toute réactivation. **Bloqué sur `PROD-TRESO-EOD1`**
+  (reconstruction EOD depuis `RunningBalance`, gate non franchi) : sans lui, « ressembler à
+  FYGR » se limite à la partie FLUX (barres), livrée en L1→L4. **NE PAS** réintroduire un double
+  axe Y (position à gauche / flux à droite) par mimétisme (écarté par le plan lisibilité,
+  option G : deux échelles incommensurables). **Déclencheur** : `PROD-TRESO-EOD1` (treso-eod)
+  MERGÉ. **Raccroché à `PROD-TRESO-EOD1` + `DASH-COURBE-SOLDE-EOD`.** NON une dette de montants
+  ni d'isolation (lecture/reconstruction).
 
 ### Dette UI + tests relevée en cross-review PROD-MERCHANT1 (2026-06-23)
 

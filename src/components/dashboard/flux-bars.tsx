@@ -37,16 +37,23 @@ import { useState } from "react";
 
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
-import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant, estNegatif } from "@/lib/format-montant";
 import {
-  maxFenetre,
+  etiquetteBucket,
+} from "@/components/charts/etiquette-bucket";
+import type { GranulariteBucket } from "@/components/charts/grille-buckets";
+import {
+  maxFenetreVisible,
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
 import { echelleNice } from "@/components/dashboard/echelle-nice";
 import { HAUTEUR_ANCRE } from "@/components/dashboard/flux-layout";
 import { useDimensionsSvg } from "@/components/dashboard/use-dimensions-svg";
+import {
+  TOUTES_SERIES_VISIBLES,
+  type VisibiliteSeries,
+} from "@/components/charts/series-types";
 
 /**
  * Corps « barres » de l'ancre Flux : projette la série sur la grille puis rend les barres.
@@ -57,6 +64,9 @@ export function FluxBarres({
   grille,
   devise,
   libellePeriode,
+  visibles = TOUTES_SERIES_VISIBLES,
+  granularite = "mois",
+  onSelectionnerBucket,
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
@@ -67,14 +77,34 @@ export function FluxBarres({
    * chose qu'un lecteur d'écran entend de la fenêtre (TOOLBAR-DATE-PRECISE1).
    */
   libellePeriode?: string;
+  /**
+   * Séries VISIBLES (légende interactive, L1). Une série masquée n'est ni tracée ni
+   * comptée dans l'échelle. Défaut = les deux (rendu identique à l'historique).
+   */
+  visibles?: VisibiliteSeries;
+  /**
+   * Granularité des buckets (L2) — pilote UNIQUEMENT le format des étiquettes d'axe et
+   * du tooltip (`etiquetteBucket`). Défaut « mois » = rendu identique à l'historique.
+   * `serie`/`grille` portent déjà des buckets de cette granularité (mois → "YYYY-MM",
+   * jour/semaine → "YYYY-MM-DD").
+   */
+  granularite?: GranulariteBucket;
+  /**
+   * Clic sur un bucket (drill L4) : ouvre le détail de CE bucket. Absent → barres non
+   * cliquables (rendu inchangé). Reçoit l'étiquette brute du bucket ("YYYY-MM"/"YYYY-MM-DD").
+   */
+  onSelectionnerBucket?: (bucket: string) => void;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
+  const montrerEntrees = visibles.has("entrees");
+  const montrerSorties = visibles.has("sorties");
 
-  // Le max BRUT pilote la détection « aucun mouvement » (0 = fenêtre vide) ; le max
-  // « nice » (toujours ≥ 1, jamais 0) sert UNIQUEMENT à l'échelle du rendu des barres
-  // non-vides — sans cette séparation, une fenêtre vide afficherait des barres à
-  // plat au lieu du message neutre (echelleNice(0) = 1 ≠ 0).
-  const maxBrut = maxFenetre(mois);
+  // Le max BRUT (sur les SEULES séries visibles) pilote la détection « aucun mouvement »
+  // (0 = fenêtre vide DANS ce qui est affiché) ; le max « nice » (toujours ≥ 1, jamais 0)
+  // sert UNIQUEMENT à l'échelle du rendu des barres non-vides — sans cette séparation, une
+  // fenêtre vide afficherait des barres à plat au lieu du message neutre
+  // (echelleNice(0) = 1 ≠ 0). Masquer une série la retire de l'échelle (§9.1).
+  const maxBrut = maxFenetreVisible(mois, montrerEntrees, montrerSorties);
   const aucunMouvement = maxBrut === 0;
   const max = echelleNice(maxBrut);
   const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
@@ -106,6 +136,10 @@ export function FluxBarres({
         max={max}
         devise={devise}
         libellePeriode={libellePeriode}
+        montrerEntrees={montrerEntrees}
+        montrerSorties={montrerSorties}
+        granularite={granularite}
+        onSelectionnerBucket={onSelectionnerBucket}
       />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -150,12 +184,24 @@ function BarresMensuelles({
   max,
   devise,
   libellePeriode,
+  montrerEntrees,
+  montrerSorties,
+  granularite,
+  onSelectionnerBucket,
 }: {
   mois: MoisAffiche[];
   max: number;
   devise: string;
   /** Libellé de la fenêtre appliquée — seule description de la période pour un lecteur d'écran. */
   libellePeriode?: string;
+  /** Tracer la série des entrées (au-dessus de l'axe) ? */
+  montrerEntrees: boolean;
+  /** Tracer la série des sorties (en dessous de l'axe) ? */
+  montrerSorties: boolean;
+  /** Granularité des buckets (format des étiquettes d'axe/tooltip). */
+  granularite: GranulariteBucket;
+  /** Clic sur un bucket (drill L4). Absent → barres non cliquables. */
+  onSelectionnerBucket?: (bucket: string) => void;
 }) {
   const { ref, largeur, hauteur } = useDimensionsSvg(
     LARGEUR_DEFAUT,
@@ -164,6 +210,9 @@ function BarresMensuelles({
 
   // Index de la colonne survolée (îlot client). `null` = aucun survol → pas de tooltip.
   const [survol, setSurvol] = useState<number | null>(null);
+  // Index de la colonne FOCUSÉE au clavier (drill L4) — rend un anneau de focus visible sur
+  // la barre cliquable (le repo impose un indicateur de focus partout, WCAG 2.4.7).
+  const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const moisActif = survol != null ? mois[survol] : null;
 
   // Zone des barres = hauteur totale moins la bande de labels ; l'axe zéro est au
@@ -239,24 +288,29 @@ function BarresMensuelles({
           const labelVisible = i % pasLabel === 0 || i === dernier;
           return (
             <g key={m.libelleMois}>
-              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={yAxe - hEntree}
-                width={largeurBarre}
-                height={hEntree}
-                rx={2}
-                fill="var(--color-inflow)"
-              />
-              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1) */}
-              <rect
-                x={cx}
-                y={yAxe}
-                width={largeurBarre}
-                height={hSortie}
-                rx={2}
-                fill="var(--color-outflow)"
-              />
+              {/* Entrée (au-dessus de l'axe) — vert `inflow` (donnée, §3.1). Non tracée
+                  si la série est masquée par la légende (L1). */}
+              {montrerEntrees && (
+                <rect
+                  x={cx}
+                  y={yAxe - hEntree}
+                  width={largeurBarre}
+                  height={hEntree}
+                  rx={2}
+                  fill="var(--color-inflow)"
+                />
+              )}
+              {/* Sortie (en dessous de l'axe) — rouge `outflow` (donnée, §3.1). */}
+              {montrerSorties && (
+                <rect
+                  x={cx}
+                  y={yAxe}
+                  width={largeurBarre}
+                  height={hSortie}
+                  rx={2}
+                  fill="var(--color-outflow)"
+                />
+              )}
               {/* Label du mois sous l'axe (densité bornée, C3). « Juin 26 » : le mois
                   court + l'année 2 chiffres lève l'ambiguïté entre années. Le détail
                   complet reste dans le tableau « Évolution mensuelle ». */}
@@ -268,12 +322,28 @@ function BarresMensuelles({
                   fill="var(--color-text-muted)"
                   className="text-[11px]"
                 >
-                  {formaterMoisCourt(m.libelleMois)}
+                  {etiquetteBucket(granularite, m.libelleMois).court}
                 </text>
               )}
             </g>
           );
         })}
+        {/* Anneau de FOCUS clavier (drill L4) — au-dessus des barres, sous les zones de
+            hit. Token `primary`, jamais une couleur de donnée. `pointer-events-none` :
+            purement décoratif, ne capte aucun événement. */}
+        {focusIdx != null && (
+          <rect
+            x={focusIdx * pas + 1.5}
+            y={1.5}
+            width={Math.max(pas - 3, 0)}
+            height={Math.max(hauteurZone - 3, 0)}
+            rx={3}
+            fill="none"
+            stroke="var(--color-primary)"
+            strokeWidth={2}
+            pointerEvents="none"
+          />
+        )}
         {/* Zones de HIT : une par colonne, PLEINE largeur/hauteur et transparentes,
             posées en DERNIER (au-dessus des barres) pour capter le survol partout
             dans la colonne — pas seulement sur la barre étroite. */}
@@ -287,6 +357,49 @@ function BarresMensuelles({
             fill="transparent"
             onMouseEnter={() => setSurvol(i)}
             onMouseLeave={() => setSurvol(null)}
+            // Drill (L4) : cliquable + accessible au clavier UNIQUEMENT si un handler est
+            // fourni. `role/tabIndex/aria-label/onKeyDown` ne sont posés que dans ce cas —
+            // sinon la zone reste un simple capteur de survol (rendu inchangé).
+            style={onSelectionnerBucket ? { cursor: "pointer" } : undefined}
+            role={onSelectionnerBucket ? "button" : undefined}
+            tabIndex={onSelectionnerBucket ? 0 : undefined}
+            aria-label={
+              onSelectionnerBucket
+                ? `Détail — ${etiquetteBucket(granularite, m.libelleMois).complet}`
+                : undefined
+            }
+            // Focus clavier : anneau visible + tooltip de la colonne (comme au survol).
+            onFocus={
+              onSelectionnerBucket
+                ? () => {
+                    setFocusIdx(i);
+                    setSurvol(i);
+                  }
+                : undefined
+            }
+            onBlur={
+              onSelectionnerBucket
+                ? () => {
+                    setFocusIdx(null);
+                    setSurvol(null);
+                  }
+                : undefined
+            }
+            onClick={
+              onSelectionnerBucket
+                ? () => onSelectionnerBucket(m.libelleMois)
+                : undefined
+            }
+            onKeyDown={
+              onSelectionnerBucket
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectionnerBucket(m.libelleMois);
+                    }
+                  }
+                : undefined
+            }
           />
         ))}
       </svg>
@@ -296,7 +409,7 @@ function BarresMensuelles({
       {moisActif && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
           <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {formaterMoisAnnee(moisActif.libelleMois)}
+            {etiquetteBucket(granularite, moisActif.libelleMois).complet}
           </p>
           <BlocTooltip mois={moisActif} devise={devise} />
         </div>

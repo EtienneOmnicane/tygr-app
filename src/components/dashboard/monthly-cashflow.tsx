@@ -1,98 +1,102 @@
 /**
- * Carte « Évolution mensuelle » — TABLEAU récapitulatif des entrées/sorties/variation
- * par mois sur la fenêtre N mois. COMPLÉMENTAIRE de l'ancre « Flux de trésorerie »
- * (`flux-tresorerie-card.tsx`) : l'ancre donne la FORME (courbe/barres), ce tableau
- * donne les VALEURS exactes par mois.
+ * `TableauEvolution` — TABLEAU récapitulatif des entrées/sorties/variation par mois sur
+ * la fenêtre. Vue « Tableau » de l'ancre « Flux de trésorerie » (toggle L1,
+ * `flux-tresorerie-card.tsx`) : le graphe donne la FORME (barres), ce tableau donne les
+ * VALEURS exactes par mois. Les DEUX consomment la MÊME série (invariant anti-divergence).
  *
- * Depuis L8a, les BARRES de cette carte ont migré dans l'ancre (vue « Barres »). Cette
- * carte ne garde QUE le tableau ; elle réutilise `projeterSurGrille` (axe continu,
- * réduction à la devise de base) depuis le module NEUTRE `flux-projection.ts` — ce
- * Server Component ne peut PAS importer de `flux-bars.tsx` (client) — pour ne PAS
- * dupliquer la logique de projection.
+ * Depuis L1 (PLAN-graphs-fygr), le tableau vit SOUS le toggle de l'ancre : il ne porte
+ * donc plus sa propre carte ni son propre titre (l'hôte les fournit) — d'où l'extraction
+ * du wrapper `MonthlyCashflow`/`StateCard`, qui aurait imbriqué deux cartes. Il réutilise
+ * `projeterSurGrille` (axe continu, réduction à la devise choisie) depuis le module NEUTRE
+ * `flux-projection.ts`.
  *
  * Présentationnel PUR (UI_GUIDELINES) : reçoit la SÉRIE mensuelle DÉJÀ agrégée en SQL
  * (`syntheseParMois` → une ligne par (mois, devise)) + la GRILLE des mois attendus
- * (`grilleMois`) + la devise de base. NE recalcule aucun total, NE fetch rien. Montants
+ * (`grilleMois`) + la devise affichée. NE recalcule aucun total, NE fetch rien. Montants
  * formatés via `formatMontant` sur les chaînes décimales (zéro float — règle 8).
  *
- * ⚠️ Multi-devises (CLAUDE.md règle 8) : on n'additionne JAMAIS des devises. La carte est
- * MONO-AFFICHÉE (décision PO 2026-06-22) : pour chaque mois on lit la ligne de la devise
- * de BASE ; s'il existe d'autres devises ce mois-là, on le SIGNALE (« + autres devises »)
- * sans rien sommer. La conversion FX est un chantier séparé (DASH-FX1).
+ * ⚠️ Multi-devises (CLAUDE.md règle 8) : on n'additionne JAMAIS des devises. MONO-AFFICHÉ
+ * sur la devise choisie (sélecteur L3) ; s'il existe d'autres devises un mois donné, on le
+ * SIGNALE (« + autres devises ») sans rien sommer. Conversion FX = chantier séparé (DASH-FX1).
  *
  * Couleurs (§3.1) : vert/rouge réservés à la DONNÉE — entrées `inflow` / sorties
  * `outflow`. `tabular-nums` (§0) pour aligner les chiffres du tableau.
  */
-import { formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant } from "@/lib/format-montant";
-import { StateCard } from "@/components/dashboard/states/primitives";
 import {
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
+import { etiquetteBucket } from "@/components/charts/etiquette-bucket";
+import type { GranulariteBucket } from "@/components/charts/grille-buckets";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
-export function MonthlyCashflow({
+/** En-tête de la première colonne selon la granularité (L2). */
+const ENTETE_BUCKET: Record<GranulariteBucket, string> = {
+  jour: "Jour",
+  semaine: "Semaine",
+  mois: "Mois",
+};
+
+export function TableauEvolution({
   serie,
   grille,
   devise = "MUR",
-  libellePeriode,
+  granularite = "mois",
 }: {
-  /** Série mensuelle à plat (mois × devise), agrégée en SQL (`syntheseParMois`). */
+  /** Série à plat (bucket × devise), agrégée en SQL (`syntheseParMois`/`cashflowParDevise`). */
   serie: SyntheseMensuelle[];
-  /** Mois attendus, du plus ancien au plus récent (`grilleMois`) — axe continu. */
+  /** Buckets attendus, du plus ancien au plus récent (grille) — axe continu. */
   grille: string[];
-  /** Devise de base du workspace (affichage mono-devise, cf. note multidevise). */
+  /** Devise affichée (sélecteur L3 ; défaut = devise de base). */
   devise?: string;
-  /**
-   * Libellé de la fenêtre appliquée, fourni par la page (source unique). ⚠️ Ne PAS le
-   * dériver de `grille.length` (« N derniers mois ») : sous une PLAGE précise passée, la
-   * fenêtre n'est pas « les N derniers mois » — et les mois d'extrémité sont PARTIELS.
-   */
-  libellePeriode?: string;
+  /** Granularité des buckets (en-tête + format de la 1re colonne). Défaut « mois ». */
+  granularite?: GranulariteBucket;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
-  // Vide = aucun mouvement sur toute la fenêtre dans la devise de base.
+  // Vide = aucun mouvement sur toute la fenêtre dans la devise affichée.
   const aucunMouvement = mois.every(
     (m) => m.entrees === "0" && m.sorties === "0",
   );
   const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
 
-  return (
-    <StateCard>
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-text">Évolution mensuelle</h2>
-        <span className="text-xs text-text-muted">
-          {libellePeriode ?? `${mois.length} derniers mois`}
-        </span>
-      </div>
+  if (aucunMouvement) {
+    return (
+      <p className="mt-6 mb-2 text-center text-sm text-text-muted">
+        Pas encore de mouvement sur la période.
+      </p>
+    );
+  }
 
-      {aucunMouvement ? (
-        <p className="mt-6 mb-2 text-center text-sm text-text-muted">
-          Pas encore de mouvement sur la période.
-        </p>
-      ) : (
-        <div className="mt-5 overflow-x-auto">
-          {/* min-w : sous ~620px de conteneur (sidebar ouverte <1024), les colonnes
-              gardent leur largeur et le conteneur scrolle — jamais un montant
-              écrasé/coupé en plein chiffre (règle 8 : un montant ne tronque pas). */}
-          <table className="w-full min-w-[620px] text-sm">
-            <thead>
-              <tr className="border-b border-line text-left text-xs text-text-muted">
-                <th className="py-2 pr-3 font-medium">Mois</th>
-                <th className="py-2 px-3 text-right font-medium">Entrées</th>
-                <th className="py-2 px-3 text-right font-medium">Sorties</th>
-                <th className="py-2 pl-3 text-right font-medium">Variation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mois.map((m) => (
-                <LigneMois key={m.libelleMois} mois={m} devise={devise} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+  return (
+    <div>
+      <div className="overflow-x-auto">
+        {/* min-w : sous ~620px de conteneur (sidebar ouverte <1024), les colonnes
+            gardent leur largeur et le conteneur scrolle — jamais un montant
+            écrasé/coupé en plein chiffre (règle 8 : un montant ne tronque pas). */}
+        <table className="w-full min-w-[620px] text-sm">
+          <thead>
+            <tr className="border-b border-line text-left text-xs text-text-muted">
+              <th className="py-2 pr-3 font-medium">
+                {ENTETE_BUCKET[granularite]}
+              </th>
+              <th className="py-2 px-3 text-right font-medium">Entrées</th>
+              <th className="py-2 px-3 text-right font-medium">Sorties</th>
+              <th className="py-2 pl-3 text-right font-medium">Variation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mois.map((m) => (
+              <LigneMois
+                key={m.libelleMois}
+                mois={m}
+                devise={devise}
+                granularite={granularite}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -101,7 +105,7 @@ export function MonthlyCashflow({
           additionnés ici (affichage en {devise}).
         </p>
       )}
-    </StateCard>
+    </div>
   );
 }
 
@@ -112,8 +116,16 @@ function estNul(montant: string): boolean {
   return montant === "0" || montant === "0.00";
 }
 
-/** Une ligne du tableau : mois + entrées (vert) + sorties (rouge) + variation. */
-function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
+/** Une ligne du tableau : bucket + entrées (vert) + sorties (rouge) + variation. */
+function LigneMois({
+  mois,
+  devise,
+  granularite,
+}: {
+  mois: MoisAffiche;
+  devise: string;
+  granularite: GranulariteBucket;
+}) {
   const variationNegative = mois.variation.trim().startsWith("-");
   const couleurVariation = estNul(mois.variation)
     ? "text-text-faint"
@@ -130,7 +142,7 @@ function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
   return (
     <tr className="border-b border-line/60 last:border-0">
       <td className="py-2 pr-3 whitespace-nowrap text-text">
-        {formaterMoisAnnee(mois.libelleMois)}
+        {etiquetteBucket(granularite, mois.libelleMois).complet}
         {mois.autresDevises && (
           <span
             className="ml-1.5 align-middle text-[11px] text-text-faint"

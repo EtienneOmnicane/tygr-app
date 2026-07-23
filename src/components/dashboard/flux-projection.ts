@@ -66,6 +66,26 @@ export function maxFenetre(mois: MoisAffiche[]): number {
   return max;
 }
 
+/**
+ * Plus grande valeur de la fenêtre parmi les SEULES séries VISIBLES (légende
+ * interactive, L1). Masquer une série la retire de l'échelle : sinon une série cachée
+ * mais grande écraserait la série restante (PLAN-graphs-fygr §9.1). Booléens plats
+ * (pas le type `VisibiliteSeries` de `charts/`) pour garder ce module NEUTRE, sans
+ * dépendance vers un composant client. `parseFloat` cantonné à la géométrie (règle 8).
+ */
+export function maxFenetreVisible(
+  mois: MoisAffiche[],
+  montrerEntrees: boolean,
+  montrerSorties: boolean,
+): number {
+  let max = 0;
+  for (const m of mois) {
+    if (montrerEntrees) max = Math.max(max, Math.abs(parseFloat(m.entrees)));
+    if (montrerSorties) max = Math.max(max, Math.abs(parseFloat(m.sorties)));
+  }
+  return max;
+}
+
 /* ------------------------------------------------------------------ */
 /* PRÉVISIONNEL (C1) — échéances projetées, jamais du réalisé          */
 /* ------------------------------------------------------------------ */
