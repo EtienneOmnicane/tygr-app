@@ -9,6 +9,13 @@
 > (`TODOS.md:1791`, P1, gardien Backend, effort M).
 > Références lues : `CLAUDE.md`, `PLAN-cadrage-graphs-fygr.md`, `PLAN-audit-ergonomie-soldes.md`,
 > `OMNIFI_API_FEEDBACK.md §10`, `docs/documentation_api.md`.
+>
+> ⚠️ **Suite (2026-07-23)** : ce document reste le **cadrage** (gate §1, pushback §3, lots §4).
+> La **spécification d'exécution** vit dans **`docs/specs/PLAN-treso-eod.md`** : algorithme
+> d'élection EOD et fuseau Maurice, report des jours vides, perte de pagination (~5 %,
+> `DIAGNOSTIC-profondeur-historique.md` §7-B, postérieur à ce plan), tests aux bornes de
+> fuseau, décisions ouvertes. Elle **corrige** l'affirmation « 4 décimales déjà gérées par
+> `normaliserMontant` » du §4-L1 (cf. sa §5.4).
 
 ---
 

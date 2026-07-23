@@ -3509,6 +3509,12 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   reste immuable (pas de DELETE). **Lève la décision DR-F3** (solde courant vs EOD) et
   alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
   pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
+  **Conception 2026-07-23** : cadrage = `PLAN-prod-treso-eod.md` (gate contrat, lots) ;
+  spécification d'exécution = `docs/specs/PLAN-treso-eod.md` (algo d'élection EOD + fuseau,
+  report, complétude/pagination, tests, 9 décisions ouvertes). **Le gate `RunningBalance`
+  reste non passé** — Q1 (couverture non-null sur nos 3 connexions `_pro`) est la seule
+  question bloquante restante ; Q2 est répondue par le source amont (`models.py:94-100`,
+  `serializers.py:74-80`). Implémentation NON démarrée.
 
 - [x] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
   ✅ **RÉALISÉ en 2 passes** : 2026-07-15 (PR #215 — 19 findings, 9 fixés, 10 différés
