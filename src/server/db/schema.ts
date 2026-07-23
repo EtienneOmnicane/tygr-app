@@ -425,6 +425,16 @@ export const transactionsCache = pgTable(
     amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
     currency: char("currency", { length: 3 }).notNull(),
     creditDebit: varchar("credit_debit", { length: 6 }).notNull(),
+    /**
+     * Solde COURANT après l'opération (`RunningBalance` OBIE — PROD-TRESO-EOD1, D5
+     * `numeric(15,2)`). NULLABLE : absent en sandbox, et sur toute transaction sans
+     * solde servi ; NÉGATIF possible (découvert), d'où pas de garde de signe. Devise
+     * amont = celle de la TRANSACTION : n'est persisté QUE si elle égale `currency`
+     * (garde §2.4 — sinon injection cross-devise), sinon NULL. Source de l'élection EOD
+     * (courbe de trésorerie). Normalisé par `normaliserSoldeCourant` (NON-levant, §5.4)
+     * pour ne jamais faire perdre une page de transactions sur un champ accessoire.
+     */
+    runningBalance: numeric("running_balance", { precision: 15, scale: 2 }),
     // Nullable : l'API ne fournit pas toujours de Description (constaté sandbox
     // 2026-06-19 : transactions sans libellé). « Pas de libellé brut » = null est
     // sémantiquement valide. Affichage UI : ultime filet de la cascade de libellé

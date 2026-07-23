@@ -171,6 +171,13 @@
       "breakpoints": true
     },
     {
+      "idx": 25,
+      "version": "7",
+      "when": 1784660000000,
+      "tag": "0025_treso-eod-running-balance",
+      "breakpoints": true
+    },
+    {
       "idx": 26,
       "version": "7",
       "when": 1784700000000,

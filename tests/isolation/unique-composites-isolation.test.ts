@@ -94,6 +94,7 @@ function txLot(omnifiTxnId: string, date: string, amount = "1500.00") {
       amount,
       currency: "MUR",
       creditDebit: "Debit" as const,
+      runningBalance: null,
       bankLabelRaw: "LOYER EBENE",
       cleanLabel: "Ebène",
       primaryCategory: "Rent",

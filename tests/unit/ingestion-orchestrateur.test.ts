@@ -120,6 +120,47 @@ describe("versLignePersistee — mapping + conversions", () => {
     expect(l.amount).toBe("750.00");
   });
 
+  // PROD-TRESO-EOD1 — running_balance : garde de devise (§2.4) + normalisation NON-levante.
+  it("RunningBalance même devise → running_balance persisté (négatif possible)", () => {
+    expect(
+      versLignePersistee(
+        txOBIE({ RunningBalance: { Amount: "50000.00", Currency: "MUR" } }),
+      ).runningBalance,
+    ).toBe("50000.00");
+    expect(
+      versLignePersistee(
+        txOBIE({ RunningBalance: { Amount: "-1234.50", Currency: "MUR" } }),
+      ).runningBalance,
+    ).toBe("-1234.50");
+  });
+
+  it("RunningBalance d'une AUTRE devise (opération FX) → null (garde cross-devise §2.4)", () => {
+    // Compte MUR, solde amont en USD : l'écrire dans la série MUR serait une addition
+    // cross-devise déguisée. On nullifie (fail-closed).
+    const l = versLignePersistee(
+      txOBIE({
+        Amount: { Amount: "1500.00", Currency: "MUR" },
+        RunningBalance: { Amount: "50.00", Currency: "USD" },
+      }),
+    );
+    expect(l.runningBalance).toBeNull();
+  });
+
+  it("RunningBalance absent → null", () => {
+    expect(versLignePersistee(txOBIE()).runningBalance).toBeNull();
+    expect(
+      versLignePersistee(txOBIE({ RunningBalance: null })).runningBalance,
+    ).toBeNull();
+  });
+
+  it("RunningBalance à >2 décimales significatives → null SANS faire perdre la transaction", () => {
+    const l = versLignePersistee(
+      txOBIE({ RunningBalance: { Amount: "50.1234", Currency: "MUR" } }),
+    );
+    expect(l.runningBalance).toBeNull(); // non-levant
+    expect(l.amount).toBe("1500.00"); // la transaction est intacte (pas de throw)
+  });
+
   // PROD-MERCHANT1 — l'enrichissement est IMBRIQUÉ sous Enrichment{} (serializer
   // Django faisant foi), PAS à plat. Le mapping doit hydrater depuis t.Enrichment,
   // et NORMALISER la chaîne vide "" (défaut serializer) vers null — sinon clean_label

@@ -147,6 +147,7 @@ function genererFlux(): {
     amount: r(f.montant),
     currency: "MUR",
     creditDebit: f.sens,
+    runningBalance: null,
     bankLabelRaw: f.label.toUpperCase(),
     cleanLabel: f.label,
     primaryCategory: f.cat,

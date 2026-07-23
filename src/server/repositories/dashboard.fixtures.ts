@@ -50,20 +50,20 @@ export const FIXTURE_SOLDE_CONSOLIDE = "7691000.00";
  * portion BASSE (sous un éventuel seuil) pour tester le rendu d'alerte.
  */
 export const FIXTURE_COURBE: PointCourbe[] = [
-  { date: "2026-03-14", soldeConsolide: "2750000.00" },
-  { date: "2026-03-21", soldeConsolide: "3120000.00" },
-  { date: "2026-03-28", soldeConsolide: "1694000.00" },
-  { date: "2026-04-04", soldeConsolide: "2480000.00" },
-  { date: "2026-04-11", soldeConsolide: "4310000.00" },
-  { date: "2026-04-18", soldeConsolide: "3890000.00" },
-  { date: "2026-04-25", soldeConsolide: "5120000.00" },
-  { date: "2026-05-02", soldeConsolide: "4675000.00" },
-  { date: "2026-05-09", soldeConsolide: "6240000.00" },
-  { date: "2026-05-16", soldeConsolide: "5980000.00" },
-  { date: "2026-05-23", soldeConsolide: "7150000.00" },
-  { date: "2026-05-30", soldeConsolide: "6720000.00" },
-  { date: "2026-06-06", soldeConsolide: "8030000.00" },
-  { date: "2026-06-12", soldeConsolide: "7691000.00" },
+  { date: "2026-03-14", currency: "MUR", soldeConsolide: "2750000.00" },
+  { date: "2026-03-21", currency: "MUR", soldeConsolide: "3120000.00" },
+  { date: "2026-03-28", currency: "MUR", soldeConsolide: "1694000.00" },
+  { date: "2026-04-04", currency: "MUR", soldeConsolide: "2480000.00" },
+  { date: "2026-04-11", currency: "MUR", soldeConsolide: "4310000.00" },
+  { date: "2026-04-18", currency: "MUR", soldeConsolide: "3890000.00" },
+  { date: "2026-04-25", currency: "MUR", soldeConsolide: "5120000.00" },
+  { date: "2026-05-02", currency: "MUR", soldeConsolide: "4675000.00" },
+  { date: "2026-05-09", currency: "MUR", soldeConsolide: "6240000.00" },
+  { date: "2026-05-16", currency: "MUR", soldeConsolide: "5980000.00" },
+  { date: "2026-05-23", currency: "MUR", soldeConsolide: "7150000.00" },
+  { date: "2026-05-30", currency: "MUR", soldeConsolide: "6720000.00" },
+  { date: "2026-06-06", currency: "MUR", soldeConsolide: "8030000.00" },
+  { date: "2026-06-12", currency: "MUR", soldeConsolide: "7691000.00" },
 ];
 
 export const FIXTURE_SYNTHESE_MOIS: SyntheseMois = {

@@ -75,6 +75,7 @@ function txLot(omnifiTxnId: string, date: string, amount = "1500.00") {
       amount,
       currency: "MUR",
       creditDebit: "Debit" as const,
+      runningBalance: null,
       bankLabelRaw: "LOYER EBENE",
       cleanLabel: "Ebène",
       primaryCategory: "Rent",
@@ -317,6 +318,7 @@ describe("provenance auto Omni-FI : marqueur + backfill", () => {
           amount: "1500.00",
           currency: "MUR",
           creditDebit: "Debit" as const,
+          runningBalance: null,
           bankLabelRaw: "CEB",
           cleanLabel: "CEB",
           primaryCategory: "Utilities",
@@ -394,6 +396,7 @@ describe("provenance auto Omni-FI : marqueur + backfill", () => {
             amount: "10.00",
             currency: "MUR",
             creditDebit: "Debit" as const,
+            runningBalance: null,
             bankLabelRaw: null,
             cleanLabel: null,
             // État LEGACY simulé : catégorie polluée présente, AUCUN marqueur (comme

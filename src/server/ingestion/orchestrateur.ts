@@ -23,6 +23,7 @@ import type { ExecuterWorkspace } from "@/server/db/tenancy";
 import {
   deriverDateComptableMaurice,
   normaliserMontant,
+  normaliserSoldeCourant,
   validerCreditDebit,
 } from "./conversion";
 import {
@@ -106,6 +107,30 @@ export function categorieAutoValide(primaryCategory: string | undefined | null):
   return !CATEGORIES_OBIE_VIDES.has(clef);
 }
 
+/**
+ * Solde courant à persister (`running_balance`) : GARDE DE DEVISE d'INGESTION (§2.4) +
+ * normalisation NON-levante (§5.4). Fonction pure. Le `RunningBalance` amont porte la
+ * devise de la TRANSACTION (`serializers.py` : `Currency = obj.currency`). On n'accepte
+ * le solde QUE si sa devise égale celle du montant (`t.Amount.Currency` = la colonne
+ * `currency` de la ligne) : le solde stocké est ainsi TOUJOURS cohérent avec la devise de
+ * SA PROPRE ligne — jamais un solde d'une autre devise taggé sous celle-ci (règle 8).
+ * Sinon NULLIFIÉ (fail-closed).
+ *
+ * ⚠️ Cette garde d'ingestion N'EXCLUT PAS à elle seule un solde FX de la série d'un compte
+ * d'une AUTRE devise (Amount USD sur un compte MUR ⇒ ligne `currency=USD`, cohérente) :
+ * l'exclusion de la série MUR est la GARDE D'ÉLECTION (§2.2, `currency = D_c` = devise du
+ * COMPTE), HORS périmètre de ce lot. `courbeTresorerie` (déjà corrigée) sépare déjà par
+ * devise, donc aucune addition cross-devise n'est possible en aval quoi qu'il arrive.
+ *
+ * Absent / forme inattendue / >2 décimales significatives ⇒ null aussi (jamais un throw :
+ * ne pas faire perdre la page de transactions).
+ */
+function deriverSoldeCourant(t: OmniFiTransaction): string | null {
+  const rb = t.RunningBalance;
+  if (rb == null || rb.Currency !== t.Amount.Currency) return null;
+  return normaliserSoldeCourant(rb.Amount);
+}
+
 /** Mappe une transaction OBIE → ligne à persister (conversions règle 8 / E20). */
 export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
   // L'enrichissement est IMBRIQUÉ sous `Enrichment{}` (serializer Django faisant foi),
@@ -125,6 +150,8 @@ export function versLignePersistee(t: OmniFiTransaction): TransactionAUpserter {
     amount: normaliserMontant(t.Amount.Amount),
     currency: t.Amount.Currency,
     creditDebit: validerCreditDebit(t.CreditDebitIndicator),
+    // Solde EOD (PROD-TRESO-EOD1) : garde de devise + normalisation non-levante.
+    runningBalance: deriverSoldeCourant(t),
     // Libellé brut = `TransactionInformation` (nom OBIE officiel du narratif). Le code
     // lisait `t.Description`, champ INEXISTANT dans le contrat HTTP public → bank_label_raw
     // était NULL sur 100 % des transactions (bug confirmé runtime + audit serializer

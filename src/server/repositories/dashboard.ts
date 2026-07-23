@@ -93,7 +93,9 @@ export interface SoldeParDevise {
 
 export interface PointCourbe {
   date: string; // YYYY-MM-DD (jour comptable Maurice)
-  soldeConsolide: string; // somme EOD multi-comptes, chaîne numeric
+  /** Devise de CETTE série — jamais d'addition cross-devise (§2.4, PROD-TRESO-EOD1). */
+  currency: string;
+  soldeConsolide: string; // somme EOD des comptes de CETTE devise, chaîne numeric
 }
 
 export interface SyntheseMois {
@@ -460,8 +462,11 @@ export async function soldesCourantsParDevise(tx: Tx): Promise<SoldeParDevise[]>
 }
 
 /**
- * Courbe de trésorerie : solde EOD CONSOLIDÉ (somme multi-comptes) par jour, sur
- * [from, to]. Agrégation SQL ; une ligne par jour ayant au moins un solde.
+ * Courbe de trésorerie : solde EOD CONSOLIDÉ (somme multi-comptes) par jour ET PAR
+ * DEVISE, sur [from, to]. Agrégation SQL ; une ligne par (jour, devise) ayant au moins
+ * un solde. MULTI-DEVISE (§2.4, règle 8) : le `GROUP BY` porte sur `(balance_date,
+ * currency)` — JAMAIS sur la date seule, qui additionnerait des roupies et des dollars
+ * (bug historique). Le rendu trace une SÉRIE PAR DEVISE, jamais une addition cross-devise.
  */
 export async function courbeTresorerie(
   tx: Tx,
@@ -470,6 +475,7 @@ export async function courbeTresorerie(
   const lignes = await tx
     .select({
       date: balanceHistory.balanceDate,
+      currency: balanceHistory.currency,
       soldeConsolide: sql<string>`sum(${balanceHistory.balance})::text`,
     })
     .from(balanceHistory)
@@ -485,8 +491,8 @@ export async function courbeTresorerie(
         lte(balanceHistory.balanceDate, fenetre.to),
       ),
     )
-    .groupBy(balanceHistory.balanceDate)
-    .orderBy(balanceHistory.balanceDate);
+    .groupBy(balanceHistory.balanceDate, balanceHistory.currency)
+    .orderBy(balanceHistory.balanceDate, balanceHistory.currency);
   return lignes;
 }
 

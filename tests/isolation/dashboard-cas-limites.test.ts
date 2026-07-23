@@ -93,10 +93,11 @@ describe("courbeTresorerie — cas limites", () => {
     const pts = await withWorkspace(session, (tx) =>
       courbeTresorerie(tx, { from: "2026-05-01", to: "2026-06-30" }),
     );
-    // 2026-05-31 : seul compte1 = 1000 ; 2026-06-10 : -2500.50 + 8000 = 5499.50
+    // 2026-05-31 : seul compte1 = 1000 ; 2026-06-10 : -2500.50 + 8000 = 5499.50 (tout MUR,
+    // consolidés en UNE série de devise — le GROUP BY (date, currency) ne splitte pas ici).
     expect(pts).toEqual([
-      { date: "2026-05-31", soldeConsolide: "1000.00" },
-      { date: "2026-06-10", soldeConsolide: "5499.50" },
+      { date: "2026-05-31", currency: "MUR", soldeConsolide: "1000.00" },
+      { date: "2026-06-10", currency: "MUR", soldeConsolide: "5499.50" },
     ]);
   });
 
@@ -111,7 +112,9 @@ describe("courbeTresorerie — cas limites", () => {
     const pts = await withWorkspace(session, (tx) =>
       courbeTresorerie(tx, { from: "2026-06-10", to: "2026-06-10" }),
     );
-    expect(pts).toEqual([{ date: "2026-06-10", soldeConsolide: "5499.50" }]);
+    expect(pts).toEqual([
+      { date: "2026-06-10", currency: "MUR", soldeConsolide: "5499.50" },
+    ]);
   });
 });
 
