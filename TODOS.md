@@ -224,26 +224,54 @@ jour)** : voir le decision log du plan
   **Preuve** : `tests/isolation/transactions-statut-coherence-isolation.test.ts` (8 cas,
   mutation-check concluant — 3 tests tombent si l'on retire le garde).
 
-- [ ] **PERF-KEYSET-INDEX-RLS1 (P2, effort ~0,5–1 j, ouvert 2026-07-22) — l'index couvrant
-  de la pagination n'est JAMAIS emprunté, pour cause d'opacité RLS.** **Quoi** : sur la base
-  locale (9 440 tx), la seule résolution de page — **sans aucune jointure ni agrégat** —
-  coûte déjà **5,1 ms**, en `Seq Scan` sur la partition + `top-N heapsort` de toutes les
-  lignes. L'index `transactions_cache_<part>_workspace_id_transaction_date_idx
-  (workspace_id, transaction_date DESC NULLS LAST)` **existe** (vérifié) et n'est pas
-  utilisé : le prédicat RLS `workspace_id = current_setting(…)` étant opaque, l'estimateur
-  table sur `rows=5` et juge tout plan gratuit — donc jamais le parcours d'index ORDONNÉ qui
-  s'arrêterait après 51 lignes. **Mode de défaillance** : le coût est **O(N)** en nombre de
-  transactions du workspace, pas O(log N). Invisible à 9 440 lignes (5 ms), linéaire ensuite
-  — à 500 000 lignes le chargement initial repasse en centaines de ms, et **aucun test ne le
-  signalera** (les suites tournent sur PGlite, qui ne prouve pas les plans).
-  **Pourquoi ce n'est PAS traité ici** : foyer DISTINCT de la ventilation — il concerne la
-  résolution de page, pas l'agrégat ; le mêler à PERF-VENTILATION-AGG1 aurait été du scope
-  creep sur la surface d'isolation (règle 7). Arbitré par Etienne le 2026-07-22.
-  **Pistes** : `ALTER TABLE … ALTER COLUMN workspace_id SET STATISTICS`, ou une fonction
-  `STABLE` encapsulant le GUC pour rendre le prédicat estimable, ou `pg_hint_plan`. À
-  **mesurer**, pas à supposer. **Déclencheur** : le premier des deux — (a) le chemin
-  `?statut=` doit descendre sous ~15 ms, (b) un workspace de production dépasse ~100 000
-  transactions.
+- [ ] **PERF-KEYSET-INDEX-RLS1 (P2, effort révisé ~2–3 j, ouvert 2026-07-22, REQUALIFIÉ le
+  2026-07-23) — l'index couvrant de la pagination n'est jamais emprunté. Mesuré : la cause
+  annoncée était FAUSSE.** Rapport complet et reproductible :
+  `docs/PERF-KEYSET-INDEX-RLS1-mesures.md` ; harnais `scripts/perf/page-transactions.sql`.
+  **Mode de défaillance CONFIRMÉ** : coût `O(N)` en transactions du workspace, pas
+  `O(log N)` — à 9 857 lignes le chemin nominal reste à **6,9 ms**, mais il croît
+  linéairement, et **aucun test ne le signalera** (les suites tournent sur PGlite, qui ne
+  prouve pas les plans).
+  **Ce que la mesure INFIRME** : le prédicat `workspace_id = current_setting(…)` n'est PAS
+  opaque — mesuré seul il donne `rows=9857`, l'estimation EXACTE, et l'index couvrant EST
+  emprunté (PostgreSQL évalue les fonctions `STABLE` au planning). Le plan réel n'est pas
+  non plus un « Seq Scan + top-N heapsort » mais un **Nested Loop piloté par les jointures
+  de provenance** (`bank_connections` → `bank_accounts`, 157 boucles). ⚠️ L'erreur du
+  diagnostic initial vient probablement d'une mesure d'estimation faite **sans poser les
+  GUC** : l'expression s'évalue alors à `NULL` et donne `rows=1`, ce qui imite l'opacité.
+  **Les 3 vrais verrous, cumulatifs** : (V1) `ORDER BY transaction_date DESC` vaut `NULLS
+  FIRST` alors que l'index est `DESC NULLS LAST` → les pathkeys ne peuvent PAS correspondre ;
+  (V2) l'estimation s'effondre à `rows=1` à cause des clauses `OR` des policies de
+  **PÉRIMÈTRE** (`account_scope`/`view_filter`/`entity_scope`, 0016/0017) — inestimables et
+  pourtant NEUTRES en Vision Globale — et avec `rows=1` le `LIMIT 51` ne réduit plus AUCUN
+  coût ; (V3) les jointures de provenance, estimées `rows=1` elles aussi, pilotent le plan.
+  **7 pistes MESURÉES puis écartées** (chiffres au rapport §4) : `SET STATISTICS` (sans
+  objet, vise un problème inexistant) ; fonction `STABLE` en SQL (**inlinée** par le
+  planificateur → sans effet) ; la même non inlinable (PL/pgSQL : lève V2, page seule ×27,
+  mais requête réelle en régression à 11,2 ms et **+147 % sur les scans complets**) ;
+  `pg_hint_plan` (absent de l'image, et indisponible sur Neon = cible de prod) ;
+  `enable_seqscan=off` (8,7 ms) ; `join_collapse_limit=1` (16,8 ms) ; `JOIN LATERAL`
+  corrélé (aplati faute de barrière `LIMIT`). ⚠️ `enable_sort=off` + `NULLS LAST` ATTEINT le
+  plan cible sur la page (7,5 → **0,88 ms**, index ordonné) mais **détruit la requête
+  réelle : 6,9 → 1 164 ms** — le GUC pénalise aussi le tri interne de `array_agg(… order
+  by …)` du LATERAL de ventilation, et les deux étages vivent dans la MÊME requête SQL.
+  **Bloqueur amont (à traiter d'abord)** : le seul chemin restant — paginer sur
+  `transactions_cache` seule puis joindre la provenance — est **sémantiquement incorrect en
+  l'état**. `account_scope` (comptes des parties ∪ comptes des entités) est plus large
+  qu'`entity_scope` sur `bank_accounts` : un compte obtenu par une partie mais hors scope
+  entité est visible côté transactions et masqué côté comptes ; c'est l'`innerJoin` qui
+  élimine ces lignes aujourd'hui. Déplacer le `LIMIT` avant lui rendrait des pages
+  **amputées**. Dans ce cas précis `ENTITY-READ-JOIN1` n'est donc PAS une simple ceinture,
+  contrairement à ce qu'affirme `CLAUDE.md` § Entités. **Trancher cette divergence est un
+  lot d'ISOLATION, pas de performance** — et il conditionne l'optimisation.
+  **Ordre des travaux quand le déclencheur tombe** : (1) trancher `account_scope` vs
+  `entity_scope` ; (2) paginer sur la table seule + provenance en `LATERAL` corrélé (lève
+  V3) ; (3) `ORDER BY … DESC NULLS LAST` (lève V1 ; `transaction_date` est `NOT NULL` donc
+  strictement équivalent ; **sans effet isolément** — mesuré dans le bruit) ; (4) V2 en
+  dernier recours seulement, en mesurant la régression sur les requêtes agrégées.
+  **Déclencheur** (inchangé) : le premier des deux — (a) le chemin `?statut=` doit descendre
+  sous ~15 ms (mesuré : 41,4 ms COMPLET / 50,9 ms PARTIEL / 13,3 ms NON_CATEGORISE),
+  (b) un workspace de production dépasse ~100 000 transactions.
 
 ### Clarté du cycle de connexion — dettes ouvertes (2026-07-20, PR `feat/clarte-cycle-connexion-demo`, plan `PLAN-loader-sync-et-nudge-connexion.md`)
 Version **démo-safe** des lots 2, « nom de banque » et 3 Option B du plan : nudge
