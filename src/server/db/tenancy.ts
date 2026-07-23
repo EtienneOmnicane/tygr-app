@@ -106,7 +106,14 @@ export type WorkspaceTx<TDb extends AnyPgDatabase> = Parameters<
  * repositories qui veulent le connaître — mais ce n'est JAMAIS la source de
  * l'autorité : l'autorité est la policy RLS `entity_scope` sur bank_accounts,
  * pilotée par le GUC posé ci-dessous. Ce champ ne sert qu'à informer l'UI / des
- * agrégats, jamais à décider d'un accès en aval (plan §2.4).
+ * agrégats, jamais à décider d'un OCTROI d'accès en aval (plan §2.4).
+ *
+ * ⚠️ Exception PRÉCISE (ENTITY-CONNEXION-REFUS-NOMME1) : un usage DENY-ONLY est
+ * permis — refuser PLUS TÔT, avec une erreur nommée, un geste que la RLS
+ * refuserait de toute façon (ex. `exigerConnexionNonBornee` de l'orchestration
+ * widget). Un champ lisible qui ne peut que RESTREINDRE ne crée aucune surface :
+ * la RLS reste l'autorité fail-closed. La direction interdite reste l'inverse —
+ * ACCORDER ou élargir un accès depuis ces champs, jamais.
  *
  * - `{ mode: "GLOBALE" }`   : aucune ligne member_entity_scopes → voit tout le
  *                             tenant (Vision Globale). Le GUC n'est PAS posé.
@@ -170,6 +177,11 @@ export interface WorkspaceContext {
  * périmètre : à un lecteur non borné, dire « un administrateur peut vous donner accès »
  * serait un mensonge — son écran vide a une autre cause (aucune banque, ou une connexion
  * qui n'a rattaché aucun compte).
+ *
+ * Sert AUSSI aux gardes applicatives DENY-ONLY (cf. l'exception documentée sur
+ * `ScopeEntite`) : refuser nommément, AVANT un appel amont, un geste que la RLS
+ * rejetterait de toute façon — ex. la connexion d'une nouvelle banque par un
+ * membre borné (ENTITY-CONNEXION-REFUS-NOMME1). Jamais pour ACCORDER un accès.
  *
  * ⚠️ FONCTION PARTAGÉE, PAS À RECOPIER. Elle vit ici, au contact des types de scope,
  * parce qu'une COPIE de la formule dans un appelant et une autre dans son test rendrait
