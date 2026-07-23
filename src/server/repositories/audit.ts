@@ -278,6 +278,66 @@ export async function consigner<TDb extends AnyPgDatabase>(
   return { auditEventId: lignes[0].id };
 }
 
+/**
+ * Événement WEBHOOK à consigner. Distinct de `EvenementAConsigner` (applicatif) :
+ * l'`eventType` amont est VERBATIM (union OUVERTE, varchar 60), `omnifiEventId` porte
+ * la dédup, la signature tronquée est tracée, et le payload suit une liste blanche
+ * DÉDIÉE — le `Payload{}` amont N'ENTRE PAS ici (quarantaine seulement, §7.3).
+ */
+export interface EvenementWebhookAConsigner {
+  omnifiEventId: string;
+  /** `EventType` amont VERBATIM (union ouverte). */
+  eventType: string;
+  /** `bank_connections.id` INTERNE, issu de la résolution tygr_service. */
+  connectionId: string;
+  /** 8 premiers hexa de la signature — jamais la signature entière (rejouable). */
+  hmacSignatureTruncated: string;
+  /** Job de scraping amont (si présent) — seule donnée technique tracée en payload. */
+  omnifiJobId?: string | null;
+}
+
+/**
+ * Écrit UNE ligne d'audit WEBHOOK avec DÉDUP (`ON CONFLICT (workspace_id,
+ * omnifi_event_id) DO NOTHING`, §6.2 étage 2). Rend `{ insere }` : `false` = conflit
+ * = « déjà vu » (aucune ligne rendue). SEUL écrivain webhook autorisé de `audit_events`
+ * (append-only STRICT : `DO NOTHING` ne déclenche aucun UPDATE → le trigger 0021 n'est
+ * pas heurté ; aucun DELETE).
+ *
+ * Points NON négociables (§7.3) :
+ *  - `actor_user_id = null`, JAMAIS `ctx.userId` : le contexte système porte la
+ *    sentinelle UUID-nul ; l'écrire imputerait un acte système à un utilisateur
+ *    fantôme dans l'audit trail (valeur probante BOM Innov8).
+ *  - `workspace_id` vient de `ctx` (résolu serveur), jamais d'un paramètre.
+ *  - Liste blanche de payload DÉDIÉE : `{ declencheur, omnifiJobId? }` — rien d'autre.
+ *    Le `Payload{}` amont n'entre PAS (quarantaine seulement, jamais loggé).
+ */
+export async function consignerEvenementWebhook<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  evenement: EvenementWebhookAConsigner,
+): Promise<{ insere: boolean }> {
+  const payload: Record<string, unknown> = { declencheur: "WEBHOOK" };
+  if (evenement.omnifiJobId) payload.omnifiJobId = evenement.omnifiJobId;
+
+  const lignes = await tx
+    .insert(auditEvents)
+    .values({
+      workspaceId: ctx.workspaceId,
+      eventType: evenement.eventType,
+      omnifiEventId: evenement.omnifiEventId,
+      connectionId: evenement.connectionId,
+      actorUserId: null, // acte système : jamais ctx.userId (sentinelle UUID-nul)
+      hmacSignatureTruncated: evenement.hmacSignatureTruncated,
+      payload,
+    })
+    .onConflictDoNothing({
+      target: [auditEvents.workspaceId, auditEvents.omnifiEventId],
+    })
+    .returning({ id: auditEvents.id });
+
+  return { insere: lignes.length > 0 };
+}
+
 /** Les actions de consentement, telles que contraintes par le CHECK en base. */
 export type ActionConsentement = "GRANTED" | "ACCOUNTS_SELECTED" | "REVOKED";
 

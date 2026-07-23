@@ -58,7 +58,19 @@ export type DeclencheurSync = (typeof declencheursSync)[number];
  *
  * `omnifiEventId` : EventId du webhook amont (W4) — porté dès W1 dans le
  * contrat pour que le webhook n'ait RIEN à changer au worker. Observabilité ;
- * la clé d'idempotence Inngest arrive avec la dédup DB du lot W4 (§4.2/§6.2).
+ * la dédup PERMANENTE (par tenant) vit dans `audit_events` (§6.2, étage 2).
+ *
+ * `cleIdempotence` (lot W4, D2) : clé d'idempotence Inngest — TOUJOURS présente
+ * (un champ requis, jamais partagé à vide qui dédupliquerait à tort). Elle rend
+ * « rejeu ×5 → 1 seul RUN » STRUCTUREL (§6.2, étage 3) via
+ * `idempotency: "event.data.cleIdempotence"` sur le worker (fenêtre SDK 24 h —
+ * vérifiée doc Inngest ; d'où une fenêtre de fraîcheur webhook ≤ 12 h, §3.4/§6.1).
+ * Convention par émetteur, pour que deux événements DISTINCTS ne collisionnent
+ * jamais :
+ *   - webhook → `wh:${EventId}`                 (l'EventId amont est unique)
+ *   - cron    → `cron:${omnifiConnectionId}:${dateDuRun}`   (W2, à venir)
+ *   - manuel  → `man:${crypto.randomUUID()}`     (jamais dédupliqué — chaque clic
+ *                                                 est une intention distincte)
  */
 export const donneesSyncIngestSchema = z
   .object({
@@ -67,6 +79,7 @@ export const donneesSyncIngestSchema = z
     declencheur: z.enum(declencheursSync),
     omnifiJobId: z.string().trim().min(1).max(64).optional(),
     omnifiEventId: z.string().trim().min(1).max(64).optional(),
+    cleIdempotence: z.string().trim().min(1).max(120),
   })
   .strict();
 

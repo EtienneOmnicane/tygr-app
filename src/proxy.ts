@@ -43,7 +43,13 @@ export const config = {
   // la redirection 307 vers /login rendrait les jobs durables inexécutables.
   // Son authentification est la SIGNATURE Inngest (INNGEST_SIGNING_KEY,
   // vérifiée par `serve`, fail-closed en mode cloud) — cf. src/app/api/inngest/route.ts.
+  //
+  // /api/webhooks HORS session (lot W4) : appelée par le serveur AMONT Omni-FI, jamais
+  // par un navigateur. Son authentification EST l'HMAC-SHA256 (cf.
+  // src/server/webhooks/omnifi/). Sans cette exclusion, le proxy répondrait une
+  // redirection 307 vers /login et AUCUNE signature ne serait jamais vérifiée — panne
+  // silencieuse. Preuve exigée au runtime : une requête non signée renvoie 401, PAS 307.
   matcher: [
-    "/((?!login|api/auth|api/inngest|demo|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
+    "/((?!login|api/auth|api/inngest|api/webhooks|demo|_next/static|_next/image|favicon|.*\\.(?:svg|png|ico|webp)$).*)",
   ],
 };
