@@ -26,6 +26,7 @@ import { withWorkspace } from "@/server/db";
 import { WorkspaceAccessDeniedError } from "@/server/db/tenancy";
 import { creerClientOmniFi, OmniFiApiError } from "@/server/omnifi";
 import {
+  ConnexionHorsPerimetreError,
   ConnexionNonAutoriseeError,
   ConsentAccountUnknownError,
   ReparationContexteInvalideError,
@@ -132,6 +133,16 @@ const MESSAGE_CONFIG = "Workspace non configuré pour Omni-FI.";
 // plus courant n'est pas une malformation mais une origine non sécurisée/non
 // autorisée. Reste non-énumérant (registre S2) : il ne révèle pas l'allowlist.
 const MESSAGE_ORIGINE = "Origine sécurisée non autorisée pour la connexion bancaire.";
+// Refus de PÉRIMÈTRE (ENTITY_CONNECTION_OUT_OF_SCOPE), distinct de MESSAGE_REFUS qui,
+// lui, sanctionne le RÔLE. La distinction est le fond du sujet : « Action non
+// autorisée. » laisse croire à une erreur de droits à corriger, alors que le geste est
+// simplement hors du périmètre confié au membre. Le message l'énonce et ORIENTE — sans
+// quoi le membre réessaie indéfiniment (ENTITY-CONNEXION-REFUS-NOMME1).
+// Non-énumérant (registre S2) : aucune entité, aucun compte, aucune banque n'est nommé,
+// et le texte est le MÊME quel que soit l'axe qui borne (entité ou compte) — il ne
+// renseigne donc sur l'existence de rien. Sans PII bancaire (règle 8).
+const MESSAGE_PERIMETRE =
+  "Votre périmètre ne permet pas de connecter une banque. Contactez un administrateur.";
 
 /**
  * Schéma de FORME seulement (string/url/longueur). L'AUTORISATION (https/dev/
@@ -787,6 +798,12 @@ function messageDepuis(erreur: unknown, workspaceId: string, action: string): st
   }
   if (erreur instanceof WorkspaceSansClientUserIdError) {
     return MESSAGE_CONFIG;
+  }
+  // Refus de PÉRIMÈTRE — testé APRÈS le refus de rôle et AVANT le générique. Un membre
+  // borné recevait jusqu'ici MESSAGE_GENERIQUE (« Réessayez. »), qui l'invitait à
+  // répéter un geste structurellement impossible pour lui.
+  if (erreur instanceof ConnexionHorsPerimetreError) {
+    return MESSAGE_PERIMETRE;
   }
   // Tout le reste (OmniFiApiError, ConnexionDesalignmentError, timeout, réseau,
   // UnsafeDatabaseRoleError…) → message générique côté UI (non-énumérant), mais
