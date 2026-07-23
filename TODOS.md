@@ -64,6 +64,102 @@ jour)** : voir le decision log du plan
   qui définit le périmètre ; la scoper par lui-même serait une auto-référence circulaire.
   Y poser une policy serait un défaut, pas un correctif (plan §2.3).
 
+### Constats de gouvernance post-vague 1 (2026-07-23, revue de dette — branche `chore/todos-post-vague1`)
+
+> Six constats relevés en revue transverse (webhook, parité de classification, graphs/
+> dashboard). AUCUN ne touche l'isolation tenant, l'append-only ni les montants → tous
+> consignables (règle 9). Le seul P1 (`WEBHOOK-BODY-BOUND`) est une surface NON authentifiée.
+> Numéros de ligne relevés à la revue du 2026-07-23 (susceptibles de dériver).
+
+- [ ] **WEBHOOK-BODY-BOUND (P1, effort ~0,25 j, ouvert 2026-07-23) — la borne 64 Ko du
+  corps webhook n'est PAS appliquée avant `request.arrayBuffer()`.** **Quoi** : `POST
+  /api/webhooks/omnifi` est HORS proxy (`route.ts:5` — exclue du matcher `src/proxy.ts`),
+  donc le plafond de corps de Next ne la couvre pas (un Route Handler App Router qui lit
+  `arrayBuffer()` n'hérite d'aucun `bodyParser.sizeLimit` — l'ancien plafond ~10 Mo des API
+  Pages ne s'y applique pas). Le handler pré-vérifie `content-length`
+  (`server/webhooks/omnifi/route-handler.ts:124-125`) MAIS seulement si l'en-tête est
+  présent, puis lit TOUT le corps en mémoire — `Buffer.from(await request.arrayBuffer())`
+  (`route-handler.ts:134`) — AVANT la garde d'octets (`route-handler.ts:135`). **Mode de
+  défaillance** : un client omettant `content-length` (ou en `Transfer-Encoding: chunked`)
+  contourne le pré-check et force `arrayBuffer()` à matérialiser un corps arbitrairement
+  grand → DoS mémoire sur une surface NON authentifiée (l'auth est l'HMAC, vérifiée APRÈS la
+  lecture). Le rate-limit XFF (`route-handler.ts:131`) borne la FRÉQUENCE, pas la taille
+  d'une requête unique. **Déclencheur de résolution** : durcissement pré-prod (avant le
+  premier déploiement de la surface webhook — SLA P1). **À faire** : garde de taille AU FIL
+  du stream (lecture bornée, abort dès `TAILLE_MAX_OCTETS` dépassé) OU acter la borne au
+  niveau infra (plafond de corps de la plateforme d'hébergement) APRÈS vérification qu'elle
+  couvre bien cette route. À raccrocher à `WEBHOOK-RL-XFF`.
+
+- [ ] **FIABILITE-PARITE-UNICODE (P2, effort ~0,25 j, ouvert 2026-07-23) — divergence
+  TS(`trim`)↔SQL(`btrim`) sur les blancs Unicode hors-ASCII.** **Quoi** : le prédicat
+  « catégorie OBIE exploitable ? » (`src/lib/categorie-obie-vide.mjs`) normalise par
+  `?.trim()` côté TS et `btrim(col, BLANCS)` côté SQL, avec `BLANCS = " \t\n\r\v\f"` (blancs
+  ASCII UNIQUEMENT). `trim()` retire EN PLUS les blancs Unicode de catégorie Zs — prouvé sur
+  NBSP U+00A0, narrow NBSP U+202F, thin space U+2009, idéographique U+3000. Un préfixe NBSP
+  (`" UNCLASSIFIED"`) est donc jugé VIDE côté TS mais EXPLOITABLE côté SQL : la parité
+  n'est pas totale, seulement ASCII (commentaire sur-affirmatif corrigé le 2026-07-23 dans
+  ce même fichier, qui renvoie ici). **Mode de défaillance** : une `primary_category` portant
+  un blanc Zs collé à une sentinelle serait classée « catégorisée par l'amont » côté backfill
+  SQL et « non catégorisée » côté ingestion TS — divergence silencieuse, sans erreur ni test
+  rouge. **Impact prod faible** : les codes OBIE émis par l'amont sont ASCII (inventaire du
+  2026-07-21). **Déclencheur de résolution** : réouverture du prédicat au **Lot B/C/D de
+  `FIABILITE-UNCLASSIFIED`** (Vague 2). **À faire** : symétriser — étendre `BLANCS` aux Zs
+  pertinents OU normaliser Unicode des deux côtés avant comparaison ; ajouter un cas de test
+  NBSP prouvant la parité.
+
+- [ ] **GRAPHS-A11Y (P2, effort ~0,5 j, ouvert 2026-07-23) — navigation clavier incomplète
+  sur deux contrôles de graphes.** **Quoi** : (a) `dashboard/flux-bars.tsx` — chaque bucket
+  de drill (L4) est un `role="button" tabIndex={0}` (`flux-bars.tsx:364-365`) dont le
+  `onKeyDown` ne gère qu'Enter/Espace (`flux-bars.tsx:393-402`) : jusqu'à ~357 stops de Tab
+  (plafond `MAX_BUCKETS_FLUX=400`, granularité « jour »), SANS roving tabindex, sans flèches,
+  sans Escape pour sortir. (b) `ui/controle-segmente.tsx` — `role="radiogroup"`
+  (`controle-segmente.tsx:53`) + `role="radio"` (`:63`) mais AUCUN `onKeyDown` : le pattern
+  ARIA radiogroup exige la navigation aux flèches (roving), ici absente. **Mode de
+  défaillance** : un utilisateur au clavier doit tabuler à travers chaque barre, et le
+  radiogroup ne répond pas aux flèches comme l'annonce son rôle — écart WCAG 2.1.1 / 4.1.2,
+  pas de crash. **Déclencheur de résolution** : chantier a11y dashboard. **À faire** : roving
+  tabindex + flèches + Home/End sur les deux contrôles ; Escape pour quitter le focus du
+  graphe.
+
+- [ ] **GRAPHS-MODAL-SCROLL (P2, effort ~0,25 j, ouvert 2026-07-23) — le panneau de détail
+  peut devenir inatteignable sur viewport court.** **Quoi** : `ui/modal/modal.tsx` verrouille
+  `document.body.style.overflow = "hidden"` à l'ouverture (`modal.tsx:114-121`) mais le
+  panneau (`modal.tsx:133-143`) n'a NI `max-h-*` NI `overflow-y-auto`, et l'overlay le centre
+  en `items-center` (`modal.tsx:128`). **Mode de défaillance** : sur un viewport plus court
+  que le contenu (drill dense, petit écran), le panneau déborde des DEUX côtés ; le scroll de
+  fond étant verrouillé et le panneau sans scroll interne, le haut de la modale (titre, croix)
+  devient inatteignable. Concerne la primitive `Modal` transverse — donc aussi le détail de
+  bucket des graphes. Cf. mémoire `piege-modale-scroll-focus-etat`. **Déclencheur de
+  résolution** : chantier a11y dashboard (même lot). **À faire** : borner le panneau
+  (`max-h-[90vh]` + `overflow-y-auto` sur le corps), en-tête/pied restant fixes.
+
+- [ ] **GRAPHS-REMOUNT-RESET (P2, effort ~0,25 j, ouvert 2026-07-23) — le changement de
+  période réinitialise la vue et la devise du graphe de flux.** **Quoi** :
+  `dashboard/dashboard-content.tsx` monte `<FluxTresorerieCard key={cleFenetre} …/>`
+  (`dashboard-content.tsx:314`) ; `cleFenetre` change avec la période, ce qui REMONTE tout le
+  sous-arbre. Le remontage est VOULU pour éviter un `useState` de données périmé (docstring
+  `flux-tresorerie-card.tsx:19-21`), MAIS il réinitialise aussi les préférences d'UI : `vue`
+  (`flux-tresorerie-card.tsx:90`, défaut « graphique ») et `deviseSel` (`:94`, défaut devise
+  de base). **Mode de défaillance** : un utilisateur ayant basculé en vue « tableau » ou
+  choisi une autre devise voit son choix ANNULÉ (retour Graphique/MUR) au simple changement
+  de période — non demandé, pas un bug de données (fail-soft). **Déclencheur de résolution** :
+  chantier a11y/UX dashboard (même lot). **À faire** : ne remonter la clé que sur la partie
+  données, OU hisser `vue`/`deviseSel` au-dessus du `key` (état parent conservé au changement
+  de période).
+
+- [ ] **GRAPHS-CAL-VALIDATION (P2, effort ~0,25 j, ouvert 2026-07-23) — validation
+  calendaire asymétrique mois vs jour/semaine dans `insights-schema.ts`.** **Quoi** :
+  `bucketCoherent` (`insights-schema.ts:58-78`) valide un bucket « jour »/« semaine » par
+  reconstruction UTC réelle (rejette 2026-02-30), mais la branche « mois »
+  (`insights-schema.ts:62-66`) ne vérifie QUE le mois 01-12 par regex — l'ANNÉE n'est pas
+  bornée : `"0050-03"` passe. **Mode de défaillance** : un bucket « mois » à année absurde
+  franchit la garde d'entrée du drill. **Actuellement fail-closed** : la fenêtre dérivée d'un
+  tel bucket est rattrapée en aval par la garde `from <= to` (`cashflowParamsSchema` refine,
+  `insights-schema.ts:138-140`) — pas d'exploitation active aujourd'hui. **Déclencheur de
+  résolution** : chantier a11y/UX dashboard (durcissement, même lot) — non bloquant. **À
+  faire** : symétriser — borner l'année de la branche « mois » (borne plausible, ex. ≥ année
+  de mise en service) au même titre que jour/semaine.
+
 ### Performance `/transactions` (2026-07-22, plan `PLAN-perf-ventilation-agg1.md`)
 
 > ⚠️ **Trou de procédure à ne pas reproduire (règle 9)** : cette section a été créée le
