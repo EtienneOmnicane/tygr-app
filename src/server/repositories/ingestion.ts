@@ -50,6 +50,9 @@ export interface TransactionAUpserter {
   amount: string; // numeric en chaîne (règle 8)
   currency: string;
   creditDebit: "Credit" | "Debit";
+  /** Solde courant après l'opération (RunningBalance OBIE), null si absent/mauvaise
+   *  devise/forme (normalisation NON-levante + garde de devise, §2.4/§5.4). */
+  runningBalance: string | null;
   bankLabelRaw: string | null;
   cleanLabel: string | null;
   primaryCategory: string | null;
@@ -194,6 +197,7 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
         amount: t.amount,
         currency: t.currency,
         creditDebit: t.creditDebit,
+        runningBalance: t.runningBalance,
         bankLabelRaw: t.bankLabelRaw,
         cleanLabel: t.cleanLabel,
         primaryCategory: t.primaryCategory,
@@ -217,6 +221,9 @@ export async function upsertTransactions<TDb extends AnyPgDatabase>(
           amount: t.amount,
           currency: t.currency,
           creditDebit: t.creditDebit,
+          // Re-sync : reflète l'état amont courant (convergence, §5.2 — un EOD faux à
+          // la passe 1 se corrige à la passe 2 ; append-only au DELETE, UPDATE permis).
+          runningBalance: t.runningBalance,
           bankLabelRaw: t.bankLabelRaw,
           cleanLabel: t.cleanLabel,
           primaryCategory: t.primaryCategory,

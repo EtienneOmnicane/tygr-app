@@ -50,6 +50,37 @@ export function normaliserMontant(montant: string): string {
 }
 
 /**
+ * Normalise un SOLDE COURANT (`RunningBalance` OBIE) en chaîne `numeric(15,2)`, ou
+ * `null` — NON-LEVANT (PLAN-treso-eod.md §5.4, PROD-TRESO-EOD1). À la DIFFÉRENCE de
+ * `normaliserMontant` :
+ *  - un solde peut être NÉGATIF (découvert) → le signe `-` est accepté ;
+ *  - toute forme inattendue OU une décimale significative au-delà de la 2ᵉ rend `null`
+ *    (JAMAIS une exception, JAMAIS un arrondi silencieux).
+ * Raison du non-levant : ce champ est ACCESSOIRE, et `versLignePersistee` tourne dans un
+ * `.map()` sur la page entière — un throw ferait perdre jusqu'à 100 transactions pour un
+ * seul solde. Un solde `null` ne dégrade que la courbe. Ne JAMAIS réutiliser
+ * `normaliserMontant` (positif-only, levant) sur ce champ.
+ */
+export function normaliserSoldeCourant(
+  solde: string | null | undefined,
+): string | null {
+  if (typeof solde !== "string") return null;
+  const t = solde.trim();
+  // Décimal SIGNÉ optionnel ; jusqu'à 13 chiffres entiers (numeric(15,2)).
+  if (!/^-?\d{1,13}(\.\d+)?$/.test(t)) return null;
+  const negatif = t.startsWith("-");
+  const abs = negatif ? t.slice(1) : t;
+  const [entier, decimales = ""] = abs.split(".");
+  // 3ᵉ décimale et au-delà : tolérées UNIQUEMENT si nulles (pas de perte de centimes).
+  if (/[^0]/.test(decimales.slice(2))) return null;
+  const cents = decimales.padEnd(2, "0").slice(0, 2);
+  const entierNorm = entier.replace(/^0+(?=\d)/, "");
+  const val = `${entierNorm}.${cents}`;
+  // Pas de « -0.00 » : un zéro négatif se normalise en zéro.
+  return negatif && val !== "0.00" ? `-${val}` : val;
+}
+
+/**
  * Dérive la date comptable Maurice (YYYY-MM-DD) d'un `BookingDateTime` OBIE
  * (ISO 8601, UTC ou avec offset). E20 : conversion EXPLICITE vers Indian/Mauritius.
  * On calcule en arithmétique d'epoch (pas de comparaison de date nue).

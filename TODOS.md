@@ -3510,6 +3510,28 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
   pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
 
+  **LOT 1 LIVRÉ (branche `feat/treso-eod`, 2026-07-23)** — socle bas-risque, indépendant
+  des 9 décisions ouvertes (plan `docs/specs/PLAN-treso-eod.md`). Sonde read-only prod :
+  `RunningBalance` rempli à **100 %** (62/62 comptes avec tx, 3 institutions) — le null
+  sandbox était un artefact. Livré : migration 0025 (`running_balance numeric(15,2)`),
+  `normaliserSoldeCourant` non-levant (§5.4), ingestion + garde de devise (§2.4), fix
+  cross-devise de `courbeTresorerie` (GROUP BY (date, currency)). RESTE (chantiers
+  suivants) :
+  - [ ] **TRESO-EOD-ELECTION (P1)** — élection EOD (`DISTINCT ON (transaction_date) ORDER
+    BY … booking_date_time DESC`), report des jours vides (helper pur, §3), détecteur de
+    complétude (§4), bord gauche du consolidé (D6). Tranche les décisions D1-D9. La colonne
+    `running_balance` est DORMANTE tant que ce lot n'est pas câblé.
+  - [ ] **TRESO-EOD-RESYNC-COALESCE (P2, cross-review)** — l'upsert écrit
+    `running_balance = t.runningBalance` INCONDITIONNELLEMENT (comme tous les champs, §5.2
+    convergence). Quand l'élection sera câblée, envisager `COALESCE(nouveau, ancien)` pour
+    ne pas effacer un solde valide si une passe ultérieure renvoie `null` (perte d'ancre).
+    Sans effet aujourd'hui (colonne dormante). **Déclencheur** : câblage de l'élection.
+  - [ ] **TRESO-EOD-SNAPSHOT-0025 (P3, hygiène Drizzle)** — pas de `meta/0025_snapshot.json`
+    (comme 0020/0021/0024, hand-write). Sans impact runtime (migrator piloté par le journal).
+    Régénérer les snapshots au prochain `db:generate`.
+  - ⚠️ **Coordination merge** : `feat/webhook-ingestion` réserve idx 26 (saute 25) ;
+    conflit git trivial attendu sur `_journal.json` (garder les deux entrées, 24/25/26).
+
 - [x] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
   ✅ **RÉALISÉ en 2 passes** : 2026-07-15 (PR #215 — 19 findings, 9 fixés, 10 différés
   tracés en sous-tickets DESIGN-* datés, score B− → B+) et 2026-07-17 (branche

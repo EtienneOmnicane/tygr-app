@@ -8,6 +8,7 @@ import {
   INSTITUTION_NAME_MAX,
   normaliserMontant,
   normaliserNomInstitution,
+  normaliserSoldeCourant,
   validerCreditDebit,
 } from "@/server/ingestion/conversion";
 import { OmniFiInvalidResponseError } from "@/server/omnifi";
@@ -57,10 +58,60 @@ describe("deriverDateComptableMaurice (E20 — Indian/Mauritius, UTC+4)", () => 
     expect(deriverDateComptableMaurice("2026-06-10T23:00:00+00:00")).toBe("2026-06-11");
   });
 
+  // Bornes de fuseau EOD (PLAN-treso-eod.md §7-A) : minuit Maurice = 20:00:00 UTC.
+  // La bascule EXACTE est le cas décisif — 22 h la franchit déjà largement.
+  it("bascule −1 s : 19:59:59Z reste le jour J", () => {
+    expect(deriverDateComptableMaurice("2026-07-22T19:59:59Z")).toBe("2026-07-22");
+  });
+
+  it("bascule EXACTE : 20:00:00Z bascule au jour J+1 (minuit Maurice)", () => {
+    expect(deriverDateComptableMaurice("2026-07-22T20:00:00Z")).toBe("2026-07-23");
+  });
+
+  it("franchissement d'ANNÉE : 2026-12-31T20:00:00Z → 2027-01-01", () => {
+    expect(deriverDateComptableMaurice("2026-12-31T20:00:00Z")).toBe("2027-01-01");
+  });
+
+  it("offset non-UTC équivalent : 23:00:00+02:00 (= 21:00Z) → lendemain Maurice", () => {
+    expect(deriverDateComptableMaurice("2026-07-22T23:00:00+02:00")).toBe("2026-07-23");
+  });
+
   it("rejette un horodatage illisible", () => {
     expect(() => deriverDateComptableMaurice("pas-une-date")).toThrow(
       OmniFiInvalidResponseError,
     );
+  });
+});
+
+describe("normaliserSoldeCourant (RunningBalance — NON-levant, §5.4)", () => {
+  it("normalise un solde positif", () => {
+    expect(normaliserSoldeCourant("1500.00")).toBe("1500.00");
+    expect(normaliserSoldeCourant("750.0000")).toBe("750.00"); // 4 déc. nulles OK
+    expect(normaliserSoldeCourant("007.5")).toBe("7.50"); // zéros de tête + padding
+  });
+
+  it("accepte un solde NÉGATIF (découvert) — contrairement à normaliserMontant", () => {
+    expect(normaliserSoldeCourant("-2500.50")).toBe("-2500.50");
+    expect(normaliserSoldeCourant("-0.0000")).toBe("0.00"); // pas de « -0.00 »
+  });
+
+  it("zéro et bornes de décimales", () => {
+    expect(normaliserSoldeCourant("0")).toBe("0.00");
+    expect(normaliserSoldeCourant("42")).toBe("42.00");
+  });
+
+  it("NE LÈVE JAMAIS : >2 décimales significatives → null (pas une exception)", () => {
+    // normaliserMontant LÈVE ici ; ce champ accessoire ne doit pas faire perdre la page.
+    expect(normaliserSoldeCourant("12.3456")).toBeNull();
+    expect(() => normaliserMontant("12.3456")).toThrow(OmniFiInvalidResponseError);
+  });
+
+  it("forme inattendue / vide / non-string → null", () => {
+    expect(normaliserSoldeCourant("abc")).toBeNull();
+    expect(normaliserSoldeCourant("")).toBeNull();
+    expect(normaliserSoldeCourant("1,500.00")).toBeNull();
+    expect(normaliserSoldeCourant(null)).toBeNull();
+    expect(normaliserSoldeCourant(undefined)).toBeNull();
   });
 });
 

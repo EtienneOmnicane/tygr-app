@@ -169,6 +169,13 @@
       "when": 1784615257975,
       "tag": "0024_account-party-role-scope",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784660000000,
+      "tag": "0025_treso-eod-running-balance",
+      "breakpoints": true
     }
   ]
 }
