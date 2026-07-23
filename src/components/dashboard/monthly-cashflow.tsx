@@ -22,25 +22,36 @@
  * Couleurs (§3.1) : vert/rouge réservés à la DONNÉE — entrées `inflow` / sorties
  * `outflow`. `tabular-nums` (§0) pour aligner les chiffres du tableau.
  */
-import { formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant } from "@/lib/format-montant";
 import {
   projeterSurGrille,
   type MoisAffiche,
 } from "@/components/dashboard/flux-projection";
+import { etiquetteBucket } from "@/components/charts/etiquette-bucket";
+import type { GranulariteBucket } from "@/components/charts/grille-buckets";
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
+
+/** En-tête de la première colonne selon la granularité (L2). */
+const ENTETE_BUCKET: Record<GranulariteBucket, string> = {
+  jour: "Jour",
+  semaine: "Semaine",
+  mois: "Mois",
+};
 
 export function TableauEvolution({
   serie,
   grille,
   devise = "MUR",
+  granularite = "mois",
 }: {
-  /** Série mensuelle à plat (mois × devise), agrégée en SQL (`syntheseParMois`). */
+  /** Série à plat (bucket × devise), agrégée en SQL (`syntheseParMois`/`cashflowParDevise`). */
   serie: SyntheseMensuelle[];
-  /** Mois attendus, du plus ancien au plus récent (`grilleMois`) — axe continu. */
+  /** Buckets attendus, du plus ancien au plus récent (grille) — axe continu. */
   grille: string[];
   /** Devise affichée (sélecteur L3 ; défaut = devise de base). */
   devise?: string;
+  /** Granularité des buckets (en-tête + format de la 1re colonne). Défaut « mois ». */
+  granularite?: GranulariteBucket;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
   // Vide = aucun mouvement sur toute la fenêtre dans la devise affichée.
@@ -66,7 +77,9 @@ export function TableauEvolution({
         <table className="w-full min-w-[620px] text-sm">
           <thead>
             <tr className="border-b border-line text-left text-xs text-text-muted">
-              <th className="py-2 pr-3 font-medium">Mois</th>
+              <th className="py-2 pr-3 font-medium">
+                {ENTETE_BUCKET[granularite]}
+              </th>
               <th className="py-2 px-3 text-right font-medium">Entrées</th>
               <th className="py-2 px-3 text-right font-medium">Sorties</th>
               <th className="py-2 pl-3 text-right font-medium">Variation</th>
@@ -74,7 +87,12 @@ export function TableauEvolution({
           </thead>
           <tbody>
             {mois.map((m) => (
-              <LigneMois key={m.libelleMois} mois={m} devise={devise} />
+              <LigneMois
+                key={m.libelleMois}
+                mois={m}
+                devise={devise}
+                granularite={granularite}
+              />
             ))}
           </tbody>
         </table>
@@ -98,8 +116,16 @@ function estNul(montant: string): boolean {
   return montant === "0" || montant === "0.00";
 }
 
-/** Une ligne du tableau : mois + entrées (vert) + sorties (rouge) + variation. */
-function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
+/** Une ligne du tableau : bucket + entrées (vert) + sorties (rouge) + variation. */
+function LigneMois({
+  mois,
+  devise,
+  granularite,
+}: {
+  mois: MoisAffiche;
+  devise: string;
+  granularite: GranulariteBucket;
+}) {
   const variationNegative = mois.variation.trim().startsWith("-");
   const couleurVariation = estNul(mois.variation)
     ? "text-text-faint"
@@ -116,7 +142,7 @@ function LigneMois({ mois, devise }: { mois: MoisAffiche; devise: string }) {
   return (
     <tr className="border-b border-line/60 last:border-0">
       <td className="py-2 pr-3 whitespace-nowrap text-text">
-        {formaterMoisAnnee(mois.libelleMois)}
+        {etiquetteBucket(granularite, mois.libelleMois).complet}
         {mois.autresDevises && (
           <span
             className="ml-1.5 align-middle text-[11px] text-text-faint"

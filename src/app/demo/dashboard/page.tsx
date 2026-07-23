@@ -224,6 +224,11 @@ export default function DashboardPreviewPage() {
       <DashboardContent
         donnees={donnees}
         devise="MUR"
+        // Démo hors-auth : la vue « mois » (premier paint) et les contrôles CLIENT (toggle,
+        // légende, devise) fonctionnent ; le re-fetch de périodicité jour/semaine (L2)
+        // afficherait son bandeau d'erreur (pas de session) — hors périmètre de la capture.
+        periodeParams={{ periode: "6m" }}
+        cleFenetre="demo-6m"
         libellePeriode="6 derniers mois"
         syntheseTitre="Synthèse du mois"
         syntheseLibelle={formaterMoisAnnee(DEMO_MOIS)}

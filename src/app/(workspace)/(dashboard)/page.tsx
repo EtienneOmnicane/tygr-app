@@ -282,10 +282,26 @@ export default async function PageDashboard({
     };
   });
 
+  // Descripteur d'URL de la période, coercé en chaînes (un param dupliqué `string[]`
+  // devient `undefined` → `resoudrePeriode` repliera sur le défaut, comme la page). Relayé
+  // à l'ancre Flux pour son re-fetch de périodicité (L2) : le SERVEUR re-dérive [from,to].
+  const chaine = (v: string | string[] | undefined) =>
+    typeof v === "string" ? v : undefined;
+  const periodeParams = {
+    periode: chaine(parametres.periode),
+    du: chaine(parametres.du),
+    au: chaine(parametres.au),
+  };
+  // Clé de remontage de l'ancre = la FENÊTRE réelle. Change ⟺ la fenêtre change → la carte
+  // repart proprement (granularité « mois », re-fetch remis à zéro), jamais d'état périmé.
+  const cleFenetre = `${fromFlux}:${to}`;
+
   return (
     <DashboardContent
       donnees={donnees}
       devise={devise}
+      periodeParams={periodeParams}
+      cleFenetre={cleFenetre}
       libellePeriode={libellePeriode}
       // La carte de synthèse DIT ce qu'elle agrège : le mois d'ancrage sous preset,
       // l'intervalle réel sous plage. Jamais « Synthèse du mois » au-dessus d'un total

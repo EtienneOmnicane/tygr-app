@@ -26,6 +26,30 @@ export const VENDORS_TOP_N_DEFAUT = 5;
 /** Granularité temporelle du cashflow (enum fermée, valeurs FR). */
 export const granulariteCashflowSchema = z.enum(["jour", "semaine", "mois"]);
 
+/**
+ * Plafond de buckets d'une série de flux (L2, PLAN-graphs-fygr §6.2.4). Anti-abus :
+ * « jour » sur la fenêtre « tout » (~940 j) exploserait le GROUP BY et l'axe. Au-delà,
+ * la granularité est REFUSÉE avec un code nommé (`GRANULARITE_TROP_FINE`) — jamais
+ * tronquée en silence. 400 laisse passer tout usage légitime (6 mois en jours = ~180 ;
+ * « tout » en semaines = ~130), et coupe les combinaisons ingérables.
+ */
+export const MAX_BUCKETS_FLUX = 400;
+
+/**
+ * Paramètres de la Server Action de flux (L2) : granularité (enum fermée → littéral SQL
+ * figé côté repo) + le descripteur de PÉRIODE de l'URL (`periode`/`du`/`au`, chaînes).
+ * Le client renvoie les MÊMES paramètres d'URL qu'il a reçus ; les bornes [from, to] sont
+ * re-dérivées À MAURICE côté serveur par `resoudrePeriode` (qui normalise toute valeur
+ * inconnue) — le client n'impose jamais une borne de date brute au SQL.
+ */
+export const fluxParamsSchema = z.object({
+  granularite: granulariteCashflowSchema,
+  periode: z.string().optional(),
+  du: z.string().optional(),
+  au: z.string().optional(),
+});
+export type FluxParams = z.infer<typeof fluxParamsSchema>;
+
 /** Sens d'analyse des vendors (enum fermée). */
 export const directionVendorsSchema = z.enum(["inflow", "outflow", "both"]);
 

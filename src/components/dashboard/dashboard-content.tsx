@@ -56,7 +56,10 @@ import { SynchroProvider } from "@/components/sync/sync-contexte";
 import { SyncSummaryConnecte } from "@/components/sync/sync-summary-connecte";
 import { NudgePremiereSynchroConnecte } from "@/components/sync/nudge-premiere-synchro-connecte";
 import { ConsommerDrapeauConnexion } from "@/components/sync/consommer-drapeau-connexion";
-import { FluxTresorerieCard } from "@/components/dashboard/flux-tresorerie-card";
+import {
+  FluxTresorerieCard,
+  type PeriodeParams,
+} from "@/components/dashboard/flux-tresorerie-card";
 import { EcheancesEncart } from "@/components/dashboard/echeances-encart";
 import type { PrevisionFlux } from "@/components/dashboard/flux-projection";
 import { CashFlowSummary } from "@/components/dashboard/cash-flow-summary";
@@ -120,6 +123,8 @@ export function DashboardContent({
   syntheseLibelle,
   role,
   connexionEtablie = false,
+  periodeParams,
+  cleFenetre,
 }: {
   donnees: DonneesDashboard;
   /** Devise de base du workspace (MUR au MVP mono-devise). */
@@ -147,6 +152,17 @@ export function DashboardContent({
    * `NudgePremiereSynchro`). Ne pas « l'améliorer » en le dérivant des données.
    */
   connexionEtablie?: boolean;
+  /**
+   * Descripteur d'URL de la période (`?periode`/`?du`/`?au`), relayé à l'ancre Flux pour
+   * son re-fetch de périodicité (L2) : la Server Action re-dérive [from,to] à Maurice.
+   */
+  periodeParams: PeriodeParams;
+  /**
+   * Clé de REMONTAGE de l'ancre Flux = la FENÊTRE (`from:to`). Change ⟺ la fenêtre change →
+   * la carte se remonte et son état (granularité, re-fetch) repart proprement, sans
+   * `useState` périmé (piège connu).
+   */
+  cleFenetre: string;
 }) {
   const {
     comptes,
@@ -295,10 +311,12 @@ export function DashboardContent({
             `FluxBarres` mesure son SVG (ResizeObserver) → s'élargit seul. Zéro fetch.
             100 % RÉALISÉ : la prévision a quitté cet axe (FLUX-PREV-AXE1, cf. encart). */}
         <FluxTresorerieCard
+          key={cleFenetre}
           serieMensuelle={serieMensuelle}
           grilleMensuelle={grilleMensuelle}
           devise={devise}
           libellePeriode={libellePeriode}
+          periodeParams={periodeParams}
         />
 
         {/* 3bis. ÉCHÉANCES À VENIR — encart SECONDAIRE à échelle propre (option E du plan

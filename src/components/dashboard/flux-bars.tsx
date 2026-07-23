@@ -37,8 +37,11 @@ import { useState } from "react";
 
 import type { SyntheseMensuelle } from "@/server/repositories/dashboard";
 
-import { formaterMoisCourt, formaterMoisAnnee } from "@/lib/format-date";
 import { formatMontant, estNegatif } from "@/lib/format-montant";
+import {
+  etiquetteBucket,
+} from "@/components/charts/etiquette-bucket";
+import type { GranulariteBucket } from "@/components/charts/grille-buckets";
 import {
   maxFenetreVisible,
   projeterSurGrille,
@@ -62,6 +65,7 @@ export function FluxBarres({
   devise,
   libellePeriode,
   visibles = TOUTES_SERIES_VISIBLES,
+  granularite = "mois",
 }: {
   serie: SyntheseMensuelle[];
   grille: string[];
@@ -77,6 +81,13 @@ export function FluxBarres({
    * comptée dans l'échelle. Défaut = les deux (rendu identique à l'historique).
    */
   visibles?: VisibiliteSeries;
+  /**
+   * Granularité des buckets (L2) — pilote UNIQUEMENT le format des étiquettes d'axe et
+   * du tooltip (`etiquetteBucket`). Défaut « mois » = rendu identique à l'historique.
+   * `serie`/`grille` portent déjà des buckets de cette granularité (mois → "YYYY-MM",
+   * jour/semaine → "YYYY-MM-DD").
+   */
+  granularite?: GranulariteBucket;
 }) {
   const mois = projeterSurGrille(serie, grille, devise);
   const montrerEntrees = visibles.has("entrees");
@@ -121,6 +132,7 @@ export function FluxBarres({
         libellePeriode={libellePeriode}
         montrerEntrees={montrerEntrees}
         montrerSorties={montrerSorties}
+        granularite={granularite}
       />
       {/* Note multi-devises : présente dès qu'un mois porte une autre devise. */}
       {ilExisteAutresDevises && (
@@ -167,6 +179,7 @@ function BarresMensuelles({
   libellePeriode,
   montrerEntrees,
   montrerSorties,
+  granularite,
 }: {
   mois: MoisAffiche[];
   max: number;
@@ -177,6 +190,8 @@ function BarresMensuelles({
   montrerEntrees: boolean;
   /** Tracer la série des sorties (en dessous de l'axe) ? */
   montrerSorties: boolean;
+  /** Granularité des buckets (format des étiquettes d'axe/tooltip). */
+  granularite: GranulariteBucket;
 }) {
   const { ref, largeur, hauteur } = useDimensionsSvg(
     LARGEUR_DEFAUT,
@@ -294,7 +309,7 @@ function BarresMensuelles({
                   fill="var(--color-text-muted)"
                   className="text-[11px]"
                 >
-                  {formaterMoisCourt(m.libelleMois)}
+                  {etiquetteBucket(granularite, m.libelleMois).court}
                 </text>
               )}
             </g>
@@ -322,7 +337,7 @@ function BarresMensuelles({
       {moisActif && (
         <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-control bg-surface-card px-3 py-2 shadow-popover">
           <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
-            {formaterMoisAnnee(moisActif.libelleMois)}
+            {etiquetteBucket(granularite, moisActif.libelleMois).complet}
           </p>
           <BlocTooltip mois={moisActif} devise={devise} />
         </div>
