@@ -43,6 +43,7 @@ import {
 } from "@/components/charts/etiquette-bucket";
 import type { GranulariteBucket } from "@/components/charts/grille-buckets";
 import {
+  etatFluxBarres,
   maxFenetreVisible,
   projeterSurGrille,
   type MoisAffiche,
@@ -99,17 +100,18 @@ export function FluxBarres({
   const montrerEntrees = visibles.has("entrees");
   const montrerSorties = visibles.has("sorties");
 
-  // Le max BRUT (sur les SEULES séries visibles) pilote la détection « aucun mouvement »
-  // (0 = fenêtre vide DANS ce qui est affiché) ; le max « nice » (toujours ≥ 1, jamais 0)
-  // sert UNIQUEMENT à l'échelle du rendu des barres non-vides — sans cette séparation, une
-  // fenêtre vide afficherait des barres à plat au lieu du message neutre
-  // (echelleNice(0) = 1 ≠ 0). Masquer une série la retire de l'échelle (§9.1).
-  const maxBrut = maxFenetreVisible(mois, montrerEntrees, montrerSorties);
-  const aucunMouvement = maxBrut === 0;
-  const max = echelleNice(maxBrut);
+  // Trois états (helper PUR `etatFluxBarres`) : fenêtre RÉELLEMENT vide vs série MASQUÉE par
+  // la légende vs données à tracer. Distinction ESSENTIELLE — les deux premiers rendent un
+  // graphe à plat, mais seul le premier justifie le nudge « synchronisez » : masquer la
+  // série non vide ne signifie PAS qu'il n'y a rien en banque (cross-review PR #259).
+  const etat = etatFluxBarres(mois, montrerEntrees, montrerSorties);
+  // Échelle du rendu : le max « nice » (toujours ≥ 1, jamais 0) borne la hauteur des barres
+  // et ne sert QU'au cas « donnees ». Masquer une série la retire de l'échelle (§9.1).
+  const max = echelleNice(maxFenetreVisible(mois, montrerEntrees, montrerSorties));
   const ilExisteAutresDevises = mois.some((m) => m.autresDevises);
 
-  if (aucunMouvement) {
+  // Fenêtre RÉELLEMENT vide (aucune donnée, toutes séries confondues) → nudge de synchro.
+  if (etat === "vide") {
     return (
       <div
         className="flex flex-col items-center justify-center text-center"
@@ -121,6 +123,28 @@ export function FluxBarres({
         <p className="mt-1 max-w-sm text-xs text-text-muted">
           Les entrées et sorties s’afficheront ici dès les premières transactions
           synchronisées.
+        </p>
+      </div>
+    );
+  }
+
+  // Série MASQUÉE : la donnée existe, l'utilisateur a caché la seule série non vide. Message
+  // NEUTRE (jamais « synchronisez ») + invite à réafficher la série cachée via la légende.
+  // `serie-masquee` ⇒ exactement une série visible : `montrerEntrees` désigne laquelle.
+  if (etat === "serie-masquee") {
+    return (
+      <div
+        className="flex flex-col items-center justify-center text-center"
+        style={{ minHeight: HAUTEUR_ANCRE }}
+      >
+        <p className="text-sm font-medium text-text">
+          {montrerEntrees
+            ? "Aucune entrée sur cette période"
+            : "Aucune sortie sur cette période"}
+        </p>
+        <p className="mt-1 max-w-sm text-xs text-text-muted">
+          Réaffichez {montrerEntrees ? "les sorties" : "les entrées"} dans la légende
+          pour voir les mouvements masqués.
         </p>
       </div>
     );

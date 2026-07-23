@@ -212,7 +212,8 @@ export interface DetailBucket {
   to: string;
   /** Répartition des SORTIES par catégorie (multi-devise ; le client filtre à sa devise). */
   categories: RepartitionCategories;
-  /** Concentration des contreparties de SORTIES (multi-devise). */
+  /** Concentration des contreparties de SORTIES, BORNÉE à la devise affichée (top-N PAR
+   * devise) — jamais un top-N global qui tronquerait la liste du drill en multi-devise. */
   contreparties: ConcentrationVendors;
 }
 
@@ -236,7 +237,7 @@ export async function detailBucketAction(
   if (!parsed.success) {
     return { ok: false, code: "INVALID_PARAMS", message: "Paramètres invalides." };
   }
-  const { granularite, bucket, periode, du, au } = parsed.data;
+  const { granularite, bucket, currency, periode, du, au } = parsed.data;
   const bornes = bornesBucket(granularite, bucket);
   const fenetre = resoudrePeriode({ periode, du, au });
   const from = bornes.from > fenetre.from ? bornes.from : fenetre.from;
@@ -273,6 +274,9 @@ export async function detailBucketAction(
         topN: VENDORS_TOP_N_DEFAUT,
         from,
         to,
+        // Top-N PAR devise : la liste du drill couvre exactement ce que la barre agrège
+        // pour la devise affichée (sinon les gros postes d'une AUTRE devise l'évinceraient).
+        currency,
       });
       return { from, to, categories, contreparties };
     });

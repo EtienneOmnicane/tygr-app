@@ -335,6 +335,80 @@ describe("vendorsParConcentration — concentration par contrepartie + isolation
       ),
     ).rejects.toThrow(/from doit être/);
   });
+
+  // ── Drill L4 : top-N PAR devise (currency) — cross-review PR #259 ─────────────
+
+  describe("drill PAR devise (currency) : top-N mono-devise, jamais tronqué", () => {
+    it("BUG évité : le top-N GLOBAL évince une devise minoritaire, currency=EUR la récupère", async () => {
+      // Sans currency, le défaut renvoie les 5 plus gros postes TOUTES devises confondues :
+      // MUR/USD (500, 200, 50) écrasent les 6 vendors EUR (60→10). Filtrer ce top-5 à l'EUR
+      // côté client — l'ANCIEN chemin du drill — n'en laisse au plus que 2 : la liste du
+      // drill contredisait la barre EUR (total 210).
+      const global = await withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, { direction: "outflow" }),
+      );
+      const eurDansGlobal = global.lignes.filter((l) => l.currency === "EUR");
+      expect(eurDansGlobal.length).toBeLessThanOrEqual(2);
+
+      // AVEC currency=EUR : top-N PAR devise → les 5 plus grosses contreparties EUR, dont
+      // celles évincées du top-N global. Le drill couvre enfin ce que la barre EUR agrège.
+      const drill = await withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, {
+          direction: "outflow",
+          currency: "EUR",
+          topN: 5,
+        }),
+      );
+      expect(drill.lignes.length).toBeGreaterThan(eurDansGlobal.length);
+      expect(drill.lignes).toHaveLength(5); // 6 vendors EUR → top 5 PAR devise
+      expect(drill.lignes.every((l) => l.currency === "EUR")).toBe(true);
+      // Des contreparties EUR HORS du top-5 global (40, 30) reviennent dans le drill EUR.
+      expect(drill.lignes.map((l) => l.contrepartie)).toEqual(
+        expect.arrayContaining(["Vendor EUR 3", "Vendor EUR 4"]),
+      );
+      // Le plus petit poste EUR (Vendor EUR 6 = 10) reste hors du top 5 PAR devise.
+      expect(
+        drill.lignes.some((l) => l.contrepartie === "Vendor EUR 6"),
+      ).toBe(false);
+    });
+
+    it("drill USD : renvoie SES contreparties USD (Bank fees 200), aucune autre devise ne fuit", async () => {
+      const drill = await withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, {
+          direction: "outflow",
+          currency: "USD",
+          topN: 5,
+        }),
+      );
+      expect(drill.lignes.every((l) => l.currency === "USD")).toBe(true);
+      expect(
+        drill.lignes.find((l) => l.contrepartie === "Bank fees")?.montant,
+      ).toBe("200.00");
+      expect(drill.lignes.some((l) => l.currency !== "USD")).toBe(false);
+    });
+
+    it("`part` relative au total de LA devise, calculée AVANT le LIMIT (window partition)", async () => {
+      // Total sorties EUR = 60+50+40+30+20+10 = 210. La part de Vendor EUR 1 (60) reste
+      // 60/210 même si le LIMIT ne renvoie que 5 lignes : la window somme les 6 postes EUR.
+      const drill = await withWorkspace(sessionA, (tx) =>
+        vendorsParConcentration(tx, {
+          direction: "outflow",
+          currency: "EUR",
+          topN: 5,
+        }),
+      );
+      const v1 = drill.lignes.find((l) => l.contrepartie === "Vendor EUR 1");
+      expect(Number(v1?.part)).toBeCloseTo(60 / 210, 6);
+    });
+
+    it("rejette une devise invalide (défense en profondeur repository)", async () => {
+      await expect(
+        withWorkspace(sessionA, (tx) =>
+          vendorsParConcentration(tx, { direction: "outflow", currency: "US" }),
+        ),
+      ).rejects.toThrow(/devise invalide/);
+    });
+  });
 });
 
 // ── Garde-fou L7a : la suite tourne-t-elle vraiment sous tygr_app ? ───────────

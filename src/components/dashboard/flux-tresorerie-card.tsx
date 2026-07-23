@@ -146,6 +146,17 @@ export function FluxTresorerieCard({
     [donnee.granularite, chargement, serieMensuelle, grilleMensuelle, periodeParams],
   );
 
+  // Devises présentes dans la donnée COURANTE, devise de base en tête. Calculé AVANT le
+  // drill : `deviseAffichee` BORNE la lecture des contreparties (top-N PAR devise, L4).
+  const devisesDisponibles = useMemo(
+    () => devisesPresentes(donnee.serie, devise),
+    [donnee.serie, devise],
+  );
+  const multiDevise = devisesDisponibles.length > 1;
+  const deviseAffichee = devisesDisponibles.includes(deviseSel)
+    ? deviseSel
+    : devisesDisponibles[0];
+
   // Garde de requête (anti-réponse-périmée) : ouvrir vite le drill de B après A pourrait
   // laisser la réponse de A (plus lente) écraser celle de B → listes de A sous le titre de
   // B. On ignore toute réponse dont le bucket ≠ la DERNIÈRE demande.
@@ -162,6 +173,10 @@ export function FluxTresorerieCard({
         const res = await detailBucketAction({
           granularite: donnee.granularite,
           bucket,
+          // Devise affichée : la lecture des contreparties est bornée à CETTE devise (top-N
+          // PAR devise) — sinon le top-N global évincerait une devise minoritaire et la
+          // « Principales sorties » contredirait la barre (cross-review PR #259).
+          currency: deviseAffichee,
           ...periodeParams,
         });
         if (demandeDrillRef.current !== bucket) return; // réponse périmée : ignorée
@@ -178,7 +193,7 @@ export function FluxTresorerieCard({
         if (demandeDrillRef.current === bucket) setChargementDetail(false);
       }
     },
-    [donnee.granularite, periodeParams],
+    [donnee.granularite, deviseAffichee, periodeParams],
   );
 
   // Fermer annule aussi la demande en vol (une réponse tardive ne ré-ouvrira rien).
@@ -186,16 +201,6 @@ export function FluxTresorerieCard({
     demandeDrillRef.current = null;
     setBucketDrill(null);
   }, []);
-
-  // Devises présentes dans la donnée COURANTE, devise de base en tête.
-  const devisesDisponibles = useMemo(
-    () => devisesPresentes(donnee.serie, devise),
-    [donnee.serie, devise],
-  );
-  const multiDevise = devisesDisponibles.length > 1;
-  const deviseAffichee = devisesDisponibles.includes(deviseSel)
-    ? deviseSel
-    : devisesDisponibles[0];
 
   const basculerSerie = (id: IdSerieFlux) =>
     setVisibles((v) => basculerVisibilite(v, id));
