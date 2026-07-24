@@ -9,26 +9,23 @@
  * Il est exempté de FRONTIERE_SYSTEME/SERVICE (eslint) : c'est la seule surface qui
  * consomme la primitive système ET le client de service.
  */
-import { eq } from "drizzle-orm";
-
-import { workspaces } from "@/server/db/schema";
 import {
   insererQuarantaine,
   resoudreConnexionParId,
 } from "@/server/db/service";
-import { executerPourWorkspaceSysteme } from "@/server/db/systeme";
 import { demanderIngestionSyncOuLever } from "@/server/inngest/emission";
-import {
-  consignerEvenementWebhook,
-  type EvenementWebhookAConsigner,
-} from "@/server/repositories/audit";
 
+import {
+  consignerAuditWebhook,
+  envDeploiement,
+  lireEnvWorkspace,
+} from "./deps-communes";
 import {
   ErreurWebhook,
   WebhookTropDeRequetesError,
   WebhookTropVolumineuxError,
 } from "./erreurs";
-import { selectionnerSecretWebhook, type EnvOmniFi } from "./hmac";
+import { selectionnerSecretWebhook } from "./hmac";
 import { creerSeaux, verifierRateLimit } from "./rate-limit";
 import { traiterWebhook, type DepsTraitementWebhook } from "./traitement";
 
@@ -37,34 +34,6 @@ const TAILLE_MAX_OCTETS = 64 * 1024;
 
 /** Seau de rate-limit — SINGLETON du process (en mémoire, par instance — §4.1). */
 const seauxWebhook = creerSeaux();
-
-/** Env du déploiement : « production » SSI OMNIFI_ENV vaut exactement cela, sinon sandbox. */
-function envDeploiement(): EnvOmniFi {
-  return process.env.OMNIFI_ENV === "production" ? "production" : "sandbox";
-}
-
-/** Cross-check : env du workspace résolu (sous tygr_app + GUC ; workspaces sans RLS). */
-async function lireEnvWorkspace(workspaceId: string): Promise<EnvOmniFi | null> {
-  return executerPourWorkspaceSysteme(workspaceId)(async (tx) => {
-    const r = await tx
-      .select({ env: workspaces.omnifiEnvironment })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
-      .limit(1);
-    const env = r[0]?.env;
-    return env === "sandbox" || env === "production" ? env : null;
-  });
-}
-
-/** Écriture d'audit webhook, sous la primitive système (tygr_app + GUC tenant). */
-async function consignerAudit(
-  workspaceId: string,
-  evt: EvenementWebhookAConsigner,
-): Promise<{ insere: boolean }> {
-  return executerPourWorkspaceSysteme(workspaceId)((tx, ctx) =>
-    consignerEvenementWebhook(tx, ctx, evt),
-  );
-}
 
 /** code machine → nom d'événement de log grep-able (§9.2). */
 const EVT_PAR_CODE: Record<string, string> = {
@@ -148,7 +117,7 @@ export async function traiterRequeteWebhook(request: Request): Promise<Response>
       insererQuarantaine,
       lireEnvWorkspace,
       enqueue: demanderIngestionSyncOuLever,
-      consignerAudit,
+      consignerAudit: consignerAuditWebhook,
     };
 
     const resultat = await traiterWebhook(

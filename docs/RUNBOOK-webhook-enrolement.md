@@ -1,4 +1,4 @@
-# Runbook — Enrôlement & exploitation du webhook Omni-FI (lot W4)
+# Runbook — Enrôlement & exploitation du webhook Omni-FI (lots W4 + W5)
 
 > Route : `POST /api/webhooks/omnifi`. Auth = HMAC-SHA256 (pas de session).
 > Plan : `docs/specs/PLAN-webhook-ingestion.md`.
@@ -67,17 +67,47 @@ tronquée), un run Inngest `omnifi/sync.ingest.requested`. Nécessite une **URL 
 rattrapés par le filet pull **W2 (cron)**, qui **n'existe pas encore** (cf. TODOS). Tant
 que W2 n'est pas livré, planifier la rotation en fenêtre de faible trafic.
 
-## 6. Quarantaine (`webhook_events_pending`)
+## 6. Quarantaine (`webhook_events_pending`) — rejeu W5
 
 Un événement non résolu (connexion inconnue, ambiguë, ou env mismatch) est conservé en
-quarantaine et répond **202** (jamais 404/403 — pas d'oracle). Le **rejeu** est le lot
-**W5** (non livré) : d'ici là, les lignes s'accumulent, visibles en base et en log
-(`webhook_quarantaine` + `motif`), jamais silencieusement perdues. Purge TTL 30 j = W5.
+quarantaine et répond **202** (jamais 404/403 — pas d'oracle). Le **rejeu (W5)** le
+reprend par le **pipeline complet** (résolution → cross-check env → enqueue → audit,
+aucun raccourci), sur deux déclencheurs :
+
+- **`link-exchange`** : à chaque connexion créée (widget custom ou drop-in), un événement
+  `omnifi/webhook.replay.requested` (fail-soft) rejoue la quarantaine de CETTE connexion —
+  le cas nominal « webhook arrivé avant la connexion » se résorbe seul.
+- **Cron filet quotidien** (`omnifi-webhook-replay-cron`, 05:30 heure de Maurice) :
+  balayage complet + **purge TTL 30 j**. ⚠️ Ce cron n'est PAS le filet pull W2 (cron de
+  sync + `sync_runs`, toujours dû) : il ne rejoue que ce qui a été REÇU.
+
+Issues d'un rejeu : livré (`replayed_at` posé, audit `WEBHOOK_REJEU`, signature tronquée
+NULL — la signature n'est pas conservée en quarantaine) ; toujours pas résolvable
+(`replay_count` +1, **plafond 10** puis sortie du balayage — log
+`webhook_rejeu_plafond_atteint`) ; panne d'infra (le step Inngest retente, sans compter).
+La purge journalise chaque **abandon** (`webhook_quarantaine_abandon`) — jamais de
+suppression silencieuse.
 
 Inspection (sous `tygr_service`) :
 
 ```sql
 SET ROLE tygr_service;
 SELECT motif, count(*) FROM webhook_events_pending WHERE replayed_at IS NULL GROUP BY motif;
+-- Bloquées au plafond (attendront la purge TTL — investiguer le motif) :
+SELECT omnifi_event_id, motif, replay_count FROM webhook_events_pending
+WHERE replayed_at IS NULL AND replay_count >= 10;
+RESET ROLE;
+```
+
+**Ré-armement après correction de la cause** (ex. `ENV_MISMATCH` corrigé côté config,
+`AMBIGUE` tranchée en base) : remettre le compteur à zéro — l'événement réintègre le
+balayage du prochain cron. ⚠️ Le plafond compte des CONSTATS, pas du temps : chaque
+`link-exchange` sur la connexion consomme une tentative si la cause persiste — ré-armer
+APRÈS avoir corrigé, sinon le compteur se re-épuise.
+
+```sql
+SET ROLE tygr_service;
+UPDATE webhook_events_pending SET replay_count = 0
+WHERE omnifi_event_id = '<EventId>' AND replayed_at IS NULL;
 RESET ROLE;
 ```

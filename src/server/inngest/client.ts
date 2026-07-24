@@ -98,6 +98,31 @@ export const evenementSyncIngest = eventType("omnifi/sync.ingest.requested", {
 });
 
 /**
+ * Données de `omnifi/webhook.replay.requested` (lot W5, plan §12) : demande de
+ * rejeu de la quarantaine webhook pour UNE connexion amont — émise au
+ * `link-exchange` (la connexion vient d'être créée : les webhooks arrivés AVANT
+ * elle attendent en `CONNEXION_INCONNUE`). Le filet quotidien (cron du worker de
+ * rejeu) balaye TOUTES les connexions sans passer par cet événement.
+ *
+ * Pas de `workspaceId` ici : le tenant de chaque événement quarantiné est
+ * inconnu PAR DÉFINITION — c'est le rejeu qui le re-résout, par le pipeline
+ * complet (résolution tygr_service → cross-check env → enqueue → audit).
+ */
+export const donneesWebhookReplaySchema = z
+  .object({
+    omnifiConnectionId: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
+export type DonneesWebhookReplay = z.infer<typeof donneesWebhookReplaySchema>;
+
+/** Déclencheur du rejeu de quarantaine ciblé sur une connexion (W5). */
+export const evenementWebhookReplay = eventType(
+  "omnifi/webhook.replay.requested",
+  { schema: donneesWebhookReplaySchema },
+);
+
+/**
  * Client unique de l'app (id "tygr") — consommé par la route /api/inngest
  * (exécution) et les émetteurs (send).
  */
