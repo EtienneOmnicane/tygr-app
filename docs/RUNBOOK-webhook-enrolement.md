@@ -1,4 +1,4 @@
-# Runbook — Enrôlement & exploitation du webhook Omni-FI (lots W4 + W5)
+# Runbook — Enrôlement & exploitation du webhook Omni-FI (lots W4 + W5 + W2)
 
 > Route : `POST /api/webhooks/omnifi`. Auth = HMAC-SHA256 (pas de session).
 > Plan : `docs/specs/PLAN-webhook-ingestion.md`.
@@ -63,9 +63,13 @@ tronquée), un run Inngest `omnifi/sync.ingest.requested`. Nécessite une **URL 
 
 `POST /dev/webhooks/rotate-secret` invalide l'ancien secret **immédiatement**. Procédure :
 **rotation → mise à jour de l'env var → redéploiement dans la foulée**. Les événements
-émis pendant la fenêtre (ancien secret rejeté par le nouveau) sont **perdus** — ils seront
-rattrapés par le filet pull **W2 (cron)**, qui **n'existe pas encore** (cf. TODOS). Tant
-que W2 n'est pas livré, planifier la rotation en fenêtre de faible trafic.
+émis pendant la fenêtre (ancien secret rejeté par le nouveau) sont **perdus côté push** —
+ils sont rattrapés par le filet pull **W2** : cron `omnifi-sync-cron` quotidien
+(06:00 heure de Maurice) qui re-synchronise chaque connexion active de l'environnement,
+avec trace par run dans `sync_runs` (RUNNING → COMPLETED/PARTIAL/FAILED/MFA_REQUIRED ;
+un RUNNING ancien sans `finished_at` = run mort en vol, à investiguer). La fraîcheur
+maximale perdue entre rotation et prochain cron reste < 24 h — planifier la rotation en
+fenêtre de faible trafic si ce délai compte.
 
 ## 6. Quarantaine (`webhook_events_pending`) — rejeu W5
 
@@ -78,8 +82,9 @@ aucun raccourci), sur deux déclencheurs :
   `omnifi/webhook.replay.requested` (fail-soft) rejoue la quarantaine de CETTE connexion —
   le cas nominal « webhook arrivé avant la connexion » se résorbe seul.
 - **Cron filet quotidien** (`omnifi-webhook-replay-cron`, 05:30 heure de Maurice) :
-  balayage complet + **purge TTL 30 j**. ⚠️ Ce cron n'est PAS le filet pull W2 (cron de
-  sync + `sync_runs`, toujours dû) : il ne rejoue que ce qui a été REÇU.
+  balayage complet + **purge TTL 30 j**. ⚠️ Ce cron n'est PAS le filet pull W2
+  (`omnifi-sync-cron` 06:00 MUT + `sync_runs`, cf. §5) : il ne rejoue que ce qui a
+  été REÇU ; W2 rattrape ce qui ne l'a jamais été.
 
 Issues d'un rejeu : livré (`replayed_at` posé, audit `WEBHOOK_REJEU`, signature tronquée
 NULL — la signature n'est pas conservée en quarantaine) ; toujours pas résolvable

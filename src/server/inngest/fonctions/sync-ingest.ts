@@ -43,6 +43,7 @@ import {
   inngest,
 } from "@/server/inngest/client";
 import { creerClientOmniFi, OmniFiApiError, type OmniFiClient } from "@/server/omnifi";
+import { cloreSyncRun, ouvrirSyncRun } from "@/server/repositories/sync-runs";
 import {
   clientUserIdDuWorkspace,
   estThrottleAmont,
@@ -181,7 +182,13 @@ async function dernierJobNonTerminal(
 /** Contexte de la connexion, résolu SOUS la RLS du workspace de l'événement. */
 export type ContexteConnexion =
   | { present: false }
-  | { present: true; clientUserId: string; nextSyncAvailableAt: string | null };
+  | {
+      present: true;
+      /** `bank_connections.id` INTERNE — clé du journal `sync_runs` (W2). */
+      connectionId: string;
+      clientUserId: string;
+      nextSyncAvailableAt: string | null;
+    };
 
 /**
  * Résout la connexion DANS le workspace (RLS posée par la primitive système).
@@ -196,13 +203,17 @@ export async function resoudreContexteConnexion(
 ): Promise<ContexteConnexion> {
   return executer(async (tx, ctx) => {
     const lignes = await tx
-      .select({ nextSyncAvailableAt: bankConnections.nextSyncAvailableAt })
+      .select({
+        id: bankConnections.id,
+        nextSyncAvailableAt: bankConnections.nextSyncAvailableAt,
+      })
       .from(bankConnections)
       .where(eq(bankConnections.omnifiConnectionId, omnifiConnectionId))
       .limit(1);
     if (lignes.length === 0) return { present: false } as const;
     return {
       present: true,
+      connectionId: lignes[0].id,
       clientUserId: await clientUserIdDuWorkspace(tx, ctx.workspaceId),
       nextSyncAvailableAt: lignes[0].nextSyncAvailableAt?.toISOString() ?? null,
     } as const;
@@ -319,6 +330,40 @@ export const syncIngest = inngest.createFunction(
       return { statut: "CONNEXION_INCONNUE" as const };
     }
 
+    // 1bis. Journal `sync_runs` (W2, cahier §4.1) : ouvrir le run APRÈS la
+    //    résolution (la FK composite exige l'id interne — un événement
+    //    CONNEXION_INCONNUE reste journalisé par le log ci-dessus, pas en
+    //    base : rien à rattacher). Clos sur CHAQUE chemin de sortie ; un run
+    //    RUNNING jamais clos a DEUX causes possibles (m3) : crash après
+    //    épuisement des retries (le cas d'exploitation à investiguer), ou
+    //    doublon bénin d'un step at-least-once (INSERT commité mais résultat
+    //    de step non persisté → le retry ré-insère, la 1re ligne reste
+    //    RUNNING). Signal à lire avec ce contexte, pas à masquer.
+    const { syncRunId } = await step.run("ouvrir-sync-run", () =>
+      executer((tx, ctx) =>
+        ouvrirSyncRun(tx, ctx, {
+          connectionId: contexte.connectionId,
+          declencheur: donnees.declencheur,
+        }),
+      ),
+    );
+    const cloreRun = (
+      statut: "COMPLETED" | "PARTIAL" | "FAILED" | "MFA_REQUIRED",
+      compteurs: { comptes: number; transactions: number },
+      erreurCode?: string | null,
+    ) =>
+      step.run("clore-sync-run", () =>
+        executer((tx, ctx) =>
+          cloreSyncRun(tx, ctx, {
+            syncRunId,
+            statut,
+            comptesTraites: compteurs.comptes,
+            transactionsUpsertees: compteurs.transactions,
+            erreurCode: erreurCode ?? null,
+          }),
+        ),
+      );
+
     // 2. Job amont à attendre : fourni par l'émetteur (relais manuel W1,
     //    webhook W4), sinon résolu/déclenché ici (cron W2).
     const resolution: ResolutionJobAmont = donnees.omnifiJobId
@@ -361,6 +406,11 @@ export const syncIngest = inngest.createFunction(
               errorType: etat.errorType,
             }),
           );
+          await cloreRun(
+            "FAILED",
+            { comptes: 0, transactions: 0 },
+            etat.errorType,
+          );
           return { statut: "JOB_AMONT_FAILED" as const, errorType: etat.errorType };
         }
         if (etat.categorie === "MFA") {
@@ -376,6 +426,7 @@ export const syncIngest = inngest.createFunction(
               declencheur: donnees.declencheur,
             }),
           );
+          await cloreRun("MFA_REQUIRED", { comptes: 0, transactions: 0 });
           return { statut: "MFA_REQUISE" as const };
         }
         dernierStatut = etat.statut;
@@ -420,7 +471,15 @@ export const syncIngest = inngest.createFunction(
       soldes += r.soldes;
     }
 
-    // Récapitulatif structuré (observabilité W1 ; sync_runs arrive en W2).
+    // Clôture du journal (W2) : PLAFOND = partiel ingéré quand même (jamais
+    // assimilé à un succès complet), COMPLETED sinon (LECTURE_SEULE incluse —
+    // relire l'état frais EST la promesse du chemin cooldown).
+    await cloreRun(issue === "PLAFOND" ? "PARTIAL" : "COMPLETED", {
+      comptes: comptes.length,
+      transactions,
+    });
+
+    // Récapitulatif structuré (observabilité W1 ; journal en base : sync_runs).
     console.info(
       JSON.stringify({
         evt: "sync_ingest_termine",

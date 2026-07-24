@@ -1505,19 +1505,14 @@ LIT quand même — la lecture ne dépend pas de la complétion du job, l'upsert
 append-only), la nature partielle remonte jusqu'à l'UI, et l'union des statuts amont est
 OUVERTE (un statut inconnu n'est plus un mensonge de typage).
 
-- [ ] **SYNC-WEBHOOK-INGEST1 (P1, déclencheur : premier scrape qui dépasse durablement les
-  120 s en prod — donc DÉJÀ atteint ; à traiter avant d'élargir la base d'utilisateurs) —
-  ingestion déclenchée par le webhook `sync.completed` au lieu du polling synchrone.**
-  Le correctif ci-dessus rend le partiel HONNÊTE, il ne le rend pas COMPLET : tant que
-  l'ingestion vit dans une Server Action, elle ne peut pas attendre un scrape de plusieurs
-  minutes (timeout de plateforme), donc l'utilisateur devra toujours relancer pour obtenir la
-  fin des transactions. La vraie sortie est événementielle : Omni-FI publie déjà
-  `sync.completed` / `sync.failed` (`docs/documentation_api.md` § Webhooks) — il faut router
-  ces événements vers l'ingestion. Portée : route `/api/webhooks/omnifi` (la résolution
-  `connection → workspace_id` sous `tygr_service` est une exception DÉJÀ documentée en
-  CLAUDE.md règle 2), idempotence (rejeu d'événement), cas ajouté à la suite isolation IDOR.
-  Effort : ~1-1,5j. Tant que ce n'est pas fait, le message « relancez dans quelques minutes »
-  est le contrat assumé avec l'utilisateur.
+- [x] **SYNC-WEBHOOK-INGEST1 — RÉSOLU le 2026-07-24** par la chaîne W1+W4+W2 : le worker
+  DURABLE `omnifi-sync-ingest` (W1) a levé le plafond des 120 s (polling en `step.sleep`,
+  cf. docstring de `sync-ingest.ts` qui le referme « côté infra ») ; la route
+  `/api/webhooks/omnifi` (W4, mergée) route `sync.completed`/`sync.failed`/`sync.mfa_required`
+  vers ce worker (idempotence 3 étages, suite isolation IDOR incluse) ; le cron filet W2
+  (branche `feat/webhook-w2-cron-sync-runs`) rattrape tout événement jamais reçu. Le message
+  « relancez dans quelques minutes » n'est plus le contrat : la fin d'un scrape long aboutit
+  en base sans nouveau clic. Historique : ouvert 2026-07-13.
 
 #### Dettes ouvertes par la revue contradictoire de la PR #202 (2026-07-13)
 
@@ -2724,17 +2719,14 @@ soldes EOD :
   (idempotent, volumes faibles). **Déclencheur** : nombreux comptes en prod / plainte de
   lenteur. Piste : ne synchroniser que les comptes des connexions touchées, ou borner par
   `lastSyncedAt` (skip si récent).
-- [ ] **DASH-AUTOSYNC1 (P1) — synchro auto en arrière-plan** — Effort M-L, gardien Backend.
-  Éviter que l'utilisateur doive cliquer « Synchroniser » après chaque ajout de banque.
-  Pistes : (a) **cron Inngest** périodique (déjà au stack) qui rejoue
-  `synchroniserConnexionsDepuisOmnifi` + `synchroniserCompteComplet` par workspace ; (b)
-  **webhook Omni-FI** (si disponible) déclenchant la synchro sur événement amont ; (c)
-  déclenchement **post-Finish** (enchaîner une synchro légère après finalisation). Contraintes
-  NON négociables : rate-limit amont (`sync` 1/15min/connexion, CLAUDE.md), idempotence
-  (upserts déjà idempotents), isolation tenant (`withWorkspace`), pas de PII en log. **À
-  concevoir dans un chantier dédié** (scheduling + observabilité), PAS dans une PR de feature.
-  **Déclencheur** : DÛ pour un MVP production (sinon données « figées » entre deux clics
-  manuels). Lié à OMNIFI_API_FEEDBACK.md (la voie curseur `/sync` aiderait pour les deltas).
+- [x] **DASH-AUTOSYNC1 — RÉSOLU le 2026-07-24** par le chantier webhook/cron : (a) cron
+  Inngest quotidien 06:00 MUT = lot **W2** (`omnifi-sync-cron`, branche
+  `feat/webhook-w2-cron-sync-runs`) ; (b) webhook Omni-FI = lots **W3/W4** (mergés) ;
+  observabilité = `sync_runs` (W2). Les contraintes non négociables sont tenues : cooldown
+  amont respecté par le worker (`resoudreJobAmont`), upserts idempotents + clé
+  d'idempotence par jour, isolation par primitive système (RLS tenant), logs sans PII.
+  La piste (c) post-Finish n'a plus d'objet (le webhook `sync.completed` couvre le cas).
+  Historique : ouvert 2026-06-19, effort M-L, gardien Backend.
 
 ### Purge locale des données de démo (runbook dev, 2026-06-19)
 
@@ -4159,19 +4151,66 @@ serveur RLS, fail-closed) est sain ; ces entrées sont de la réutilisation/effi
 - [ ] **Réévaluer bases séparées par tenant (C2)** — si une exigence de conformité
   client externe l'impose (taste T1 du gate : RLS partagée retenue au MVP).
 
-### Webhook Omni-FI — lots W3 + W4 + W5 LIVRÉS (W3/W4 : 2026-07-23 ; W5 : branche `feat/webhook-w5-rejeu-quarantaine`, 2026-07-24)
+### Webhook Omni-FI — chantier CODE COMPLET : lots W1→W5 LIVRÉS (W3/W4 : 2026-07-23 mergés ; W5 : mergé 2026-07-24 ; W2 : branche `feat/webhook-w2-cron-sync-runs`, 2026-07-24)
 
 Réf. `docs/specs/PLAN-webhook-ingestion.md`, runbook `docs/RUNBOOK-webhook-enrolement.md`.
 **`GAP-WEBHOOK1`** (P1, l.3762) et **`WEBHOOK-TENANT-FIRST1`** (P1, l.3013) sont désormais
-SUBSTANTIELLEMENT adressés : route `POST /api/webhooks/omnifi` (HMAC-SHA256 constant-time
-sur octets bruts, fenêtre de fraîcheur, zod strict, résolution tenant fail-closed sous
-`tygr_service`, cross-check env, idempotence 3 étages, quarantaine, 202 uniforme) + rejeu
-de la quarantaine (W5). Ne PAS les clore tant que W2 (filet pull) n'est pas livré.
-Décisions actées : D1 (cross-check env sous tygr_app, D2-parent annulée), D2
-(`cleIdempotence`), D3 (enqueue AVANT audit), D4 (fenêtre 12 h).
+ADRESSÉS EN TOTALITÉ côté code : route `POST /api/webhooks/omnifi` (HMAC-SHA256
+constant-time sur octets bruts, fenêtre de fraîcheur, zod strict, résolution tenant
+fail-closed sous `tygr_service`, cross-check env, idempotence 3 étages, quarantaine,
+202 uniforme) + rejeu de la quarantaine (W5) + filet pull quotidien (W2) — clôturables au
+merge de W2. Reste OPÉRATIONNEL (pas du code) : l'enrôlement amont (runbook §3, URL
+publique) et les questions D4 à Omni-FI. Décisions actées : D1 (cross-check env sous
+tygr_app, D2-parent annulée), D2 (`cleIdempotence`), D3 (enqueue AVANT audit), D4
+(fenêtre 12 h).
 
 Dette DIFFÉRÉE (à traiter à un chantier nommé) :
 
+- [x] **WEBHOOK-W2 — RÉSOLU le 2026-07-24** (branche `feat/webhook-w2-cron-sync-runs`,
+  plan parent §4.3/§6.2/§9). Livré : (a) **cron filet pull** `omnifi-sync-cron`
+  (06:00 MUT, `TZ=Indian/Mauritius` explicite) — énumère les workspaces de
+  l'ENVIRONNEMENT courant (`listerWorkspacesParEnvironnement`, systeme.ts : `id` seul,
+  `workspaces` sans RLS, JAMAIS `tygr_service` dont l'usage reste gelé à la résolution
+  webhook) puis les connexions `active` de chaque workspace SOUS SA RLS, et émet le
+  MÊME événement `sync.ingest.requested` que le manuel/webhook (D1=C), clé SCOPÉE TENANT
+  `cron:<workspaceId>:<omnifiConnectionId>:<dateDuRun Maurice>` (aujourdhuiMaurice,
+  mémoïsée en step) ; (b) **`sync_runs` minimal** (migration `0027`, RLS tenant + FORCE, FK COMPOSITE
+  `(connection_id, workspace_id) → bank_connections(id, workspace_id)` ON DELETE CASCADE
+  — UNIQUE cible ajoutée en 0027 ; CHECK `RUNNING ⇔ finished_at NULL`) ouvert/clos par le
+  worker sur CHAQUE chemin de sortie (COMPLETED/PARTIAL/FAILED+erreur_code/MFA_REQUIRED) ;
+  un RUNNING ancien jamais clos = crash après retries, signal d'exploitation VOULU.
+  Preuves : `tests/unit/sync-cron.test.ts` (5 cas) +
+  `tests/isolation/sync-runs-isolation.test.ts` (9 cas PGlite : cycle, RLS tenant, FK
+  composite cross-tenant rejetée, CHECK, cascade, énumération par env + garde owner).
+  Hygiène : `meta/0027_snapshot.json` absent (hand-write, même liste que
+  WEBHOOK-SNAPSHOT-0026 ci-dessous — régénérer au prochain `db:generate`).
+  ⚠️ Limite ASSUMÉE : le run `CONNEXION_INCONNUE` (événement mal routé) n'est PAS
+  journalisé en base (la FK composite exige un id interne inexistant) — il reste visible
+  au log `sync_ingest_connexion_inconnue`.
+  **Cross-review (règle 6, 2026-07-24) — 1 moyen + 4 mineurs + 3 nits, tous traités ou
+  consignés** : M1 (moyen) la clé d'idempotence `cron:<conn>:<date>` n'était PAS scopée
+  tenant — au CONTRACT (unicité globale d'omnifi_connection_id abandonnée), deux
+  workspaces partageant un ConnectionId auraient collapsé en UN filet (perte silencieuse)
+  — corrigé : `cron:<workspaceId>:<conn>:<date>` + test de non-collision cross-tenant +
+  convention client.ts. m2 : l'échec d'un workspace (StepError) est désormais ABSORBÉ
+  (émission par workspace au fil de l'eau, log `sync_cron_workspace_echec`) — les tenants
+  suivants sont servis. m4 : troncature défensive d'`erreur_code` à 60 (l'enum amont
+  dérive). m5 : contre-preuve « DELETE direct sous tygr_app refusé » ajoutée à la suite.
+  m3 (documenté, non codé) : un RUNNING orphelin a une 2de cause bénigne — step
+  at-least-once ré-insérant après un commit non persisté côté Inngest ; docstring du
+  worker mise à jour, pas d'id déterministe (machinerie non justifiée au volume actuel).
+  m6 → entrée dédiée ci-dessous. Nits : références de commentaires corrigées
+  (deps-communes→route-handler, emission.ts vs step.sendEvent).
+
+- [ ] **SYNC-UI-INVALIDATE1 (P3, ouvert 2026-07-24) — l'« invalidation UI » du plan
+  parent (§6.2 step 5, `revalidateTag`) n'est ni livrée ni nécessaire aujourd'hui.**
+  **Quoi** : le plan prévoyait une invalidation de cache à la clôture d'un run ; or
+  AUCUN cache par tag n'existe dans l'app (grep `revalidateTag|unstable_cache|cacheTag`
+  = 0 occurrence — les pages workspace lisent par requête). Livrer un `revalidateTag`
+  sans tag serait du code mort. **Déclencheur** : la PREMIÈRE introduction d'un cache
+  taggé sur une lecture de données de sync (dashboard/transactions) — ce jour-là, la
+  clôture de run dans `sync-ingest.ts` est l'endroit exact où invalider. Constat m6 de
+  la cross-review W2.
 - [x] **WEBHOOK-W5 — RÉSOLU le 2026-07-24** (branche `feat/webhook-w5-rejeu-quarantaine`,
   plan §12). Livré : (a) rejeu par le pipeline COMPLET — résolution `tygr_service` →
   cross-check env → enqueue (gating EventType partagé `doitDeclencherSync`) → audit
@@ -4207,9 +4246,6 @@ Dette DIFFÉRÉE (à traiter à un chantier nommé) :
   **Résidu connu (non bloquant, tracé par la revue)** : un retry amont au-delà de la
   fenêtre d'idempotence Inngest (24 h) peut produire UN run de sync redondant —
   inoffensif (worker idempotent, concurrency 1/connexion, cooldown amont).
-- [ ] **WEBHOOK-W2 (P1) — cron 06:00 MUT + `sync_runs`.** SANS lui, le webhook n'a AUCUN
-  filet pull : un événement perdu (enqueue échoué, secret en rotation, déploiement) ne se
-  rattrape que par un clic manuel. Recommandé avant/en parallèle d'un usage prod réel.
 - [ ] **WEBHOOK-FENETRE1 (P2, effort ~0,25 j) — resserrer la fenêtre de fraîcheur.**
   Fixée à 12 h (≤ idempotence Inngest 24 h, vérifiée). La resserrer à 10-15 min dès que la
   **politique de retry amont (D4-b)** est connue. Constante `FENETRE_FRAICHEUR_MS`

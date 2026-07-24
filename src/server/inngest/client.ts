@@ -68,7 +68,9 @@ export type DeclencheurSync = (typeof declencheursSync)[number];
  * Convention par émetteur, pour que deux événements DISTINCTS ne collisionnent
  * jamais :
  *   - webhook → `wh:${EventId}`                 (l'EventId amont est unique)
- *   - cron    → `cron:${omnifiConnectionId}:${dateDuRun}`   (W2, à venir)
+ *   - cron    → `cron:${workspaceId}:${omnifiConnectionId}:${dateDuRun}` (W2 —
+ *               SCOPÉE TENANT : omnifi_connection_id n'est pas garanti unique
+ *               entre workspaces, hypothèse abandonnée à l'EXPAND 0018)
  *   - manuel  → `man:${crypto.randomUUID()}`     (jamais dédupliqué — chaque clic
  *                                                 est une intention distincte)
  */
