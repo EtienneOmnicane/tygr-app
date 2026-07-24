@@ -41,6 +41,23 @@ export function enCentimes(montant: string): bigint | null {
 }
 
 /**
+ * Parse une chaîne décimale SIGNÉE en centimes (BigInt). `null` si invalide.
+ *
+ * Pendant SIGNÉ d'`enCentimes`, pour les valeurs qui ne sont PAS des montants de
+ * mouvement : un SOLDE EOD peut être négatif (découvert), un delta net (Σ crédits −
+ * Σ débits) aussi. Le « -0.00 » se normalise en zéro (aucune distinction métier).
+ * Ne PAS l'utiliser pour un montant de transaction — là, le signe est porté par
+ * `credit_debit` et `enCentimes` (positif-only) reste la garde.
+ */
+export function enCentimesSigne(montant: string): bigint | null {
+  const v = montant.trim();
+  const negatif = v.startsWith("-");
+  const abs = enCentimes(negatif ? v.slice(1) : v);
+  if (abs === null) return null;
+  return negatif ? -abs : abs;
+}
+
+/**
  * Formate des centimes (BigInt) en chaîne décimale `"1234.50"` — échelle TOUJOURS à 2
  * décimales (même contrat que le `::numeric(15,2)::text` du SQL : « 0.00 », pas « 0 »).
  * Gère le négatif (un net encaissement − décaissement peut l'être).

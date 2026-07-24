@@ -28,6 +28,7 @@ import {
   validerCreditDebit,
 } from "./conversion";
 import {
+  deriverSoldesEod,
   marquerSynchronise,
   upsertTransactions,
   type TransactionAUpserter,
@@ -218,6 +219,26 @@ export async function synchroniserCompte(
   await executer((tx) =>
     marquerSynchronise(tx, params.bankAccountId, maintenant()),
   );
+
+  // Élection EOD BEST-EFFORT (TRESO-EOD-ELECTION, §2.2) : dérive les soldes de
+  // clôture depuis running_balance UNE FOIS toutes les pages persistées (l'élection
+  // lit la BASE, pas le flux — indépendante de l'ordre d'arrivée des pages).
+  // Isolée dans un try/catch, exactement comme appliquerRegles ci-dessous : une
+  // dérivation bancale ne doit JAMAIS faire perdre des transactions déjà
+  // persistées (critère §6 du plan — seul catch large admis, journalisé sans PII).
+  try {
+    await executer((tx, ctx) =>
+      deriverSoldesEod(tx, ctx, params.bankAccountId),
+    );
+  } catch {
+    console.warn(
+      JSON.stringify({
+        evt: "eod_derivation_echec",
+        action: "deriver-soldes-post-sync",
+        bankAccountId: params.bankAccountId,
+      }),
+    );
+  }
 
   // Catégorisation automatique BEST-EFFORT des transactions nouvellement
   // ingérées : on applique les règles ACTIVES aux transactions de CE compte qui
