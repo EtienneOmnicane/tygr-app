@@ -140,10 +140,12 @@ const eslintConfig = defineConfig([
   // service. Bloc SÉPARÉ du précédent (celui-ci ignore src/server/** en entier pour le
   // schéma ; ici on ne restreint QUE ces deux modules). Les DEUX frontières vivent dans
   // LE MÊME bloc `no-restricted-imports` (⚠️ flat config : deux blocs qui matchent le
-  // même fichier se REMPLACENT — cf. FRONTIERE_DONNEES). Conséquence des `ignores`
-  // partagés : `src/server/inngest/**` est aussi exempté de FRONTIERE_SERVICE — bénin,
-  // un job Inngest a déjà son workspaceId résolu et n'importe jamais le client de
-  // service (aucune résolution cross-tenant côté worker). Les importeurs légitimes :
+  // même fichier se REMPLACENT — cf. FRONTIERE_DONNEES). `src/server/inngest/**` est
+  // exempté ICI (il importe légitimement la primitive SYSTÈME) mais reçoit
+  // FRONTIERE_SERVICE seule dans le bloc SUIVANT — depuis W5, le worker de rejeu est
+  // un chemin cross-tenant qui doit passer par les WRAPPERS de
+  // src/server/webhooks/omnifi/rejeu.ts, jamais par le client de service en direct
+  // (constat C2 de la cross-review W5). Les importeurs légitimes :
   //   - systeme  → inngest/** + webhooks/omnifi/** (+ systeme.ts lui-même) ;
   //   - service  → webhooks/omnifi/** (+ service.ts lui-même).
   {
@@ -159,6 +161,19 @@ const eslintConfig = defineConfig([
         "error",
         { patterns: [FRONTIERE_SYSTEME, FRONTIERE_SERVICE] },
       ],
+    },
+  },
+
+  // FRONTIERE_SERVICE seule sur les fonctions Inngest (W5, constat C2) : la primitive
+  // SYSTÈME y reste légitime (workspaceId résolu par l'événement), mais le client de
+  // service (tygr_service, cross-tenant) ne s'y importe JAMAIS en direct — le rejeu
+  // passe par les wrappers de src/server/webhooks/omnifi/rejeu.ts. Bloc dédié parce
+  // que les `ignores` du bloc précédent exemptent inngest/** en entier (⚠️ flat
+  // config : redéclarer la règle sur les mêmes fichiers la REMPLACERAIT).
+  {
+    files: ["src/server/inngest/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [FRONTIERE_SERVICE] }],
     },
   },
 

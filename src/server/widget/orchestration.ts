@@ -60,6 +60,7 @@ import {
   versPartie,
 } from "@/server/repositories/ingestion";
 import { enregistrerConsentement } from "@/server/repositories/audit";
+import { demanderRejeuWebhook } from "@/server/inngest/emission";
 import { normaliserNomInstitution } from "@/server/ingestion/conversion";
 import { synchroniserCompte } from "@/server/ingestion/orchestrateur";
 
@@ -561,6 +562,12 @@ export async function finaliserConnexion(
     consentement: {},
   });
 
+  // W5 (plan §12) : la connexion vient d'être créée par link-exchange — les
+  // webhooks arrivés AVANT elle attendent en quarantaine (CONNEXION_INCONNUE).
+  // FAIL-SOFT : la connexion a réussi, un échec d'émission ne la casse pas ;
+  // le cron filet quotidien rebalaye toute la quarantaine.
+  await demanderRejeuWebhook(echange.ConnectionId);
+
   return {
     connectionId: echange.ConnectionId,
     institutionId: echange.InstitutionId,
@@ -621,6 +628,10 @@ export async function finaliserConnexionDropin(
   const rattaches = await persisterConnexionEtComptes(executer, echange, comptes, {
     consentement: {},
   });
+
+  // W5 : même hook de rejeu qu'au chemin custom — ce chemin sort aussi d'un
+  // link-exchange (fail-soft, filet cron en secours).
+  await demanderRejeuWebhook(echange.ConnectionId);
 
   return {
     connectionId: echange.ConnectionId,

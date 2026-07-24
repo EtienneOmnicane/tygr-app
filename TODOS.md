@@ -4159,23 +4159,54 @@ serveur RLS, fail-closed) est sain ; ces entrées sont de la réutilisation/effi
 - [ ] **Réévaluer bases séparées par tenant (C2)** — si une exigence de conformité
   client externe l'impose (taste T1 du gate : RLS partagée retenue au MVP).
 
-### Webhook Omni-FI — lots W3 + W4 LIVRÉS (branche `feat/webhook-ingestion`, 2026-07-23)
+### Webhook Omni-FI — lots W3 + W4 + W5 LIVRÉS (W3/W4 : 2026-07-23 ; W5 : branche `feat/webhook-w5-rejeu-quarantaine`, 2026-07-24)
 
 Réf. `docs/specs/PLAN-webhook-ingestion.md`, runbook `docs/RUNBOOK-webhook-enrolement.md`.
 **`GAP-WEBHOOK1`** (P1, l.3762) et **`WEBHOOK-TENANT-FIRST1`** (P1, l.3013) sont désormais
 SUBSTANTIELLEMENT adressés : route `POST /api/webhooks/omnifi` (HMAC-SHA256 constant-time
 sur octets bruts, fenêtre de fraîcheur, zod strict, résolution tenant fail-closed sous
-`tygr_service`, cross-check env, idempotence 3 étages, quarantaine, 202 uniforme). Ne PAS
-les clore tant que W5 (rejeu) et W2 (filet pull) ne sont pas livrés. Décisions actées :
-D1 (cross-check env sous tygr_app, D2-parent annulée), D2 (`cleIdempotence`), D3 (enqueue
-AVANT audit), D4 (fenêtre 12 h).
+`tygr_service`, cross-check env, idempotence 3 étages, quarantaine, 202 uniforme) + rejeu
+de la quarantaine (W5). Ne PAS les clore tant que W2 (filet pull) n'est pas livré.
+Décisions actées : D1 (cross-check env sous tygr_app, D2-parent annulée), D2
+(`cleIdempotence`), D3 (enqueue AVANT audit), D4 (fenêtre 12 h).
 
 Dette DIFFÉRÉE (à traiter à un chantier nommé) :
 
-- [ ] **WEBHOOK-W5 (P1, effort ~1 j) — rejeu de la quarantaine.** `webhook_events_pending`
-  s'accumule sans être rejoué (visible en base/log, jamais silencieux). Livrer : enqueue
-  `omnifi/webhook.replay.requested` au `link-exchange` + cron filet + purge TTL 30 j avec
-  log d'abandon. **Déclencheur** : immédiat (le webhook est en prod sans rejeu).
+- [x] **WEBHOOK-W5 — RÉSOLU le 2026-07-24** (branche `feat/webhook-w5-rejeu-quarantaine`,
+  plan §12). Livré : (a) rejeu par le pipeline COMPLET — résolution `tygr_service` →
+  cross-check env → enqueue (gating EventType partagé `doitDeclencherSync`) → audit
+  (`declencheur: WEBHOOK_REJEU`, `hmac_signature_truncated NULL` : la signature, vérifiée
+  à la réception, n'est PAS conservée en quarantaine car rejouable) → `replayed_at` posé ;
+  (b) enqueue fail-soft `omnifi/webhook.replay.requested` aux DEUX `finaliser*`
+  (link-exchange custom + drop-in, `orchestration.ts`) ; (c) fonctions Inngest
+  `omnifi-webhook-replay` (ciblée connexion, concurrency 1) et `omnifi-webhook-replay-cron`
+  (filet quotidien 05:30 MUT, TZ explicite) ; (d) purge TTL 30 j avec log d'abandon
+  explicite par événement (`webhook_quarantaine_abandon`, jamais silencieux) ; (e) plafond
+  anti-boucle : `replay_count` ne compte que les constats « non résolvable » (10 max, sortie
+  du balayage journalisée) — une panne d'infra fait échouer le step (retry Inngest), sans
+  incrément. Logique dans `src/server/webhooks/omnifi/rejeu.ts` (seule surface
+  FRONTIERE_SERVICE) ; primitives DB dans `service.ts` (garde `exigerRoleService` par
+  transaction) ; deps câblées partagées réception/rejeu extraites en `deps-communes.ts`.
+  Preuves : `tests/unit/webhook-rejeu.test.ts` (10 cas) +
+  `tests/unit/webhook-replay-lot.test.ts` (4 cas — absorption StepError, C1) +
+  `tests/isolation/webhook-rejeu-isolation.test.ts` (8 cas PGlite : bornes du balayage,
+  gardes de rôle sur les 4 primitives, purge avec distinction abandon, rejeu bout en bout
+  avec dédup d'audit).
+  **Cross-review (règle 6, 2026-07-24) — 4 constats, 3 corrigés dans le lot** :
+  C1 (moyen) un step épuisant ses retries (`StepError`) faisait échouer le run entier →
+  affamait le lot FIFO et sautait la purge TTL — corrigé : purge déplacée EN TÊTE du cron
+  + absorption par événement (log `webhook_rejeu_step_echec`, compteur `echecsInfra`,
+  `replay_count` intact, toute erreur non-StepError remonte). C2 (faible) l'exemption
+  ESLint de `src/server/inngest/**` sur FRONTIERE_SERVICE était périmée depuis W5 —
+  corrigé : bloc dédié ré-appliquant FRONTIERE_SERVICE seule (prouvé par fichier-test
+  négatif, alias + relatif). C3 (faible) ré-armement du plafond non documenté — corrigé :
+  runbook §6 (`UPDATE … SET replay_count = 0` sous tygr_service, APRÈS correction de la
+  cause). C4 (info, accepté sans correctif) : l'`await` du hook fail-soft ajoute la
+  latence d'un aller-retour Inngest au parcours de connexion — assumé (fire-and-forget
+  risquerait le gel du runtime serverless avant l'envoi ; filet cron en secours).
+  **Résidu connu (non bloquant, tracé par la revue)** : un retry amont au-delà de la
+  fenêtre d'idempotence Inngest (24 h) peut produire UN run de sync redondant —
+  inoffensif (worker idempotent, concurrency 1/connexion, cooldown amont).
 - [ ] **WEBHOOK-W2 (P1) — cron 06:00 MUT + `sync_runs`.** SANS lui, le webhook n'a AUCUN
   filet pull : un événement perdu (enqueue échoué, secret en rotation, déploiement) ne se
   rattrape que par un clic manuel. Recommandé avant/en parallèle d'un usage prod réel.
