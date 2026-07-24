@@ -69,6 +69,10 @@ function executerFactice() {
       }),
     }),
     select: () => selectChain,
+    // deriverSoldesEod (élection EOD post-sync, best-effort) passe par tx.execute
+    // (INSERT…SELECT brut) : no-op ici, la logique SQL réelle est prouvée par
+    // tests/isolation/treso-eod-election.test.ts.
+    execute: async () => {},
   };
   const ctx = { workspaceId: "ws-1", userId: "u-1", role: "ADMIN" as const };
   const executer = async <T>(fn: (t: never, c: never) => Promise<T>) => {
@@ -401,10 +405,11 @@ describe("synchroniserCompte — pagination par page", () => {
     });
 
     expect(r.transactionsTraitees).toBe(0);
-    // Aucun upsert de transactions (lignes vides), mais DEUX appels executer en
-    // fin de parcours : (1) marquerSynchronise, (2) appliquerRegles post-sync
-    // (best-effort ; aucune règle dans le mock → no-op {0,0}).
-    expect(upserts.length).toBe(2);
+    // Aucun upsert de transactions (lignes vides), mais TROIS appels executer en
+    // fin de parcours : (1) marquerSynchronise, (2) deriverSoldesEod (élection EOD
+    // best-effort, TRESO-EOD-ELECTION), (3) appliquerRegles post-sync (best-effort ;
+    // aucune règle dans le mock → no-op {0,0}).
+    expect(upserts.length).toBe(3);
   });
 
   it("MAX_PAGES — l'amont prétend qu'il reste des pages au-delà du plafond → IngestionBoucleError", async () => {

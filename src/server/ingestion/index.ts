@@ -66,8 +66,18 @@ export async function ingererConnexions(
 
 /**
  * Synchronise UN compte déjà rattaché : transactions (par PAGE, suit Links.Next/
- * Meta.TotalPages) + soldes EOD (par page également). Composable depuis un cron/
- * route. Pas de curseur : chaque sync relit la liste complète (upsert idempotent).
+ * Meta.TotalPages) + soldes EOD. Composable depuis un cron/route. Pas de curseur :
+ * chaque sync relit la liste complète (upsert idempotent).
+ *
+ * SOURCE des soldes EOD (D1, TRESO-EOD-ELECTION) : la DÉRIVATION depuis
+ * `running_balance` — elle vit DANS `synchroniserCompte` (élection §2.2,
+ * best-effort). La branche `/balances/history` ci-dessous est le REPLI conditionné
+ * à « Q4 repasse 200 » : l'endpoint amont répond 404 (sandbox ET prod,
+ * OMNIFI_API_FEEDBACK.md §10), donc elle est FAIL-SOFT — son échec ne doit plus
+ * faire échouer le step d'ingestion du worker (les transactions sont déjà
+ * persistées, la dérivation a déjà écrit les EOD). Si l'amont sert un jour des
+ * données, elles ÉCRASENT la dérivation (upsert après elle : l'amont est
+ * autoritaire). Log codé sans PII, jamais silencieux.
  */
 export async function synchroniserCompteComplet(
   client: OmniFiClient,
@@ -84,22 +94,35 @@ export async function synchroniserCompteComplet(
   const sync = await synchroniserCompte(client, executer, params);
 
   const soldes: SoldeAUpserter[] = [];
-  let page = 1;
-  for (;;) {
-    const env = await client.historiqueSoldes(params.omnifiAccountId, {
-      ...params.fenetreSoldes,
-      page,
-    });
-    for (const b of env.Data.HistoricalBalances) {
-      soldes.push({
-        balanceDate: b.Date,
-        balance: normaliserMontant(b.Balance.Amount.Amount),
-        currency: b.Balance.Amount.Currency,
+  try {
+    let page = 1;
+    for (;;) {
+      const env = await client.historiqueSoldes(params.omnifiAccountId, {
+        ...params.fenetreSoldes,
+        page,
       });
+      for (const b of env.Data.HistoricalBalances) {
+        soldes.push({
+          balanceDate: b.Date,
+          balance: normaliserMontant(b.Balance.Amount.Amount),
+          currency: b.Balance.Amount.Currency,
+        });
+      }
+      const totalPages = env.Meta?.TotalPages ?? 1;
+      if (!env.Links?.Next || page >= totalPages) break;
+      page += 1;
     }
-    const totalPages = env.Meta?.TotalPages ?? 1;
-    if (!env.Links?.Next || page >= totalPages) break;
-    page += 1;
+  } catch {
+    // Repli indisponible (404 attendu tant que Q4 ≠ 200) : la dérivation reste la
+    // source. On ne perd RIEN — et on ne remonte pas l'échec au step du worker.
+    console.warn(
+      JSON.stringify({
+        evt: "soldes_amont_indisponible",
+        action: "historique-soldes",
+        bankAccountId: params.bankAccountId,
+      }),
+    );
+    return { sync, soldes: 0 };
   }
 
   if (soldes.length > 0) {

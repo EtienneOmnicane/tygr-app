@@ -157,6 +157,7 @@ export {
   soldeConsolideCourant,
   soldesCourantsParDevise,
   courbeTresorerie,
+  courbeTresorerieFiable,
   syntheseMois,
   synthesePeriodeParDevise,
   syntheseParMois,
@@ -175,6 +176,9 @@ export type {
   SyntheseMensuelle,
   TransactionRecente,
 } from "@/server/repositories/dashboard";
+// Courbe EOD fiable (TRESO-EOD-ELECTION, lot L4) : le type sort du module PUR
+// src/server/treso/eod.ts — même frontière que les services dashboard ci-dessus.
+export type { PointConsolideFiable } from "@/server/treso/eod";
 
 // Insights dérivés (TECH-API-INSIGHTS, Voie A) : cashflow & vendors dérivés de
 // transactions_cache. Même frontière que le dashboard — ré-exportés ici pour que

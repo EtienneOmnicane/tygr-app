@@ -33,6 +33,11 @@ import {
 } from "@/server/db/schema";
 import type { CategorySource } from "@/server/db/schema";
 import type { WorkspaceTx } from "@/server/db/tenancy";
+import {
+  consoliderCourbeFiable,
+  type CompteEod,
+  type PointConsolideFiable,
+} from "@/server/treso/eod";
 
 type AnyPgDatabase = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 type Tx = WorkspaceTx<AnyPgDatabase>;
@@ -494,6 +499,121 @@ export async function courbeTresorerie(
     .groupBy(balanceHistory.balanceDate, balanceHistory.currency)
     .orderBy(balanceHistory.balanceDate, balanceHistory.currency);
   return lignes;
+}
+
+/* ------------------------------------------------------------------ */
+/* Courbe de trésorerie FIABLE (TRESO-EOD-ELECTION — report §3,        */
+/* complétude §4.2, bord gauche consolidé D6-a). Couche lecture SANS   */
+/* UI (lot L4) : le front la branche au lot F1. Le calcul est PUR      */
+/* (src/server/treso/eod.ts) ; ici on ne fait que FETCHER sous RLS.    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * EOD réels d'un workspace par compte SÉLECTIONNÉ, bornés à `to` SEULEMENT :
+ * PAS de borne basse — le report (§3.1) a besoin du dernier EOD ANTÉRIEUR à la
+ * fenêtre pour ancrer son bord gauche, et le détecteur (§4.2) du K d'avant-fenêtre.
+ * Volume borné de fait (l'amont sert ≤ 92 j d'historique).
+ *
+ * Garde de devise à la LECTURE : seuls les points `balance_history.currency =
+ * bank_accounts.currency` entrent dans la série du compte (l'élection n'écrit que
+ * D_c, mais le chemin amont `/balances/history` pourrait écrire autre chose — on
+ * n'injecte jamais un solde d'une autre devise dans la série d'un compte, règle 8).
+ * ENTITY-READ-JOIN1 : jointure `bank_accounts` (héritage entity_scope) — ceinture,
+ * la policy `account_scope` (0017) étant la bretelle.
+ */
+export async function soldesEodParCompte(
+  tx: Tx,
+  borne: { to: string },
+): Promise<{ bankAccountId: string; date: string; solde: string }[]> {
+  return tx
+    .select({
+      bankAccountId: balanceHistory.bankAccountId,
+      date: balanceHistory.balanceDate,
+      solde: sql<string>`${balanceHistory.balance}::text`,
+    })
+    .from(balanceHistory)
+    .innerJoin(bankAccounts, eq(balanceHistory.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(bankAccounts.isSelected, true),
+        sql`${balanceHistory.currency} = ${bankAccounts.currency}`,
+        lte(balanceHistory.balanceDate, borne.to),
+      ),
+    )
+    .orderBy(balanceHistory.bankAccountId, balanceHistory.balanceDate);
+}
+
+/**
+ * Mouvements NETS par (compte sélectionné, jour comptable Maurice), bornés à `to`
+ * seulement (même raison d'avant-fenêtre que `soldesEodParCompte`). Le SIGNE vient
+ * de `credit_debit`, JAMAIS du signe d'`amount` (positif-only côté OBIE — sommer
+ * `amount` nu donnerait « sorties = 0 » en silence, §4.2). Tombstones exclus ;
+ * garde D_c (`t.currency = ba.currency`) : un mouvement FX n'entre pas dans la
+ * réconciliation de la série du compte. Agrégat EN SQL (numeric), règle 8.
+ */
+export async function mouvementsNetsParJour(
+  tx: Tx,
+  borne: { to: string },
+): Promise<{ bankAccountId: string; date: string; delta: string }[]> {
+  return tx
+    .select({
+      bankAccountId: transactionsCache.bankAccountId,
+      date: transactionsCache.transactionDate,
+      delta: sql<string>`sum(case when ${transactionsCache.creditDebit} = 'Credit' then ${transactionsCache.amount} else -${transactionsCache.amount} end)::text`,
+    })
+    .from(transactionsCache)
+    .innerJoin(bankAccounts, eq(transactionsCache.bankAccountId, bankAccounts.id))
+    .where(
+      and(
+        eq(bankAccounts.isSelected, true),
+        eq(transactionsCache.isRemoved, false),
+        sql`${transactionsCache.currency} = ${bankAccounts.currency}`,
+        lte(transactionsCache.transactionDate, borne.to),
+      ),
+    )
+    .groupBy(transactionsCache.bankAccountId, transactionsCache.transactionDate)
+    .orderBy(transactionsCache.bankAccountId, transactionsCache.transactionDate);
+}
+
+/**
+ * Courbe de trésorerie CONSOLIDÉE par devise, continue (report §3.1), drapeau de
+ * complétude par jour (D2/D3 : drapeau RECALCULÉ à la lecture, zéro migration) et
+ * bord gauche D6-a (démarre quand TOUS les comptes sélectionnés de la devise ont
+ * un EOD connu). Remplace `courbeTresorerie` pour le lot F1 ; l'ancienne reste la
+ * lecture « points bruts » (agrégat SQL des seuls jours observés).
+ *
+ * Le périmètre des comptes vient d'une lecture DIRECTE de `bank_accounts` (et pas
+ * seulement des lignes de soldes) : un compte sélectionné SANS AUCUN EOD doit
+ * vider la série de sa devise (D6-a, fail-closed) — s'il n'apparaissait pas, la
+ * marche d'escalier réapparaîtrait le jour de son premier point.
+ */
+export async function courbeTresorerieFiable(
+  tx: Tx,
+  fenetre: { from: string; to: string },
+): Promise<PointConsolideFiable[]> {
+  const comptes = await tx
+    .select({ id: bankAccounts.id, currency: bankAccounts.currency })
+    .from(bankAccounts)
+    .where(eq(bankAccounts.isSelected, true));
+  if (comptes.length === 0) return [];
+
+  const [eods, mouvements] = await Promise.all([
+    soldesEodParCompte(tx, { to: fenetre.to }),
+    mouvementsNetsParJour(tx, { to: fenetre.to }),
+  ]);
+
+  const entrees: CompteEod[] = comptes.map((c) => ({
+    bankAccountId: c.id,
+    currency: c.currency,
+    points: eods
+      .filter((e) => e.bankAccountId === c.id)
+      .map((e) => ({ date: e.date, solde: e.solde })),
+    mouvements: mouvements
+      .filter((m) => m.bankAccountId === c.id)
+      .map((m) => ({ date: m.date, delta: m.delta })),
+  }));
+
+  return consoliderCourbeFiable(entrees, fenetre);
 }
 
 /**

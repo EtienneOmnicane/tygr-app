@@ -272,6 +272,58 @@ export async function upsertSoldes<TDb extends AnyPgDatabase>(
 }
 
 /**
+ * Dérive et persiste les soldes EOD d'un compte depuis `running_balance`
+ * (TRESO-EOD-ELECTION, PLAN-treso-eod.md §2.2) — l'ÉLECTION du représentant de
+ * chaque jour comptable Maurice, en UNE requête idempotente :
+ *
+ * - Regroupement LOCAL Maurice : `DISTINCT ON (transaction_date)` — la colonne est
+ *   DÉJÀ la date comptable Maurice (E20, dérivée à l'ingestion). Ne JAMAIS regrouper
+ *   sur `booking_date_time::date` (jour UTC, décalé de 4 h).
+ * - Ordre ABSOLU : `booking_date_time DESC` (l'instant le plus tardif du jour porte la
+ *   clôture), départage stable des ex æquo par `omnifi_txn_id DESC` (D8 : arbitraire
+ *   mais DÉTERMINISTE — deux passes sur la même donnée élisent la même ligne).
+ * - Gardes : tombstones exclus, `running_balance IS NULL` exclu (on ne fabrique rien),
+ *   et `t.currency = ba.currency` (garde D_c §2.2 : une transaction FX — USD sur compte
+ *   MUR — porte un solde USD ; l'élire dans la série MUR serait une addition
+ *   cross-devise déguisée, règle 8).
+ * - Convergence (D4, §5.2) : `ON CONFLICT … DO UPDATE` — un EOD faux à la passe 1
+ *   (perte de pagination) se CORRIGE à la passe suivante. L'immuabilité de
+ *   `balance_history` porte sur le DELETE (append-only), pas sur la valeur.
+ *   Limite tracée : un jour qui PERD son unique porteuse (tombstone tardif) garde sa
+ *   ligne périmée — le DELETE est interdit ; le détecteur de complétude (§4.2) le
+ *   signale (`tombstone apparu entre deux passes`).
+ *
+ * Full re-dérivation du compte à chaque sync (pas de fenêtre) : l'amont borne
+ * l'historique à ≤92 j (DIAGNOSTIC), le volume est trivial et la lecture de la BASE
+ * (pas du flux) rend l'élection indépendante de l'ordre d'arrivée des pages.
+ * `workspace_id` vient de `ctx`, jamais d'un paramètre client (règle 2) ; la jointure
+ * `bank_accounts` fait hériter l'étage entité (ENTITY-READ-JOIN1) en plus de la RLS.
+ */
+export async function deriverSoldesEod<TDb extends AnyPgDatabase>(
+  tx: WorkspaceTx<TDb>,
+  ctx: WorkspaceContext,
+  bankAccountId: string,
+): Promise<void> {
+  await tx.execute(sql`
+    insert into ${balanceHistory} (workspace_id, bank_account_id, balance_date, balance, currency)
+    select ${ctx.workspaceId}, elu.bank_account_id, elu.transaction_date, elu.running_balance, elu.currency
+    from (
+      select distinct on (t.transaction_date)
+        t.bank_account_id, t.transaction_date, t.running_balance, t.currency
+      from ${transactionsCache} t
+      join ${bankAccounts} ba on ba.id = t.bank_account_id
+      where t.bank_account_id = ${bankAccountId}
+        and t.is_removed = false
+        and t.running_balance is not null
+        and t.currency = ba.currency
+      order by t.transaction_date, t.booking_date_time desc, t.omnifi_txn_id desc
+    ) elu
+    on conflict (bank_account_id, balance_date)
+    do update set balance = excluded.balance, currency = excluded.currency
+  `);
+}
+
+/**
  * Marque la dernière synchronisation d'un compte (`last_synced_at`). Le modèle
  * d'ingestion est par PAGE (on relit toujours depuis la page 1) : il n'y a plus de
  * curseur à persister — la colonne `sync_cursor` reste orpheline (dette TODOS,

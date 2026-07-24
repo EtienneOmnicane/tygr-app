@@ -455,8 +455,33 @@ vide · consolidé à historiques inégaux ⇒ comportement conforme à D6 (pas 
 
 ## 8. Décisions ouvertes
 
+> **ACTÉES le 2026-07-24 (lot TRESO-EOD-ELECTION, branche `feat/treso-eod-election`)** —
+> les 9 décisions sont tranchées sur les recommandations du tableau (colonne en gras),
+> avec les ancrages suivants :
+> - **D1** (dérivation `RunningBalance`) : le gate Q1 est LEVÉ — sonde read-only prod du
+>   Lot 1 : couverture 100 % (62/62 comptes, 3 institutions, cf. TODOS PROD-TRESO-EOD1).
+>   Q4 reste 404 → `/balances/history` est un repli FAIL-SOFT (`synchroniserCompteComplet`),
+>   ses données écrasent la dérivation si l'endpoint revit (amont autoritaire).
+> - **D2** (persister + drapeau) + **D3** (drapeau RECALCULÉ à la lecture, zéro migration) :
+>   `evaluerCompletude` (§4.2) est une fonction pure appelée par `courbeTresorerieFiable` ;
+>   le point consolidé porte `fiable: boolean`. Propagation §4.3 : le drapeau suit la
+>   valeur PORTÉE (un jour reporté hérite du statut de son jour source) ; NON_EVALUABLE
+>   (premier EOD) ne rend pas douteux.
+> - **D4** (UPDATE autorisé — convergence) : aligné sur l'invariant CLAUDE.md (« append-only
+>   au DELETE », l'UPDATE est permis) ; prouvé par le cas « passe 2 corrige le jour ».
+>   Limite tracée : un jour qui PERD sa seule porteuse (tombstone tardif) garde sa ligne
+>   périmée (DELETE interdit) — le détecteur le signale.
+> - **D5** : `numeric(15,2)` — déjà livré (migration 0025, Lot 1).
+> - **D6** : option **(a)** — le consolidé d'une devise démarre quand TOUS ses comptes
+>   sélectionnés ont un EOD ; corollaire assumé : un compte sélectionné sans AUCUN EOD
+>   vide la série de sa devise (fail-closed), à expliciter en UI au lot F1.
+> - **D7** : presets existants (`resoudrePeriode`) — aucune fenêtre « 90 j » parallèle.
+> - **D8** : départage stable `omnifi_txn_id DESC`, tracé (cas E4).
+> - **D9** : chantier PARALLÈLE à la dette B ; le drapeau est câblé dans la lecture et
+>   reste OBLIGATOIRE tant que la dette B (ingestion par fenêtres) n'est pas refermée.
+
 Les cinq du cadrage §5 restent valides ; D1/D6/D8 en sont la reprise. Recommandation en gras,
-**aucune n'est tranchée ici**.
+tableau d'origine conservé (l'arbitrage ci-dessus fait foi).
 
 | # | Décision | Options | Impact |
 |---|---|---|---|

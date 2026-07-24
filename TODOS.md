@@ -3676,15 +3676,38 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   `normaliserSoldeCourant` non-levant (§5.4), ingestion + garde de devise (§2.4), fix
   cross-devise de `courbeTresorerie` (GROUP BY (date, currency)). RESTE (chantiers
   suivants) :
-  - [ ] **TRESO-EOD-ELECTION (P1)** — élection EOD (`DISTINCT ON (transaction_date) ORDER
-    BY … booking_date_time DESC`), report des jours vides (helper pur, §3), détecteur de
-    complétude (§4), bord gauche du consolidé (D6). Tranche les décisions D1-D9. La colonne
-    `running_balance` est DORMANTE tant que ce lot n'est pas câblé.
+  - [x] **TRESO-EOD-ELECTION — RÉSOLU le 2026-07-24** (branche `feat/treso-eod-election`,
+    lots L2+L4 du cadrage). Livré : (a) **élection §2.2** — `deriverSoldesEod`
+    (repositories/ingestion.ts) : `DISTINCT ON (transaction_date) ORDER BY …
+    booking_date_time DESC, omnifi_txn_id DESC` + gardes (tombstone, `running_balance
+    NULL`, devise `D_c` par jointure `bank_accounts`), `ON CONFLICT DO UPDATE`
+    (convergence D4), branchée BEST-EFFORT dans `synchroniserCompte` (calquée
+    `appliquerRegles`, log `eod_derivation_echec`) — la colonne `running_balance` n'est
+    plus dormante ; (b) **report §3** — `reporterSerie` PUR (`src/server/treso/eod.ts`),
+    report AVANT uniquement, ancre d'avant-fenêtre, `dateSource` discernable ;
+    (c) **détecteur §4.2** — `evaluerCompletude` PUR (centimes BigInt exacts, signe via
+    delta signé SQL `credit_debit`, jamais |amount|), statuts COMPLET/INCOMPLET/
+    NON_EVALUABLE ; (d) **consolidé D6-a** — `consoliderCourbeFiable` +
+    `courbeTresorerieFiable` (dashboard.ts, lecture SANS UI : le front = lot F1) :
+    démarrage quand TOUS les comptes de la devise ont un EOD, drapeau `fiable` suivant
+    la valeur PORTÉE ; (e) `synchroniserCompteComplet` : branche `/balances/history`
+    repurposée en repli FAIL-SOFT (Q4=404 ; log `soldes_amont_indisponible`) ;
+    (f) `enCentimesSigne` ajouté à la source unique `montant-centimes.ts`.
+    **Décisions D1-D9 ACTÉES** — decision log dans `docs/specs/PLAN-treso-eod.md` §8
+    (encadré 2026-07-24). Preuves : `tests/unit/treso-eod.test.ts` (19 cas §7-C/§7-D) +
+    `tests/isolation/treso-eod-election.test.ts` (16 cas PGlite : E1-E9, idempotence,
+    convergence D4, 2 étages de périmètre) + cas fuseau §7-A (déjà couverts au Lot 1).
   - [ ] **TRESO-EOD-RESYNC-COALESCE (P2, cross-review)** — l'upsert écrit
     `running_balance = t.runningBalance` INCONDITIONNELLEMENT (comme tous les champs, §5.2
     convergence). Quand l'élection sera câblée, envisager `COALESCE(nouveau, ancien)` pour
     ne pas effacer un solde valide si une passe ultérieure renvoie `null` (perte d'ancre).
     Sans effet aujourd'hui (colonne dormante). **Déclencheur** : câblage de l'élection.
+    ⚠️ **Déclencheur ATTEINT le 2026-07-24** (élection câblée par TRESO-EOD-ELECTION) —
+    arbitrage DÛ au prochain lot treso (F1 ou revue de dette) : COALESCE protège l'ancre
+    contre un extracteur amont capricieux, MAIS fige un solde que l'amont aurait
+    légitimement rétracté ; atténuation existante = un jour qui perd sa porteuse reste
+    signalé par le détecteur §4.2 (tombstone/écart). Ni tranché ni codé ici
+    (anti-scope-creep, règle 10).
   - [ ] **TRESO-EOD-SNAPSHOT-0025 (P3, hygiène Drizzle)** — pas de `meta/0025_snapshot.json`
     (comme 0020/0021/0024, hand-write). Sans impact runtime (migrator piloté par le journal).
     Régénérer les snapshots au prochain `db:generate`.
