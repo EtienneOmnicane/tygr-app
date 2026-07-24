@@ -39,6 +39,15 @@ const EVENTS_DECLENCHANT_SYNC = new Set([
   "sync.mfa_required",
 ]);
 
+/**
+ * Un `EventType` amont déclenche-t-il une ingestion ? Partagé entre la réception
+ * (étape 7 ci-dessous) et le REJEU de la quarantaine (W5, `rejeu.ts`) — la même
+ * règle de gating, jamais deux copies qui divergent.
+ */
+export function doitDeclencherSync(eventType: string): boolean {
+  return EVENTS_DECLENCHANT_SYNC.has(eventType.trim().toLowerCase());
+}
+
 export interface DepsTraitementWebhook {
   /** Env du déploiement (OMNIFI_ENV). */
   envDeploiement: EnvOmniFi;
@@ -172,9 +181,7 @@ export async function traiterWebhook(
   // (7) ENQUEUE (fail-loud) AVANT l'audit (§6.3) — SEULEMENT pour les EventType qui
   //     déclenchent une ingestion ; les autres sont tracés sans enqueue. Un rejeu du
   //     même EventId collapse en 1 run (idempotency `wh:${EventId}`, fenêtre 24 h).
-  const doitEnqueue = EVENTS_DECLENCHANT_SYNC.has(
-    payload.EventType.trim().toLowerCase(),
-  );
+  const doitEnqueue = doitDeclencherSync(payload.EventType);
   if (doitEnqueue) {
     try {
       await deps.enqueue({

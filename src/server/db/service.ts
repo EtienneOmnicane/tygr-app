@@ -20,7 +20,7 @@
  * requête bornée.
  */
 import { neonConfig, Pool } from "@neondatabase/serverless";
-import { sql } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, sql } from "drizzle-orm";
 import { drizzle, type NeonDatabase } from "drizzle-orm/neon-serverless";
 
 import type { AnyPgDatabase, WorkspaceTx } from "@/server/db/tenancy";
@@ -194,4 +194,198 @@ export function insererQuarantaine(
   evt: EvenementQuarantaine,
 ): Promise<{ insere: boolean }> {
   return createInsererQuarantaine(obtenirServiceDb())(evt);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Rejeu de la quarantaine (lot W5) — primitives DB sous tygr_service.
+ * Table système NON append-only : UPDATE (marquage/compteur) et DELETE (purge
+ * TTL) sont LÉGITIMES ici, et réservés à tygr_service (REVOKE + RLS pour
+ * tygr_app). La LOGIQUE de rejeu (pipeline complet, plafond, logs) vit dans
+ * `src/server/webhooks/omnifi/rejeu.ts` — ce module ne fait que les requêtes.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/** Un événement EN ATTENTE de rejeu — projection stable (sérialisable par un
+ *  step Inngest : pas de Date, uniquement des scalaires). */
+export interface LigneQuarantaineEnAttente {
+  id: string;
+  omnifiEventId: string;
+  omnifiConnectionId: string;
+  eventType: string;
+  omnifiJobId: string | null;
+  /** Motif de la MISE en quarantaine (état à la réception — le rejeu peut en
+   *  constater un autre, journalisé sans réécrire celui-ci). */
+  motif: WebhookMotif;
+  /** Nombre de rejeux INFRUCTUEUX déjà tentés (cf. enregistrerEchecRejeu). */
+  replayCount: number;
+}
+
+/**
+ * Liste les événements en attente de rejeu : `replayed_at IS NULL` ET sous le
+ * plafond anti-boucle. Optionnellement bornée à une connexion (chemin
+ * link-exchange) ; toujours bornée en taille (`limite`) — l'appelant journalise
+ * la troncature (no silent caps). Ordre FIFO (`received_at`) : les plus anciens
+ * d'abord, pour qu'aucun événement ne soit affamé par les arrivées récentes.
+ */
+export function createListerQuarantaineEnAttente<TDb extends AnyPgDatabase>(
+  db: TDb,
+) {
+  return async function listerQuarantaineEnAttente(filtre: {
+    omnifiConnectionId?: string;
+    plafondRejeux: number;
+    limite: number;
+  }): Promise<LigneQuarantaineEnAttente[]> {
+    return db.transaction(async (tx) => {
+      await exigerRoleService<TDb>(tx as WorkspaceTx<TDb>);
+      const conditions = [
+        isNull(schema.webhookEventsPending.replayedAt),
+        lt(schema.webhookEventsPending.replayCount, filtre.plafondRejeux),
+      ];
+      if (filtre.omnifiConnectionId) {
+        conditions.push(
+          eq(
+            schema.webhookEventsPending.omnifiConnectionId,
+            filtre.omnifiConnectionId,
+          ),
+        );
+      }
+      const lignes = await (tx as WorkspaceTx<TDb>)
+        .select({
+          id: schema.webhookEventsPending.id,
+          omnifiEventId: schema.webhookEventsPending.omnifiEventId,
+          omnifiConnectionId: schema.webhookEventsPending.omnifiConnectionId,
+          eventType: schema.webhookEventsPending.eventType,
+          omnifiJobId: schema.webhookEventsPending.omnifiJobId,
+          motif: schema.webhookEventsPending.motif,
+          replayCount: schema.webhookEventsPending.replayCount,
+        })
+        .from(schema.webhookEventsPending)
+        .where(and(...conditions))
+        .orderBy(asc(schema.webhookEventsPending.receivedAt))
+        .limit(filtre.limite);
+      return lignes.map((l) => ({ ...l, motif: l.motif as WebhookMotif }));
+    });
+  };
+}
+
+/** Instance applicative — listing sous `tygr_service` réel. */
+export function listerQuarantaineEnAttente(filtre: {
+  omnifiConnectionId?: string;
+  plafondRejeux: number;
+  limite: number;
+}): Promise<LigneQuarantaineEnAttente[]> {
+  return createListerQuarantaineEnAttente(obtenirServiceDb())(filtre);
+}
+
+/**
+ * Marque un événement REJOUÉ (livré au pipeline : audité, enqueue fait si dû).
+ * `replayed_at` non-NULL le sort définitivement du balayage. Idempotent (un
+ * second marquage réécrit l'horodatage, sans effet sur la sortie du balayage).
+ */
+export function createMarquerQuarantaineRejouee<TDb extends AnyPgDatabase>(
+  db: TDb,
+) {
+  return async function marquerQuarantaineRejouee(id: string): Promise<void> {
+    return db.transaction(async (tx) => {
+      await exigerRoleService<TDb>(tx as WorkspaceTx<TDb>);
+      await (tx as WorkspaceTx<TDb>)
+        .update(schema.webhookEventsPending)
+        .set({ replayedAt: sql`now()` })
+        .where(eq(schema.webhookEventsPending.id, id));
+    });
+  };
+}
+
+/** Instance applicative — marquage sous `tygr_service` réel. */
+export function marquerQuarantaineRejouee(id: string): Promise<void> {
+  return createMarquerQuarantaineRejouee(obtenirServiceDb())(id);
+}
+
+/**
+ * Enregistre un rejeu INFRUCTUEUX (l'événement reste non résolu : connexion
+ * toujours inconnue, ambiguïté, env mismatch) : incrémente `replay_count` et
+ * rend le total — l'appelant compare au plafond et journalise. Un échec
+ * d'INFRASTRUCTURE (enqueue/audit qui lève) ne passe PAS par ici : il fait
+ * échouer le step Inngest, qui retente — le plafond ne compte que les
+ * constats « toujours pas résolvable ».
+ */
+export function createEnregistrerEchecRejeu<TDb extends AnyPgDatabase>(db: TDb) {
+  return async function enregistrerEchecRejeu(
+    id: string,
+  ): Promise<{ tentatives: number }> {
+    return db.transaction(async (tx) => {
+      await exigerRoleService<TDb>(tx as WorkspaceTx<TDb>);
+      const lignes = await (tx as WorkspaceTx<TDb>)
+        .update(schema.webhookEventsPending)
+        .set({
+          replayCount: sql`${schema.webhookEventsPending.replayCount} + 1`,
+        })
+        .where(eq(schema.webhookEventsPending.id, id))
+        .returning({ tentatives: schema.webhookEventsPending.replayCount });
+      return { tentatives: lignes[0]?.tentatives ?? 0 };
+    });
+  };
+}
+
+/** Instance applicative — compteur d'échec sous `tygr_service` réel. */
+export function enregistrerEchecRejeu(
+  id: string,
+): Promise<{ tentatives: number }> {
+  return createEnregistrerEchecRejeu(obtenirServiceDb())(id);
+}
+
+/** Une ligne purgée (TTL) — rendue à l'appelant pour le LOG D'ABANDON explicite
+ *  (identifiants techniques amont uniquement, zéro PII). */
+export interface LigneQuarantainePurgee {
+  omnifiEventId: string;
+  omnifiConnectionId: string;
+  eventType: string;
+  motif: WebhookMotif;
+  replayCount: number;
+  /** true = jamais rejouée avec succès : c'est un ABANDON, à journaliser. */
+  abandonnee: boolean;
+}
+
+/**
+ * Purge TTL : DELETE des lignes plus vieilles que `seuil` (rejouées OU non).
+ * Rend TOUTES les lignes supprimées — l'appelant journalise chaque abandon
+ * (`abandonnee: true`), jamais de suppression silencieuse. Le DELETE physique
+ * est légitime ICI et seulement ici (table système, non financière, non
+ * append-only — cf. migration 0026).
+ */
+export function createPurgerQuarantaineExpiree<TDb extends AnyPgDatabase>(
+  db: TDb,
+) {
+  return async function purgerQuarantaineExpiree(
+    seuil: Date,
+  ): Promise<LigneQuarantainePurgee[]> {
+    return db.transaction(async (tx) => {
+      await exigerRoleService<TDb>(tx as WorkspaceTx<TDb>);
+      const lignes = await (tx as WorkspaceTx<TDb>)
+        .delete(schema.webhookEventsPending)
+        .where(lt(schema.webhookEventsPending.receivedAt, seuil))
+        .returning({
+          omnifiEventId: schema.webhookEventsPending.omnifiEventId,
+          omnifiConnectionId: schema.webhookEventsPending.omnifiConnectionId,
+          eventType: schema.webhookEventsPending.eventType,
+          motif: schema.webhookEventsPending.motif,
+          replayCount: schema.webhookEventsPending.replayCount,
+          replayedAt: schema.webhookEventsPending.replayedAt,
+        });
+      return lignes.map((l) => ({
+        omnifiEventId: l.omnifiEventId,
+        omnifiConnectionId: l.omnifiConnectionId,
+        eventType: l.eventType,
+        motif: l.motif as WebhookMotif,
+        replayCount: l.replayCount,
+        abandonnee: l.replayedAt === null,
+      }));
+    });
+  };
+}
+
+/** Instance applicative — purge sous `tygr_service` réel. */
+export function purgerQuarantaineExpiree(
+  seuil: Date,
+): Promise<LigneQuarantainePurgee[]> {
+  return createPurgerQuarantaineExpiree(obtenirServiceDb())(seuil);
 }

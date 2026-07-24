@@ -19,8 +19,12 @@ import { inngest } from "@/server/inngest/client";
 import { healthcheck } from "@/server/inngest/fonctions/healthcheck";
 import { syncCron } from "@/server/inngest/fonctions/sync-cron";
 import { syncIngest } from "@/server/inngest/fonctions/sync-ingest";
+import {
+  webhookReplay,
+  webhookReplayCron,
+} from "@/server/inngest/fonctions/webhook-replay";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [healthcheck, syncIngest, syncCron],
+  functions: [healthcheck, syncIngest, syncCron, webhookReplay, webhookReplayCron],
 });

@@ -40,15 +40,11 @@ import {
   inngest,
   type DonneesSyncIngest,
 } from "@/server/inngest/client";
+// Source UNIQUE de l'env du déploiement (« production » SSI OMNIFI_ENV vaut
+// exactement cela) — helper extrait par W5, partagé avec la route webhook.
+// deps-communes n'importe PAS le client de service : FRONTIERE_SERVICE respectée.
+import { envDeploiement } from "@/server/webhooks/omnifi/deps-communes";
 import { aujourdhuiMaurice } from "@/lib/periode";
-
-/** Env du déploiement — même règle que la route webhook (« production » SSI
- *  OMNIFI_ENV vaut exactement cela — `webhooks/omnifi/route-handler.ts`).
- *  Dupliquée localement : la route est hors du périmètre d'import de ce module
- *  (le lot W5 en extrait un helper partagé — à converger au merge). */
-function envDeploiement(): "sandbox" | "production" {
-  return process.env.OMNIFI_ENV === "production" ? "production" : "sandbox";
-}
 
 /** Paire (workspace, connexion amont) à synchroniser. */
 export interface ConnexionASynchroniser {

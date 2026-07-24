@@ -20,6 +20,7 @@
  */
 import {
   evenementSyncIngest,
+  evenementWebhookReplay,
   inngest,
   type DonneesSyncIngest,
 } from "@/server/inngest/client";
@@ -93,5 +94,47 @@ export async function demanderIngestionSyncOuLever(
   } catch (erreur) {
     journaliserEchecEmission(donnees, erreur);
     throw erreur;
+  }
+}
+
+/**
+ * Demande le REJEU de la quarantaine webhook pour une connexion (W5, plan §12) —
+ * émis au `link-exchange`, juste après la persistance de la connexion : les
+ * webhooks arrivés AVANT elle (`CONNEXION_INCONNUE`) deviennent résolvables.
+ *
+ * FAIL-SOFT délibéré : la connexion de l'utilisateur vient de RÉUSSIR — un échec
+ * d'émission ne doit pas la faire échouer, et le CRON FILET quotidien du rejeu
+ * rebalaye toute la quarantaine (aucun événement perdu, juste différé). Rend
+ * `true` si l'événement est parti, `false` sinon (journalisé, sans PII).
+ */
+export async function demanderRejeuWebhook(
+  omnifiConnectionId: string,
+): Promise<boolean> {
+  try {
+    const evenement = evenementWebhookReplay.create({ omnifiConnectionId });
+    await evenement.validate();
+    await inngest.send(evenement);
+    console.info(
+      JSON.stringify({
+        evt: "webhook_rejeu_demande",
+        connectionId: omnifiConnectionId,
+      }),
+    );
+    return true;
+  } catch (erreur) {
+    const code =
+      erreur instanceof Error && "code" in erreur && typeof erreur.code === "string"
+        ? erreur.code
+        : erreur instanceof Error
+          ? erreur.name
+          : "UNKNOWN";
+    console.warn(
+      JSON.stringify({
+        evt: "webhook_rejeu_demande_echec",
+        connectionId: omnifiConnectionId,
+        code,
+      }),
+    );
+    return false;
   }
 }

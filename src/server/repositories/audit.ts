@@ -290,10 +290,17 @@ export interface EvenementWebhookAConsigner {
   eventType: string;
   /** `bank_connections.id` INTERNE, issu de la résolution tygr_service. */
   connectionId: string;
-  /** 8 premiers hexa de la signature — jamais la signature entière (rejouable). */
-  hmacSignatureTruncated: string;
+  /**
+   * 8 premiers hexa de la signature — jamais la signature entière (rejouable).
+   * `null` au REJEU de quarantaine (W5) : la signature a été vérifiée à la
+   * RÉCEPTION et n'est pas conservée dans `webhook_events_pending` (une
+   * signature stockée serait rejouable — on ne garde que la preuve d'audit).
+   */
+  hmacSignatureTruncated: string | null;
   /** Job de scraping amont (si présent) — seule donnée technique tracée en payload. */
   omnifiJobId?: string | null;
+  /** Origine de l'écriture : réception directe (défaut) ou rejeu de quarantaine (W5). */
+  declencheur?: "WEBHOOK" | "WEBHOOK_REJEU";
 }
 
 /**
@@ -316,7 +323,9 @@ export async function consignerEvenementWebhook<TDb extends AnyPgDatabase>(
   ctx: WorkspaceContext,
   evenement: EvenementWebhookAConsigner,
 ): Promise<{ insere: boolean }> {
-  const payload: Record<string, unknown> = { declencheur: "WEBHOOK" };
+  const payload: Record<string, unknown> = {
+    declencheur: evenement.declencheur ?? "WEBHOOK",
+  };
   if (evenement.omnifiJobId) payload.omnifiJobId = evenement.omnifiJobId;
 
   const lignes = await tx
