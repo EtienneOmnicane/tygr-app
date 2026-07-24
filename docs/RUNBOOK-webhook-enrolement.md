@@ -63,9 +63,13 @@ tronquée), un run Inngest `omnifi/sync.ingest.requested`. Nécessite une **URL 
 
 `POST /dev/webhooks/rotate-secret` invalide l'ancien secret **immédiatement**. Procédure :
 **rotation → mise à jour de l'env var → redéploiement dans la foulée**. Les événements
-émis pendant la fenêtre (ancien secret rejeté par le nouveau) sont **perdus** — ils seront
-rattrapés par le filet pull **W2 (cron)**, qui **n'existe pas encore** (cf. TODOS). Tant
-que W2 n'est pas livré, planifier la rotation en fenêtre de faible trafic.
+émis pendant la fenêtre (ancien secret rejeté par le nouveau) sont **perdus côté push** —
+ils sont rattrapés par le filet pull **W2** : cron `omnifi-sync-cron` quotidien
+(06:00 heure de Maurice) qui re-synchronise chaque connexion active de l'environnement,
+avec trace par run dans `sync_runs` (RUNNING → COMPLETED/PARTIAL/FAILED/MFA_REQUIRED ;
+un RUNNING ancien sans `finished_at` = run mort en vol, à investiguer). La fraîcheur
+maximale perdue entre rotation et prochain cron reste < 24 h — planifier la rotation en
+fenêtre de faible trafic si ce délai compte.
 
 ## 6. Quarantaine (`webhook_events_pending`)
 

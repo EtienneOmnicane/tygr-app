@@ -291,6 +291,10 @@ export const bankConnections = pgTable(
       t.workspaceId,
       t.omnifiConnectionId,
     ),
+    // UNIQUE (id, workspace_id) : cible des FK COMPOSITES scopées workspace
+    // (pattern entities/bank_accounts/categories). Ajoutée en 0027 pour
+    // sync_runs(connection_id, workspace_id) — trivialement satisfaite (id est PK).
+    unique("bank_connections_id_workspace_unique").on(t.id, t.workspaceId),
     index("bank_connections_workspace_id_idx").on(t.workspaceId),
     pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
@@ -1490,5 +1494,93 @@ export const webhookEventsPending = pgTable(
       "webhook_events_pending_motif_check",
       sql`${t.motif} IN ('CONNEXION_INCONNUE','AMBIGUE','ENV_MISMATCH')`,
     ),
+  ],
+).enableRLS();
+
+/* ------------------------------------------------------------------ */
+/* Journal des runs de synchronisation (lot W2, cahier §4.1 — version  */
+/* MINIMALE, PLAN-ingestion-webhook-omnifi.md §4.3). Leçon             */
+/* sync-fail-soft : sans trace en base, un cron qui échoue en silence  */
+/* est invisible en prod.                                              */
+/*                                                                     */
+/* Table NORMALE (UPDATE de progression licite — RUNNING → terminal),  */
+/* PAS financière, PAS append-only. PAS de DELETE applicatif (hors     */
+/* liste blanche tygr_app.sql — une purge éventuelle sera son propre   */
+/* chantier) ; la seule suppression est la CASCADE de la déconnexion   */
+/* d'une banque (bank_connections a légitimement DELETE).              */
+/* RLS TENANT uniquement, PAS d'étage 2 : la granularité est la        */
+/* CONNEXION, qui n'est pas scopée entité (1 credential = comptes de   */
+/* N entités) — même visibilité que bank_connections elle-même.        */
+/* ------------------------------------------------------------------ */
+
+/** Déclencheurs d'un run — miroir de `declencheursSync` (inngest/client.ts). */
+export const SYNC_RUN_TRIGGERS = ["CRON", "WEBHOOK", "MANUAL"] as const;
+export type SyncRunTrigger = (typeof SYNC_RUN_TRIGGERS)[number];
+
+/** Statuts d'un run. RUNNING = ouvert ; les 4 autres sont TERMINAUX (finished_at
+ *  posé). Un RUNNING ancien sans finished_at = run mort en vol (crash du worker
+ *  après épuisement des retries) — signal d'exploitation, pas un état nominal. */
+export const SYNC_RUN_STATUTS = [
+  "RUNNING",
+  "COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "MFA_REQUIRED",
+] as const;
+export type SyncRunStatut = (typeof SYNC_RUN_STATUTS)[number];
+
+export const syncRuns = pgTable(
+  "sync_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    /** Connexion synchronisée — id INTERNE (résolu sous RLS par le worker). */
+    connectionId: uuid("connection_id").notNull(),
+    /** `trigger` du cahier §4.1 — renommé : TRIGGER est un mot réservé SQL. */
+    triggerSource: varchar("trigger_source", { length: 10 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("RUNNING"),
+    comptesTraites: integer("comptes_traites").notNull().default(0),
+    transactionsUpsertees: integer("transactions_upsertees").notNull().default(0),
+    /** Code machine SEUL (ex. Error.Type amont) — jamais un message OBIE (règle 8). */
+    erreurCode: varchar("erreur_code", { length: 60 }),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** NULL = run encore ouvert (ou mort en vol, cf. SYNC_RUN_STATUTS). */
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    // FK COMPOSITE scopée workspace (pattern categories) : un run ne peut PAS
+    // référencer la connexion d'un autre tenant — garantie en base, pas par
+    // convention. CASCADE : la déconnexion d'une banque emporte son journal de
+    // runs (l'audit trail probant vit dans audit_events, append-only, lui).
+    foreignKey({
+      columns: [t.connectionId, t.workspaceId],
+      foreignColumns: [bankConnections.id, bankConnections.workspaceId],
+      name: "sync_runs_connection_workspace_fk",
+    }).onDelete("cascade"),
+    index("sync_runs_workspace_id_idx").on(t.workspaceId),
+    // Lecture d'exploitation : derniers runs d'une connexion (ORDER BY started_at).
+    index("sync_runs_workspace_connection_started_idx").on(
+      t.workspaceId,
+      t.connectionId,
+      t.startedAt,
+    ),
+    check(
+      "sync_runs_trigger_check",
+      sql`${t.triggerSource} IN ('CRON','WEBHOOK','MANUAL')`,
+    ),
+    check(
+      "sync_runs_status_check",
+      sql`${t.status} IN ('RUNNING','COMPLETED','PARTIAL','FAILED','MFA_REQUIRED')`,
+    ),
+    // Cohérence run ouvert/clos : RUNNING ⇔ finished_at NULL (les deux sens).
+    check(
+      "sync_runs_finished_coherence_check",
+      sql`(${t.status} = 'RUNNING') = (${t.finishedAt} IS NULL)`,
+    ),
+    pgPolicy("tenant_isolation", POLITIQUE_TENANT),
   ],
 ).enableRLS();

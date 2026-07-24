@@ -130,3 +130,55 @@ export function executerPourWorkspaceSysteme(
 ): ExecuterWorkspace {
   return createExecuterSysteme(obtenirDb())(workspaceId);
 }
+
+/* ------------------------------------------------------------------ */
+/* Énumération SYSTÈME des workspaces (lot W2 — cron filet pull).      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Liste les `id` des workspaces d'un environnement Omni-FI — l'ITÉRATEUR du
+ * cron quotidien (W2) : chaque id alimente ensuite
+ * `executerPourWorkspaceSysteme(id)` pour lister SES connexions sous RLS.
+ *
+ * Pourquoi cette lecture est légitime ICI (et seulement ici) :
+ *  - `workspaces` n'a PAS de RLS (fait §1.4 du plan W3-W5) : la lecture sous
+ *    `tygr_app` fonctionne sans GUC — aucun privilège nouveau, aucun rôle
+ *    élargi (PAS `tygr_service`, dont l'usage reste GELÉ à la résolution
+ *    webhook — CLAUDE.md règle 2, liste fermée).
+ *  - Périmètre MINIMAL : `id` seul, filtré par `omnifi_environment` — un
+ *    déploiement sandbox n'itère JAMAIS les workspaces production (même
+ *    cloison que le cross-check env du webhook).
+ *  - Ce module est borné par FRONTIERE_SYSTEME (eslint) : importable
+ *    uniquement par les fonctions Inngest et la route webhook — une Server
+ *    Action ne peut pas s'en servir pour énumérer les tenants.
+ */
+export function createListerWorkspacesSysteme<TDb extends AnyPgDatabase>(
+  db: TDb,
+) {
+  return async function listerWorkspacesParEnvironnement(
+    environnement: "sandbox" | "production",
+  ): Promise<{ id: string }[]> {
+    return db.transaction(async (tx) => {
+      await exigerRoleNonProprietaire<TDb>(tx);
+      const res = await tx.execute(
+        sql`select id from workspaces where omnifi_environment = ${environnement} order by created_at`,
+      );
+      const lignes = (res as unknown as { rows: { id: string }[] }).rows;
+      console.info(
+        JSON.stringify({
+          evt: "systeme_workspaces_enumeration",
+          environnement,
+          total: lignes.length,
+        }),
+      );
+      return lignes;
+    });
+  };
+}
+
+/** Instance applicative — base réelle (Neon), résolue paresseusement. */
+export function listerWorkspacesParEnvironnement(
+  environnement: "sandbox" | "production",
+): Promise<{ id: string }[]> {
+  return createListerWorkspacesSysteme(obtenirDb())(environnement);
+}

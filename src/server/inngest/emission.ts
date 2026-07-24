@@ -1,6 +1,8 @@
 /**
  * Émission d'événements Inngest — point d'entrée des SURFACES APPLICATIVES
- * (Server Actions ; cron W2 et route webhook W4).
+ * (Server Actions ; route webhook W4). Le cron W2 n'émet PAS par ici : dans
+ * une fonction Inngest, `step.sendEvent` est le canal durable (mémoïsé au
+ * retry) — ce module sert aux surfaces SANS step.
  *
  * DEUX contrats, selon qui appelle :
  *  - `demanderIngestionSync` (FAIL-SOFT) : un échec d'émission (Inngest injoignable

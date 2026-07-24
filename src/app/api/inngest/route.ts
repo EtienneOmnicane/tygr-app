@@ -17,9 +17,10 @@ import { serve } from "inngest/next";
 
 import { inngest } from "@/server/inngest/client";
 import { healthcheck } from "@/server/inngest/fonctions/healthcheck";
+import { syncCron } from "@/server/inngest/fonctions/sync-cron";
 import { syncIngest } from "@/server/inngest/fonctions/sync-ingest";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [healthcheck, syncIngest],
+  functions: [healthcheck, syncIngest, syncCron],
 });
