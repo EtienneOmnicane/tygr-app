@@ -1488,7 +1488,7 @@ clés, pas de l'hôte — confirmé tuteur). Branche `feat/verrou-prod-hote-part
   /clients/end-users/{id}` (→ 404 HTML). Résidu inerte (identifiant sans donnée bancaire,
   bac à sable). Le purger si Omni-FI ajoute une route de suppression, sinon l'ignorer.
 
-### Sync incomplet — lecture partielle livrée, ingestion pilotée par webhook à faire (2026-07-13)
+### Sync incomplet — lecture partielle livrée, ingestion pilotée par webhook LIVRÉE (2026-07-13 → 2026-07-24)
 
 Incident prod : « le sync importe 0 transaction » alors que la donnée était lisible chez
 Omni-FI (67 transactions sur le 1er compte). Cause RÉELLE (le diagnostic initial pointait un
@@ -1510,7 +1510,7 @@ OUVERTE (un statut inconnu n'est plus un mensonge de typage).
   cf. docstring de `sync-ingest.ts` qui le referme « côté infra ») ; la route
   `/api/webhooks/omnifi` (W4, mergée) route `sync.completed`/`sync.failed`/`sync.mfa_required`
   vers ce worker (idempotence 3 étages, suite isolation IDOR incluse) ; le cron filet W2
-  (branche `feat/webhook-w2-cron-sync-runs`) rattrape tout événement jamais reçu. Le message
+  (mergé #269 `4704f78`) rattrape tout événement jamais reçu. Le message
   « relancez dans quelques minutes » n'est plus le contrat : la fin d'un scrape long aboutit
   en base sans nouveau clic. Historique : ouvert 2026-07-13.
 
@@ -3149,7 +3149,14 @@ vide). Différés / décisions :
     seulement APRÈS que l'expand soit déployé & vérifié en prod (le code composite doit être
     la version N-1 pour que 0019 soit backward-compat — §5.3, sinon le N-1 mono-colonne
     plante l'ingestion pendant la fenêtre).
-- [ ] **WEBHOOK-TENANT-FIRST1 (P1) — garde-fou du futur résolveur `/api/webhooks/omnifi`** —
+- [x] **WEBHOOK-TENANT-FIRST1 — RÉSOLU le 2026-07-24** par le chantier webhook W1→W5,
+  intégralement mergé dans main (W3/W4 2026-07-23, W5 #268 `c7147a4`, W2 #269 `4704f78`) :
+  la route `POST /api/webhooks/omnifi` résout le TENANT d'abord (`ClientUserId` →
+  workspace, unique global conservé) PUIS la connexion DANS ce workspace, fail-closed
+  sous `tygr_service`, avec garde SQL `LIMIT 2` contre la résolution ambiguë (son test
+  d'intégration 2-tenants reste dû au CONTRACT — `WEBHOOK-LIMIT2-CONTRACT`, P3).
+  Constat d'origine conservé ci-dessous pour l'audit trail :
+  ~~garde-fou du futur résolveur `/api/webhooks/omnifi`~~ —
   Effort S. **Déclencheur : création de la route webhook** (inexistante aujourd'hui —
   `src/app/api/` = auth uniquement). Corollaire du contract 1.1/L4 : une fois les globales
   droppées, `omnifi_connection_id` n'est plus unique GLOBALEMENT → un lookup webhook par ce
@@ -3661,7 +3668,8 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   alimente la courbe prévisionnelle. **NON une dette de montants** (lecture/reconstruction,
   pas de FX). **Déclencheur** : ce ticket OU recette « la courbe est vide ».
 
-  **LOT 1 LIVRÉ (branche `feat/treso-eod`, 2026-07-23)** — socle bas-risque, indépendant
+  **LOT 1 LIVRÉ (branche `feat/treso-eod`, 2026-07-23 — MERGÉ dans main, PR #262
+  `65e8e5d`)** — socle bas-risque, indépendant
   des 9 décisions ouvertes (plan `docs/specs/PLAN-treso-eod.md`). Sonde read-only prod :
   `RunningBalance` rempli à **100 %** (62/62 comptes avec tx, 3 institutions) — le null
   sandbox était un artefact. Livré : migration 0025 (`running_balance numeric(15,2)`),
@@ -3680,8 +3688,8 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
   - [ ] **TRESO-EOD-SNAPSHOT-0025 (P3, hygiène Drizzle)** — pas de `meta/0025_snapshot.json`
     (comme 0020/0021/0024, hand-write). Sans impact runtime (migrator piloté par le journal).
     Régénérer les snapshots au prochain `db:generate`.
-  - ⚠️ **Coordination merge** : `feat/webhook-ingestion` réserve idx 26 (saute 25) ;
-    conflit git trivial attendu sur `_journal.json` (garder les deux entrées, 24/25/26).
+  - [x] ~~⚠️ **Coordination merge**~~ — RÉSOLUE le 2026-07-24 : treso-eod (0025, #262)
+    et webhook (0026/0027, #268/#269) tous mergés ; `_journal.json` porte 24/25/26/27.
 
 - [x] **PROD-UX-REVIEW1 (P1) — review UX/UI profonde via /design-review** —
   ✅ **RÉALISÉ en 2 passes** : 2026-07-15 (PR #215 — 19 findings, 9 fixés, 10 différés
@@ -3932,7 +3940,15 @@ les endpoints page-based). Différés ci-dessous (mordent en PR 2, pas en PR 1) 
 > section. Aucune de ces dettes ne touche l'isolation tenant / l'append-only / les
 > montants (sinon INTERDITE, règle 9) : ce sont des fonctionnalités absentes.
 
-- [ ] **GAP-WEBHOOK1 (P1, FRONTIÈRE BACKEND) — ingestion pilotée par webhook Omni-FI absente** —
+- [x] **GAP-WEBHOOK1 — RÉSOLU le 2026-07-24** par le chantier webhook W1→W5, intégralement
+  mergé dans main (W3/W4 2026-07-23, W5 #268 `c7147a4`, W2 #269 `4704f78`) : route
+  `POST /api/webhooks/omnifi` (HMAC-SHA256 constant-time, dédup 3 étages, quarantaine
+  `webhook_events_pending`, enqueue Inngest) + rejeu W5 + filet pull quotidien W2 +
+  `sync_runs`. Cf. section « Webhook Omni-FI — chantier CODE COMPLET » (P3) pour le
+  détail et la dette différée. Reste OPÉRATIONNEL (pas du code) : enrôlement amont
+  (runbook §3, URL publique) et questions `WEBHOOK-D4`. Constat d'origine conservé
+  ci-dessous pour l'audit trail :
+  ~~(P1, FRONTIÈRE BACKEND) — ingestion pilotée par webhook Omni-FI absente~~ —
   Effort L, gardien Backend. Ouvert 2026-06-23. Le cahier des charges v2.1 (§1, §2.4,
   FEAT-1.2) fait du **webhook HMAC SHA-256** le cœur de l'architecture d'ingestion
   (résolution `connection → workspace_id` via `tygr_service`, dédup `omnifi_event_id`,
@@ -4151,23 +4167,23 @@ serveur RLS, fail-closed) est sain ; ces entrées sont de la réutilisation/effi
 - [ ] **Réévaluer bases séparées par tenant (C2)** — si une exigence de conformité
   client externe l'impose (taste T1 du gate : RLS partagée retenue au MVP).
 
-### Webhook Omni-FI — chantier CODE COMPLET : lots W1→W5 LIVRÉS (W3/W4 : 2026-07-23 mergés ; W5 : mergé 2026-07-24 ; W2 : branche `feat/webhook-w2-cron-sync-runs`, 2026-07-24)
+### Webhook Omni-FI — chantier COMPLET, lots W1→W5 MERGÉS dans main (W3/W4 : 2026-07-23 ; W5 : #268 `c7147a4` ; W2 : #269 `4704f78`, 2026-07-24)
 
 Réf. `docs/specs/PLAN-webhook-ingestion.md`, runbook `docs/RUNBOOK-webhook-enrolement.md`.
-**`GAP-WEBHOOK1`** (P1, l.3762) et **`WEBHOOK-TENANT-FIRST1`** (P1, l.3013) sont désormais
-ADRESSÉS EN TOTALITÉ côté code : route `POST /api/webhooks/omnifi` (HMAC-SHA256
+**`GAP-WEBHOOK1`** et **`WEBHOOK-TENANT-FIRST1`** sont **CLÔTURÉS le 2026-07-24** (cochés
+à leurs entrées, hygiène post-merge W2) : route `POST /api/webhooks/omnifi` (HMAC-SHA256
 constant-time sur octets bruts, fenêtre de fraîcheur, zod strict, résolution tenant
 fail-closed sous `tygr_service`, cross-check env, idempotence 3 étages, quarantaine,
-202 uniforme) + rejeu de la quarantaine (W5) + filet pull quotidien (W2) — clôturables au
-merge de W2. Reste OPÉRATIONNEL (pas du code) : l'enrôlement amont (runbook §3, URL
+202 uniforme) + rejeu de la quarantaine (W5) + filet pull quotidien (W2).
+Reste OPÉRATIONNEL (pas du code) : l'enrôlement amont (runbook §3, URL
 publique) et les questions D4 à Omni-FI. Décisions actées : D1 (cross-check env sous
 tygr_app, D2-parent annulée), D2 (`cleIdempotence`), D3 (enqueue AVANT audit), D4
 (fenêtre 12 h).
 
 Dette DIFFÉRÉE (à traiter à un chantier nommé) :
 
-- [x] **WEBHOOK-W2 — RÉSOLU le 2026-07-24** (branche `feat/webhook-w2-cron-sync-runs`,
-  plan parent §4.3/§6.2/§9). Livré : (a) **cron filet pull** `omnifi-sync-cron`
+- [x] **WEBHOOK-W2 — RÉSOLU le 2026-07-24, MERGÉ dans main (#269 `4704f78`)**
+  (branche `feat/webhook-w2-cron-sync-runs`, plan parent §4.3/§6.2/§9). Livré : (a) **cron filet pull** `omnifi-sync-cron`
   (06:00 MUT, `TZ=Indian/Mauritius` explicite) — énumère les workspaces de
   l'ENVIRONNEMENT courant (`listerWorkspacesParEnvironnement`, systeme.ts : `id` seul,
   `workspaces` sans RLS, JAMAIS `tygr_service` dont l'usage reste gelé à la résolution
